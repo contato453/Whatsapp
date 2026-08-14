@@ -45,6 +45,12 @@ export class MessageIngestService {
   ): Promise<IngestResult | null> {
     const conversation = await this.upsertConversation(message, context.organizationId);
 
+    // Mensagem recebida em conversa sem responsável cai para o responsável
+    // padrão do departamento, se houver.
+    if (message.direction === "inbound" && !conversation.assignedUserId) {
+      await this.applyDefaultAssignee(conversation, context.organizationId);
+    }
+
     // Deduplicação: eventos do WhatsApp podem chegar repetidos.
     const existing = await this.prisma.message.findUnique({
       where: {
@@ -179,6 +185,58 @@ export class MessageIngestService {
       },
       organizationId,
     );
+  }
+
+  /**
+   * Atribui a conversa ao responsável padrão do departamento.
+   *
+   * Só age quando ninguém está responsável — nunca tira uma conversa de
+   * quem já assumiu. O registro no histórico fica sem "performedBy", que é
+   * o que distingue a atribuição automática da feita por uma pessoa.
+   */
+  private async applyDefaultAssignee(
+    conversation: { id: string; departmentId: string | null },
+    organizationId: string,
+  ): Promise<void> {
+    if (!conversation.departmentId) return;
+    try {
+      const department = await this.prisma.department.findUnique({
+        where: { id: conversation.departmentId },
+        select: { defaultAssigneeId: true },
+      });
+      const assigneeId = department?.defaultAssigneeId;
+      if (!assigneeId) return;
+
+      // Usuário desativado depois de configurado não recebe a conversa:
+      // ela ficaria parada numa caixa que ninguém abre.
+      const assignee = await this.prisma.user.findFirst({
+        where: { id: assigneeId, organizationId, status: "active" },
+        select: { id: true },
+      });
+      if (!assignee) return;
+
+      await this.prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { assignedUserId: assignee.id },
+      });
+      await this.prisma.conversationAssignmentHistory.create({
+        data: {
+          organizationId,
+          conversationId: conversation.id,
+          action: "assigned",
+          toUserId: assignee.id,
+          toDepartmentId: conversation.departmentId,
+          note: "Responsável padrão do departamento",
+        },
+      });
+    } catch (err) {
+      // Falhar aqui não pode impedir a mensagem de ser gravada.
+      this.logger.warn({
+        conversationId: conversation.id,
+        event: "default_assignee_failed",
+        error: String(err),
+      });
+    }
   }
 
   private async upsertConversation(

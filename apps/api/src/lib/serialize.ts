@@ -63,6 +63,8 @@ export function serializeDepartment(department: Department) {
     name: department.name,
     description: department.description,
     color: department.color,
+    // Só o id: o nome é resolvido no frontend, que já carrega os usuários.
+    defaultAssigneeId: department.defaultAssigneeId,
   };
 }
 

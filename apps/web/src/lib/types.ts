@@ -50,6 +50,8 @@ export interface DepartmentDto {
   name: string;
   description: string | null;
   color: string | null;
+  /** Responsável padrão: assume as conversas que entram sem ninguém */
+  defaultAssigneeId: string | null;
 }
 
 export interface TagDto {
