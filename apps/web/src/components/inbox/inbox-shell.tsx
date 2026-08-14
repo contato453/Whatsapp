@@ -103,7 +103,8 @@ type QuickFilter =
   | "individual"
   | "unread"
   | "open"
-  | "waiting"
+  | "waiting_client"
+  | "waiting_internal"
   | "resolved";
 
 const QUICK_FILTERS: Array<{ key: QuickFilter; label: string }> = [
@@ -113,9 +114,10 @@ const QUICK_FILTERS: Array<{ key: QuickFilter; label: string }> = [
   { key: "groups", label: "Grupos" },
   { key: "individual", label: "Individuais" },
   { key: "unread", label: "Não lidas" },
-  { key: "open", label: "Abertas" },
-  { key: "waiting", label: "Aguardando" },
-  { key: "resolved", label: "Finalizadas" },
+  { key: "open", label: "Aberto" },
+  { key: "waiting_client", label: "AG. Cliente" },
+  { key: "waiting_internal", label: "AG. Operacional" },
+  { key: "resolved", label: "Concluído" },
 ];
 
 export function InboxShell({ conversationId }: { conversationId?: string }) {
@@ -180,7 +182,8 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     if (filter === "individual") params.set("type", "individual");
     if (filter === "unread") params.set("unread", "true");
     if (filter === "open") params.set("status", "open");
-    if (filter === "waiting") params.set("status", "waiting");
+    if (filter === "waiting_client") params.set("status", "waiting_client");
+    if (filter === "waiting_internal") params.set("status", "waiting_internal");
     if (filter === "resolved") params.set("status", "resolved");
     if (departmentFilter) params.set("departmentId", departmentFilter);
     if (instanceFilter) params.set("instanceId", instanceFilter);

@@ -122,8 +122,10 @@ export class MessageIngestService {
         ...(isInbound
           ? {
               unreadCount: { increment: 1 },
-              // Conversa resolvida que recebe mensagem nova volta para a fila.
-              ...(conversation.status === "resolved" || conversation.status === "archived"
+              // Mensagem do cliente devolve a conversa para a fila: concluída
+              // reabre, e "AG. Cliente" deixa de fazer sentido — a espera
+              // acabou no momento em que ele respondeu.
+              ...(conversation.status === "resolved" || conversation.status === "waiting_client"
                 ? { status: "open" as const }
                 : {}),
             }
@@ -181,7 +183,7 @@ export class MessageIngestService {
       externalChatId: message.externalChatId,
       type: message.chatType,
       title: fallbackTitle,
-      status: "new",
+      status: "open",
     };
     return this.prisma.conversation.create({ data });
   }

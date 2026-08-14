@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Prisma } from "@azvchat/database";
 import { z } from "zod";
-import { RealtimeEvents } from "@azvchat/shared";
+import { CONVERSATION_STATUSES, RealtimeEvents } from "@azvchat/shared";
 import { accessibleInstanceIds, instanceScope } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
 import { ForbiddenError, NotFoundError } from "../../lib/errors.js";
@@ -10,7 +10,7 @@ import { instanceAudience } from "../../realtime/socket.js";
 import type { AppDeps } from "../../types.js";
 
 const listQuerySchema = z.object({
-  status: z.enum(["new", "open", "waiting", "resolved", "archived"]).optional(),
+  status: z.enum(CONVERSATION_STATUSES).optional(),
   type: z.enum(["individual", "group"]).optional(),
   assigned: z.string().optional(), // "me" | "none" | userId
   departmentId: z.string().uuid().optional(),
@@ -261,7 +261,6 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
         data: {
           assignedUserId: targetUserId,
           ...(body.departmentId ? { departmentId: body.departmentId } : {}),
-          ...(conversation.status === "new" ? { status: "open" as const } : {}),
         },
       }),
       deps.prisma.conversationAssignmentHistory.create({
@@ -387,14 +386,43 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
   });
 
   const statusSchema = z.object({
-    status: z.enum(["new", "open", "waiting", "resolved", "archived"]),
+    status: z.enum(CONVERSATION_STATUSES),
   });
 
   app.post("/conversations/:id/status", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const { status } = statusSchema.parse(request.body);
-    await findConversationOr404(id, request.user);
-    await deps.prisma.conversation.update({ where: { id }, data: { status } });
+    const conversation = await findConversationOr404(id, request.user);
+    if (conversation.status === status) return { ok: true };
+
+    // Concluir e reabrir continuam aparecendo no histórico da conversa; as
+    // trocas entre os status de espera são registradas só na auditoria.
+    const historyAction =
+      status === "resolved" ? "resolved" : conversation.status === "resolved" ? "reopened" : null;
+
+    await deps.prisma.$transaction([
+      deps.prisma.conversation.update({ where: { id }, data: { status } }),
+      ...(historyAction
+        ? [
+            deps.prisma.conversationAssignmentHistory.create({
+              data: {
+                organizationId: request.user.organizationId,
+                conversationId: id,
+                action: historyAction,
+                performedByUserId: request.user.sub,
+              },
+            }),
+          ]
+        : []),
+    ]);
+    deps.audit.record({
+      organizationId: request.user.organizationId,
+      userId: request.user.sub,
+      action: "conversation.status_changed",
+      entityType: "Conversation",
+      entityId: id,
+      metadata: { from: conversation.status, to: status },
+    });
     await emitConversationUpdated(id, request.user.organizationId);
     return { ok: true };
   });
