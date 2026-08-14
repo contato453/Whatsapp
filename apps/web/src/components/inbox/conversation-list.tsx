@@ -72,12 +72,6 @@ export function ConversationListItem({
               {formatTime(conversation.lastMessageAt)}
             </span>
           </div>
-          {/* Cadastro da empresa no escritório — tarja de destaque */}
-          {conversation.externalReference && (
-            <span className="mt-1 inline-flex rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800">
-              {conversation.externalReference}
-            </span>
-          )}
           <div className="mt-0.5 flex items-center justify-between gap-2">
             <p className="truncate text-xs text-slate-500">
               {conversation.lastMessagePreview ?? "Sem mensagens"}
@@ -120,13 +114,19 @@ export function ConversationListItem({
             ))}
           </div>
 
-          {/* Responsável sempre visível — inclusive quando ninguém assumiu */}
+          {/* Responsável sempre visível — inclusive quando ninguém assumiu.
+              O cadastro da empresa divide a linha, alinhado à direita. */}
           <p className="mt-1 flex items-center gap-1 text-[11px]">
             <UserRound className="h-3 w-3 shrink-0 text-slate-400" />
             {conversation.assignedUser ? (
               <span className="truncate text-slate-600">{conversation.assignedUser.name}</span>
             ) : (
-              <span className="font-medium text-amber-600">Sem responsável</span>
+              <span className="truncate font-medium text-amber-600">Sem responsável</span>
+            )}
+            {conversation.externalReference && (
+              <span className="ml-auto shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800">
+                {conversation.externalReference}
+              </span>
             )}
           </p>
         </div>
