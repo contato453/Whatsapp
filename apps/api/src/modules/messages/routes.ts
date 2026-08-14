@@ -13,6 +13,7 @@ import {
   serializeMessage,
   type QuotedPreview,
 } from "../../lib/serialize.js";
+import { resolveSenders, type SenderDirectory } from "../../lib/sender-directory.js";
 import { instanceAudience } from "../../realtime/socket.js";
 import { buildPreview } from "../../services/message-ingest.js";
 import type { AppDeps } from "../../types.js";
@@ -68,6 +69,26 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
   }
 
   /**
+   * Descobre nome e telefone dos remetentes do lote no cadastro de
+   * participantes/contatos. Necessário em grupos com endereçamento "@lid",
+   * onde a mensagem chega sem o telefone de quem escreveu.
+   */
+  async function loadSenders(
+    conversation: { whatsappInstanceId: string; externalChatId: string; type: string },
+    messages: Array<{ senderExternalId: string | null }>,
+  ): Promise<SenderDirectory> {
+    return resolveSenders(
+      deps.prisma,
+      conversation,
+      messages.map((message) => message.senderExternalId),
+    );
+  }
+
+  function senderOf(directory: SenderDirectory, senderExternalId: string | null) {
+    return senderExternalId ? (directory.get(senderExternalId) ?? null) : null;
+  }
+
+  /**
    * Resolve as mensagens citadas de um lote, em uma única consulta,
    * para exibir a pré-visualização do reply.
    */
@@ -110,7 +131,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
   app.get("/conversations/:id/messages", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const query = listQuerySchema.parse(request.query);
-    await findConversationOr404(id, request.user);
+    const conversation = await findConversationOr404(id, request.user);
     const messages = await deps.prisma.message.findMany({
       where: {
         conversationId: id,
@@ -121,13 +142,17 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       include: { reactions: true },
     });
     const ordered = messages.reverse();
-    const quotedMap = await loadQuotedPreviews(id, ordered);
+    const [quotedMap, senders] = await Promise.all([
+      loadQuotedPreviews(id, ordered),
+      loadSenders(conversation, ordered),
+    ]);
     const total = await deps.prisma.message.count({ where: { conversationId: id } });
     return {
       messages: ordered.map((message) =>
         serializeMessage(
           message,
           message.quotedMessageId ? (quotedMap.get(message.quotedMessageId) ?? null) : null,
+          senderOf(senders, message.senderExternalId),
         ),
       ),
       // Indica se ainda há histórico anterior para carregar
@@ -141,7 +166,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
     const { q, limit } = z
       .object({ q: z.string().min(2).max(120), limit: z.coerce.number().min(1).max(50).default(30) })
       .parse(request.query);
-    await findConversationOr404(id, request.user);
+    const conversation = await findConversationOr404(id, request.user);
     const results = await deps.prisma.message.findMany({
       where: {
         conversationId: id,
@@ -156,7 +181,12 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       take: limit,
       include: { reactions: true },
     });
-    return { messages: results.map((message) => serializeMessage(message)) };
+    const senders = await loadSenders(conversation, results);
+    return {
+      messages: results.map((message) =>
+        serializeMessage(message, null, senderOf(senders, message.senderExternalId)),
+      ),
+    };
   });
 
   /**
@@ -166,7 +196,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
   app.get("/conversations/:id/messages/around", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const { at } = z.object({ at: z.string().datetime() }).parse(request.query);
-    await findConversationOr404(id, request.user);
+    const conversation = await findConversationOr404(id, request.user);
     const pivot = new Date(at);
     const [before, after] = await Promise.all([
       deps.prisma.message.findMany({
@@ -183,7 +213,10 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       }),
     ]);
     const ordered = [...before.reverse(), ...after];
-    const quotedMap = await loadQuotedPreviews(id, ordered);
+    const [quotedMap, senders] = await Promise.all([
+      loadQuotedPreviews(id, ordered),
+      loadSenders(conversation, ordered),
+    ]);
     const oldest = ordered[0];
     const olderCount = oldest
       ? await deps.prisma.message.count({
@@ -195,6 +228,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
         serializeMessage(
           message,
           message.quotedMessageId ? (quotedMap.get(message.quotedMessageId) ?? null) : null,
+          senderOf(senders, message.senderExternalId),
         ),
       ),
       hasMore: olderCount > 0,

@@ -117,6 +117,12 @@ export interface QuotedPreview {
 export function serializeMessage(
   message: Message & { reactions?: Array<{ emoji: string; senderName: string | null; fromMe: boolean }> },
   quoted?: QuotedPreview | null,
+  /**
+   * Nome/telefone resolvidos no cadastro de participantes ou contatos.
+   * Usado quando a mensagem não carrega o telefone — caso dos grupos com
+   * endereçamento "@lid". Nunca sobrescreve o que veio na mensagem.
+   */
+  sender?: { phoneNumber: string | null; name: string | null } | null,
 ) {
   return {
     id: message.id,
@@ -129,8 +135,8 @@ export function serializeMessage(
     })) ?? [],
     quoted: quoted ?? null,
     senderExternalId: message.senderExternalId,
-    senderName: message.senderName,
-    senderPhone: message.senderPhone,
+    senderName: message.senderName ?? sender?.name ?? null,
+    senderPhone: message.senderPhone ?? sender?.phoneNumber ?? null,
     direction: message.direction,
     type: message.type,
     content: message.content,

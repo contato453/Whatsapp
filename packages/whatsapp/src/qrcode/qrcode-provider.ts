@@ -315,7 +315,16 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
   private handleHistorySync(
     instanceId: string,
     chats: ReadonlyArray<{ id: string; name?: string | null; unreadCount?: number | null; conversationTimestamp?: number | { toString(): string } | null }>,
-    contacts: ReadonlyArray<{ id: string; name?: string | null; notify?: string | null; verifiedName?: string | null }>,
+    contacts: ReadonlyArray<{
+      id: string;
+      /** Identificador interno anônimo (@lid), quando o contato usa esse modo */
+      lid?: string | null;
+      /** JID de telefone (@s.whatsapp.net), quando conhecido */
+      jid?: string | null;
+      name?: string | null;
+      notify?: string | null;
+      verifiedName?: string | null;
+    }>,
   ): void {
     const state = this.getOrCreateState(instanceId);
     const newChats: ProviderChat[] = [];
@@ -334,13 +343,23 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     const newContacts: ProviderContact[] = [];
     for (const contact of contacts) {
       if (isIgnorableJid(contact.id) || isGroupJid(contact.id)) continue;
-      const normalized: ProviderContact = {
-        externalId: contact.id,
-        phoneNumber: jidToPhone(contact.id) ?? "",
-        name: contact.name ?? contact.verifiedName ?? contact.notify ?? null,
-      };
+      const name = contact.name ?? contact.verifiedName ?? contact.notify ?? null;
+      // O telefone só pode vir de um JID de telefone. Quando o contato é
+      // endereçado por "@lid", os dígitos do identificador NÃO são número.
+      const phoneNumber = phoneFromJid(contact.jid) ?? phoneFromJid(contact.id) ?? "";
+      const normalized: ProviderContact = { externalId: contact.id, phoneNumber, name };
       state.contacts.set(contact.id, normalized);
       newContacts.push(normalized);
+
+      // Registra também sob o "@lid": é esse o identificador que aparece
+      // como remetente das mensagens em grupos anônimos, e é por ele que a
+      // aplicação procura o telefone depois.
+      const lid = contact.lid;
+      if (lid && lid !== contact.id && !isIgnorableJid(lid)) {
+        const byLid: ProviderContact = { externalId: lid, phoneNumber, name };
+        state.contacts.set(lid, byLid);
+        newContacts.push(byLid);
+      }
     }
     if (newChats.length > 0) {
       this.emit("chats-sync", { instanceId, chats: newChats });

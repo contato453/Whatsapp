@@ -24,7 +24,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { fetchMediaBlobUrl } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, formatPhone } from "@/lib/utils";
 import type { MessageDto } from "@/lib/types";
 import { AudioPlayer } from "./audio-player";
 
@@ -167,7 +167,7 @@ export function MessageBubble({
   const outbound = message.direction === "outbound";
   const senderKey = message.senderExternalId ?? message.senderPhone ?? "?";
   const senderLabel =
-    message.senderName ?? (message.senderPhone ? `+${message.senderPhone}` : "Desconhecido");
+    message.senderName ?? (message.senderPhone ? formatPhone(message.senderPhone) : "Desconhecido");
   const [menuOpen, setMenuOpen] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -230,7 +230,7 @@ export function MessageBubble({
             <User className="h-3 w-3" />
             {senderLabel}
             {message.senderPhone && message.senderName && (
-              <span className="font-normal opacity-60">+{message.senderPhone}</span>
+              <span className="font-normal opacity-60">{formatPhone(message.senderPhone)}</span>
             )}
           </p>
         )}
