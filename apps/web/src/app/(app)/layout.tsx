@@ -19,7 +19,8 @@ import {
 import { USER_ROLE_LABELS, hasRole, type UserRole } from "@azvchat/shared";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
-import { Avatar, Spinner } from "@/components/ui";
+import { Spinner } from "@/components/ui";
+import { UserAvatar } from "@/components/user-avatar";
 import { CallAlerts } from "@/components/call-alerts";
 import { Logo } from "@/components/logo";
 
@@ -122,7 +123,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         </nav>
         <div className="border-t border-slate-800 p-3">
           <div className="flex items-center gap-2.5">
-            <Avatar name={user.name} size="sm" />
+            <UserAvatar userId={user.id} name={user.name} hasAvatar={user.hasAvatar} size="sm" />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium text-white">{user.name}</p>
               <p className="truncate text-[11px] text-slate-400">{USER_ROLE_LABELS[user.role]}</p>

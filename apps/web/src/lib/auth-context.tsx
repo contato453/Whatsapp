@@ -20,6 +20,8 @@ interface AuthContextValue {
   logout: () => void;
   /** Aplica a sessão devolvida quando a pessoa edita o próprio perfil. */
   setSession: (token: string, user: UserDto) => void;
+  /** Atualiza os dados do usuário sem trocar o token (troca de foto). */
+  setUser: (user: UserDto) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -66,9 +68,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(next);
   }, []);
 
+  const updateUser = useCallback((next: UserDto) => setUser(next), []);
+
   const value = useMemo(
-    () => ({ user, loading, login, logout, setSession }),
-    [user, loading, login, logout, setSession],
+    () => ({ user, loading, login, logout, setSession, setUser: updateUser }),
+    [user, loading, login, logout, setSession, updateUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

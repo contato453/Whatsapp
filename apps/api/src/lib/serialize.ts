@@ -19,7 +19,8 @@ export function serializeUser(user: User) {
     email: user.email,
     role: user.role,
     status: user.status,
-    avatarUrl: user.avatarUrl,
+    // A chave do arquivo nunca sai da API; a imagem vem por /users/:id/avatar.
+    hasAvatar: user.avatarUrl != null,
     signMessages: user.signMessages,
     lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
     createdAt: user.createdAt.toISOString(),
@@ -40,7 +41,8 @@ export function serializeUserDirectory(user: User) {
     name: user.name,
     role: user.role,
     status: user.status,
-    avatarUrl: user.avatarUrl,
+    // A chave do arquivo nunca sai da API; a imagem vem por /users/:id/avatar.
+    hasAvatar: user.avatarUrl != null,
   };
 }
 

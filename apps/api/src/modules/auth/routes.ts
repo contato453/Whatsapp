@@ -2,7 +2,8 @@ import type { FastifyInstance } from "fastify";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { authenticate } from "../../lib/auth.js";
-import { AppError, UnauthorizedError } from "../../lib/errors.js";
+import { AppError, NotFoundError, UnauthorizedError } from "../../lib/errors.js";
+import { extensionFromMime } from "../../lib/media-storage.js";
 import { serializeUser } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
 
@@ -173,6 +174,65 @@ export async function authRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
       return { ok: true };
     },
   );
+
+  /**
+   * Foto de perfil interna: aparece só dentro do sistema, para a equipe se
+   * reconhecer. Não tem relação com a foto dos números de WhatsApp.
+   *
+   * O recorte e o zoom são feitos no navegador; aqui chega a imagem já
+   * pronta, quadrada. Guardar o original não traria ganho e ocuparia disco.
+   */
+  app.post("/auth/me/avatar", { preHandler: authenticate }, async (request) => {
+    const file = await request.file();
+    if (!file) throw new AppError("Arquivo é obrigatório", 400, "file_required");
+    if (!file.mimetype?.startsWith("image/")) {
+      throw new AppError("Envie uma imagem", 400, "invalid_image");
+    }
+    const buffer = await file.toBuffer();
+    // Teto de 2 MB: a imagem já chega recortada e redimensionada.
+    if (buffer.byteLength > 2 * 1024 * 1024) {
+      throw new AppError("Imagem muito grande", 413, "image_too_large");
+    }
+    const key = await deps.storage.save(buffer, {
+      instanceId: "avatars",
+      extension: extensionFromMime(file.mimetype) ?? "png",
+    });
+    const user = await deps.prisma.user.update({
+      where: { id: request.user.sub },
+      data: { avatarUrl: key },
+    });
+    deps.audit.record({
+      organizationId: user.organizationId,
+      userId: user.id,
+      action: "user.avatar_updated",
+      entityType: "User",
+      entityId: user.id,
+    });
+    return { user: serializeUser(user) };
+  });
+
+  app.delete("/auth/me/avatar", { preHandler: authenticate }, async (request) => {
+    const user = await deps.prisma.user.update({
+      where: { id: request.user.sub },
+      data: { avatarUrl: null },
+    });
+    return { user: serializeUser(user) };
+  });
+
+  /**
+   * Serve a foto de qualquer colega da mesma organização: ela aparece na
+   * lista de usuários, no relatório e ao lado das mensagens enviadas.
+   */
+  app.get("/users/:id/avatar", { preHandler: authenticate }, async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const user = await deps.prisma.user.findFirst({
+      where: { id, organizationId: request.user.organizationId },
+      select: { avatarUrl: true },
+    });
+    if (!user?.avatarUrl) throw new NotFoundError("Foto de perfil");
+    const buffer = await deps.storage.read(user.avatarUrl);
+    return reply.type("image/*").send(buffer);
+  });
 
   app.post("/auth/logout", { preHandler: authenticate }, async (request) => {
     deps.audit.record({

@@ -48,7 +48,8 @@ describe("serializeUserDirectory (usuário visto por terceiros)", () => {
       name: "Fulano",
       role: "agent",
       status: "active",
-      avatarUrl: null,
+      // Booleano, não a chave do arquivo: a imagem vem por /users/:id/avatar.
+      hasAvatar: false,
     });
   });
 
@@ -68,11 +69,24 @@ describe("serializeConversation (responsável embutido)", () => {
       name: "Fulano",
       role: "agent",
       status: "active",
-      avatarUrl: null,
+      // Booleano, não a chave do arquivo: a imagem vem por /users/:id/avatar.
+      hasAvatar: false,
     });
   });
 
   it("conversa sem responsável continua com null", () => {
     expect(serializeConversation(fakeConversation(null)).assignedUser).toBeNull();
+  });
+});
+
+describe("foto de perfil interna", () => {
+  it("indica que existe foto sem revelar onde ela está guardada", () => {
+    const withPhoto = serializeUserDirectory({
+      ...fakeUser(),
+      avatarUrl: "avatars/2026-abc123.jpg",
+    });
+    expect(withPhoto.hasAvatar).toBe(true);
+    // A chave do storage não pode sair da API em hipótese alguma.
+    expect(JSON.stringify(withPhoto)).not.toContain("avatars/");
   });
 });

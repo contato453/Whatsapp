@@ -1,20 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { KeyRound, Save } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Camera, KeyRound, Save } from "lucide-react";
 import { USER_ROLE_LABELS } from "@azvchat/shared";
 import { useAuth } from "@/lib/auth-context";
-import { API_URL, ApiError, api } from "@/lib/api";
+import { API_URL, ApiError, api, invalidateUserAvatar } from "@/lib/api";
 import type { UserDto } from "@/lib/types";
 import { Button, Card, Field, Input } from "@/components/ui";
+import { UserAvatar } from "@/components/user-avatar";
+import { AvatarCropper } from "@/components/avatar-cropper";
 
 export default function SettingsPage() {
-  const { user, setSession } = useAuth();
+  const { user, setSession, setUser } = useAuth();
 
   return (
     <div className="thin-scroll h-full overflow-y-auto p-8">
       <h1 className="mb-6 text-2xl font-bold text-slate-900">Configurações</h1>
       <div className="max-w-xl space-y-4">
+        {user && <AvatarCard user={user} onChanged={setUser} />}
         {user && <ProfileCard user={user} onSaved={setSession} />}
         <PasswordCard />
         <Card className="p-6">
@@ -42,6 +45,92 @@ export default function SettingsPage() {
  * leitura: mudar credencial de entrada ou nível de acesso é ato de
  * administração, e a API recusa mesmo que a tela tentasse.
  */
+/**
+ * Foto de perfil interna: aparece só dentro do sistema, para a equipe se
+ * reconhecer. Não altera a foto de nenhum número de WhatsApp.
+ */
+function AvatarCard({
+  user,
+  onChanged,
+}: {
+  user: UserDto;
+  onChanged: (user: UserDto) => void;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  async function upload(blob: Blob) {
+    setBusy(true);
+    setError(null);
+    try {
+      const form = new FormData();
+      form.append("file", blob, "avatar.jpg");
+      const data = await api.postForm<{ user: UserDto }>("/auth/me/avatar", form);
+      invalidateUserAvatar(user.id);
+      onChanged(data.user);
+      setFile(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Não foi possível enviar a foto");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removePhoto() {
+    if (!window.confirm("Remover sua foto de perfil?")) return;
+    setBusy(true);
+    try {
+      const data = await api.delete<{ user: UserDto }>("/auth/me/avatar");
+      invalidateUserAvatar(user.id);
+      onChanged(data.user);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Não foi possível remover a foto");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="space-y-4 p-6">
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Foto</h2>
+      <div className="flex items-center gap-4">
+        <UserAvatar userId={user.id} name={user.name} hasAvatar={user.hasAvatar} size="lg" />
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => inputRef.current?.click()}>
+              <Camera className="h-4 w-4" /> {user.hasAvatar ? "Trocar foto" : "Enviar foto"}
+            </Button>
+            {user.hasAvatar && (
+              <Button size="sm" variant="outline" disabled={busy} onClick={() => void removePhoto()}>
+                Remover
+              </Button>
+            )}
+          </div>
+          <p className="text-xs text-slate-400">
+            Aparece apenas dentro do sistema. Não tem relação com a foto dos números de WhatsApp.
+          </p>
+        </div>
+      </div>
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        hidden
+        onChange={(event) => {
+          const chosen = event.target.files?.[0] ?? null;
+          setFile(chosen);
+          // Permite escolher o mesmo arquivo de novo depois de cancelar.
+          event.target.value = "";
+        }}
+      />
+      <AvatarCropper file={file} onCancel={() => setFile(null)} onConfirm={upload} />
+    </Card>
+  );
+}
+
 function ProfileCard({
   user,
   onSaved,

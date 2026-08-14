@@ -112,6 +112,16 @@ export function fetchParticipantAvatarUrl(participantId: string): Promise<string
   return fetchAvatar(`part:${participantId}`, `/group-participants/${participantId}/avatar`);
 }
 
+/** Foto de perfil interna do usuário do sistema (não é a do WhatsApp). */
+export function fetchUserAvatarUrl(userId: string): Promise<string> {
+  return fetchAvatar(`user:${userId}`, `/users/${userId}/avatar`);
+}
+
+/** Descarta o cache da foto de um usuário (após troca ou remoção). */
+export function invalidateUserAvatar(userId: string): void {
+  avatarCache.delete(`user:${userId}`);
+}
+
 /** Descarta o cache de uma foto (após atualização manual). */
 export function invalidateConversationAvatar(conversationId: string): void {
   avatarCache.delete(`conv:${conversationId}`);

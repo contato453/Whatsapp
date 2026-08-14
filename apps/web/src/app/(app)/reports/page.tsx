@@ -5,7 +5,8 @@ import { Download, RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import type { AgentReportDto } from "@/lib/types";
-import { Avatar, Button, Card, EmptyState, Spinner } from "@/components/ui";
+import { Button, Card, EmptyState, Spinner } from "@/components/ui";
+import { UserAvatar } from "@/components/user-avatar";
 
 /** Períodos prontos — o dia a dia da gestão cabe nestes quatro. */
 const PRESETS = [
@@ -246,7 +247,12 @@ export default function ReportsPage() {
                   <tr key={row.user.id}>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
-                        <Avatar name={row.user.name} src={row.user.avatarUrl} className="h-7 w-7 text-[10px]" />
+                        <UserAvatar
+                          userId={row.user.id}
+                          name={row.user.name}
+                          hasAvatar={row.user.hasAvatar}
+                          className="h-7 w-7 text-[10px]"
+                        />
                         <div className="min-w-0">
                           <p className="truncate font-medium text-slate-900">{row.user.name}</p>
                           <p className="truncate text-xs text-slate-400">{row.user.email}</p>

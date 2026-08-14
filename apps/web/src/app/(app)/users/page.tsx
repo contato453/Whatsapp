@@ -8,7 +8,8 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { formatDateTime } from "@/lib/utils";
 import type { DepartmentDto, InstanceDto, UserWithAccessDto } from "@/lib/types";
-import { Avatar, Badge, Button, Card, Spinner } from "@/components/ui";
+import { Badge, Button, Card, Spinner } from "@/components/ui";
+import { UserAvatar } from "@/components/user-avatar";
 
 export default function UsersPage() {
   const router = useRouter();
@@ -85,7 +86,7 @@ export default function UsersPage() {
         <Card className="divide-y divide-slate-100">
           {users.map((user) => (
             <div key={user.id} className="flex items-center gap-3 px-5 py-3.5">
-              <Avatar name={user.name} src={user.avatarUrl} />
+              <UserAvatar userId={user.id} name={user.name} hasAvatar={user.hasAvatar} />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-semibold text-slate-900">{user.name}</p>
                 <p className="truncate text-xs text-slate-500">{user.email}</p>

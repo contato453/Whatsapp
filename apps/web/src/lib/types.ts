@@ -20,7 +20,8 @@ export interface UserDirectoryDto {
   name: string;
   role: UserRole;
   status: "active" | "inactive";
-  avatarUrl: string | null;
+  /** Tem foto de perfil interna — a imagem vem por /users/:id/avatar */
+  hasAvatar: boolean;
 }
 
 /** Cadastro completo: só chega para o próprio usuário (/auth/me) e para o administrador. */
