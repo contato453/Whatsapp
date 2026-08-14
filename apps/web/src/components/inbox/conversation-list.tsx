@@ -1,7 +1,7 @@
 "use client";
 
 import { Users2, User, UserRound } from "lucide-react";
-import type { ConnectionStatus } from "@zapdesk/shared";
+import type { ConnectionStatus } from "@azvchat/shared";
 import { cn, formatTime } from "@/lib/utils";
 import type { ConversationDto } from "@/lib/types";
 import { Badge } from "@/components/ui";

@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@zapdesk/database";
+import type { PrismaClient } from "@azvchat/database";
 import type { AuthTokenPayload } from "./auth.js";
 
 /**

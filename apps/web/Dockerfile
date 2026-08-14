@@ -9,14 +9,14 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml .npmrc ./
 COPY apps/web/package.json apps/web/
 COPY packages/shared/package.json packages/shared/
-RUN pnpm install --frozen-lockfile --filter @zapdesk/web...
+RUN pnpm install --frozen-lockfile --filter @azvchat/web...
 COPY tsconfig.base.json ./
 COPY packages/shared ./packages/shared
 COPY apps/web ./apps/web
-RUN pnpm --filter @zapdesk/web build
+RUN pnpm --filter @azvchat/web build
 
 FROM base AS runtime
 ENV NODE_ENV=production
 COPY --from=build /app /app
 EXPOSE 3000
-CMD ["pnpm", "--filter", "@zapdesk/web", "start"]
+CMD ["pnpm", "--filter", "@azvchat/web", "start"]

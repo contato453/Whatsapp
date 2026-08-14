@@ -4,7 +4,7 @@ import { authenticate } from "../../lib/auth.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
 import { serializeUser } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
-import type { ScheduledMessage, User } from "@zapdesk/database";
+import type { ScheduledMessage, User } from "@azvchat/database";
 
 function serialize(scheduled: ScheduledMessage & { createdBy?: User | null }) {
   return {

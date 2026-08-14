@@ -25,7 +25,7 @@ import type {
   ProviderContact,
   ProviderGroup,
   QuotedMessageRef,
-} from "@zapdesk/shared";
+} from "@azvchat/shared";
 import type { MessageTarget, WhatsAppProvider, WhatsAppProviderEvents } from "../provider.js";
 import {
   chatTypeFromJid,

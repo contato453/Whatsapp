@@ -1,5 +1,5 @@
-import type { PrismaClient, Prisma } from "@zapdesk/database";
-import type { NormalizedMessage } from "@zapdesk/shared";
+import type { PrismaClient, Prisma } from "@azvchat/database";
+import type { NormalizedMessage } from "@azvchat/shared";
 import type { Logger } from "pino";
 import type { MediaStorage } from "../lib/media-storage.js";
 import { extensionFromMime } from "../lib/media-storage.js";

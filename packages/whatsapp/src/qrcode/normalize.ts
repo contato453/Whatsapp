@@ -1,5 +1,5 @@
 import type { proto } from "@whiskeysockets/baileys";
-import type { ConversationType, MessageDirection, MessageType } from "@zapdesk/shared";
+import type { ConversationType, MessageDirection, MessageType } from "@azvchat/shared";
 
 /**
  * Funções puras de normalização de mensagens do formato Baileys para o

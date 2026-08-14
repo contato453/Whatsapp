@@ -1,5 +1,5 @@
-import type { PrismaClient } from "@zapdesk/database";
-import type { WhatsAppProvider } from "@zapdesk/whatsapp";
+import type { PrismaClient } from "@azvchat/database";
+import type { WhatsAppProvider } from "@azvchat/whatsapp";
 import type { Server } from "socket.io";
 import type { Logger } from "pino";
 import type { AppConfig } from "./config.js";

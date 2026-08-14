@@ -98,7 +98,7 @@ docker compose -f docker-compose.prod.yml exec \
   -e SEED_ADMIN_PASSWORD='UmaSenhaForteAqui' \
   -e SEED_ADMIN_NAME='Seu Nome' \
   -e SEED_ORG_NAME='Nome do Escritório' \
-  api pnpm --filter @zapdesk/database seed
+  api pnpm --filter @azvchat/database seed
 ```
 
 ## Passo 8 — Usar
@@ -122,6 +122,32 @@ docker compose -f docker-compose.prod.yml up -d --build
 
 As migrations rodam sozinhas no start da API. As sessões do WhatsApp **não caem** — nada de QR de novo.
 
+### Migração única: renomear o banco de `zapdesk` para `azvchat`
+
+Só é necessário em instalações que subiram **antes** da renomeação do sistema para AZVCHAT. Instalação nova já nasce com os nomes corretos e pode pular esta seção.
+
+O Postgres só cria usuário e banco quando o volume está vazio. Num servidor que já rodou, o volume tem `zapdesk` gravado, e as variáveis novas do compose são ignoradas — então a API sobe apontando para um usuário que não existe e não conecta. O rename é feito uma vez, no banco:
+
+```bash
+# 1. Pare a API (o banco continua no ar)
+docker compose -f docker-compose.prod.yml stop api
+
+# 2. Renomeie banco e usuário. A senha vem do POSTGRES_PASSWORD do seu .env
+docker compose -f docker-compose.prod.yml exec postgres psql -U zapdesk -d postgres -c \
+  "ALTER DATABASE zapdesk RENAME TO azvchat;"
+docker compose -f docker-compose.prod.yml exec postgres psql -U zapdesk -d postgres -c \
+  "ALTER ROLE zapdesk RENAME TO azvchat;"
+docker compose -f docker-compose.prod.yml exec postgres psql -U azvchat -d postgres -c \
+  "ALTER ROLE azvchat WITH PASSWORD 'SUA_POSTGRES_PASSWORD';"
+
+# 3. Suba tudo de novo
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+Sobre o passo 3 da senha: o Postgres 16 guarda a senha em scram-sha-256 e o rename a preserva, mas em cluster antigo migrado de md5 o rename limpa a senha. Rodar o `ALTER ROLE ... WITH PASSWORD` cobre os dois casos — use exatamente o valor de `POSTGRES_PASSWORD` que está no seu `.env`, senão a API não conecta.
+
+Nada de dados é perdido: renomear banco e usuário não toca nas tabelas. As sessões de WhatsApp ficam em volume separado e também não são afetadas — nenhum número precisa reconectar.
+
 **Ver logs**:
 
 ```bash
@@ -140,7 +166,7 @@ docker compose -f docker-compose.prod.yml restart api
 ```bash
 # Banco de dados
 docker compose -f docker-compose.prod.yml exec postgres \
-  pg_dump -U zapdesk zapdesk | gzip > backup-$(date +%F).sql.gz
+  pg_dump -U azvchat azvchat | gzip > backup-$(date +%F).sql.gz
 
 # Sessões do WhatsApp + mídias (volumes)
 docker run --rm -v whatsapp_whatsapp_sessions:/s -v whatsapp_media_store:/m -v $(pwd):/out \
