@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
+import { createSessionVerifier } from "./lib/auth.js";
 import { registerErrorHandler } from "./lib/errors.js";
 import { authRoutes } from "./modules/auth/routes.js";
 import { userRoutes } from "./modules/users/routes.js";
@@ -39,6 +40,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
 
   await app.register(jwt, { secret: deps.config.JWT_SECRET });
+
+  // Toda rota autenticada revalida a sessão no banco (ver createSessionVerifier).
+  app.decorate("verifySession", createSessionVerifier(deps.prisma));
 
   await app.register(rateLimit, {
     max: 300,

@@ -10,13 +10,22 @@ import type {
 
 /** DTOs retornados pela API (datas como string ISO). */
 
-export interface UserDto {
+/**
+ * Usuário como ele aparece dentro do trabalho de outro: responsável pela
+ * conversa, autor de nota, opção no seletor de atribuição. É tudo o que a
+ * API devolve para quem não administra usuários.
+ */
+export interface UserDirectoryDto {
   id: string;
   name: string;
-  email: string;
   role: UserRole;
   status: "active" | "inactive";
   avatarUrl: string | null;
+}
+
+/** Cadastro completo: só chega para o próprio usuário (/auth/me) e para o administrador. */
+export interface UserDto extends UserDirectoryDto {
+  email: string;
   /** Prefixa as mensagens enviadas com o nome do atendente */
   signMessages: boolean;
   /** Último acesso ao sistema — null se nunca entrou */
@@ -70,7 +79,7 @@ export interface ConversationDto {
   title: string;
   hasAvatar: boolean;
   status: ConversationStatus;
-  assignedUser: UserDto | null;
+  assignedUser: UserDirectoryDto | null;
   department: DepartmentDto | null;
   tags: TagDto[];
   unreadCount: number;
@@ -143,14 +152,14 @@ export interface NoteDto {
   id: string;
   conversationId?: string;
   content: string;
-  user: UserDto | null;
+  user: UserDirectoryDto | null;
   createdAt: string;
 }
 
 export interface AssignmentHistoryDto {
   id: string;
   action: string;
-  performedBy: UserDto | null;
+  performedBy: UserDirectoryDto | null;
   note: string | null;
   createdAt: string;
 }
@@ -169,7 +178,7 @@ export interface ScheduledMessageDto {
   scheduledFor: string;
   status: "pending" | "sent" | "failed" | "canceled";
   error: string | null;
-  createdBy: UserDto | null;
+  createdBy: UserDirectoryDto | null;
   createdAt: string;
 }
 

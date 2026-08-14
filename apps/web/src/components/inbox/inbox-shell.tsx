@@ -33,7 +33,7 @@ import type {
   NoteDto,
   QuickReplyDto,
   TagDto,
-  UserDto,
+  UserDirectoryDto,
 } from "@/lib/types";
 import { Avatar, Button, EmptyState, Input, Modal, Spinner, Textarea } from "@/components/ui";
 import { ConversationListItem } from "./conversation-list";
@@ -149,7 +149,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const [chatResults, setChatResults] = useState<MessageDto[] | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
 
-  const [users, setUsers] = useState<UserDto[]>([]);
+  const [users, setUsers] = useState<UserDirectoryDto[]>([]);
   const [departments, setDepartments] = useState<DepartmentDto[]>([]);
   const [tags, setTags] = useState<TagDto[]>([]);
   const [instances, setInstances] = useState<InstanceDto[]>([]);
@@ -162,7 +162,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
 
   // ---------- Carregamento de dados auxiliares ----------
   useEffect(() => {
-    api.get<{ users: UserDto[] }>("/users").then((data) => setUsers(data.users)).catch(() => undefined);
+    api.get<{ users: UserDirectoryDto[] }>("/users").then((data) => setUsers(data.users)).catch(() => undefined);
     api.get<{ departments: DepartmentDto[] }>("/departments").then((data) => setDepartments(data.departments)).catch(() => undefined);
     api.get<{ tags: TagDto[] }>("/tags").then((data) => setTags(data.tags)).catch(() => undefined);
     api.get<{ instances: InstanceDto[] }>("/whatsapp-instances").then((data) => setInstances(data.instances)).catch(() => undefined);

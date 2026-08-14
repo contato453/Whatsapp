@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { authenticate } from "../../lib/auth.js";
-import { UnauthorizedError } from "../../lib/errors.js";
+import { AppError, UnauthorizedError } from "../../lib/errors.js";
 import { serializeUser } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
 
@@ -69,6 +69,110 @@ export async function authRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
     }
     return { user: serializeUser(user) };
   });
+
+  /**
+   * O que a pessoa muda em si mesma. E-mail fica de fora de propósito: é a
+   * credencial de entrada, então continua na mão do administrador, junto de
+   * papel, status e recorte de acesso.
+   */
+  const updateProfileSchema = z.object({
+    name: z.string().min(2, "Nome deve ter no mínimo 2 caracteres").max(120).optional(),
+    signMessages: z.boolean().optional(),
+  });
+
+  /**
+   * Devolve token novo porque o nome viaja dentro do JWT (é ele que carimba
+   * quem enviou cada mensagem). Sem reemitir, o nome antigo continuaria
+   * assinando o envio até a sessão expirar.
+   */
+  app.patch("/auth/me", { preHandler: authenticate }, async (request) => {
+    const body = updateProfileSchema.parse(request.body);
+    const current = await deps.prisma.user.findUnique({ where: { id: request.user.sub } });
+    if (!current || current.status !== "active") throw new UnauthorizedError();
+
+    const user = await deps.prisma.user.update({
+      where: { id: current.id },
+      data: {
+        ...(body.name ? { name: body.name } : {}),
+        ...(body.signMessages === undefined ? {} : { signMessages: body.signMessages }),
+      },
+    });
+    deps.audit.record({
+      organizationId: user.organizationId,
+      userId: user.id,
+      action: "user.profile_updated",
+      entityType: "User",
+      entityId: user.id,
+      ip: request.ip,
+    });
+    const token = await app.jwt.sign(
+      {
+        sub: user.id,
+        organizationId: user.organizationId,
+        role: user.role,
+        name: user.name,
+        email: user.email,
+      },
+      { expiresIn: deps.config.JWT_EXPIRES_IN },
+    );
+    return { token, user: serializeUser(user) };
+  });
+
+  const changePasswordSchema = z.object({
+    currentPassword: z.string().min(1, "Informe a senha atual"),
+    newPassword: z.string().min(6, "A nova senha deve ter no mínimo 6 caracteres").max(72),
+  });
+
+  /**
+   * Troca de senha pela própria pessoa. Exige a senha atual: token roubado
+   * ou máquina destravada não vira troca de senha silenciosa.
+   *
+   * A sessão em uso continua valendo — quem trocou a própria senha não tem
+   * por que ser deslogado.
+   */
+  app.post(
+    "/auth/change-password",
+    {
+      preHandler: authenticate,
+      // Mesmo motivo do login: a senha atual não pode virar alvo de tentativa em massa.
+      config: { rateLimit: { max: 5, timeWindow: "1 minute" } },
+    },
+    async (request) => {
+      const body = changePasswordSchema.parse(request.body);
+      const user = await deps.prisma.user.findUnique({ where: { id: request.user.sub } });
+      if (!user || user.status !== "active") throw new UnauthorizedError();
+
+      const valid = await bcrypt.compare(body.currentPassword, user.passwordHash);
+      if (!valid) {
+        deps.audit.record({
+          organizationId: user.organizationId,
+          userId: user.id,
+          action: "auth.password_change_failed",
+          entityType: "User",
+          entityId: user.id,
+          ip: request.ip,
+        });
+        throw new AppError("Senha atual incorreta", 400, "invalid_password");
+      }
+      if (await bcrypt.compare(body.newPassword, user.passwordHash)) {
+        throw new AppError("A nova senha deve ser diferente da atual", 400, "same_password");
+      }
+
+      await deps.prisma.user.update({
+        where: { id: user.id },
+        data: { passwordHash: await bcrypt.hash(body.newPassword, 10) },
+      });
+      deps.audit.record({
+        organizationId: user.organizationId,
+        userId: user.id,
+        action: "user.password_changed",
+        entityType: "User",
+        entityId: user.id,
+        ip: request.ip,
+      });
+      return { ok: true };
+    },
+  );
 
   app.post("/auth/logout", { preHandler: authenticate }, async (request) => {
     deps.audit.record({

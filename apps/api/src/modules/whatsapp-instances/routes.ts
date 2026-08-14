@@ -3,6 +3,7 @@ import { z } from "zod";
 import { accessibleInstanceIds, instanceIdScope } from "../../lib/access.js";
 import { authenticate, requireRole } from "../../lib/auth.js";
 import { NotFoundError } from "../../lib/errors.js";
+import { grantInstanceAccess } from "../../realtime/socket.js";
 import { serializeInstance } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
 
@@ -56,21 +57,45 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
     async (request, reply) => {
       const body = createInstanceSchema.parse(request.body);
       await assertDepartmentInOrg(body.departmentId, request.user.organizationId);
-      const instance = await deps.prisma.whatsAppInstance.create({
-        data: {
-          organizationId: request.user.organizationId,
-          name: body.name,
-          departmentId: body.departmentId ?? null,
-          provider: "qrcode",
-        },
+
+      /**
+       * Quem cria o número passa a enxergá-lo. Visibilidade sai só de
+       * vínculo explícito, então sem isto o supervisor criava a conexão e
+       * em seguida tomava 404 ao tentar conectá-la: o número não estava
+       * em lugar nenhum até um administrador vinculá-lo à mão.
+       *
+       * Admin não precisa de vínculo — enxerga a organização inteira.
+       */
+      const linkCreator = request.user.role !== "admin";
+      const instance = await deps.prisma.$transaction(async (tx) => {
+        const created = await tx.whatsAppInstance.create({
+          data: {
+            organizationId: request.user.organizationId,
+            name: body.name,
+            departmentId: body.departmentId ?? null,
+            provider: "qrcode",
+          },
+        });
+        if (linkCreator) {
+          await tx.userWhatsAppInstance.create({
+            data: { userId: request.user.sub, whatsappInstanceId: created.id },
+          });
+        }
+        return created;
       });
+
       deps.instanceManager.registerInstance(instance.id, instance.organizationId);
+      if (linkCreator) {
+        // O acesso vale para a sessão que já está aberta, não só na próxima.
+        grantInstanceAccess(deps.io, request.user.sub, instance.id);
+      }
       deps.audit.record({
         organizationId: request.user.organizationId,
         userId: request.user.sub,
         action: "whatsapp.instance_created",
         entityType: "WhatsAppInstance",
         entityId: instance.id,
+        ...(linkCreator ? { metadata: { linkedToCreator: request.user.sub } } : {}),
       });
       return reply.status(201).send({ instance: serializeInstance(instance) });
     },

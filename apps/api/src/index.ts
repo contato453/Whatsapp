@@ -54,6 +54,7 @@ async function main(): Promise<void> {
   const io = createRealtime(app.server, {
     corsOrigins: config.corsOrigins,
     verifyToken: (token) => app.jwt.verify<AuthTokenPayload>(token),
+    verifySession: app.verifySession,
     resolveAccess: async (user) => {
       const access = await loadConversationAccess(prisma, user);
       return { instanceIds: access.instanceIds, departmentIds: access.departmentIds };

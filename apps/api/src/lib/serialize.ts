@@ -27,6 +27,24 @@ export function serializeUser(user: User) {
 }
 
 /**
+ * Versão mínima, usada sempre que um usuário aparece dentro do trabalho de
+ * outro: responsável pela conversa, autor de nota, seletor de atribuição.
+ *
+ * E-mail, último acesso e o mapa de números/departamentos são dados de
+ * cadastro — só saem para quem administra usuários, nunca embutidos em
+ * outra entidade.
+ */
+export function serializeUserDirectory(user: User) {
+  return {
+    id: user.id,
+    name: user.name,
+    role: user.role,
+    status: user.status,
+    avatarUrl: user.avatarUrl,
+  };
+}
+
+/**
  * Versão usada na tela de atendentes: inclui as conexões de WhatsApp
  * liberadas para o usuário (lista vazia = acesso a todas).
  */
@@ -97,7 +115,9 @@ export function serializeConversation(conversation: ConversationWithRelations) {
     // pelo endpoint autenticado /conversations/:id/avatar.
     hasAvatar: conversation.profilePicture != null,
     status: conversation.status,
-    assignedUser: conversation.assignedUser ? serializeUser(conversation.assignedUser) : null,
+    assignedUser: conversation.assignedUser
+      ? serializeUserDirectory(conversation.assignedUser)
+      : null,
     department: conversation.department ? serializeDepartment(conversation.department) : null,
     tags: conversation.tags?.map((entry) => serializeTag(entry.tag)) ?? [],
     unreadCount: conversation.unreadCount,

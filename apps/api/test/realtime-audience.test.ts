@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { conversationAudience, instanceAudience } from "../src/realtime/socket.js";
+import { conversationAudience, grantInstanceAccess, instanceAudience } from "../src/realtime/socket.js";
 
 const ORG = "org-1";
 const CHIP = "chip-a";
@@ -85,5 +85,64 @@ describe("conversationAudience (quem recebe evento de conversa)", () => {
 describe("instanceAudience (evento do número, não da conversa)", () => {
   it("alcança quem tem o número, sem recorte de departamento", () => {
     expect(instanceAudience(ORG, CHIP)).toEqual(["org:org-1", "instance:chip-a"]);
+  });
+});
+
+/** Socket mínimo: só o que grantInstanceAccess usa. */
+function fakeSocket(role: "admin" | "supervisor" | "agent", departmentIds: string[] | null) {
+  const rooms: string[] = [];
+  return {
+    rooms,
+    socket: {
+      data: {
+        user: { sub: "user-9", organizationId: ORG, role, name: "Fulano", email: "f@x.com" },
+        access: { instanceIds: departmentIds ? [] : null, departmentIds },
+      },
+      join: (room: string) => rooms.push(room),
+    },
+  };
+}
+
+function fakeIo(entries: Array<{ socket: unknown }>) {
+  return {
+    sockets: { sockets: new Map(entries.map((entry, index) => [`s${index}`, entry.socket])) },
+  } as unknown as Parameters<typeof grantInstanceAccess>[0];
+}
+
+describe("grantInstanceAccess (número criado no meio da sessão)", () => {
+  it("coloca o supervisor nas salas do número novo, sem reconectar", () => {
+    const sup = fakeSocket("supervisor", ["dep-1"]);
+    grantInstanceAccess(fakeIo([sup]), "user-9", CHIP);
+    expect(sup.rooms).toEqual(["instance:chip-a", "sup:chip-a:dep-1", "sup:chip-a:none"]);
+  });
+
+  it("usuário comum entra separado entre livres e as próprias conversas", () => {
+    const agent = fakeSocket("agent", ["dep-1"]);
+    grantInstanceAccess(fakeIo([agent]), "user-9", CHIP);
+    expect(agent.rooms).toEqual([
+      "instance:chip-a",
+      "free:chip-a:dep-1",
+      "mine:chip-a:dep-1:user-9",
+      "free:chip-a:none",
+      "mine:chip-a:none:user-9",
+    ]);
+  });
+
+  it("passa a valer para as buscas seguintes da mesma sessão", () => {
+    const sup = fakeSocket("supervisor", ["dep-1"]);
+    grantInstanceAccess(fakeIo([sup]), "user-9", CHIP);
+    expect(sup.socket.data.access.instanceIds).toEqual([CHIP]);
+  });
+
+  it("não mexe na sessão de outra pessoa", () => {
+    const outro = fakeSocket("supervisor", ["dep-1"]);
+    grantInstanceAccess(fakeIo([outro]), "user-outro", CHIP);
+    expect(outro.rooms).toEqual([]);
+  });
+
+  it("admin não usa sala por número — já recebe pela organização", () => {
+    const admin = fakeSocket("admin", null);
+    grantInstanceAccess(fakeIo([admin]), "user-9", CHIP);
+    expect(admin.rooms).toEqual([]);
   });
 });
