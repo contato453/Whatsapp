@@ -1,5 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import type { UserRole } from "@azvchat/shared";
+import { hasRole, type UserRole } from "@azvchat/shared";
 import { ForbiddenError, UnauthorizedError } from "./errors.js";
 
 /** Payload do JWT — nunca incluir dados sensíveis aqui. */
@@ -27,18 +27,10 @@ export async function authenticate(request: FastifyRequest): Promise<void> {
 }
 
 /**
- * Regras de permissão por papel. Pura e testável.
- * admin > supervisor > agent.
+ * A hierarquia admin > supervisor > agent vive em `@azvchat/shared`, para o
+ * menu do frontend obedecer exatamente à mesma regra que protege a rota.
  */
-const ROLE_LEVEL: Record<UserRole, number> = {
-  admin: 3,
-  supervisor: 2,
-  agent: 1,
-};
-
-export function hasRole(userRole: UserRole, minimumRole: UserRole): boolean {
-  return ROLE_LEVEL[userRole] >= ROLE_LEVEL[minimumRole];
-}
+export { hasRole };
 
 /** preHandler que exige papel mínimo. */
 export function requireRole(minimumRole: UserRole) {

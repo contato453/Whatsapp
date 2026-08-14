@@ -133,6 +133,30 @@ só quem atua naquele departamento passa a enxergá-la. Número sem departamento
 conversa sem departamento, visível para quem tem o número — para não existir mensagem de
 cliente que ninguém vê.
 
+### O que cada papel pode fazer
+
+Visibilidade responde "quais conversas"; papel responde "quais ações". A hierarquia
+(`admin > supervisor > agent`) vive em `packages/shared` e é a mesma tabela usada para
+proteger a rota na API e para montar o menu no frontend.
+
+| Ação | Papel mínimo |
+| --- | --- |
+| Criar e editar usuário; excluir número ou departamento | admin |
+| Criar/conectar número, criar departamento e etiqueta, ver auditoria, editar nota de terceiro | supervisor |
+| Inbox, atribuição, notas próprias, respostas rápidas | usuário |
+
+O menu lateral esconde o que o papel não alcança e a URL digitada direto cai em "acesso
+restrito". Isso é conveniência de interface: **a autorização de verdade é sempre a do
+servidor**, que responde 403 de qualquer jeito.
+
+### Dado de cadastro não circula
+
+Usuário que aparece dentro do trabalho de outro (responsável pela conversa, autor de nota,
+opção do seletor de atribuição) sai da API na versão reduzida — id, nome, papel, status e
+avatar (`serializeUserDirectory`). E-mail, último acesso e o mapa de números e departamentos
+de cada pessoa só saem em `GET /users` para **administrador**; para os demais essa rota
+devolve apenas a agenda interna de ativos, que é o suficiente para escolher responsável.
+
 ## Segurança
 
 - JWT com expiração; senha com bcrypt; endpoints protegidos por papel (admin/supervisor/agent);

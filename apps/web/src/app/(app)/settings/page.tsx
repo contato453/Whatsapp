@@ -1,5 +1,6 @@
 "use client";
 
+import { USER_ROLE_LABELS } from "@azvchat/shared";
 import { useAuth } from "@/lib/auth-context";
 import { API_URL } from "@/lib/api";
 import { Card } from "@/components/ui";
@@ -26,7 +27,7 @@ export default function SettingsPage() {
             </div>
             <div className="flex justify-between">
               <dt className="text-slate-500">Papel</dt>
-              <dd className="font-medium capitalize text-slate-900">{user?.role}</dd>
+              <dd className="font-medium text-slate-900">{user ? USER_ROLE_LABELS[user.role] : ""}</dd>
             </div>
           </dl>
         </Card>

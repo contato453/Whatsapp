@@ -10,7 +10,7 @@ import type {
   ConversationDetailDto,
   DepartmentDto,
   TagDto,
-  UserDto,
+  UserDirectoryDto,
 } from "@/lib/types";
 import { Badge, Button, Textarea } from "@/components/ui";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
@@ -75,7 +75,7 @@ export function ContextPanel({
   onChanged,
 }: {
   detail: ConversationDetailDto;
-  users: UserDto[];
+  users: UserDirectoryDto[];
   departments: DepartmentDto[];
   tags: TagDto[];
   onChanged: () => void;
@@ -114,6 +114,17 @@ export function ContextPanel({
   const availableTags = tags.filter(
     (tag) => !conversation.tags.some((assigned) => assigned.id === tag.id),
   );
+
+  /**
+   * A lista de usuários só traz gente ativa. Se o responsável atual foi
+   * desativado, ele entra como opção mesmo assim — sem isso o seletor
+   * mostraria "Sem responsável" numa conversa que tem dono.
+   */
+  const assignable = conversation.assignedUser
+    ? users.some((item) => item.id === conversation.assignedUser?.id)
+      ? users
+      : [...users, conversation.assignedUser]
+    : users;
 
   return (
     <div className="thin-scroll flex h-full flex-col gap-5 overflow-y-auto p-4">
@@ -193,7 +204,7 @@ export function ContextPanel({
               }}
             >
               <option value="">Sem responsável</option>
-              {users.map((user) => (
+              {assignable.map((user) => (
                 <option key={user.id} value={user.id}>
                   {user.name}
                 </option>

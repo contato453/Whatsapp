@@ -1,9 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
+import { hasRole } from "@azvchat/shared";
 import { authenticate, requireRole } from "../../lib/auth.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
-import { serializeUserWithAccess } from "../../lib/serialize.js";
+import { serializeUserDirectory, serializeUserWithAccess } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
 
 /** Conexões liberadas. Lista vazia = o usuário não enxerga conversa alguma. */
@@ -62,7 +63,25 @@ export async function userRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
     return unique;
   }
 
+  /**
+   * Duas listas na mesma rota, porque servem a duas coisas diferentes.
+   *
+   * Para o administrador é o cadastro: todo mundo, inclusive inativos, com
+   * e-mail, último acesso e o mapa de números e departamentos de cada um.
+   *
+   * Para supervisor e usuário é só a agenda interna que abastece o seletor
+   * de responsável — nome e nada mais, sem inativos (não faz sentido
+   * atribuir conversa a quem não entra mais no sistema). Quem atende não
+   * precisa saber o e-mail nem o recorte de acesso dos colegas.
+   */
   app.get("/users", { preHandler: authenticate }, async (request) => {
+    if (!hasRole(request.user.role, "admin")) {
+      const directory = await deps.prisma.user.findMany({
+        where: { organizationId: request.user.organizationId, status: "active" },
+        orderBy: { name: "asc" },
+      });
+      return { users: directory.map(serializeUserDirectory) };
+    }
     const users = await deps.prisma.user.findMany({
       where: { organizationId: request.user.organizationId },
       orderBy: { name: "asc" },
