@@ -13,7 +13,7 @@ Uso interno inicialmente, mas arquitetada desde o início para virar SaaS (multi
 | Banco | PostgreSQL 16 + Prisma (migrations versionadas) |
 | Tempo real | Socket.IO (salas por organização) |
 | WhatsApp | Baileys (isolado atrás da interface `WhatsAppProvider`) |
-| Auth | JWT + bcrypt, autorização por papéis (admin / supervisor / agent) |
+| Auth | JWT + bcrypt, autorização por papéis (admin / supervisor / agent) e visibilidade por número + departamento |
 
 ### Por que Baileys (e não whatsapp-web.js)?
 
@@ -109,6 +109,29 @@ Frontend e API podem rodar em servidores diferentes: o web só precisa de `NEXT_
 ### Redes restritas
 
 Se a saída de rede passa por proxy corporativo, defina `WHATSAPP_PROXY_URL` — o WebSocket do WhatsApp será tunelado por ele.
+
+## Quem enxerga o quê
+
+A visibilidade de conversa é decidida em um único lugar (`apps/api/src/lib/access.ts`) e
+vale igual para HTTP e para o tempo real — o que não pode ser buscado por API também não
+chega pelo socket.
+
+| Papel | Enxerga |
+| --- | --- |
+| admin | a organização inteira |
+| supervisor | todas as conversas dos **departamentos marcados**, dentro dos **números marcados** |
+| usuário | dentro do mesmo recorte, só as conversas **atribuídas a ele** e as **sem responsável** |
+
+Duas regras não têm exceção:
+
+- **número não vinculado ao login nunca aparece**, nem para supervisor;
+- **sem número ou sem departamento marcado, o usuário não vê conversa alguma.** Não existe
+  "sem marcação = vê tudo".
+
+Cada número tem um **departamento padrão**: a conversa que chega já nasce classificada, e
+só quem atua naquele departamento passa a enxergá-la. Número sem departamento padrão gera
+conversa sem departamento, visível para quem tem o número — para não existir mensagem de
+cliente que ninguém vê.
 
 ## Segurança
 

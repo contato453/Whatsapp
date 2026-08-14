@@ -26,12 +26,14 @@ export interface UserDto {
  */
 export interface UserWithAccessDto extends UserDto {
   whatsappInstanceIds: string[];
+  departmentIds: string[];
 }
 
 export interface InstanceDto {
   id: string;
   name: string;
   phoneNumber: string | null;
+  departmentId: string | null;
   status: ConnectionStatus;
   provider: string;
   lastConnectionAt: string | null;

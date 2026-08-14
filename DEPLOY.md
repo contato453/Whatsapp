@@ -104,10 +104,12 @@ docker compose -f docker-compose.prod.yml exec \
 ## Passo 8 — Usar
 
 1. Acesse `https://app.seudominio.com.br` e faça login;
-2. Vá em **WhatsApp → Adicionar WhatsApp → Conectar** e escaneie o QR Code;
+2. Vá em **WhatsApp → Adicionar WhatsApp**, escolha o **departamento padrão** do número
+   e clique em **Conectar** para escanear o QR Code;
 3. Cadastre os usuários em **Usuários** (cada um com sua senha e papel);
-4. Use **Editar** no usuário para ajustar dados, senha, situação e marcar a quais
-   números de WhatsApp ele tem acesso (sem marcação = todos os números);
+4. Use **Editar** no usuário para ajustar dados, senha, situação e marcar **a quais números
+   e a quais departamentos** ele tem acesso. Sem número ou sem departamento marcado, o
+   usuário não enxerga conversa alguma — a marcação é obrigatória, não opcional;
 5. As sessões ficam no volume `whatsapp_sessions` — sobrevivem a deploys e reboots.
 
 ## Operação do dia a dia

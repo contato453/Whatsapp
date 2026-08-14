@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { MediaPayload, QuotedMessageRef } from "@azvchat/shared";
 import { RealtimeEvents } from "@azvchat/shared";
-import { accessibleInstanceIds, instanceScope } from "../../lib/access.js";
+import { conversationScope, loadConversationAccess } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
 import { extensionFromMime } from "../../lib/media-storage.js";
@@ -14,7 +14,7 @@ import {
   type QuotedPreview,
 } from "../../lib/serialize.js";
 import { resolveSenders, type SenderDirectory } from "../../lib/sender-directory.js";
-import { instanceAudience } from "../../realtime/socket.js";
+import { conversationAudience } from "../../realtime/socket.js";
 import { buildPreview } from "../../services/message-ingest.js";
 import type { AppDeps } from "../../types.js";
 
@@ -33,9 +33,9 @@ function mediaTypeFromMime(mimeType: string): MediaPayload["type"] {
 export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
   /** Escopado por organização e pelas conexões liberadas para o usuário. */
   async function findConversationOr404(id: string, user: FastifyRequest["user"]) {
-    const allowed = await accessibleInstanceIds(deps.prisma, user);
+    const access = await loadConversationAccess(deps.prisma, user);
     const conversation = await deps.prisma.conversation.findFirst({
-      where: { id, organizationId: user.organizationId, ...instanceScope(allowed) },
+      where: { id, organizationId: user.organizationId, ...conversationScope(access) },
       include: { instance: true },
     });
     if (!conversation) throw new NotFoundError("Conversa");
@@ -60,7 +60,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       deps.prisma.message.findUnique({ where: { id: messageId } }),
     ]);
     if (!conversation || !message) return;
-    const room = instanceAudience(organizationId, conversation.whatsappInstanceId);
+    const room = conversationAudience(organizationId, conversation);
     deps.io.to(room).emit(RealtimeEvents.MessageNew, {
       conversation: serializeConversation(conversation),
       message: serializeMessage(message),
@@ -294,12 +294,12 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
   app.post("/messages/:id/reactions", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const { emoji } = z.object({ emoji: z.string().max(16) }).parse(request.body);
-    const allowed = await accessibleInstanceIds(deps.prisma, request.user);
+    const access = await loadConversationAccess(deps.prisma, request.user);
     const message = await deps.prisma.message.findFirst({
       where: {
         id,
         organizationId: request.user.organizationId,
-        ...(allowed ? { conversation: { whatsappInstanceId: { in: allowed } } } : {}),
+        conversation: conversationScope(access),
       },
       include: { conversation: true },
     });
@@ -337,10 +337,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
     }
 
     const reactions = await deps.prisma.messageReaction.findMany({ where: { messageId: id } });
-    const audience = instanceAudience(
-      request.user.organizationId,
-      message.conversation.whatsappInstanceId,
-    );
+    const audience = conversationAudience(request.user.organizationId, message.conversation);
     deps.io.to(audience).emit(RealtimeEvents.MessageReaction, {
       conversationId: message.conversationId,
       messageId: id,
@@ -387,7 +384,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       entityId: id,
     });
     deps.io
-      .to(instanceAudience(request.user.organizationId, message.conversation.whatsappInstanceId))
+      .to(conversationAudience(request.user.organizationId, message.conversation))
       .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
     return { ok: true };
   });
@@ -434,7 +431,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       entityId: id,
     });
     deps.io
-      .to(instanceAudience(request.user.organizationId, message.conversation.whatsappInstanceId))
+      .to(conversationAudience(request.user.organizationId, message.conversation))
       .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
     return { message: serializeMessage(updated) };
   });
@@ -446,14 +443,12 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       .object({ conversationId: z.string().uuid() })
       .parse(request.body);
 
-    const allowedForForward = await accessibleInstanceIds(deps.prisma, request.user);
+    const accessForForward = await loadConversationAccess(deps.prisma, request.user);
     const original = await deps.prisma.message.findFirst({
       where: {
         id,
         organizationId: request.user.organizationId,
-        ...(allowedForForward
-          ? { conversation: { whatsappInstanceId: { in: allowedForForward } } }
-          : {}),
+        conversation: conversationScope(accessForForward),
       },
     });
     if (!original) throw new NotFoundError("Mensagem");
@@ -701,12 +696,12 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
   /** Download/exibição da mídia de uma mensagem (autenticado, escopado por organização). */
   app.get("/messages/:id/media", { preHandler: authenticate }, async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const allowed = await accessibleInstanceIds(deps.prisma, request.user);
+    const access = await loadConversationAccess(deps.prisma, request.user);
     const message = await deps.prisma.message.findFirst({
       where: {
         id,
         organizationId: request.user.organizationId,
-        ...(allowed ? { conversation: { whatsappInstanceId: { in: allowed } } } : {}),
+        conversation: conversationScope(access),
       },
     });
     if (!message?.mediaUrl) throw new NotFoundError("Mídia");

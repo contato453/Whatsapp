@@ -6,7 +6,7 @@ import { RealtimeEvents, type ConnectionStatus } from "@azvchat/shared";
 import { api } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { formatDateTime, formatPhone } from "@/lib/utils";
-import type { InstanceDto } from "@/lib/types";
+import type { DepartmentDto, InstanceDto } from "@/lib/types";
 import { Badge, Button, Card, Field, Input, Modal, Spinner, EmptyState } from "@/components/ui";
 
 const STATUS_LABEL: Record<ConnectionStatus, { label: string; color: string }> = {
@@ -23,6 +23,8 @@ export default function WhatsAppPage() {
   const [instances, setInstances] = useState<InstanceDto[] | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
+  const [newDepartmentId, setNewDepartmentId] = useState("");
+  const [departments, setDepartments] = useState<DepartmentDto[]>([]);
   const [qrModal, setQrModal] = useState<{ instanceId: string; qrDataUrl: string | null } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -31,6 +33,13 @@ export default function WhatsAppPage() {
   }, []);
 
   useEffect(load, [load]);
+
+  useEffect(() => {
+    api
+      .get<{ departments: DepartmentDto[] }>("/departments")
+      .then((data) => setDepartments(data.departments))
+      .catch(() => setDepartments([]));
+  }, []);
 
   useEffect(() => {
     if (!socket) return;
@@ -68,8 +77,12 @@ export default function WhatsAppPage() {
     if (newName.trim().length < 2) return;
     setBusy("create");
     try {
-      await api.post("/whatsapp-instances", { name: newName.trim() });
+      await api.post("/whatsapp-instances", {
+        name: newName.trim(),
+        departmentId: newDepartmentId || null,
+      });
       setNewName("");
+      setNewDepartmentId("");
       setCreating(false);
       load();
     } finally {
@@ -84,6 +97,18 @@ export default function WhatsAppPage() {
         `/whatsapp-instances/${instance.id}/connect`,
       );
       setQrModal({ instanceId: instance.id, qrDataUrl: result.qrDataUrl });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function changeDepartment(instance: InstanceDto, departmentId: string) {
+    setBusy(instance.id);
+    try {
+      await api.patch(`/whatsapp-instances/${instance.id}`, {
+        departmentId: departmentId || null,
+      });
+      load();
     } finally {
       setBusy(null);
     }
@@ -134,6 +159,7 @@ export default function WhatsAppPage() {
           <div className="hidden items-center gap-4 border-b border-slate-200 bg-slate-50 px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:flex">
             <span className="min-w-0 flex-1">Instância</span>
             <span className="w-44 shrink-0">Número</span>
+            <span className="w-44 shrink-0">Departamento</span>
             <span className="w-36 shrink-0">Status</span>
             <span className="w-44 shrink-0">Última conexão</span>
             <span className="w-56 shrink-0 text-right">Ações</span>
@@ -159,6 +185,23 @@ export default function WhatsAppPage() {
                     ) : (
                       <span className="text-sm text-slate-400">Não vinculado</span>
                     )}
+                  </div>
+
+                  <div className="w-44 shrink-0">
+                    <select
+                      className="w-full max-w-[11rem] rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                      value={instance.departmentId ?? ""}
+                      disabled={busy === instance.id}
+                      onChange={(event) => void changeDepartment(instance, event.target.value)}
+                      title="Departamento em que as conversas deste número entram"
+                    >
+                      <option value="">Sem departamento</option>
+                      {departments.map((department) => (
+                        <option key={department.id} value={department.id}>
+                          {department.name}
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
                   <div className="w-36 shrink-0">
@@ -210,6 +253,24 @@ export default function WhatsAppPage() {
               autoFocus
             />
           </Field>
+          <Field label="Departamento padrão">
+            <select
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              value={newDepartmentId}
+              onChange={(event) => setNewDepartmentId(event.target.value)}
+            >
+              <option value="">Sem departamento</option>
+              {departments.map((department) => (
+                <option key={department.id} value={department.id}>
+                  {department.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <p className="text-xs text-slate-500">
+            As conversas que chegarem neste número entram nesse departamento, e só quem
+            atua nele passa a enxergá-las.
+          </p>
           <p className="text-xs text-slate-500">
             Depois de criar, clique em Conectar para gerar o QR Code e escanear com o celular
             (WhatsApp → Dispositivos conectados).

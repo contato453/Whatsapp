@@ -8,7 +8,7 @@ import { RealtimeEvents } from "@azvchat/shared";
 import type { WhatsAppProvider } from "@azvchat/whatsapp";
 import type { Server } from "socket.io";
 import type { Logger } from "pino";
-import { instanceAudience } from "../realtime/socket.js";
+import { conversationAudience, instanceAudience } from "../realtime/socket.js";
 import { serializeConversation, serializeMessage } from "../lib/serialize.js";
 import { extensionFromMime, type MediaStorage } from "../lib/media-storage.js";
 import type { MessageIngestService } from "./message-ingest.js";
@@ -97,7 +97,7 @@ export class InstanceManager {
           this.prisma.message.findUnique({ where: { id: result.messageId } }),
         ]);
         if (!conversation || !persisted) return;
-        const room = instanceAudience(organizationId, conversation.whatsappInstanceId);
+        const room = conversationAudience(organizationId, conversation);
         this.io.to(room).emit(RealtimeEvents.MessageNew, {
           conversation: serializeConversation(conversation),
           message: serializeMessage(persisted),
@@ -115,7 +115,12 @@ export class InstanceManager {
               externalChatId: update.externalChatId,
             },
           },
-          select: { id: true },
+          select: {
+            id: true,
+            whatsappInstanceId: true,
+            departmentId: true,
+            assignedUserId: true,
+          },
         });
         if (!conversation) return;
         const message = await this.prisma.message.findUnique({
@@ -135,7 +140,7 @@ export class InstanceManager {
           where: { id: message.id },
           data: { status: update.status },
         });
-        this.io.to(instanceAudience(organizationId, update.instanceId)).emit(RealtimeEvents.MessageStatus, {
+        this.io.to(conversationAudience(organizationId, conversation)).emit(RealtimeEvents.MessageStatus, {
           conversationId: conversation.id,
           messageId: message.id,
           status: update.status,
@@ -152,7 +157,12 @@ export class InstanceManager {
               externalChatId: reaction.externalChatId,
             },
           },
-          select: { id: true },
+          select: {
+            id: true,
+            whatsappInstanceId: true,
+            departmentId: true,
+            assignedUserId: true,
+          },
         });
         if (!conversation) return;
         const message = await this.prisma.message.findUnique({
@@ -194,7 +204,7 @@ export class InstanceManager {
           where: { messageId: message.id },
         });
         this.io
-          .to(instanceAudience(organizationId, reaction.instanceId))
+          .to(conversationAudience(organizationId, conversation))
           .emit(RealtimeEvents.MessageReaction, {
           conversationId: conversation.id,
           messageId: message.id,
@@ -288,7 +298,7 @@ export class InstanceManager {
             tags: { include: { tag: true } },
           },
         });
-        const room = instanceAudience(organizationId, event.instanceId);
+        const room = conversationAudience(organizationId, full ?? conversation);
         if (existing) {
           this.io.to(room).emit(RealtimeEvents.MessageUpdated, serializeMessage(message));
         } else if (full) {
@@ -335,7 +345,7 @@ export class InstanceManager {
           data: { deletedAt: new Date(), content: null },
         });
         this.io
-          .to(instanceAudience(organizationId, event.instanceId))
+          .to(conversationAudience(organizationId, message.conversation))
           .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
       });
     });
@@ -354,7 +364,7 @@ export class InstanceManager {
           data: { content: event.newText, editedAt: new Date() },
         });
         this.io
-          .to(instanceAudience(organizationId, event.instanceId))
+          .to(conversationAudience(organizationId, message.conversation))
           .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
       });
     });
@@ -436,10 +446,15 @@ export class InstanceManager {
           externalChatId,
         },
       },
-      select: { id: true },
+      select: {
+        id: true,
+        whatsappInstanceId: true,
+        departmentId: true,
+        assignedUserId: true,
+      },
     });
     if (!conversation) return null;
-    return this.prisma.message.findUnique({
+    const message = await this.prisma.message.findUnique({
       where: {
         conversationId_externalMessageId: {
           conversationId: conversation.id,
@@ -447,6 +462,9 @@ export class InstanceManager {
         },
       },
     });
+    // A conversa vai junto porque quem emite precisa dela para calcular
+    // a audiência (número, departamento e responsável).
+    return message ? { ...message, conversation } : null;
   }
 
   /** Retoma sessões que estavam ativas antes do último shutdown/deploy. */
@@ -597,7 +615,17 @@ export class InstanceManager {
     try {
       const group = await this.prisma.whatsAppGroup.findFirst({
         where: { conversationId, organizationId },
-        select: { id: true, whatsappInstanceId: true },
+        select: {
+          id: true,
+          whatsappInstanceId: true,
+          conversation: {
+            select: {
+              whatsappInstanceId: true,
+              departmentId: true,
+              assignedUserId: true,
+            },
+          },
+        },
       });
       if (!group) return;
 
@@ -657,7 +685,16 @@ export class InstanceManager {
       });
       if (updated > 0) {
         this.io
-          .to(instanceAudience(organizationId, group.whatsappInstanceId))
+          .to(
+            conversationAudience(
+              organizationId,
+              group.conversation ?? {
+                whatsappInstanceId: group.whatsappInstanceId,
+                departmentId: null,
+                assignedUserId: null,
+              },
+            ),
+          )
           .emit(RealtimeEvents.GroupParticipants, { conversationId });
       }
     } catch (err) {
@@ -707,7 +744,7 @@ export class InstanceManager {
           });
           if (full) {
             this.io
-              .to(instanceAudience(organizationId, instanceId))
+              .to(conversationAudience(organizationId, full))
               .emit(RealtimeEvents.ConversationUpdated, serializeConversation(full));
           }
         }
@@ -721,11 +758,21 @@ export class InstanceManager {
     }
   }
 
+  /** Departamento em que as conversas do número entram por padrão. */
+  private async defaultDepartmentId(instanceId: string): Promise<string | null> {
+    const instance = await this.prisma.whatsAppInstance.findUnique({
+      where: { id: instanceId },
+      select: { departmentId: true },
+    });
+    return instance?.departmentId ?? null;
+  }
+
   private async syncChats(
     instanceId: string,
     organizationId: string,
     chats: ProviderChat[],
   ): Promise<void> {
+    const departmentId = await this.defaultDepartmentId(instanceId);
     for (const chat of chats) {
       const title = chat.name ?? chat.externalChatId.split("@")[0] ?? chat.externalChatId;
       await this.prisma.conversation.upsert({
@@ -745,6 +792,7 @@ export class InstanceManager {
           externalChatId: chat.externalChatId,
           type: chat.type,
           title,
+          departmentId,
           status: "open",
           unreadCount: chat.unreadCount,
           lastMessageAt: chat.lastMessageAt,
@@ -791,6 +839,7 @@ export class InstanceManager {
     organizationId: string,
     groups: ProviderGroup[],
   ): Promise<void> {
+    const departmentId = await this.defaultDepartmentId(instanceId);
     for (const group of groups) {
       // Grupo é entidade de primeira classe: garante conversa + registro do grupo.
       const conversation = await this.prisma.conversation.upsert({
@@ -807,6 +856,7 @@ export class InstanceManager {
           externalChatId: group.externalId,
           type: "group",
           title: group.name,
+          departmentId,
           status: "open",
         },
       });

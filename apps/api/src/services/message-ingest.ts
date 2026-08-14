@@ -217,12 +217,20 @@ export class MessageIngestService {
       return existing;
     }
 
+    // A conversa nasce no departamento padrão do número, para já entrar
+    // classificada e respeitar o recorte por departamento desde a primeira
+    // mensagem.
+    const instance = await this.prisma.whatsAppInstance.findUnique({
+      where: { id: message.instanceId },
+      select: { departmentId: true },
+    });
     const data: Prisma.ConversationUncheckedCreateInput = {
       organizationId,
       whatsappInstanceId: message.instanceId,
       externalChatId: message.externalChatId,
       type: message.chatType,
       title: fallbackTitle,
+      departmentId: instance?.departmentId ?? null,
       status: "open",
     };
     return this.prisma.conversation.create({ data });
