@@ -24,8 +24,9 @@ import type {
   ProviderChat,
   ProviderContact,
   ProviderGroup,
+  QuotedMessageRef,
 } from "@zapdesk/shared";
-import type { WhatsAppProvider, WhatsAppProviderEvents } from "../provider.js";
+import type { MessageTarget, WhatsAppProvider, WhatsAppProviderEvents } from "../provider.js";
 import {
   chatTypeFromJid,
   directionFromKey,
@@ -36,6 +37,7 @@ import {
   isIgnorableJid,
   jidToPhone,
   toDate,
+  unwrapMessage,
 } from "./normalize.js";
 
 // Interop ESM/CJS: o export default do Baileys pode vir aninhado dependendo do runtime.
@@ -327,8 +329,54 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     const remoteJid = message.key?.remoteJid;
     if (!remoteJid || isIgnorableJid(remoteJid)) return;
 
+    // Apagar/editar chegam como protocolMessage — viram eventos próprios.
+    const protocolMessage = message.message?.protocolMessage;
+    if (protocolMessage?.key?.id) {
+      // type 0 = REVOKE (apagada para todos)
+      if (protocolMessage.type === 0) {
+        this.emit("message-deleted", {
+          instanceId,
+          externalChatId: remoteJid,
+          targetExternalMessageId: protocolMessage.key.id,
+        });
+        return;
+      }
+      // Edição: o novo conteúdo vem em editedMessage
+      const editedText =
+        protocolMessage.editedMessage?.conversation ??
+        protocolMessage.editedMessage?.extendedTextMessage?.text;
+      if (editedText) {
+        this.emit("message-edited", {
+          instanceId,
+          externalChatId: remoteJid,
+          targetExternalMessageId: protocolMessage.key.id,
+          newText: editedText,
+        });
+        return;
+      }
+      return;
+    }
+
+    // Reações vêm como mensagens; viram evento próprio.
+    const reaction = unwrapMessage(message.message)?.reactionMessage;
+    if (reaction?.key?.id) {
+      const senderJid = message.key?.fromMe
+        ? (state.ownJid ?? "")
+        : (message.key?.participant ?? remoteJid);
+      this.emit("message-reaction", {
+        instanceId,
+        externalChatId: remoteJid,
+        targetExternalMessageId: reaction.key.id,
+        emoji: reaction.text ?? "",
+        senderExternalId: senderJid,
+        senderName: message.pushName ?? null,
+        fromMe: message.key?.fromMe ?? false,
+      });
+      return;
+    }
+
     const extracted = extractContent(message.message);
-    if (!extracted) return; // protocolo/reação — não exibível
+    if (!extracted) return; // protocolo — não exibível
 
     const { senderExternalId, senderPhone } = extractSender(message.key, state.ownJid);
     const socket = state.socket;
@@ -468,9 +516,35 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     return state.socket;
   }
 
-  async sendText(instanceId: string, chatId: string, text: string): Promise<MessageResult> {
+  /**
+   * Monta o objeto de mensagem citada aceito pelo Baileys a partir dos
+   * dados que persistimos. Não temos o proto original, então recriamos o
+   * mínimo necessário — a citação aparece no WhatsApp com o texto salvo.
+   */
+  private buildQuoted(chatId: string, quoted: QuotedMessageRef): WAMessage {
+    return {
+      key: {
+        remoteJid: chatId,
+        id: quoted.externalMessageId,
+        fromMe: quoted.fromMe,
+        ...(quoted.participantExternalId ? { participant: quoted.participantExternalId } : {}),
+      },
+      message: { conversation: quoted.text ?? "" },
+    } as WAMessage;
+  }
+
+  async sendText(
+    instanceId: string,
+    chatId: string,
+    text: string,
+    quoted?: QuotedMessageRef,
+  ): Promise<MessageResult> {
     const socket = this.requireSocket(instanceId);
-    const result = await socket.sendMessage(chatId, { text });
+    const result = await socket.sendMessage(
+      chatId,
+      { text },
+      quoted ? { quoted: this.buildQuoted(chatId, quoted) } : undefined,
+    );
     this.logger.info({ instanceId, event: "message_sent", chatId, messageId: result?.key?.id });
     return {
       externalMessageId: result?.key?.id ?? `local-${Date.now()}`,
@@ -478,7 +552,73 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     };
   }
 
-  async sendMedia(instanceId: string, chatId: string, media: MediaPayload): Promise<MessageResult> {
+  /** Chave da mensagem no formato esperado pelo Baileys. */
+  private targetKey(chatId: string, target: MessageTarget) {
+    return {
+      remoteJid: chatId,
+      id: target.externalMessageId,
+      fromMe: target.fromMe,
+      ...(target.participantExternalId ? { participant: target.participantExternalId } : {}),
+    };
+  }
+
+  async sendReaction(
+    instanceId: string,
+    chatId: string,
+    target: MessageTarget,
+    emoji: string,
+  ): Promise<void> {
+    const socket = this.requireSocket(instanceId);
+    await socket.sendMessage(chatId, {
+      react: {
+        text: emoji, // string vazia remove a reação
+        key: this.targetKey(chatId, target),
+      },
+    });
+    this.logger.info({
+      instanceId,
+      event: emoji ? "reaction_sent" : "reaction_removed",
+      chatId,
+      messageId: target.externalMessageId,
+    });
+  }
+
+  async deleteMessage(instanceId: string, chatId: string, target: MessageTarget): Promise<void> {
+    const socket = this.requireSocket(instanceId);
+    await socket.sendMessage(chatId, { delete: this.targetKey(chatId, target) });
+    this.logger.info({
+      instanceId,
+      event: "message_deleted",
+      chatId,
+      messageId: target.externalMessageId,
+    });
+  }
+
+  async editMessage(
+    instanceId: string,
+    chatId: string,
+    target: MessageTarget,
+    newText: string,
+  ): Promise<void> {
+    const socket = this.requireSocket(instanceId);
+    await socket.sendMessage(chatId, {
+      text: newText,
+      edit: this.targetKey(chatId, target),
+    });
+    this.logger.info({
+      instanceId,
+      event: "message_edited",
+      chatId,
+      messageId: target.externalMessageId,
+    });
+  }
+
+  async sendMedia(
+    instanceId: string,
+    chatId: string,
+    media: MediaPayload,
+    quoted?: QuotedMessageRef,
+  ): Promise<MessageResult> {
     const socket = this.requireSocket(instanceId);
     let content: AnyMessageContent;
     switch (media.type) {
@@ -508,7 +648,11 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
         };
         break;
     }
-    const result = await socket.sendMessage(chatId, content);
+    const result = await socket.sendMessage(
+      chatId,
+      content,
+      quoted ? { quoted: this.buildQuoted(chatId, quoted) } : undefined,
+    );
     this.logger.info({
       instanceId,
       event: "media_sent",

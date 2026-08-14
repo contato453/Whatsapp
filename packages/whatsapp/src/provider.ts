@@ -9,6 +9,8 @@ import type {
   ProviderContact,
   ProviderGroup,
   QrCodeEvent,
+  QuotedMessageRef,
+  ReactionEvent,
 } from "@zapdesk/shared";
 
 /**
@@ -16,11 +18,33 @@ import type {
  * A aplicação consome SOMENTE estes eventos normalizados — nunca os
  * eventos crus da biblioteca subjacente.
  */
+/** Identifica uma mensagem existente no WhatsApp. */
+export interface MessageTarget {
+  externalMessageId: string;
+  fromMe: boolean;
+  /** JID do autor (obrigatório em grupos) */
+  participantExternalId: string | null;
+}
+
 export interface WhatsAppProviderEvents {
   qr: (event: QrCodeEvent) => void;
   status: (event: InstanceStatusEvent & { phoneNumber?: string | null }) => void;
   message: (message: NormalizedMessage) => void;
   "message-status": (update: MessageStatusUpdate) => void;
+  "message-reaction": (reaction: ReactionEvent) => void;
+  /** Alguém apagou uma mensagem para todos */
+  "message-deleted": (event: {
+    instanceId: string;
+    externalChatId: string;
+    targetExternalMessageId: string;
+  }) => void;
+  /** Alguém editou o texto de uma mensagem */
+  "message-edited": (event: {
+    instanceId: string;
+    externalChatId: string;
+    targetExternalMessageId: string;
+    newText: string;
+  }) => void;
   "chats-sync": (event: { instanceId: string; chats: ProviderChat[] }) => void;
   "contacts-sync": (event: { instanceId: string; contacts: ProviderContact[] }) => void;
   "groups-sync": (event: { instanceId: string; groups: ProviderGroup[] }) => void;
@@ -68,9 +92,41 @@ export interface WhatsAppProvider {
     externalId: string,
   ): Promise<{ data: Buffer; mimeType: string } | null>;
 
-  sendText(instanceId: string, chatId: string, text: string): Promise<MessageResult>;
+  sendText(
+    instanceId: string,
+    chatId: string,
+    text: string,
+    quoted?: QuotedMessageRef,
+  ): Promise<MessageResult>;
 
-  sendMedia(instanceId: string, chatId: string, media: MediaPayload): Promise<MessageResult>;
+  sendMedia(
+    instanceId: string,
+    chatId: string,
+    media: MediaPayload,
+    quoted?: QuotedMessageRef,
+  ): Promise<MessageResult>;
+
+  /**
+   * Reage a uma mensagem. Emoji vazio remove a reação.
+   * `target` identifica a mensagem original no WhatsApp.
+   */
+  sendReaction(
+    instanceId: string,
+    chatId: string,
+    target: MessageTarget,
+    emoji: string,
+  ): Promise<void>;
+
+  /** Apaga a mensagem para todos os participantes do chat. */
+  deleteMessage(instanceId: string, chatId: string, target: MessageTarget): Promise<void>;
+
+  /** Edita o texto de uma mensagem já enviada. */
+  editMessage(
+    instanceId: string,
+    chatId: string,
+    target: MessageTarget,
+    newText: string,
+  ): Promise<void>;
 
   getChats(instanceId: string): Promise<ProviderChat[]>;
 

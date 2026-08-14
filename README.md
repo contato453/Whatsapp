@@ -135,6 +135,14 @@ Para produção séria, considere ainda: tokens httpOnly + refresh (hoje o token
 - identificação do participante que enviou cada mensagem de grupo (nome + telefone, cor por remetente);
 - envio de texto e de arquivos/áudios/imagens/PDFs pela Inbox;
 - status de entrega (enviado/entregue/lido) quando o WhatsApp reporta;
+- reações com emoji (enviar, remover e receber em tempo real);
+- responder citando mensagem, com pré-visualização da citação no chat;
+- encaminhar mensagem (texto ou mídia) para outra conversa;
+- player de áudio com controle de velocidade (1x / 1,5x / 2x);
+- notas internas intercaladas na conversa (visíveis só para a equipe), com alternância "Responder ao cliente" ⇄ "Nota interna" no composer;
+- carregar mensagens anteriores (paginação do histórico) e copiar texto da mensagem;
+- apagar mensagem para todos e editar mensagem de texto enviada (com marcação "editada"), refletindo também quando o cliente apaga/edita do lado dele;
+- gravação de áudio pelo navegador, convertida para o formato de voz do WhatsApp via ffmpeg (fallback: envia como arquivo de áudio se o ffmpeg não estiver disponível);
 - Inbox de 3 colunas: lista com filtros (minhas, sem responsável, grupos, individuais, não lidas, status, departamento, número, etiqueta) e busca; chat central; painel de contexto (participantes, responsável, departamento, etiquetas, notas internas, histórico de atribuições);
 - assumir/transferir/liberar/finalizar/reabrir atendimento com histórico completo (`ConversationAssignmentHistory`);
 - notas internas (nunca vão para o WhatsApp) visualmente distintas;
@@ -146,9 +154,8 @@ Para produção séria, considere ainda: tokens httpOnly + refresh (hoje o token
 ## O que ainda falta (próximos passos sugeridos)
 
 - **Validação em produção do pareamento QR**: o ambiente onde este código foi desenvolvido bloqueia a saída para `web.whatsapp.com`, então o handshake final com o WhatsApp não pôde ser exercitado de ponta a ponta aqui. O fluxo (QR → conexão → eventos) usa o caminho padrão e estável do Baileys, mas o primeiro pareamento real deve ser feito em ambiente com rede aberta;
-- envio de áudio gravado no navegador (hoje envia arquivos de áudio; gravação nativa é próximo passo);
-- mensagens citadas (reply) na UI — o dado já é persistido (`quotedMessageId`);
-- paginação infinita na lista de mensagens (hoje carrega as últimas 60);
+- busca dentro da conversa aberta;
+- enquetes, figurinhas próprias e mensagens agendadas;
 - marcação de lida no WhatsApp (read receipts de saída);
 - fila (BullMQ/Redis) para ingestão de mídia em volume alto — hoje o download é inline;
 - tela de auditoria no frontend (API pronta);

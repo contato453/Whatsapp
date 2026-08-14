@@ -24,6 +24,19 @@ export function serializeUser(user: User) {
   };
 }
 
+/**
+ * Versão usada na tela de atendentes: inclui as conexões de WhatsApp
+ * liberadas para o usuário (lista vazia = acesso a todas).
+ */
+export function serializeUserWithAccess(
+  user: User & { whatsappAccess?: Array<{ whatsappInstanceId: string }> },
+) {
+  return {
+    ...serializeUser(user),
+    whatsappInstanceIds: user.whatsappAccess?.map((link) => link.whatsappInstanceId) ?? [],
+  };
+}
+
 export function serializeInstance(instance: WhatsAppInstance) {
   return {
     id: instance.id,
@@ -85,11 +98,34 @@ export function serializeConversation(conversation: ConversationWithRelations) {
   };
 }
 
-export function serializeMessage(message: Message) {
+export interface MessageReactionView {
+  emoji: string;
+  senderName: string | null;
+  fromMe: boolean;
+}
+
+/** Mensagem citada, resumida para a pré-visualização no chat. */
+export interface QuotedPreview {
+  id: string | null;
+  senderName: string | null;
+  content: string | null;
+  type: string;
+}
+
+export function serializeMessage(
+  message: Message & { reactions?: Array<{ emoji: string; senderName: string | null; fromMe: boolean }> },
+  quoted?: QuotedPreview | null,
+) {
   return {
     id: message.id,
     conversationId: message.conversationId,
     externalMessageId: message.externalMessageId,
+    reactions: message.reactions?.map((entry) => ({
+      emoji: entry.emoji,
+      senderName: entry.senderName,
+      fromMe: entry.fromMe,
+    })) ?? [],
+    quoted: quoted ?? null,
     senderExternalId: message.senderExternalId,
     senderName: message.senderName,
     senderPhone: message.senderPhone,
@@ -103,5 +139,7 @@ export function serializeMessage(message: Message) {
     timestamp: message.timestamp.toISOString(),
     status: message.status,
     sentByUserId: message.sentByUserId,
+    deletedAt: message.deletedAt?.toISOString() ?? null,
+    editedAt: message.editedAt?.toISOString() ?? null,
   };
 }

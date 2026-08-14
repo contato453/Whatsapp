@@ -67,6 +67,7 @@ model User {
   performedAssignments  ConversationAssignmentHistory[] @relation("PerformedAssignments")
   auditLogs             AuditLog[]
   quickReplies          QuickReply[]
+  whatsappAccess        UserWhatsAppInstance[]
 
   @@index([organizationId])
   @@map("users")
@@ -118,13 +119,29 @@ model WhatsAppInstance {
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
-  organization  Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization  Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   conversations Conversation[]
   groups        WhatsAppGroup[]
   contacts      Contact[]
+  userAccess    UserWhatsAppInstance[]
 
   @@index([organizationId])
   @@map("whatsapp_instances")
+}
+
+/// Quais números de WhatsApp cada atendente enxerga.
+/// Sem nenhuma linha para o usuário = acesso a todas as conexões da organização.
+model UserWhatsAppInstance {
+  userId             String
+  whatsappInstanceId String
+  createdAt          DateTime @default(now())
+
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  instance WhatsAppInstance @relation(fields: [whatsappInstanceId], references: [id], onDelete: Cascade)
+
+  @@id([userId, whatsappInstanceId])
+  @@index([whatsappInstanceId])
+  @@map("user_whatsapp_instances")
 }
 
 // ============================================================
@@ -299,16 +316,44 @@ model Message {
   timestamp         DateTime
   status            MessageStatus    @default(pending)
   sentByUserId      String?
+  /// Apagada para todos (mantemos a linha para histórico/auditoria)
+  deletedAt         DateTime?
+  deletedByUserId   String?
+  /// Última edição do texto, quando houve
+  editedAt          DateTime?
   createdAt         DateTime         @default(now())
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sentByUser   User?        @relation(fields: [sentByUserId], references: [id], onDelete: SetNull)
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sentByUser   User?             @relation(fields: [sentByUserId], references: [id], onDelete: SetNull)
+  reactions    MessageReaction[]
 
   @@unique([conversationId, externalMessageId])
   @@index([conversationId, timestamp])
   @@index([organizationId, timestamp])
   @@map("messages")
+}
+
+// ============================================================
+// Reações às mensagens (emoji)
+// ============================================================
+
+model MessageReaction {
+  id               String   @id @default(uuid())
+  messageId        String
+  emoji            String
+  /// JID de quem reagiu (ou o número conectado, quando fromMe)
+  senderExternalId String
+  senderName       String?
+  fromMe           Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, senderExternalId])
+  @@index([messageId])
+  @@map("message_reactions")
 }
 
 // ============================================================

@@ -1,11 +1,12 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Prisma } from "@zapdesk/database";
 import { z } from "zod";
 import { RealtimeEvents } from "@zapdesk/shared";
+import { accessibleInstanceIds, instanceScope } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
-import { NotFoundError } from "../../lib/errors.js";
+import { ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import { serializeConversation, serializeUser } from "../../lib/serialize.js";
-import { orgRoom } from "../../realtime/socket.js";
+import { instanceAudience } from "../../realtime/socket.js";
 import type { AppDeps } from "../../types.js";
 
 const listQuerySchema = z.object({
@@ -29,9 +30,14 @@ const conversationInclude = {
 } satisfies Prisma.ConversationInclude;
 
 export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
-  async function findConversationOr404(id: string, organizationId: string) {
+  /**
+   * Além da organização, respeita as conexões liberadas para o usuário:
+   * conversa de um número sem acesso responde 404, como se não existisse.
+   */
+  async function findConversationOr404(id: string, user: FastifyRequest["user"]) {
+    const allowed = await accessibleInstanceIds(deps.prisma, user);
     const conversation = await deps.prisma.conversation.findFirst({
-      where: { id, organizationId },
+      where: { id, organizationId: user.organizationId, ...instanceScope(allowed) },
       include: conversationInclude,
     });
     if (!conversation) throw new NotFoundError("Conversa");
@@ -45,15 +51,21 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     });
     if (conversation) {
       deps.io
-        .to(orgRoom(organizationId))
+        .to(instanceAudience(organizationId, conversation.whatsappInstanceId))
         .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation));
     }
   }
 
   app.get("/conversations", { preHandler: authenticate }, async (request) => {
     const query = listQuerySchema.parse(request.query);
+    const allowed = await accessibleInstanceIds(deps.prisma, request.user);
+    // Filtro por um número ao qual o usuário não tem acesso: lista vazia.
+    if (query.instanceId && allowed && !allowed.includes(query.instanceId)) {
+      return { conversations: [], total: 0 };
+    }
     const where: Prisma.ConversationWhereInput = {
       organizationId: request.user.organizationId,
+      ...instanceScope(allowed),
       ...(query.status ? { status: query.status } : {}),
       ...(query.type ? { type: query.type } : {}),
       ...(query.departmentId ? { departmentId: query.departmentId } : {}),
@@ -85,7 +97,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
 
   app.get("/conversations/:id", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const conversation = await findConversationOr404(id, request.user.organizationId);
+    const conversation = await findConversationOr404(id, request.user);
 
     // Painel de contexto: grupo + participantes + histórico de atribuição
     const [group, history, notes] = await Promise.all([
@@ -154,8 +166,9 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
   /** Foto de perfil da conversa (contato ou grupo), autenticada. */
   app.get("/conversations/:id/avatar", { preHandler: authenticate }, async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const allowed = await accessibleInstanceIds(deps.prisma, request.user);
     const conversation = await deps.prisma.conversation.findFirst({
-      where: { id, organizationId: request.user.organizationId },
+      where: { id, organizationId: request.user.organizationId, ...instanceScope(allowed) },
       select: { profilePicture: true },
     });
     if (!conversation?.profilePicture) throw new NotFoundError("Foto de perfil");
@@ -168,8 +181,12 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
   /** Foto de perfil de um participante de grupo, autenticada. */
   app.get("/group-participants/:id/avatar", { preHandler: authenticate }, async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const allowed = await accessibleInstanceIds(deps.prisma, request.user);
     const participant = await deps.prisma.groupParticipant.findFirst({
-      where: { id, group: { organizationId: request.user.organizationId } },
+      where: {
+        id,
+        group: { organizationId: request.user.organizationId, ...instanceScope(allowed) },
+      },
       select: { avatarUrl: true },
     });
     if (!participant?.avatarUrl) throw new NotFoundError("Foto de perfil");
@@ -185,7 +202,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
    */
   app.post("/conversations/:id/avatar/refresh", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const conversation = await findConversationOr404(id, request.user.organizationId);
+    const conversation = await findConversationOr404(id, request.user);
     const group = await deps.prisma.whatsAppGroup.findFirst({
       where: { conversationId: id, organizationId: request.user.organizationId },
       select: { id: true },
@@ -212,7 +229,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
 
   app.post("/conversations/:id/read", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    await findConversationOr404(id, request.user.organizationId);
+    await findConversationOr404(id, request.user);
     await deps.prisma.conversation.update({ where: { id }, data: { unreadCount: 0 } });
     await emitConversationUpdated(id, request.user.organizationId);
     return { ok: true };
@@ -229,7 +246,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
   app.post("/conversations/:id/assign", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = assignSchema.parse(request.body);
-    const conversation = await findConversationOr404(id, request.user.organizationId);
+    const conversation = await findConversationOr404(id, request.user);
 
     // Sem corpo: o próprio usuário assume o atendimento.
     const targetUserId = body.userId ?? request.user.sub;
@@ -275,7 +292,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       const body = z
         .object({ departmentId: z.string().uuid(), note: z.string().max(500).optional() })
         .parse(request.body);
-      const conversation = await findConversationOr404(id, request.user.organizationId);
+      const conversation = await findConversationOr404(id, request.user);
       const department = await deps.prisma.department.findFirst({
         where: { id: body.departmentId, organizationId: request.user.organizationId },
       });
@@ -306,7 +323,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
 
   app.post("/conversations/:id/unassign", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const conversation = await findConversationOr404(id, request.user.organizationId);
+    const conversation = await findConversationOr404(id, request.user);
     await deps.prisma.$transaction([
       deps.prisma.conversation.update({ where: { id }, data: { assignedUserId: null } }),
       deps.prisma.conversationAssignmentHistory.create({
@@ -325,7 +342,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
 
   app.post("/conversations/:id/resolve", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    await findConversationOr404(id, request.user.organizationId);
+    await findConversationOr404(id, request.user);
     await deps.prisma.$transaction([
       deps.prisma.conversation.update({ where: { id }, data: { status: "resolved" } }),
       deps.prisma.conversationAssignmentHistory.create({
@@ -350,7 +367,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
 
   app.post("/conversations/:id/reopen", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    await findConversationOr404(id, request.user.organizationId);
+    await findConversationOr404(id, request.user);
     await deps.prisma.$transaction([
       deps.prisma.conversation.update({ where: { id }, data: { status: "open" } }),
       deps.prisma.conversationAssignmentHistory.create({
@@ -373,7 +390,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
   app.post("/conversations/:id/status", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const { status } = statusSchema.parse(request.body);
-    await findConversationOr404(id, request.user.organizationId);
+    await findConversationOr404(id, request.user);
     await deps.prisma.conversation.update({ where: { id }, data: { status } });
     await emitConversationUpdated(id, request.user.organizationId);
     return { ok: true };
@@ -385,7 +402,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     const { id, tagId } = z
       .object({ id: z.string().uuid(), tagId: z.string().uuid() })
       .parse(request.params);
-    await findConversationOr404(id, request.user.organizationId);
+    await findConversationOr404(id, request.user);
     const tag = await deps.prisma.tag.findFirst({
       where: { id: tagId, organizationId: request.user.organizationId },
     });
@@ -411,7 +428,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     const { id, tagId } = z
       .object({ id: z.string().uuid(), tagId: z.string().uuid() })
       .parse(request.params);
-    await findConversationOr404(id, request.user.organizationId);
+    await findConversationOr404(id, request.user);
     await deps.prisma.conversationTag.deleteMany({ where: { conversationId: id, tagId } });
     await emitConversationUpdated(id, request.user.organizationId);
     return { ok: true };
@@ -422,7 +439,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
   app.post("/conversations/:id/notes", { preHandler: authenticate }, async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const { content } = z.object({ content: z.string().min(1).max(2000) }).parse(request.body);
-    await findConversationOr404(id, request.user.organizationId);
+    const conversation = await findConversationOr404(id, request.user);
     const note = await deps.prisma.internalNote.create({
       data: {
         organizationId: request.user.organizationId,
@@ -432,13 +449,33 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       },
       include: { user: true },
     });
-    return reply.status(201).send({
-      note: {
-        id: note.id,
-        content: note.content,
-        user: note.user ? serializeUser(note.user) : null,
-        createdAt: note.createdAt.toISOString(),
-      },
+    const payload = {
+      id: note.id,
+      conversationId: id,
+      content: note.content,
+      user: note.user ? serializeUser(note.user) : null,
+      createdAt: note.createdAt.toISOString(),
+    };
+    // Aparece na hora para toda a equipe, dentro da conversa.
+    deps.io
+      .to(instanceAudience(request.user.organizationId, conversation.whatsappInstanceId))
+      .emit(RealtimeEvents.InternalNote, payload);
+    return reply.status(201).send({ note: payload });
+  });
+
+  /** Remove uma nota interna (autor ou supervisor/admin). */
+  app.delete("/conversations/:id/notes/:noteId", { preHandler: authenticate }, async (request) => {
+    const { id, noteId } = z
+      .object({ id: z.string().uuid(), noteId: z.string().uuid() })
+      .parse(request.params);
+    const note = await deps.prisma.internalNote.findFirst({
+      where: { id: noteId, conversationId: id, organizationId: request.user.organizationId },
     });
+    if (!note) throw new NotFoundError("Nota interna");
+    if (note.userId !== request.user.sub && request.user.role === "agent") {
+      throw new ForbiddenError("Só o autor pode excluir esta nota");
+    }
+    await deps.prisma.internalNote.delete({ where: { id: noteId } });
+    return { ok: true };
   });
 }

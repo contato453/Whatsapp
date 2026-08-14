@@ -20,6 +20,14 @@ export interface UserDto {
   createdAt: string;
 }
 
+/**
+ * Usuário na tela de atendentes: inclui as conexões de WhatsApp liberadas.
+ * Lista vazia = acesso a todas as conexões da organização.
+ */
+export interface UserWithAccessDto extends UserDto {
+  whatsappInstanceIds: string[];
+}
+
 export interface InstanceDto {
   id: string;
   name: string;
@@ -62,10 +70,25 @@ export interface ConversationDto {
   createdAt: string;
 }
 
+export interface MessageReactionDto {
+  emoji: string;
+  senderName: string | null;
+  fromMe: boolean;
+}
+
+export interface QuotedPreviewDto {
+  id: string | null;
+  senderName: string | null;
+  content: string | null;
+  type: string;
+}
+
 export interface MessageDto {
   id: string;
   conversationId: string;
   externalMessageId: string | null;
+  reactions: MessageReactionDto[];
+  quoted: QuotedPreviewDto | null;
   senderExternalId: string | null;
   senderName: string | null;
   senderPhone: string | null;
@@ -79,6 +102,8 @@ export interface MessageDto {
   timestamp: string;
   status: MessageStatus;
   sentByUserId: string | null;
+  deletedAt: string | null;
+  editedAt: string | null;
 }
 
 export interface GroupDetailDto {
@@ -97,6 +122,7 @@ export interface GroupDetailDto {
 
 export interface NoteDto {
   id: string;
+  conversationId?: string;
   content: string;
   user: UserDto | null;
   createdAt: string;

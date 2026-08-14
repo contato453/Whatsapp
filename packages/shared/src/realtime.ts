@@ -7,8 +7,11 @@ import type { ConnectionStatus, MessageStatus } from "./enums.js";
 export const RealtimeEvents = {
   MessageNew: "message:new",
   MessageStatus: "message:status",
+  MessageReaction: "message:reaction",
+  MessageUpdated: "message:updated",
   ConversationUpdated: "conversation:updated",
   GroupParticipants: "group:participants",
+  InternalNote: "note:new",
   InstanceStatus: "instance:status",
   InstanceQr: "instance:qr",
 } as const;
