@@ -18,6 +18,8 @@ interface AuthContextValue {
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
+  /** Aplica a sessão devolvida quando a pessoa edita o próprio perfil. */
+  setSession: (token: string, user: UserDto) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -59,9 +61,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     router.push("/login");
   }, [router]);
 
+  const setSession = useCallback((token: string, next: UserDto) => {
+    setToken(token);
+    setUser(next);
+  }, []);
+
   const value = useMemo(
-    () => ({ user, loading, login, logout }),
-    [user, loading, login, logout],
+    () => ({ user, loading, login, logout, setSession }),
+    [user, loading, login, logout, setSession],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

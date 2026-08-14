@@ -133,9 +133,68 @@ só quem atua naquele departamento passa a enxergá-la. Número sem departamento
 conversa sem departamento, visível para quem tem o número — para não existir mensagem de
 cliente que ninguém vê.
 
+### O que cada papel pode fazer
+
+Visibilidade responde "quais conversas"; papel responde "quais ações". A hierarquia
+(`admin > supervisor > agent`) vive em `packages/shared` e é a mesma tabela usada para
+proteger a rota na API e para montar o menu no frontend.
+
+| Ação | Papel mínimo |
+| --- | --- |
+| Criar e editar usuário; excluir número ou departamento | admin |
+| Criar/conectar número, criar departamento e etiqueta, ver auditoria, editar nota de terceiro | supervisor |
+| Inbox, atribuição, notas próprias, respostas rápidas, **próprio perfil e senha** | usuário |
+
+O menu lateral esconde o que o papel não alcança e a URL digitada direto cai em "acesso
+restrito". Isso é conveniência de interface: **a autorização de verdade é sempre a do
+servidor**, que responde 403 de qualquer jeito.
+
+Quem cria um número **passa a enxergá-lo na hora** — o vínculo nasce junto da conexão, e as
+abas já abertas entram nas salas de tempo real sem precisar recarregar (o QR Code se renova a
+cada poucos segundos; sem isso a pessoa encararia um código vencido). Admin não recebe
+vínculo porque já enxerga tudo. O departamento padrão continua valendo: número criado
+apontando para departamento alheio funciona, só que as conversas vão para o time daquele
+departamento, não para quem criou.
+
+A organização **nunca fica sem administrador ativo**: rebaixar ou desativar o último é
+recusado, inclusive quando dois administradores tentam se rebaixar no mesmo instante (a
+verificação roda dentro da transação, com as linhas travadas).
+
+### O que cada um muda em si mesmo
+
+Em **Configurações** qualquer usuário ajusta o próprio nome, a assinatura das mensagens e a
+senha, sem depender de administrador. A troca de senha exige a senha atual (token roubado ou
+máquina destravada não vira troca silenciosa) e tem limite de 5 tentativas por minuto, como
+o login.
+
+E-mail, papel, status e recorte de acesso ficam fora: são a credencial de entrada e o nível
+de permissão, alterados só em **Usuários**, por administrador. Salvar o perfil devolve um
+token novo, porque é o JWT que carimba o nome de quem enviou cada mensagem.
+
+### Dado de cadastro não circula
+
+Usuário que aparece dentro do trabalho de outro (responsável pela conversa, autor de nota,
+opção do seletor de atribuição) sai da API na versão reduzida — id, nome, papel, status e
+avatar (`serializeUserDirectory`). E-mail, último acesso e o mapa de números e departamentos
+de cada pessoa só saem em `GET /users` para **administrador**; para os demais essa rota
+devolve apenas a agenda interna de ativos, que é o suficiente para escolher responsável.
+
+### Mudança de acesso vale na hora
+
+O JWT é uma foto do momento do login e vale por dias, então **quem manda é o banco**: toda
+requisição autenticada relê papel, status e nome do usuário (uma consulta por chave
+primária). Desativar alguém corta o acesso imediatamente, em vez de esperar o token vencer —
+o que importa no dia em que a pessoa deixa o escritório, porque até então ela seguiria lendo
+e respondendo cliente pelo WhatsApp da casa. Rebaixar tira a administração no mesmo instante.
+
+O mesmo vale no tempo real: o handshake do socket revalida a sessão, e mudança de papel,
+status ou recorte de acesso derruba as conexões abertas daquela pessoa — as salas são
+montadas na conexão, então a sessão antiga continuaria recebendo pelas regras antigas.
+
 ## Segurança
 
 - JWT com expiração; senha com bcrypt; endpoints protegidos por papel (admin/supervisor/agent);
+- papel e status revalidados no banco a cada requisição — desativar ou rebaixar vale na hora;
 - rate limiting global (300 req/min) e específico no login (10/min);
 - validação de entrada com Zod em todas as rotas; tratamento global de erros sem vazar internals;
 - mídia servida somente autenticada e escopada por organização; proteção contra path traversal;

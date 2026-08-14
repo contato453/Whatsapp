@@ -3,17 +3,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Pencil, Plus } from "lucide-react";
+import { USER_ROLE_LABELS } from "@azvchat/shared";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { formatDateTime } from "@/lib/utils";
 import type { DepartmentDto, InstanceDto, UserWithAccessDto } from "@/lib/types";
 import { Avatar, Badge, Button, Card, Spinner } from "@/components/ui";
-
-const ROLE_LABELS: Record<string, string> = {
-  admin: "Administrador",
-  supervisor: "Supervisor",
-  agent: "Usuário",
-};
 
 export default function UsersPage() {
   const router = useRouter();
@@ -118,7 +113,7 @@ export default function UsersPage() {
                 </Badge>
               )}
               <Badge className="bg-slate-100 text-slate-600">
-                {ROLE_LABELS[user.role] ?? user.role}
+                {USER_ROLE_LABELS[user.role]}
               </Badge>
               <Badge color={user.status === "active" ? "#16a34a" : "#94a3b8"}>
                 {user.status === "active" ? "Ativo" : "Inativo"}

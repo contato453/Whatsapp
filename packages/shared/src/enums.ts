@@ -76,6 +76,28 @@ export type MessageStatus = (typeof MESSAGE_STATUSES)[number];
 export const USER_ROLES = ["admin", "supervisor", "agent"] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
+/** Rótulos exibidos na interface — o papel `agent` chama-se "Usuário" para o operador. */
+export const USER_ROLE_LABELS: Record<UserRole, string> = {
+  admin: "Administrador",
+  supervisor: "Supervisor",
+  agent: "Usuário",
+};
+
+/**
+ * Hierarquia dos papéis. Fonte única: a API usa para proteger rota e o
+ * frontend para montar o menu, então os dois nunca divergem.
+ */
+const ROLE_LEVEL: Record<UserRole, number> = {
+  admin: 3,
+  supervisor: 2,
+  agent: 1,
+};
+
+/** true quando o papel do usuário atende ao mínimo exigido. */
+export function hasRole(userRole: UserRole, minimumRole: UserRole): boolean {
+  return ROLE_LEVEL[userRole] >= ROLE_LEVEL[minimumRole];
+}
+
 export const USER_STATUSES = ["active", "inactive"] as const;
 export type UserStatus = (typeof USER_STATUSES)[number];
 

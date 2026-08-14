@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { authenticate } from "../../lib/auth.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
-import { serializeUser } from "../../lib/serialize.js";
+import { serializeUserDirectory } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
 import type { ScheduledMessage, User } from "@azvchat/database";
 
@@ -14,7 +14,7 @@ function serialize(scheduled: ScheduledMessage & { createdBy?: User | null }) {
     scheduledFor: scheduled.scheduledFor.toISOString(),
     status: scheduled.status,
     error: scheduled.error,
-    createdBy: scheduled.createdBy ? serializeUser(scheduled.createdBy) : null,
+    createdBy: scheduled.createdBy ? serializeUserDirectory(scheduled.createdBy) : null,
     createdAt: scheduled.createdAt.toISOString(),
   };
 }

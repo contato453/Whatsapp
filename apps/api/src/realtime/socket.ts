@@ -1,7 +1,7 @@
 import type { Server as HttpServer } from "node:http";
-import { Server } from "socket.io";
+import { Server, type Socket } from "socket.io";
 import type { Logger } from "pino";
-import type { AuthTokenPayload } from "../lib/auth.js";
+import type { AuthTokenPayload, SessionVerifier } from "../lib/auth.js";
 
 export interface VerifyToken {
   (token: string): AuthTokenPayload;
@@ -36,6 +36,7 @@ export function createRealtime(
   options: {
     corsOrigins: string[];
     verifyToken: VerifyToken;
+    verifySession: SessionVerifier;
     resolveAccess: ResolveRealtimeAccess;
     logger: Logger;
   },
@@ -60,11 +61,13 @@ export function createRealtime(
       next(new Error("unauthorized"));
       return;
     }
-    socket.data.user = payload;
+    // Mesma revalidação da API: token válido de usuário desativado não abre
+    // conexão, e quem mudou de papel entra nas salas do papel atual.
     options
-      .resolveAccess(payload)
-      .then((access) => {
-        socket.data.access = access;
+      .verifySession(payload)
+      .then(async (user) => {
+        socket.data.user = user;
+        socket.data.access = await options.resolveAccess(user);
         next();
       })
       .catch((err) => {
@@ -81,21 +84,8 @@ export function createRealtime(
       // admin: organização inteira
       void socket.join(orgRoom(user.organizationId));
     } else {
-      // Conversa sem departamento entra no balde "none" — é o caso de número
-      // sem departamento padrão configurado.
-      const departmentKeys = [...access.departmentIds, NO_DEPARTMENT];
       for (const instanceId of access.instanceIds) {
-        // Eventos do próprio número (QR, status da conexão) não dependem de
-        // departamento nem de responsável.
-        void socket.join(instanceRoom(instanceId));
-        for (const departmentKey of departmentKeys) {
-          if (user.role === "supervisor") {
-            void socket.join(supervisorRoom(instanceId, departmentKey));
-          } else {
-            void socket.join(unassignedRoom(instanceId, departmentKey));
-            void socket.join(assigneeRoom(instanceId, departmentKey, user.sub));
-          }
-        }
+        joinInstanceRooms(socket, instanceId);
       }
     }
 
@@ -109,6 +99,63 @@ export function createRealtime(
 }
 
 const NO_DEPARTMENT = "none";
+
+/**
+ * Salas de um número para um socket já autenticado. Conversa sem
+ * departamento entra no balde "none" — é o caso de número sem departamento
+ * padrão configurado.
+ */
+function joinInstanceRooms(socket: Socket, instanceId: string): void {
+  const user = socket.data.user as AuthTokenPayload;
+  const access = socket.data.access as RealtimeAccess;
+  // Admin recebe tudo pela sala da organização; não usa sala por número.
+  if (!access.departmentIds) return;
+
+  // Eventos do próprio número (QR, status da conexão) não dependem de
+  // departamento nem de responsável.
+  void socket.join(instanceRoom(instanceId));
+  for (const departmentKey of [...access.departmentIds, NO_DEPARTMENT]) {
+    if (user.role === "supervisor") {
+      void socket.join(supervisorRoom(instanceId, departmentKey));
+    } else {
+      void socket.join(unassignedRoom(instanceId, departmentKey));
+      void socket.join(assigneeRoom(instanceId, departmentKey, user.sub));
+    }
+  }
+}
+
+/**
+ * Acesso a número concedido no meio da sessão — hoje, o supervisor que
+ * acabou de criar o número. As abas abertas dele entram nas salas na hora.
+ *
+ * Sem isso o QR Code, que se renova a cada poucos segundos, só chegaria
+ * depois de recarregar a página: a pessoa ficaria encarando um código
+ * vencido que o celular se recusa a ler.
+ */
+/**
+ * Derruba as sessões de tempo real de um usuário. As salas são montadas na
+ * conexão, então quem é desativado ou muda de papel continuaria recebendo
+ * pelas regras antigas até fechar a aba. Na reconexão o handshake aplica o
+ * estado atual — ou recusa, se a pessoa foi desativada.
+ */
+export function disconnectUser(io: Server, userId: string): void {
+  for (const socket of io.sockets.sockets.values()) {
+    const user = socket.data.user as AuthTokenPayload | undefined;
+    if (user?.sub === userId) socket.disconnect(true);
+  }
+}
+
+export function grantInstanceAccess(io: Server, userId: string, instanceId: string): void {
+  for (const socket of io.sockets.sockets.values()) {
+    const user = socket.data.user as AuthTokenPayload | undefined;
+    if (user?.sub !== userId) continue;
+    const access = socket.data.access as RealtimeAccess | undefined;
+    if (access?.instanceIds && !access.instanceIds.includes(instanceId)) {
+      access.instanceIds.push(instanceId);
+    }
+    joinInstanceRooms(socket, instanceId);
+  }
+}
 
 export function orgRoom(organizationId: string): string {
   return `org:${organizationId}`;

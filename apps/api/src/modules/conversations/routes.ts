@@ -9,7 +9,7 @@ import {
 } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
 import { ForbiddenError, NotFoundError } from "../../lib/errors.js";
-import { serializeConversation, serializeUser } from "../../lib/serialize.js";
+import { serializeConversation, serializeUserDirectory } from "../../lib/serialize.js";
 import { resolveContacts, type SenderInfo } from "../../lib/sender-directory.js";
 import { conversationAudience } from "../../realtime/socket.js";
 import type { AppDeps } from "../../types.js";
@@ -200,14 +200,14 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       assignmentHistory: history.map((entry) => ({
         id: entry.id,
         action: entry.action,
-        performedBy: entry.performedBy ? serializeUser(entry.performedBy) : null,
+        performedBy: entry.performedBy ? serializeUserDirectory(entry.performedBy) : null,
         note: entry.note,
         createdAt: entry.createdAt.toISOString(),
       })),
       notes: notes.map((note) => ({
         id: note.id,
         content: note.content,
-        user: note.user ? serializeUser(note.user) : null,
+        user: note.user ? serializeUserDirectory(note.user) : null,
         createdAt: note.createdAt.toISOString(),
       })),
     };
@@ -568,7 +568,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       id: note.id,
       conversationId: id,
       content: note.content,
-      user: note.user ? serializeUser(note.user) : null,
+      user: note.user ? serializeUserDirectory(note.user) : null,
       createdAt: note.createdAt.toISOString(),
     };
     // Aparece na hora para toda a equipe, dentro da conversa.
@@ -608,7 +608,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
         id: updated.id,
         conversationId: id,
         content: updated.content,
-        user: updated.user ? serializeUser(updated.user) : null,
+        user: updated.user ? serializeUserDirectory(updated.user) : null,
         createdAt: updated.createdAt.toISOString(),
       },
     };
