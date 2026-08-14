@@ -22,6 +22,15 @@ const rangeSchema = z.object({
 /** Teto de mensagens lidas por consulta, para o relatório não travar a API. */
 const MAX_MESSAGES = 100_000;
 
+/** Fila atual do atendente, por status do atendimento. */
+interface QueueByStatus {
+  open: number;
+  waitingClient: number;
+  waitingInternal: number;
+}
+
+const emptyQueue = (): QueueByStatus => ({ open: 0, waitingClient: 0, waitingInternal: 0 });
+
 export async function reportRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
   app.get("/reports/agents", { preHandler: requireRole("supervisor") }, async (request) => {
     const { from, to } = rangeSchema.parse(request.query);
@@ -63,9 +72,9 @@ export async function reportRoutes(app: FastifyInstance, deps: AppDeps): Promise
         },
         _count: { _all: true },
       }),
-      // Fila atual — retrato de agora, não do período.
+      // Fila atual por status — retrato de agora, não do período.
       deps.prisma.conversation.groupBy({
-        by: ["assignedUserId"],
+        by: ["assignedUserId", "status"],
         where: {
           organizationId,
           ...scope,
@@ -90,15 +99,21 @@ export async function reportRoutes(app: FastifyInstance, deps: AppDeps): Promise
         .filter((entry) => entry.performedByUserId)
         .map((entry) => [entry.performedByUserId as string, entry._count._all]),
     );
-    const openByUser = new Map(
-      openConversations
-        .filter((entry) => entry.assignedUserId)
-        .map((entry) => [entry.assignedUserId as string, entry._count._all]),
-    );
+    // Um registro por atendente com a contagem de cada status da fila.
+    const queueByUser = new Map<string, QueueByStatus>();
+    for (const entry of openConversations) {
+      if (!entry.assignedUserId) continue;
+      const queue = queueByUser.get(entry.assignedUserId) ?? emptyQueue();
+      if (entry.status === "open") queue.open = entry._count._all;
+      if (entry.status === "waiting_client") queue.waitingClient = entry._count._all;
+      if (entry.status === "waiting_internal") queue.waitingInternal = entry._count._all;
+      queueByUser.set(entry.assignedUserId, queue);
+    }
 
     const rows = users
       .map((user) => {
         const agent = totals.get(user.id);
+        const queue = queueByUser.get(user.id) ?? emptyQueue();
         return {
           user: serializeUser(user),
           messagesSent: agent?.messagesSent ?? 0,
@@ -106,7 +121,8 @@ export async function reportRoutes(app: FastifyInstance, deps: AppDeps): Promise
           avgResponseSeconds: agent?.avgResponseSeconds ?? null,
           responsesMeasured: agent?.responsesMeasured ?? 0,
           conversationsResolved: resolvedByUser.get(user.id) ?? 0,
-          openNow: openByUser.get(user.id) ?? 0,
+          queue,
+          openNow: queue.open + queue.waitingClient + queue.waitingInternal,
         };
       })
       // Quem não teve movimento nem fila no período fica de fora do relatório.
@@ -124,6 +140,14 @@ export async function reportRoutes(app: FastifyInstance, deps: AppDeps): Promise
         messagesSent: rows.reduce((sum, row) => sum + row.messagesSent, 0),
         conversationsResolved: rows.reduce((sum, row) => sum + row.conversationsResolved, 0),
         openNow: rows.reduce((sum, row) => sum + row.openNow, 0),
+        queue: rows.reduce(
+          (sum, row) => ({
+            open: sum.open + row.queue.open,
+            waitingClient: sum.waitingClient + row.queue.waitingClient,
+            waitingInternal: sum.waitingInternal + row.queue.waitingInternal,
+          }),
+          emptyQueue(),
+        ),
       },
       // Avisa quando o período é grande demais e os números ficaram parciais.
       truncated: messages.length >= MAX_MESSAGES,

@@ -96,7 +96,9 @@ export default function ReportsPage() {
       "Tempo médio de resposta (s)",
       "Respostas medidas",
       "Conversas concluídas",
-      "Em aberto agora",
+      "Fila: Aberto",
+      "Fila: AG. Cliente",
+      "Fila: AG. Operacional",
     ];
     const lines = report.rows.map((row) =>
       [
@@ -107,7 +109,9 @@ export default function ReportsPage() {
         row.avgResponseSeconds ?? "",
         row.responsesMeasured,
         row.conversationsResolved,
-        row.openNow,
+        row.queue.open,
+        row.queue.waitingClient,
+        row.queue.waitingInternal,
       ]
         .map((value) => `"${String(value).replace(/"/g, '""')}"`)
         .join(";"),
@@ -210,7 +214,7 @@ export default function ReportsPage() {
             <SummaryCard label="Recebidas" value={report.totals.messagesReceived} />
             <SummaryCard label="Enviadas" value={report.totals.messagesSent} />
             <SummaryCard label="Concluídas" value={report.totals.conversationsResolved} />
-            <SummaryCard label="Em aberto agora" value={report.totals.openNow} />
+            <SummaryCard label="Na fila agora" value={report.totals.openNow} />
           </div>
 
           {report.truncated && (
@@ -221,7 +225,7 @@ export default function ReportsPage() {
           )}
 
           <Card className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-sm">
+            <table className="w-full min-w-[900px] text-sm">
               <thead>
                 <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wide text-slate-400">
                   <th className="px-4 py-3 font-medium">Atendente</th>
@@ -229,7 +233,12 @@ export default function ReportsPage() {
                   <th className="px-4 py-3 text-right font-medium">Conversas</th>
                   <th className="px-4 py-3 text-right font-medium">Tempo médio</th>
                   <th className="px-4 py-3 text-right font-medium">Concluídas</th>
-                  <th className="px-4 py-3 text-right font-medium">Em aberto</th>
+                  {/* Fila atual, separada por status do atendimento */}
+                  <th className="border-l border-slate-100 px-4 py-3 text-right font-medium">
+                    Aberto
+                  </th>
+                  <th className="px-4 py-3 text-right font-medium">AG. Cliente</th>
+                  <th className="px-4 py-3 text-right font-medium">AG. Operacional</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -255,7 +264,13 @@ export default function ReportsPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">{row.conversationsResolved}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">{row.openNow}</td>
+                    <td className="border-l border-slate-100 px-4 py-3 text-right tabular-nums">
+                      {row.queue.open}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums">{row.queue.waitingClient}</td>
+                    <td className="px-4 py-3 text-right tabular-nums">
+                      {row.queue.waitingInternal}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -269,8 +284,10 @@ export default function ReportsPage() {
               número entre parênteses é quantas respostas entraram na média.
             </p>
             <p>
-              <strong>Em aberto</strong> é o retrato de agora — a fila atual da pessoa —, e não
-              depende do período escolhido.
+              <strong>Aberto</strong>, <strong>AG. Cliente</strong> e{" "}
+              <strong>AG. Operacional</strong> são o retrato de agora — a fila atual da pessoa em
+              cada etapa —, e não dependem do período escolhido. <strong>Concluídas</strong>, sim:
+              conta quantas ela concluiu dentro das datas selecionadas.
             </p>
           </div>
         </>

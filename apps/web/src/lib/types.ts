@@ -189,8 +189,16 @@ export interface AgentReportRowDto {
   avgResponseSeconds: number | null;
   responsesMeasured: number;
   conversationsResolved: number;
-  /** Fila atual da pessoa — não depende do período */
+  /** Fila atual da pessoa, por status — não depende do período */
+  queue: QueueByStatusDto;
+  /** Soma da fila: aberto + AG. cliente + AG. operacional */
   openNow: number;
+}
+
+export interface QueueByStatusDto {
+  open: number;
+  waitingClient: number;
+  waitingInternal: number;
 }
 
 export interface AgentReportDto {
@@ -202,6 +210,7 @@ export interface AgentReportDto {
     messagesSent: number;
     conversationsResolved: number;
     openNow: number;
+    queue: QueueByStatusDto;
   };
   /** true quando o período estourou o teto e os números ficaram parciais */
   truncated: boolean;
