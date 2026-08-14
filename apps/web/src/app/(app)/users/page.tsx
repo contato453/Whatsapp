@@ -10,7 +10,7 @@ import { Avatar, Badge, Button, Card, Field, Input, Modal, Spinner } from "@/com
 const ROLE_LABELS: Record<string, string> = {
   admin: "Administrador",
   supervisor: "Supervisor",
-  agent: "Atendente",
+  agent: "Usuário",
 };
 
 interface UserForm {
@@ -199,7 +199,7 @@ export default function UsersPage() {
       )}
       {!form.allInstances && form.instanceIds.length === 0 && (
         <p className="text-xs text-amber-600">
-          Nenhuma conexão marcada — sem seleção, o atendente volta a enxergar todas.
+          Nenhuma conexão marcada — sem seleção, o usuário volta a enxergar todas.
         </p>
       )}
     </div>
@@ -208,7 +208,7 @@ export default function UsersPage() {
   return (
     <div className="thin-scroll h-full overflow-y-auto p-8">
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-slate-900">Atendentes</h1>
+        <h1 className="text-2xl font-bold text-slate-900">Usuários</h1>
         {isAdmin && (
           <Button onClick={openCreate}>
             <Plus className="h-4 w-4" /> Novo usuário
@@ -280,7 +280,7 @@ export default function UsersPage() {
               value={form.role}
               onChange={(event) => setForm({ ...form, role: event.target.value })}
             >
-              <option value="agent">Atendente</option>
+              <option value="agent">Usuário</option>
               <option value="supervisor">Supervisor</option>
               <option value="admin">Administrador</option>
             </select>
@@ -293,7 +293,7 @@ export default function UsersPage() {
         </div>
       </Modal>
 
-      <Modal open={editing != null} onClose={closeModals} title="Editar atendente">
+      <Modal open={editing != null} onClose={closeModals} title="Editar usuário">
         <div className="space-y-4">
           <Field label="Nome">
             <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
@@ -320,7 +320,7 @@ export default function UsersPage() {
               disabled={editingSelf}
               onChange={(event) => setForm({ ...form, role: event.target.value })}
             >
-              <option value="agent">Atendente</option>
+              <option value="agent">Usuário</option>
               <option value="supervisor">Supervisor</option>
               <option value="admin">Administrador</option>
             </select>
