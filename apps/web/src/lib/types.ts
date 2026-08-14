@@ -1,0 +1,132 @@
+import type {
+  ConnectionStatus,
+  ConversationStatus,
+  ConversationType,
+  MessageDirection,
+  MessageStatus,
+  MessageType,
+  UserRole,
+} from "@zapdesk/shared";
+
+/** DTOs retornados pela API (datas como string ISO). */
+
+export interface UserDto {
+  id: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  status: "active" | "inactive";
+  avatarUrl: string | null;
+  createdAt: string;
+}
+
+export interface InstanceDto {
+  id: string;
+  name: string;
+  phoneNumber: string | null;
+  status: ConnectionStatus;
+  provider: string;
+  lastConnectionAt: string | null;
+  lastDisconnectionAt: string | null;
+  createdAt: string;
+}
+
+export interface DepartmentDto {
+  id: string;
+  name: string;
+  description: string | null;
+  color: string | null;
+}
+
+export interface TagDto {
+  id: string;
+  name: string;
+  color: string;
+}
+
+export interface ConversationDto {
+  id: string;
+  whatsappInstanceId: string;
+  instanceName: string | null;
+  externalChatId: string;
+  type: ConversationType;
+  title: string;
+  profilePicture: string | null;
+  status: ConversationStatus;
+  assignedUser: UserDto | null;
+  department: DepartmentDto | null;
+  tags: TagDto[];
+  unreadCount: number;
+  lastMessageAt: string | null;
+  lastMessagePreview: string | null;
+  createdAt: string;
+}
+
+export interface MessageDto {
+  id: string;
+  conversationId: string;
+  externalMessageId: string | null;
+  senderExternalId: string | null;
+  senderName: string | null;
+  senderPhone: string | null;
+  direction: MessageDirection;
+  type: MessageType;
+  content: string | null;
+  hasMedia: boolean;
+  mimeType: string | null;
+  filename: string | null;
+  quotedMessageId: string | null;
+  timestamp: string;
+  status: MessageStatus;
+  sentByUserId: string | null;
+}
+
+export interface GroupDetailDto {
+  id: string;
+  name: string;
+  description: string | null;
+  participantCount: number;
+  participants: Array<{
+    id: string;
+    phoneNumber: string;
+    name: string | null;
+    isAdmin: boolean;
+  }>;
+}
+
+export interface NoteDto {
+  id: string;
+  content: string;
+  user: UserDto | null;
+  createdAt: string;
+}
+
+export interface AssignmentHistoryDto {
+  id: string;
+  action: string;
+  performedBy: UserDto | null;
+  note: string | null;
+  createdAt: string;
+}
+
+export interface ConversationDetailDto {
+  conversation: ConversationDto;
+  group: GroupDetailDto | null;
+  assignmentHistory: AssignmentHistoryDto[];
+  notes: NoteDto[];
+}
+
+export interface DashboardStatsDto {
+  instancesConnected: number;
+  instancesDisconnected: number;
+  conversationsOpen: number;
+  conversationsWaiting: number;
+  conversationsUnassigned: number;
+  messagesReceivedToday: number;
+  messagesSentToday: number;
+  conversationsByDepartment: Array<{
+    departmentId: string | null;
+    departmentName: string;
+    count: number;
+  }>;
+}

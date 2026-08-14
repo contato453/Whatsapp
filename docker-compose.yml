@@ -1,0 +1,56 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: zapdesk
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-zapdesk}
+      POSTGRES_DB: zapdesk
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zapdesk"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://zapdesk:${POSTGRES_PASSWORD:-zapdesk}@postgres:5432/zapdesk?schema=public
+      JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET no .env}
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
+      API_PORT: 4000
+      WHATSAPP_SESSION_DIR: /app/data/sessions
+      MEDIA_DIR: /app/data/media
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      # Sessões do WhatsApp e mídias SOBREVIVEM a deploys/restarts.
+      - whatsapp_sessions:/app/data/sessions
+      - media_store:/app/data/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "4000:4000"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  whatsapp_sessions:
+  media_store:

@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import multipart from "@fastify/multipart";
@@ -25,7 +25,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({
     // pino.Logger é compatível com FastifyBaseLogger em runtime; o cast evita
     // propagar o generic de logger para todos os módulos de rota.
-    loggerInstance: deps.logger as unknown as import("fastify").FastifyBaseLogger,
+    loggerInstance: deps.logger as unknown as FastifyBaseLogger,
     trustProxy: true,
     bodyLimit: 1024 * 1024,
   });

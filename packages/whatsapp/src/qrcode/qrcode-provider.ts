@@ -11,7 +11,7 @@ import makeWASocketImport, {
   type WAMessage,
   type WASocket,
 } from "@whiskeysockets/baileys";
-import { Boom } from "@hapi/boom";
+import type { Boom } from "@hapi/boom";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import pino, { type Logger } from "pino";
 import QRCode from "qrcode";
