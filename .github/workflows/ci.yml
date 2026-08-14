@@ -39,6 +39,15 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - name: Usar HTTPS nas dependências git do GitHub
+        # O Baileys puxa `libsignal` por URL SSH (git@github.com:...) e o
+        # runner não tem chave publicada, então o clone falha com
+        # "Permission denied (publickey)". O rewrite manda o mesmo clone
+        # sair por HTTPS, sem alterar o lockfile.
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
+
       - name: Instalar dependências
         run: pnpm install --frozen-lockfile
 
