@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, RefreshCw, StickyNote, UserMinus, UserPlus, X } from "lucide-react";
 import { CONVERSATION_STATUSES, CONVERSATION_STATUS_LABELS } from "@azvchat/shared";
 import { api, invalidateConversationAvatar } from "@/lib/api";
-import { formatDateTime, formatPhone } from "@/lib/utils";
+import { cn, formatDateTime, formatPhone } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
 import type {
   ConversationDetailDto,
@@ -23,6 +23,49 @@ const ACTION_LABELS: Record<string, string> = {
   resolved: "concluiu o atendimento",
   reopened: "reabriu o atendimento",
 };
+
+/**
+ * Descrição do grupo recolhida em 3 linhas. Descrições longas empurram o
+ * atendimento e a lista de participantes para fora da tela, então o texto
+ * completo fica atrás de um "ver mais".
+ */
+function GroupDescription({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const ref = useRef<HTMLParagraphElement | null>(null);
+
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    // Só oferece o botão quando o texto realmente passa das 3 linhas —
+    // medido no elemento, para não depender de contagem de caracteres.
+    const check = () => setOverflows(node.scrollHeight > node.clientHeight + 1);
+    check();
+    const observer = new ResizeObserver(check);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [text]);
+
+  return (
+    <div className="mt-2 rounded-lg bg-slate-50 p-2">
+      <p
+        ref={ref}
+        className={cn("whitespace-pre-wrap text-xs text-slate-500", !expanded && "line-clamp-3")}
+      >
+        {text}
+      </p>
+      {(overflows || expanded) && (
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          className="mt-1 text-xs font-medium text-brand-600 hover:underline"
+        >
+          {expanded ? "ver menos" : "ver mais"}
+        </button>
+      )}
+    </div>
+  );
+}
 
 export function ContextPanel({
   detail,
@@ -90,11 +133,7 @@ export function ContextPanel({
             <RefreshCw className="h-3.5 w-3.5" />
           </button>
         </div>
-        {detail.group?.description && (
-          <p className="mt-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-500">
-            {detail.group.description}
-          </p>
-        )}
+        {detail.group?.description && <GroupDescription text={detail.group.description} />}
       </section>
 
       {/* Atribuição */}
