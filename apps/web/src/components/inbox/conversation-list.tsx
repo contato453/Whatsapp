@@ -72,6 +72,12 @@ export function ConversationListItem({
               {formatTime(conversation.lastMessageAt)}
             </span>
           </div>
+          {/* Cadastro da empresa no escritório — tarja de destaque */}
+          {conversation.externalReference && (
+            <span className="mt-1 inline-flex rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800">
+              {conversation.externalReference}
+            </span>
+          )}
           <div className="mt-0.5 flex items-center justify-between gap-2">
             <p className="truncate text-xs text-slate-500">
               {conversation.lastMessagePreview ?? "Sem mensagens"}

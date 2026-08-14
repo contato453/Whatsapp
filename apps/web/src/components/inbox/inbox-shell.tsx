@@ -833,7 +833,17 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                 />
                 {isGroup && <Users2 className="h-4 w-4 shrink-0 text-slate-400" />}
                 <div className="min-w-0">
-                  <h2 className="truncate text-sm font-semibold text-slate-900">{conversation.title}</h2>
+                  <div className="flex items-center gap-1.5">
+                    <h2 className="truncate text-sm font-semibold text-slate-900">
+                      {conversation.title}
+                    </h2>
+                    {/* Cadastro da empresa no escritório */}
+                    {conversation.externalReference && (
+                      <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800">
+                        {conversation.externalReference}
+                      </span>
+                    )}
+                  </div>
                   <p className="truncate text-[11px] text-slate-400">
                     {isGroup
                       ? `${detail?.group?.participantCount ?? "..."} participantes · via ${conversation.instanceName ?? "—"}`

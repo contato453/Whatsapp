@@ -32,6 +32,8 @@ export async function searchRoutes(app: FastifyInstance, deps: AppDeps): Promise
           OR: [
             { title: { contains: q, mode: "insensitive" } },
             { externalChatId: { contains: q } },
+            // Código do cadastro no escritório ("EMPRESA 001")
+            { externalReference: { contains: q, mode: "insensitive" } },
           ],
         },
         include: {
