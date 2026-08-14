@@ -240,6 +240,8 @@ export class InstanceManager {
   ): Promise<boolean> {
     if (!options.force && this.avatarsUnavailable.has(conversation.id)) return false;
     try {
+      // Um erro aqui é temporário (o provider retorna null quando é
+      // definitivo) — cai no catch e será tentado de novo depois.
       const picture = await this.provider.getProfilePicture(
         conversation.whatsappInstanceId,
         conversation.externalChatId,
@@ -259,13 +261,24 @@ export class InstanceManager {
       this.avatarsUnavailable.delete(conversation.id);
       return true;
     } catch (err) {
+      // Falha temporária: não marca como indisponível para tentar de novo.
       this.logger.debug({
         conversationId: conversation.id,
-        event: "avatar_sync_failed",
+        event: "avatar_sync_retry_later",
         error: String(err),
       });
-      this.avatarsUnavailable.add(conversation.id);
       return false;
+    }
+  }
+
+  /** Limpa a marcação de "sem foto" para forçar nova consulta. */
+  async resetAvatarChecks(conversationId: string, groupId?: string): Promise<void> {
+    this.avatarsUnavailable.delete(conversationId);
+    if (groupId) {
+      await this.prisma.groupParticipant.updateMany({
+        where: { groupId },
+        data: { avatarCheckedAt: null },
+      });
     }
   }
 
@@ -294,27 +307,37 @@ export class InstanceManager {
       if (pending.length === 0) return;
 
       let updated = 0;
+      let withoutPicture = 0;
+      let transientFailures = 0;
       for (const participant of pending) {
-        let key: string | null = null;
         try {
           const picture = await this.provider.getProfilePicture(
             group.whatsappInstanceId,
             participant.externalContactId,
           );
           if (picture) {
-            key = await this.storage.save(picture.data, {
+            const key = await this.storage.save(picture.data, {
               instanceId: group.whatsappInstanceId,
               extension: extensionFromMime(picture.mimeType) ?? "jpg",
             });
+            await this.prisma.groupParticipant.update({
+              where: { id: participant.id },
+              data: { avatarUrl: key, avatarCheckedAt: new Date() },
+            });
             updated += 1;
+          } else {
+            // Sem foto ou privacidade: registra a verificação para não insistir.
+            await this.prisma.groupParticipant.update({
+              where: { id: participant.id },
+              data: { avatarCheckedAt: new Date() },
+            });
+            withoutPicture += 1;
           }
         } catch {
-          // segue para o próximo participante — foto é informação acessória
+          // Falha temporária: NÃO marca como verificado — tenta de novo
+          // na próxima vez que o grupo for aberto.
+          transientFailures += 1;
         }
-        await this.prisma.groupParticipant.update({
-          where: { id: participant.id },
-          data: { avatarCheckedAt: new Date(), ...(key ? { avatarUrl: key } : {}) },
-        });
         await new Promise((resolve) => setTimeout(resolve, AVATAR_FETCH_DELAY_MS));
       }
 
@@ -323,6 +346,8 @@ export class InstanceManager {
         event: "participant_avatars_synced",
         checked: pending.length,
         updated,
+        withoutPicture,
+        transientFailures,
       });
       if (updated > 0) {
         this.io

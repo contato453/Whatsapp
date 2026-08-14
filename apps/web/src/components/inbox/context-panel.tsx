@@ -76,7 +76,7 @@ export function ContextPanel({
             <p className="text-xs text-slate-400">via {conversation.instanceName ?? "—"}</p>
           </div>
           <button
-            title="Atualizar foto de perfil"
+            title="Atualizar fotos (conversa e participantes)"
             disabled={busy}
             onClick={() =>
               run(async () => {

@@ -179,10 +179,19 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     return reply.send(data);
   });
 
-  /** Força nova busca da foto de perfil (ex.: contato trocou a imagem). */
+  /**
+   * Força nova busca das fotos (da conversa e, em grupos, dos participantes).
+   * Útil quando alguém troca a imagem ou quando uma consulta anterior falhou.
+   */
   app.post("/conversations/:id/avatar/refresh", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const conversation = await findConversationOr404(id, request.user.organizationId);
+    const group = await deps.prisma.whatsAppGroup.findFirst({
+      where: { conversationId: id, organizationId: request.user.organizationId },
+      select: { id: true },
+    });
+
+    await deps.instanceManager.resetAvatarChecks(id, group?.id);
     const updated = await deps.instanceManager.syncConversationAvatar(
       {
         id: conversation.id,
@@ -193,6 +202,10 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     );
     if (updated) {
       await emitConversationUpdated(id, request.user.organizationId);
+    }
+    if (group) {
+      // Participantes são buscados em segundo plano (pode levar alguns segundos).
+      void deps.instanceManager.syncParticipantAvatars(id, request.user.organizationId);
     }
     return { updated };
   });

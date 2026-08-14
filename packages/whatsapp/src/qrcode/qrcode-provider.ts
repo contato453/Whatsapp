@@ -522,6 +522,12 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     };
   }
 
+  /**
+   * Retorna null quando o perfil definitivamente não tem foto acessível
+   * (sem foto ou bloqueado por privacidade) e LANÇA em falhas temporárias
+   * (limite de requisições, timeout, rede) — assim a aplicação sabe que
+   * vale tentar de novo mais tarde em vez de marcar como "sem foto".
+   */
   async getProfilePicture(
     instanceId: string,
     externalId: string,
@@ -529,27 +535,27 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     const socket = this.requireSocket(instanceId);
     let url: string | undefined;
     try {
-      // "image" = alta resolução; lança/retorna undefined quando não há foto
-      // ou quando a privacidade do contato bloqueia o acesso.
+      // "image" = alta resolução
       url = await socket.profilePictureUrl(externalId, "image");
-    } catch {
-      return null;
+    } catch (err) {
+      const statusCode = (err as Boom | undefined)?.output?.statusCode;
+      // 404 = sem foto; 401/403 = privacidade. Demais: falha temporária.
+      if (statusCode === 404 || statusCode === 401 || statusCode === 403) {
+        return null;
+      }
+      throw err;
     }
     if (!url) return null;
-    try {
-      const response = await fetch(url);
-      if (!response.ok) return null;
-      const buffer = Buffer.from(await response.arrayBuffer());
-      const mimeType = response.headers.get("content-type") ?? "image/jpeg";
-      return { data: buffer, mimeType };
-    } catch (err) {
-      this.logger.debug({
-        instanceId,
-        event: "profile_picture_download_failed",
-        error: String(err),
-      });
-      return null;
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      // A URL do WhatsApp expira: 404/410 aqui significa foto trocada/removida.
+      if (response.status === 404 || response.status === 410) return null;
+      throw new Error(`Falha ao baixar foto de perfil (HTTP ${response.status})`);
     }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const mimeType = response.headers.get("content-type") ?? "image/jpeg";
+    return { data: buffer, mimeType };
   }
 
   async getChats(instanceId: string): Promise<ProviderChat[]> {
