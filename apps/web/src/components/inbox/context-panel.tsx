@@ -1,7 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, RefreshCw, StickyNote, UserMinus, UserPlus, X } from "lucide-react";
+import { useRouter } from "next/navigation";
+import {
+  CheckCircle2,
+  MessageSquare,
+  RefreshCw,
+  StickyNote,
+  UserMinus,
+  UserPlus,
+  X,
+} from "lucide-react";
 import { CONVERSATION_STATUSES, CONVERSATION_STATUS_LABELS } from "@azvchat/shared";
 import { api, invalidateConversationAvatar } from "@/lib/api";
 import { cn, formatDateTime, formatPhone } from "@/lib/utils";
@@ -81,6 +90,7 @@ export function ContextPanel({
   onChanged: () => void;
 }) {
   const { user: me } = useAuth();
+  const router = useRouter();
   const conversation = detail.conversation;
   const [noteText, setNoteText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -100,6 +110,24 @@ export function ContextPanel({
   useEffect(() => {
     setReference(conversation.externalReference ?? "");
   }, [conversation.id, conversation.externalReference]);
+
+  /**
+   * Abre a conversa individual com o participante — o "chamar no privado".
+   * A conversa é criada na hora se ainda não existir.
+   */
+  async function openDirect(participantId: string) {
+    setBusy(true);
+    try {
+      const data = await api.post<{ conversationId: string }>(
+        `/group-participants/${participantId}/conversation`,
+      );
+      router.push(`/inbox/${data.conversationId}`);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Não foi possível abrir a conversa");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function saveReference() {
     const value = reference.trim();
@@ -363,6 +391,17 @@ export function ContextPanel({
                   )}
                 </div>
                 {participant.isAdmin && <Badge className="bg-amber-50 text-amber-700">admin</Badge>}
+                {/* Sem telefone conhecido não há para onde abrir a conversa */}
+                {participant.phoneNumber && (
+                  <button
+                    title={`Conversar no privado com ${participant.name || formatPhone(participant.phoneNumber)}`}
+                    disabled={busy}
+                    onClick={() => void openDirect(participant.id)}
+                    className="flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 px-1.5 py-1 text-[11px] text-slate-600 hover:bg-slate-50 hover:text-brand-700 disabled:opacity-50"
+                  >
+                    <MessageSquare className="h-3 w-3" /> Conversar
+                  </button>
+                )}
               </div>
             ))}
             {detail.group.participants.length === 0 && (

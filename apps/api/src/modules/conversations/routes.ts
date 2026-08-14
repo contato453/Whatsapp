@@ -4,11 +4,11 @@ import { z } from "zod";
 import { CONVERSATION_STATUSES, RealtimeEvents } from "@azvchat/shared";
 import {
   conversationScope,
-  instanceScope,
+  groupScope,
   loadConversationAccess,
 } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
-import { ForbiddenError, NotFoundError } from "../../lib/errors.js";
+import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import { serializeConversation, serializeUserDirectory } from "../../lib/serialize.js";
 import { resolveContacts, type SenderInfo } from "../../lib/sender-directory.js";
 import { conversationAudience } from "../../realtime/socket.js";
@@ -235,12 +235,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     const participant = await deps.prisma.groupParticipant.findFirst({
       where: {
         id,
-        group: {
-          organizationId: request.user.organizationId,
-          ...instanceScope(access.instanceIds),
-          // Grupo já virou conversa: vale o mesmo recorte da conversa.
-          OR: [{ conversationId: null }, { conversation: conversationScope(access) }],
-        },
+        group: { organizationId: request.user.organizationId, ...groupScope(access) },
       },
       select: { avatarUrl: true },
     });
@@ -250,6 +245,62 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     reply.header("Cache-Control", "private, max-age=86400");
     return reply.send(data);
   });
+
+  /**
+   * Abre a conversa individual com um participante do grupo, criando-a se
+   * ainda não existir. É o "chamar no privado": tirar um assunto do grupo
+   * sem sair do sistema e sem procurar o número na mão.
+   */
+  app.post(
+    "/group-participants/:id/conversation",
+    { preHandler: authenticate },
+    async (request, reply) => {
+      const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+      const access = await loadConversationAccess(deps.prisma, request.user);
+      const participant = await deps.prisma.groupParticipant.findFirst({
+        where: {
+          id,
+          group: { organizationId: request.user.organizationId, ...groupScope(access) },
+        },
+        select: {
+          name: true,
+          phoneNumber: true,
+          group: { select: { whatsappInstanceId: true } },
+        },
+      });
+      if (!participant) throw new NotFoundError("Participante");
+
+      // Sem telefone não há para onde abrir: em grupo anônimo o WhatsApp
+      // só entrega o número de quem já escreveu.
+      const phone = participant.phoneNumber?.replace(/\D/g, "") ?? "";
+      if (!phone) {
+        throw new AppError(
+          "O WhatsApp não informou o número desta pessoa, então não dá para abrir a conversa.",
+          400,
+          "participant_without_phone",
+        );
+      }
+
+      const conversation = await deps.ingest.ensureConversation(
+        {
+          instanceId: participant.group.whatsappInstanceId,
+          externalChatId: `${phone}@s.whatsapp.net`,
+          isGroup: false,
+          callerName: participant.name,
+          callerPhone: phone,
+        },
+        request.user.organizationId,
+      );
+      deps.audit.record({
+        organizationId: request.user.organizationId,
+        userId: request.user.sub,
+        action: "conversation.opened_from_group",
+        entityType: "Conversation",
+        entityId: conversation.id,
+      });
+      return reply.status(201).send({ conversationId: conversation.id });
+    },
+  );
 
   /**
    * Força nova busca das fotos (da conversa e, em grupos, dos participantes).

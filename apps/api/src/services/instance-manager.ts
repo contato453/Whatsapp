@@ -635,7 +635,7 @@ export class InstanceManager {
           groupId: group.id,
           OR: [{ avatarCheckedAt: null }, { avatarCheckedAt: { lt: staleBefore } }],
         },
-        select: { id: true, externalContactId: true },
+        select: { id: true, externalContactId: true, phoneNumber: true },
         take: PARTICIPANT_AVATAR_LIMIT,
       });
       if (pending.length === 0) return;
@@ -645,10 +645,18 @@ export class InstanceManager {
       let transientFailures = 0;
       for (const participant of pending) {
         try {
-          const picture = await this.provider.getProfilePicture(
+          let picture = await this.provider.getProfilePicture(
             group.whatsappInstanceId,
             participant.externalContactId,
           );
+          // Identificador anônimo costuma não responder à consulta de foto.
+          // Com o telefone conhecido, tentamos de novo pelo JID de telefone.
+          if (!picture && participant.externalContactId.endsWith("@lid") && participant.phoneNumber) {
+            picture = await this.provider.getProfilePicture(
+              group.whatsappInstanceId,
+              `${participant.phoneNumber}@s.whatsapp.net`,
+            );
+          }
           if (picture) {
             const key = await this.storage.save(picture.data, {
               instanceId: group.whatsappInstanceId,

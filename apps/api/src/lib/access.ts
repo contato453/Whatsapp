@@ -140,3 +140,20 @@ export function canWriteInDepartment(
   if (!departmentId) return false;
   return ids.includes(departmentId);
 }
+
+/**
+ * Recorte para consultas que partem do grupo (fotos e dados de
+ * participante), e não da conversa.
+ *
+ * O `is:` é obrigatório: em relação opcional, o Prisma trata
+ * `conversation: {}` como filtro que não casa nada — e o admin, cujo
+ * escopo é vazio, deixaria de enxergar qualquer participante.
+ */
+export function groupScope(access: ConversationAccess): Prisma.WhatsAppGroupWhereInput {
+  return {
+    ...instanceScope(access.instanceIds),
+    // Grupo ainda sem conversa continua visível: ele existe entre a
+    // sincronização do grupo e a primeira mensagem.
+    OR: [{ conversationId: null }, { conversation: { is: conversationScope(access) } }],
+  };
+}
