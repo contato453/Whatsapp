@@ -9,6 +9,7 @@ import {
   Search,
   Send,
   Users2,
+  Zap,
 } from "lucide-react";
 import { RealtimeEvents } from "@zapdesk/shared";
 import { api } from "@/lib/api";
@@ -21,6 +22,7 @@ import type {
   DepartmentDto,
   InstanceDto,
   MessageDto,
+  QuickReplyDto,
   TagDto,
   UserDto,
 } from "@/lib/types";
@@ -74,6 +76,9 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const [departments, setDepartments] = useState<DepartmentDto[]>([]);
   const [tags, setTags] = useState<TagDto[]>([]);
   const [instances, setInstances] = useState<InstanceDto[]>([]);
+  const [quickReplies, setQuickReplies] = useState<QuickReplyDto[]>([]);
+  const [quickReplyIndex, setQuickReplyIndex] = useState(0);
+  const [quickReplyDismissed, setQuickReplyDismissed] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -84,6 +89,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     api.get<{ departments: DepartmentDto[] }>("/departments").then((data) => setDepartments(data.departments)).catch(() => undefined);
     api.get<{ tags: TagDto[] }>("/tags").then((data) => setTags(data.tags)).catch(() => undefined);
     api.get<{ instances: InstanceDto[] }>("/whatsapp-instances").then((data) => setInstances(data.instances)).catch(() => undefined);
+    api.get<{ quickReplies: QuickReplyDto[] }>("/quick-replies").then((data) => setQuickReplies(data.quickReplies)).catch(() => undefined);
   }, []);
 
   // ---------- Lista de conversas ----------
@@ -231,6 +237,35 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
 
   const conversation = detail?.conversation;
   const isGroup = conversation?.type === "group";
+
+  // ---------- Respostas rápidas (atalho "/") ----------
+  const slashQuery =
+    draft.startsWith("/") && !draft.includes("\n") ? draft.slice(1).toLowerCase() : null;
+  const quickReplyMatches = useMemo(() => {
+    if (slashQuery === null || quickReplyDismissed) return [];
+    return quickReplies
+      .filter(
+        (reply) =>
+          reply.shortcut.startsWith(slashQuery) ||
+          (reply.title ?? "").toLowerCase().includes(slashQuery) ||
+          reply.content.toLowerCase().includes(slashQuery),
+      )
+      .slice(0, 8);
+  }, [slashQuery, quickReplies, quickReplyDismissed]);
+  const quickReplyOpen = quickReplyMatches.length > 0;
+
+  useEffect(() => {
+    setQuickReplyIndex(0);
+  }, [slashQuery]);
+
+  useEffect(() => {
+    if (slashQuery === null) setQuickReplyDismissed(false);
+  }, [slashQuery]);
+
+  function applyQuickReply(reply: QuickReplyDto) {
+    setDraft(reply.content);
+    setQuickReplyDismissed(true);
+  }
 
   const groupedMessages = useMemo(() => {
     if (!messages) return [];
@@ -388,7 +423,36 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
               <div ref={bottomRef} />
             </div>
 
-            <footer className="border-t border-slate-200 bg-white p-3">
+            <footer className="relative border-t border-slate-200 bg-white p-3">
+              {quickReplyOpen && (
+                <div className="absolute bottom-full left-3 right-3 z-20 mb-1 max-h-72 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+                  <p className="flex items-center gap-1.5 border-b border-slate-100 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                    <Zap className="h-3 w-3" /> Respostas rápidas — Enter insere, Esc fecha
+                  </p>
+                  {quickReplyMatches.map((reply, index) => (
+                    <button
+                      key={reply.id}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        applyQuickReply(reply);
+                      }}
+                      onMouseEnter={() => setQuickReplyIndex(index)}
+                      className={cn(
+                        "block w-full px-3 py-2 text-left",
+                        index === quickReplyIndex ? "bg-brand-50" : "hover:bg-slate-50",
+                      )}
+                    >
+                      <p className="text-xs font-semibold text-brand-700">
+                        /{reply.shortcut}
+                        {reply.title && (
+                          <span className="ml-2 font-normal text-slate-500">{reply.title}</span>
+                        )}
+                      </p>
+                      <p className="truncate text-xs text-slate-500">{reply.content}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="flex items-end gap-2">
                 <input
                   ref={fileInputRef}
@@ -415,12 +479,37 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   disabled={sending}
                   onChange={(event) => setDraft(event.target.value)}
                   onKeyDown={(event) => {
+                    if (quickReplyOpen) {
+                      if (event.key === "ArrowDown") {
+                        event.preventDefault();
+                        setQuickReplyIndex((index) => (index + 1) % quickReplyMatches.length);
+                        return;
+                      }
+                      if (event.key === "ArrowUp") {
+                        event.preventDefault();
+                        setQuickReplyIndex(
+                          (index) => (index - 1 + quickReplyMatches.length) % quickReplyMatches.length,
+                        );
+                        return;
+                      }
+                      if (event.key === "Enter" || event.key === "Tab") {
+                        event.preventDefault();
+                        const selected = quickReplyMatches[quickReplyIndex];
+                        if (selected) applyQuickReply(selected);
+                        return;
+                      }
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        setQuickReplyDismissed(true);
+                        return;
+                      }
+                    }
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
                       void sendText();
                     }
                   }}
-                  placeholder={`Mensagem para ${conversation.title}... (Enter envia, Shift+Enter quebra linha)`}
+                  placeholder={`Mensagem para ${conversation.title}... ("/" para respostas rápidas, Enter envia)`}
                   className="max-h-32 min-h-[40px] resize-none"
                 />
                 <Button

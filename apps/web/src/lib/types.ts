@@ -116,6 +116,14 @@ export interface ConversationDetailDto {
   notes: NoteDto[];
 }
 
+export interface QuickReplyDto {
+  id: string;
+  shortcut: string;
+  title: string | null;
+  content: string;
+  createdAt: string;
+}
+
 export interface DashboardStatsDto {
   instancesConnected: number;
   instancesDisconnected: number;
