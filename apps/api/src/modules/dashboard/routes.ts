@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { accessibleInstanceIds, instanceIdScope, instanceScope } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
 import type { AppDeps } from "../../types.js";
 
@@ -7,6 +8,14 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
     const organizationId = request.user.organizationId;
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
+
+    // Números que o usuário enxerga — os indicadores seguem o mesmo recorte.
+    const allowed = await accessibleInstanceIds(deps.prisma, request.user);
+    const instanceFilter = instanceIdScope(allowed);
+    const conversationFilter = instanceScope(allowed);
+    const messageFilter = allowed
+      ? { conversation: { whatsappInstanceId: { in: allowed } } }
+      : {};
 
     const [
       instancesConnected,
@@ -19,27 +28,44 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
       byDepartment,
     ] = await Promise.all([
       deps.prisma.whatsAppInstance.count({
-        where: { organizationId, status: "connected" },
+        where: { organizationId, ...instanceFilter, status: "connected" },
       }),
       deps.prisma.whatsAppInstance.count({
-        where: { organizationId, status: { not: "connected" } },
+        where: { organizationId, ...instanceFilter, status: { not: "connected" } },
       }),
       deps.prisma.conversation.count({
-        where: { organizationId, status: { in: ["new", "open"] } },
+        where: { organizationId, ...conversationFilter, status: { in: ["new", "open"] } },
       }),
-      deps.prisma.conversation.count({ where: { organizationId, status: "waiting" } }),
       deps.prisma.conversation.count({
-        where: { organizationId, assignedUserId: null, status: { in: ["new", "open", "waiting"] } },
+        where: { organizationId, ...conversationFilter, status: "waiting" },
+      }),
+      deps.prisma.conversation.count({
+        where: {
+          organizationId,
+          ...conversationFilter,
+          assignedUserId: null,
+          status: { in: ["new", "open", "waiting"] },
+        },
       }),
       deps.prisma.message.count({
-        where: { organizationId, direction: "inbound", timestamp: { gte: startOfDay } },
+        where: {
+          organizationId,
+          ...messageFilter,
+          direction: "inbound",
+          timestamp: { gte: startOfDay },
+        },
       }),
       deps.prisma.message.count({
-        where: { organizationId, direction: "outbound", timestamp: { gte: startOfDay } },
+        where: {
+          organizationId,
+          ...messageFilter,
+          direction: "outbound",
+          timestamp: { gte: startOfDay },
+        },
       }),
       deps.prisma.conversation.groupBy({
         by: ["departmentId"],
-        where: { organizationId, status: { in: ["new", "open", "waiting"] } },
+        where: { organizationId, ...conversationFilter, status: { in: ["new", "open", "waiting"] } },
         _count: { _all: true },
       }),
     ]);

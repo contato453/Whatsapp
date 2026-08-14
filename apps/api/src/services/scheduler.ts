@@ -3,7 +3,7 @@ import { RealtimeEvents } from "@zapdesk/shared";
 import type { WhatsAppProvider } from "@zapdesk/whatsapp";
 import type { Server } from "socket.io";
 import type { Logger } from "pino";
-import { orgRoom } from "../realtime/socket.js";
+import { instanceAudience } from "../realtime/socket.js";
 import { serializeConversation, serializeMessage } from "../lib/serialize.js";
 import { buildPreview } from "./message-ingest.js";
 
@@ -130,7 +130,11 @@ export class ScheduledMessageWorker {
         },
       });
       if (conversation) {
-        const room = orgRoom(scheduled.organizationId);
+        // Respeita o escopo de acesso por número (atendentes com acesso restrito)
+        const room = instanceAudience(
+          scheduled.organizationId,
+          scheduled.conversation.whatsappInstanceId,
+        );
         this.io.to(room).emit(RealtimeEvents.MessageNew, {
           conversation: serializeConversation(conversation),
           message: serializeMessage(message),
