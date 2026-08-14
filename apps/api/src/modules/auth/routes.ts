@@ -53,7 +53,12 @@ export async function authRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
         action: "auth.login",
         ip: request.ip,
       });
-      return { token, user: serializeUser(user) };
+      // Registrado depois da autenticação: tentativa falha não conta como acesso.
+      const loggedIn = await deps.prisma.user.update({
+        where: { id: user.id },
+        data: { lastLoginAt: new Date() },
+      });
+      return { token, user: serializeUser(loggedIn) };
     },
   );
 

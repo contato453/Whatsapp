@@ -19,6 +19,8 @@ export interface UserDto {
   avatarUrl: string | null;
   /** Prefixa as mensagens enviadas com o nome do atendente */
   signMessages: boolean;
+  /** Último acesso ao sistema — null se nunca entrou */
+  lastLoginAt: string | null;
   createdAt: string;
 }
 

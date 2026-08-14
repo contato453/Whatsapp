@@ -21,6 +21,7 @@ export function serializeUser(user: User) {
     status: user.status,
     avatarUrl: user.avatarUrl,
     signMessages: user.signMessages,
+    lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
     createdAt: user.createdAt.toISOString(),
   };
 }

@@ -172,11 +172,16 @@ export function Modal({
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
       onClick={onClose}
     >
+      {/* max-h + rolagem interna: conteúdo alto não pode estourar a tela
+          e ficar inacessível. O cabeçalho fica fixo durante a rolagem. */}
       <div
-        className={cn("w-full rounded-xl bg-white p-6 shadow-xl", wide ? "max-w-2xl" : "max-w-md")}
+        className={cn(
+          "flex max-h-[calc(100vh-2rem)] w-full flex-col rounded-xl bg-white shadow-xl",
+          wide ? "max-w-2xl" : "max-w-md",
+        )}
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between">
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-6 py-4">
           <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
           <button
             onClick={onClose}
@@ -186,7 +191,7 @@ export function Modal({
             <X className="h-5 w-5" />
           </button>
         </div>
-        {children}
+        <div className="thin-scroll min-h-0 flex-1 overflow-y-auto px-6 py-5">{children}</div>
       </div>
     </div>
   );

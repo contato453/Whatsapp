@@ -60,6 +60,8 @@ model User {
   avatarUrl      String?
   /// Prefixa as mensagens enviadas com o nome do atendente ("Fulano:")
   signMessages   Boolean    @default(false)
+  /// Último login bem-sucedido — null enquanto o usuário nunca entrou
+  lastLoginAt    DateTime?
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
 
