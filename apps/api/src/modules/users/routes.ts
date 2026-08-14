@@ -5,6 +5,7 @@ import { hasRole } from "@azvchat/shared";
 import { authenticate, requireRole } from "../../lib/auth.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
 import { serializeUserDirectory, serializeUserWithAccess } from "../../lib/serialize.js";
+import { disconnectUser } from "../../realtime/socket.js";
 import type { AppDeps } from "../../types.js";
 
 /** Conexões liberadas. Lista vazia = o usuário não enxerga conversa alguma. */
@@ -238,6 +239,20 @@ export async function userRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
         },
       });
     });
+
+    /**
+     * Mudou papel, status ou o recorte de acesso: as sessões de tempo real
+     * abertas ainda estão nas salas antigas, então caem aqui. A API já
+     * revalida a cada requisição; o socket revalida ao reconectar.
+     */
+    if (
+      updated.role !== user.role ||
+      updated.status !== user.status ||
+      instanceIds ||
+      departmentIds
+    ) {
+      disconnectUser(deps.io, id);
+    }
 
     deps.audit.record({
       organizationId: request.user.organizationId,

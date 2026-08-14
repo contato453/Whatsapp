@@ -1,7 +1,7 @@
 import type { Server as HttpServer } from "node:http";
 import { Server, type Socket } from "socket.io";
 import type { Logger } from "pino";
-import type { AuthTokenPayload } from "../lib/auth.js";
+import type { AuthTokenPayload, SessionVerifier } from "../lib/auth.js";
 
 export interface VerifyToken {
   (token: string): AuthTokenPayload;
@@ -36,6 +36,7 @@ export function createRealtime(
   options: {
     corsOrigins: string[];
     verifyToken: VerifyToken;
+    verifySession: SessionVerifier;
     resolveAccess: ResolveRealtimeAccess;
     logger: Logger;
   },
@@ -60,11 +61,13 @@ export function createRealtime(
       next(new Error("unauthorized"));
       return;
     }
-    socket.data.user = payload;
+    // Mesma revalidação da API: token válido de usuário desativado não abre
+    // conexão, e quem mudou de papel entra nas salas do papel atual.
     options
-      .resolveAccess(payload)
-      .then((access) => {
-        socket.data.access = access;
+      .verifySession(payload)
+      .then(async (user) => {
+        socket.data.user = user;
+        socket.data.access = await options.resolveAccess(user);
         next();
       })
       .catch((err) => {
@@ -129,6 +132,19 @@ function joinInstanceRooms(socket: Socket, instanceId: string): void {
  * depois de recarregar a página: a pessoa ficaria encarando um código
  * vencido que o celular se recusa a ler.
  */
+/**
+ * Derruba as sessões de tempo real de um usuário. As salas são montadas na
+ * conexão, então quem é desativado ou muda de papel continuaria recebendo
+ * pelas regras antigas até fechar a aba. Na reconexão o handshake aplica o
+ * estado atual — ou recusa, se a pessoa foi desativada.
+ */
+export function disconnectUser(io: Server, userId: string): void {
+  for (const socket of io.sockets.sockets.values()) {
+    const user = socket.data.user as AuthTokenPayload | undefined;
+    if (user?.sub === userId) socket.disconnect(true);
+  }
+}
+
 export function grantInstanceAccess(io: Server, userId: string, instanceId: string): void {
   for (const socket of io.sockets.sockets.values()) {
     const user = socket.data.user as AuthTokenPayload | undefined;

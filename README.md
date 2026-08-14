@@ -179,9 +179,22 @@ avatar (`serializeUserDirectory`). E-mail, último acesso e o mapa de números e
 de cada pessoa só saem em `GET /users` para **administrador**; para os demais essa rota
 devolve apenas a agenda interna de ativos, que é o suficiente para escolher responsável.
 
+### Mudança de acesso vale na hora
+
+O JWT é uma foto do momento do login e vale por dias, então **quem manda é o banco**: toda
+requisição autenticada relê papel, status e nome do usuário (uma consulta por chave
+primária). Desativar alguém corta o acesso imediatamente, em vez de esperar o token vencer —
+o que importa no dia em que a pessoa deixa o escritório, porque até então ela seguiria lendo
+e respondendo cliente pelo WhatsApp da casa. Rebaixar tira a administração no mesmo instante.
+
+O mesmo vale no tempo real: o handshake do socket revalida a sessão, e mudança de papel,
+status ou recorte de acesso derruba as conexões abertas daquela pessoa — as salas são
+montadas na conexão, então a sessão antiga continuaria recebendo pelas regras antigas.
+
 ## Segurança
 
 - JWT com expiração; senha com bcrypt; endpoints protegidos por papel (admin/supervisor/agent);
+- papel e status revalidados no banco a cada requisição — desativar ou rebaixar vale na hora;
 - rate limiting global (300 req/min) e específico no login (10/min);
 - validação de entrada com Zod em todas as rotas; tratamento global de erros sem vazar internals;
 - mídia servida somente autenticada e escopada por organização; proteção contra path traversal;
