@@ -96,6 +96,8 @@ export interface MessageDto {
   sentByUserId: string | null;
   deletedAt: string | null;
   editedAt: string | null;
+  /** Dados extras por tipo — em enquetes traz { pollOptions } */
+  metadata: { pollOptions?: string[]; selectableCount?: number } | null;
 }
 
 export interface GroupDetailDto {
@@ -133,6 +135,17 @@ export interface ConversationDetailDto {
   group: GroupDetailDto | null;
   assignmentHistory: AssignmentHistoryDto[];
   notes: NoteDto[];
+}
+
+export interface ScheduledMessageDto {
+  id: string;
+  conversationId: string;
+  content: string;
+  scheduledFor: string;
+  status: "pending" | "sent" | "failed" | "canceled";
+  error: string | null;
+  createdBy: UserDto | null;
+  createdAt: string;
 }
 
 export interface QuickReplyDto {

@@ -29,6 +29,7 @@ model Organization {
   assignmentHistories ConversationAssignmentHistory[]
   auditLogs           AuditLog[]
   quickReplies        QuickReply[]
+  scheduledMessages   ScheduledMessage[]
 
   @@map("organizations")
 }
@@ -67,6 +68,7 @@ model User {
   performedAssignments  ConversationAssignmentHistory[] @relation("PerformedAssignments")
   auditLogs             AuditLog[]
   quickReplies          QuickReply[]
+  scheduledMessages     ScheduledMessage[]
 
   @@index([organizationId])
   @@map("users")
@@ -245,6 +247,7 @@ model Conversation {
   internalNotes     InternalNote[]
   tags              ConversationTag[]
   assignmentHistory ConversationAssignmentHistory[]
+  scheduledMessages ScheduledMessage[]
 
   @@unique([whatsappInstanceId, externalChatId])
   @@index([organizationId, status])
@@ -270,6 +273,7 @@ enum MessageType {
   sticker
   location
   contact
+  poll
   other
 }
 
@@ -304,6 +308,8 @@ model Message {
   deletedByUserId   String?
   /// Última edição do texto, quando houve
   editedAt          DateTime?
+  /// Dados extras por tipo (ex.: opções da enquete)
+  metadata          Json?
   createdAt         DateTime         @default(now())
 
   organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -445,6 +451,41 @@ model QuickReply {
 
   @@unique([organizationId, shortcut])
   @@map("quick_replies")
+}
+
+// ============================================================
+// Mensagens agendadas
+// ============================================================
+
+enum ScheduledMessageStatus {
+  pending
+  sent
+  failed
+  canceled
+}
+
+model ScheduledMessage {
+  id             String                 @id @default(uuid())
+  organizationId String
+  conversationId String
+  content        String
+  scheduledFor   DateTime
+  status         ScheduledMessageStatus @default(pending)
+  createdById    String?
+  sentMessageId  String?
+  error          String?
+  /// Tentativas de envio já realizadas (falhas temporárias são retentadas)
+  attempts       Int                    @default(0)
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([status, scheduledFor])
+  @@index([conversationId])
+  @@map("scheduled_messages")
 }
 
 // ============================================================

@@ -13,6 +13,8 @@ export interface ExtractedContent {
   mimeType: string | null;
   filename: string | null;
   hasMedia: boolean;
+  /** Opções da enquete, quando type === "poll" */
+  pollOptions?: string[];
 }
 
 /** Extrai o número de telefone de um JID ("5511999@s.whatsapp.net" -> "5511999"). */
@@ -169,6 +171,19 @@ export function extractContent(
       mimeType: null,
       filename: null,
       hasMedia: false,
+    };
+  }
+  const poll = message.pollCreationMessage ?? message.pollCreationMessageV3;
+  if (poll) {
+    return {
+      type: "poll",
+      content: poll.name ?? "Enquete",
+      mimeType: null,
+      filename: null,
+      hasMedia: false,
+      pollOptions: (poll.options ?? [])
+        .map((option) => option.optionName ?? "")
+        .filter((name) => name.length > 0),
     };
   }
 

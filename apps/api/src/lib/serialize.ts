@@ -128,5 +128,7 @@ export function serializeMessage(
     sentByUserId: message.sentByUserId,
     deletedAt: message.deletedAt?.toISOString() ?? null,
     editedAt: message.editedAt?.toISOString() ?? null,
+    // Dados extras por tipo (opções da enquete, por exemplo)
+    metadata: (message.metadata as Record<string, unknown> | null) ?? null,
   };
 }

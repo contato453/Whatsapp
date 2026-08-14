@@ -10,6 +10,7 @@ import { LocalMediaStorage } from "./lib/media-storage.js";
 import { AuditService } from "./modules/audit/service.js";
 import { MessageIngestService } from "./services/message-ingest.js";
 import { InstanceManager } from "./services/instance-manager.js";
+import { ScheduledMessageWorker } from "./services/scheduler.js";
 import type { AuthTokenPayload } from "./lib/auth.js";
 import type { AppDeps } from "./types.js";
 
@@ -68,6 +69,9 @@ async function main(): Promise<void> {
   instanceManager.wireProviderEvents();
   deps.instanceManager = instanceManager;
 
+  const scheduler = new ScheduledMessageWorker(prisma, provider, io, logger);
+  scheduler.start();
+
   await app.listen({ port: config.API_PORT, host: config.API_HOST });
   logger.info({ event: "api_started", port: config.API_PORT });
 
@@ -81,6 +85,7 @@ async function main(): Promise<void> {
     shuttingDown = true;
     logger.info({ event: "shutdown", signal });
     try {
+      scheduler.stop();
       await provider.shutdownAll();
       io.close();
       await app.close();

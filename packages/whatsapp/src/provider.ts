@@ -117,6 +117,16 @@ export interface WhatsAppProvider {
     emoji: string,
   ): Promise<void>;
 
+  /**
+   * Envia uma enquete. `selectableCount` = quantas opções cada pessoa
+   * pode escolher (1 = resposta única).
+   */
+  sendPoll(
+    instanceId: string,
+    chatId: string,
+    poll: { question: string; options: string[]; selectableCount?: number },
+  ): Promise<MessageResult>;
+
   /** Apaga a mensagem para todos os participantes do chat. */
   deleteMessage(instanceId: string, chatId: string, target: MessageTarget): Promise<void>;
 

@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  BarChart3,
+  CalendarClock,
   CornerUpLeft,
   Forward,
   History,
@@ -11,6 +13,7 @@ import {
   Paperclip,
   Search,
   Send,
+  Sticker,
   StickyNote,
   Users2,
   X,
@@ -20,7 +23,7 @@ import { RealtimeEvents } from "@zapdesk/shared";
 import { api } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { useAuth } from "@/lib/auth-context";
-import { cn } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 import type {
   ConversationDetailDto,
   ConversationDto,
@@ -36,6 +39,9 @@ import { Button, EmptyState, Input, Modal, Spinner, Textarea } from "@/component
 import { ConversationListItem } from "./conversation-list";
 import { ConversationAvatar } from "./conversation-avatar";
 import { AudioRecorder } from "./audio-recorder";
+import { PollModal, ScheduleModal } from "./composer-modals";
+import { MessageBubble } from "./message-bubble";
+import { ContextPanel } from "./context-panel";
 
 /** Nota interna exibida dentro da conversa — nunca vai para o WhatsApp. */
 function InternalNoteItem({ note }: { note: NoteDto }) {
@@ -59,9 +65,6 @@ function InternalNoteItem({ note }: { note: NoteDto }) {
     </div>
   );
 }
-import { MessageBubble } from "./message-bubble";
-import { ContextPanel } from "./context-panel";
-
 type QuickFilter =
   | "all"
   | "mine"
@@ -109,6 +112,13 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const [replyTo, setReplyTo] = useState<MessageDto | null>(null);
   const [forwarding, setForwarding] = useState<MessageDto | null>(null);
   const [forwardSearch, setForwardSearch] = useState("");
+  const [pollOpen, setPollOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  // Busca dentro da conversa aberta
+  const [chatSearchOpen, setChatSearchOpen] = useState(false);
+  const [chatSearch, setChatSearch] = useState("");
+  const [chatResults, setChatResults] = useState<MessageDto[] | null>(null);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
 
   const [users, setUsers] = useState<UserDto[]>([]);
   const [departments, setDepartments] = useState<DepartmentDto[]>([]);
@@ -120,6 +130,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const stickerInputRef = useRef<HTMLInputElement | null>(null);
 
   // ---------- Carregamento de dados auxiliares ----------
   useEffect(() => {
@@ -184,6 +195,43 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       .catch(() => setMessages([]));
     void api.post(`/conversations/${conversationId}/read`).catch(() => undefined);
   }, [conversationId, loadDetail]);
+
+  // Busca dentro da conversa (com atraso para não consultar a cada tecla)
+  useEffect(() => {
+    if (!conversationId || chatSearch.trim().length < 2) {
+      setChatResults(null);
+      return;
+    }
+    const timer = setTimeout(() => {
+      api
+        .get<{ messages: MessageDto[] }>(
+          `/conversations/${conversationId}/messages/search?q=${encodeURIComponent(chatSearch.trim())}`,
+        )
+        .then((data) => setChatResults(data.messages))
+        .catch(() => setChatResults([]));
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [chatSearch, conversationId]);
+
+  /** Abre o trecho da conversa em torno de uma mensagem encontrada. */
+  async function jumpToMessage(message: MessageDto) {
+    if (!conversationId) return;
+    const data = await api.get<{ messages: MessageDto[]; hasMore: boolean }>(
+      `/conversations/${conversationId}/messages/around?at=${encodeURIComponent(message.timestamp)}`,
+    );
+    setMessages(data.messages);
+    setHasMore(data.hasMore);
+    setHighlightId(message.id);
+    setChatSearchOpen(false);
+    setChatSearch("");
+    setTimeout(() => {
+      document.getElementById(`message-${message.id}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }, 100);
+    setTimeout(() => setHighlightId(null), 3000);
+  }
 
   /** Carrega o trecho anterior do histórico (paginação para trás). */
   async function loadOlderMessages() {
@@ -433,11 +481,12 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     }
   }
 
-  async function sendFile(file: File) {
+  async function sendFile(file: File, options: { asSticker?: boolean } = {}) {
     if (!conversationId || sending) return;
     setSending(true);
     try {
       const form = new FormData();
+      if (options.asSticker) form.append("asSticker", "true");
       form.append("file", file);
       const result = await api.postForm<{ message: MessageDto }>(
         `/conversations/${conversationId}/messages/media`,
@@ -453,6 +502,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     } finally {
       setSending(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
+      if (stickerInputRef.current) stickerInputRef.current.value = "";
     }
   }
 
@@ -647,10 +697,64 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   </p>
                 </div>
               </div>
-              <Button size="sm" variant="ghost" onClick={() => setShowPanel((value) => !value)}>
-                <Info className="h-4 w-4" />
-              </Button>
+              <div className="flex shrink-0 items-center gap-1">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  title="Buscar nesta conversa"
+                  onClick={() => {
+                    setChatSearchOpen((value) => !value);
+                    setChatSearch("");
+                  }}
+                >
+                  <Search className="h-4 w-4" />
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setShowPanel((value) => !value)}>
+                  <Info className="h-4 w-4" />
+                </Button>
+              </div>
             </header>
+
+            {/* Busca dentro da conversa */}
+            {chatSearchOpen && (
+              <div className="border-b border-slate-200 bg-white px-4 py-2">
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" />
+                  <Input
+                    className="pl-8"
+                    autoFocus
+                    placeholder="Buscar mensagens nesta conversa..."
+                    value={chatSearch}
+                    onChange={(event) => setChatSearch(event.target.value)}
+                  />
+                </div>
+                {chatResults && (
+                  <div className="thin-scroll mt-2 max-h-56 space-y-1 overflow-y-auto">
+                    {chatResults.length === 0 ? (
+                      <p className="py-2 text-center text-xs text-slate-400">
+                        Nenhuma mensagem encontrada.
+                      </p>
+                    ) : (
+                      chatResults.map((result) => (
+                        <button
+                          key={result.id}
+                          onClick={() => void jumpToMessage(result)}
+                          className="block w-full rounded-lg px-2.5 py-1.5 text-left hover:bg-slate-50"
+                        >
+                          <p className="text-[11px] font-medium text-slate-500">
+                            {result.senderName ?? (result.direction === "outbound" ? "Você" : "Cliente")}{" "}
+                            · {formatDateTime(result.timestamp)}
+                          </p>
+                          <p className="truncate text-xs text-slate-700">
+                            {result.content ?? `[${result.type}]`}
+                          </p>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="thin-scroll flex-1 space-y-2 overflow-y-auto px-4 py-4">
               {hasMore && messages && messages.length > 0 && (
@@ -675,8 +779,15 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
               ) : (
                 timeline.map((item) =>
                   item.kind === "message" ? (
-                    <MessageBubble
+                    <div
                       key={item.message.id}
+                      id={`message-${item.message.id}`}
+                      className={cn(
+                        "rounded-xl transition-colors",
+                        highlightId === item.message.id && "bg-amber-100/70 ring-2 ring-amber-300",
+                      )}
+                    >
+                    <MessageBubble
                       message={item.message}
                       isGroup={isGroup ?? false}
                       showSender={item.showSender}
@@ -689,6 +800,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                       onEdit={(message) => void handleEdit(message)}
                       onDelete={(message) => void handleDelete(message)}
                     />
+                    </div>
                   ) : (
                     <InternalNoteItem key={`note-${item.note.id}`} note={item.note} />
                   ),
@@ -799,6 +911,16 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                     if (file) void sendFile(file);
                   }}
                 />
+                <input
+                  ref={stickerInputRef}
+                  type="file"
+                  accept="image/*"
+                  hidden
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) void sendFile(file, { asSticker: true });
+                  }}
+                />
                 {composerMode === "message" && (
                   <>
                     <Button
@@ -812,6 +934,36 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                       <Paperclip className="h-4 w-4" />
                     </Button>
                     <AudioRecorder disabled={sending} onSend={sendVoiceNote} />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="mb-1"
+                      title="Enviar figurinha (converte a imagem)"
+                      disabled={sending}
+                      onClick={() => stickerInputRef.current?.click()}
+                    >
+                      <Sticker className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="mb-1"
+                      title="Criar enquete"
+                      disabled={sending}
+                      onClick={() => setPollOpen(true)}
+                    >
+                      <BarChart3 className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="mb-1"
+                      title="Agendar mensagem"
+                      disabled={sending}
+                      onClick={() => setScheduleOpen(true)}
+                    >
+                      <CalendarClock className="h-4 w-4" />
+                    </Button>
                   </>
                 )}
                 <Textarea
@@ -932,6 +1084,23 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
           </div>
         </div>
       </Modal>
+
+      {conversationId && (
+        <>
+          <PollModal
+            open={pollOpen}
+            onClose={() => setPollOpen(false)}
+            conversationId={conversationId}
+            onSent={() => undefined}
+          />
+          <ScheduleModal
+            open={scheduleOpen}
+            onClose={() => setScheduleOpen(false)}
+            conversationId={conversationId}
+            initialContent={draft}
+          />
+        </>
+      )}
 
       {/* Coluna direita: contexto */}
       {conversationId && detail && showPanel && (

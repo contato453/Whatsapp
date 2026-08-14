@@ -6,6 +6,7 @@ import { authenticate } from "../../lib/auth.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
 import { extensionFromMime } from "../../lib/media-storage.js";
 import { transcodeToOpusOgg } from "../../lib/audio-transcode.js";
+import { convertToSticker } from "../../lib/sticker-convert.js";
 import {
   serializeConversation,
   serializeMessage,
@@ -129,6 +130,128 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       // Indica se ainda há histórico anterior para carregar
       hasMore: total > messages.length + (query.before ? 1 : 0),
     };
+  });
+
+  /** Busca dentro da conversa aberta. */
+  app.get("/conversations/:id/messages/search", { preHandler: authenticate }, async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { q, limit } = z
+      .object({ q: z.string().min(2).max(120), limit: z.coerce.number().min(1).max(50).default(30) })
+      .parse(request.query);
+    await findConversationOr404(id, request.user.organizationId);
+    const results = await deps.prisma.message.findMany({
+      where: {
+        conversationId: id,
+        deletedAt: null,
+        OR: [
+          { content: { contains: q, mode: "insensitive" } },
+          { filename: { contains: q, mode: "insensitive" } },
+          { senderName: { contains: q, mode: "insensitive" } },
+        ],
+      },
+      orderBy: { timestamp: "desc" },
+      take: limit,
+      include: { reactions: true },
+    });
+    return { messages: results.map((message) => serializeMessage(message)) };
+  });
+
+  /**
+   * Carrega uma janela de mensagens em torno de um horário — usado ao
+   * clicar num resultado da busca para ver o contexto da conversa.
+   */
+  app.get("/conversations/:id/messages/around", { preHandler: authenticate }, async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { at } = z.object({ at: z.string().datetime() }).parse(request.query);
+    await findConversationOr404(id, request.user.organizationId);
+    const pivot = new Date(at);
+    const [before, after] = await Promise.all([
+      deps.prisma.message.findMany({
+        where: { conversationId: id, timestamp: { lte: pivot } },
+        orderBy: { timestamp: "desc" },
+        take: 25,
+        include: { reactions: true },
+      }),
+      deps.prisma.message.findMany({
+        where: { conversationId: id, timestamp: { gt: pivot } },
+        orderBy: { timestamp: "asc" },
+        take: 25,
+        include: { reactions: true },
+      }),
+    ]);
+    const ordered = [...before.reverse(), ...after];
+    const quotedMap = await loadQuotedPreviews(id, ordered);
+    const oldest = ordered[0];
+    const olderCount = oldest
+      ? await deps.prisma.message.count({
+          where: { conversationId: id, timestamp: { lt: oldest.timestamp } },
+        })
+      : 0;
+    return {
+      messages: ordered.map((message) =>
+        serializeMessage(
+          message,
+          message.quotedMessageId ? (quotedMap.get(message.quotedMessageId) ?? null) : null,
+        ),
+      ),
+      hasMore: olderCount > 0,
+    };
+  });
+
+  /** Envia uma enquete para a conversa. */
+  app.post("/conversations/:id/polls", { preHandler: authenticate }, async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({
+        question: z.string().min(1).max(255),
+        options: z.array(z.string().min(1).max(100)).min(2).max(12),
+        selectableCount: z.coerce.number().min(1).max(12).default(1),
+      })
+      .parse(request.body);
+    const conversation = await findConversationOr404(id, request.user.organizationId);
+
+    const result = await deps.provider.sendPoll(
+      conversation.whatsappInstanceId,
+      conversation.externalChatId,
+      {
+        question: body.question,
+        options: body.options,
+        selectableCount: Math.min(body.selectableCount, body.options.length),
+      },
+    );
+
+    const message = await deps.prisma.message.create({
+      data: {
+        organizationId: request.user.organizationId,
+        conversationId: id,
+        externalMessageId: result.externalMessageId,
+        direction: "outbound",
+        type: "poll",
+        content: body.question,
+        metadata: { pollOptions: body.options, selectableCount: body.selectableCount },
+        senderName: request.user.name,
+        timestamp: result.timestamp,
+        status: "sent",
+        sentByUserId: request.user.sub,
+      },
+    });
+    await deps.prisma.conversation.update({
+      where: { id },
+      data: {
+        lastMessageAt: result.timestamp,
+        lastMessagePreview: `📊 ${body.question}`.slice(0, 120),
+        ...(conversation.status === "new" ? { status: "open" as const } : {}),
+      },
+    });
+    deps.audit.record({
+      organizationId: request.user.organizationId,
+      userId: request.user.sub,
+      action: "message.poll_sent",
+      entityType: "Conversation",
+      entityId: id,
+    });
+    await afterOutboundPersist(id, request.user.organizationId, message.id);
+    return reply.status(201).send({ message: serializeMessage(message) });
   });
 
   /** Reage a uma mensagem (emoji vazio remove a reação). */
@@ -433,6 +556,23 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
           : undefined;
       let asVoiceNote =
         (file.fields.asVoiceNote as { value?: unknown } | undefined)?.value === "true";
+      const asSticker =
+        (file.fields.asSticker as { value?: unknown } | undefined)?.value === "true";
+
+      // Figurinha: o WhatsApp exige WebP 512x512.
+      if (asSticker && mimeType.startsWith("image/")) {
+        const converted = await convertToSticker(buffer, deps.logger);
+        if (converted) {
+          buffer = converted;
+          mimeType = "image/webp";
+        } else {
+          deps.logger.warn({
+            conversationId: id,
+            event: "sticker_fallback",
+            reason: "conversão indisponível — enviado como imagem",
+          });
+        }
+      }
 
       // Mensagem de voz: o navegador grava em WebM/Opus e o WhatsApp espera
       // OGG/Opus. Sem ffmpeg, envia como arquivo de áudio comum.
@@ -451,7 +591,8 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
         }
       }
 
-      const mediaType = mediaTypeFromMime(mimeType);
+      const mediaType: MediaPayload["type"] =
+        asSticker && mimeType === "image/webp" ? "sticker" : mediaTypeFromMime(mimeType);
       const result = await deps.provider.sendMedia(
         conversation.whatsappInstanceId,
         conversation.externalChatId,

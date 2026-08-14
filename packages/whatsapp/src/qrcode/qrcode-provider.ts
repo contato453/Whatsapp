@@ -394,6 +394,7 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
       senderPhone,
       senderName: message.pushName ?? null,
       quotedExternalMessageId: extractQuotedMessageId(message.message),
+      ...(extracted.pollOptions ? { pollOptions: extracted.pollOptions } : {}),
       timestamp: toDate(message.messageTimestamp),
       media: extracted.hasMedia && socket
         ? {
@@ -581,6 +582,32 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
       chatId,
       messageId: target.externalMessageId,
     });
+  }
+
+  async sendPoll(
+    instanceId: string,
+    chatId: string,
+    poll: { question: string; options: string[]; selectableCount?: number },
+  ): Promise<MessageResult> {
+    const socket = this.requireSocket(instanceId);
+    const result = await socket.sendMessage(chatId, {
+      poll: {
+        name: poll.question,
+        values: poll.options,
+        selectableCount: poll.selectableCount ?? 1,
+      },
+    });
+    this.logger.info({
+      instanceId,
+      event: "poll_sent",
+      chatId,
+      messageId: result?.key?.id,
+      options: poll.options.length,
+    });
+    return {
+      externalMessageId: result?.key?.id ?? `local-${Date.now()}`,
+      timestamp: toDate(result?.messageTimestamp),
+    };
   }
 
   async deleteMessage(instanceId: string, chatId: string, target: MessageTarget): Promise<void> {

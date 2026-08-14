@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Ban,
+  BarChart3,
   Check,
   CheckCheck,
   Clock,
@@ -249,6 +250,28 @@ export function MessageBubble({
           >
             <Ban className="h-3.5 w-3.5" /> Esta mensagem foi apagada
           </p>
+        ) : message.type === "poll" ? (
+          <div className="space-y-1.5">
+            <p className="flex items-center gap-1.5 text-sm font-medium">
+              <BarChart3 className="h-4 w-4" /> {message.content ?? "Enquete"}
+            </p>
+            <div className="space-y-1">
+              {(message.metadata?.pollOptions ?? []).map((option, index) => (
+                <div
+                  key={index}
+                  className={cn(
+                    "rounded-md border px-2 py-1 text-xs",
+                    outbound ? "border-white/30 bg-white/10" : "border-slate-200 bg-slate-50",
+                  )}
+                >
+                  {option}
+                </div>
+              ))}
+            </div>
+            <p className={cn("text-[10px]", outbound ? "text-white/60" : "text-slate-400")}>
+              Os votos aparecem no WhatsApp dos participantes
+            </p>
+          </div>
         ) : message.type === "location" ? (
           <p className="flex items-center gap-1.5 text-sm">
             <MapPin className="h-4 w-4" /> {message.content ?? "Localização"}

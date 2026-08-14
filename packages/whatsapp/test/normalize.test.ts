@@ -114,8 +114,20 @@ describe("extractContent", () => {
     expect(extractContent({ reactionMessage: { text: "👍" } })).toBeNull();
   });
 
+  it("extrai enquete com pergunta e opções", () => {
+    const result = extractContent({
+      pollCreationMessage: {
+        name: "Qual o melhor horário?",
+        options: [{ optionName: "Manhã" }, { optionName: "Tarde" }],
+      },
+    } as never);
+    expect(result?.type).toBe("poll");
+    expect(result?.content).toBe("Qual o melhor horário?");
+    expect(result?.pollOptions).toEqual(["Manhã", "Tarde"]);
+  });
+
   it("classifica tipos desconhecidos como other", () => {
-    expect(extractContent({ pollCreationMessage: {} } as never)?.type).toBe("other");
+    expect(extractContent({ paymentInviteMessage: {} } as never)?.type).toBe("other");
   });
 
   it("retorna null para mensagem vazia", () => {

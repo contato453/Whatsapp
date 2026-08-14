@@ -78,6 +78,8 @@ export interface NormalizedMessage {
   senderPhone: string | null;
   senderName: string | null;
   quotedExternalMessageId: string | null;
+  /** Opções da enquete, quando type === "poll" */
+  pollOptions?: string[];
   timestamp: Date;
   media: {
     mimeType: string | null;
