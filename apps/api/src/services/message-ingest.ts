@@ -50,9 +50,11 @@ export class MessageIngestService {
   ): Promise<IngestResult | null> {
     const conversation = await this.upsertConversation(message, context.organizationId);
 
-    // Mensagem recebida em conversa sem responsável cai para o responsável
-    // padrão do departamento, se houver.
-    if (message.direction === "inbound" && !conversation.assignedUserId) {
+    // Conversa sem responsável cai para o responsável padrão do
+    // departamento, tanto na mensagem que o cliente manda quanto na que a
+    // equipe manda primeiro — conversa iniciada por nós também precisa de
+    // dono, senão nasce órfã na lista.
+    if (!conversation.assignedUserId) {
       await this.applyDefaultAssignee(conversation, context.organizationId);
     }
 

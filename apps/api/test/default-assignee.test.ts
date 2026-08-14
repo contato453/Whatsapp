@@ -139,9 +139,22 @@ describe("responsável padrão do departamento", () => {
     expect(conversationUpdate).not.toHaveBeenCalled();
   });
 
-  it("mensagem enviada pela equipe não dispara atribuição", async () => {
+  it("conversa iniciada pela equipe também recebe responsável", async () => {
+    // Sem isso, a conversa que nós começamos nasceria órfã na lista.
     const { service, conversationUpdate } = harness({
       conversation: CONVERSATION,
+      defaultAssigneeId: "user-1",
+      assignee: { id: "user-1" },
+    });
+    await service.ingest(inbound({ direction: "outbound" }), { organizationId: "org-1" });
+    expect(conversationUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { assignedUserId: "user-1" } }),
+    );
+  });
+
+  it("mensagem da equipe em conversa já atribuída não muda o responsável", async () => {
+    const { service, conversationUpdate } = harness({
+      conversation: { ...CONVERSATION, assignedUserId: "outro-usuario" },
       defaultAssigneeId: "user-1",
       assignee: { id: "user-1" },
     });
