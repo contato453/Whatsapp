@@ -130,7 +130,7 @@ Para produção séria, considere ainda: tokens httpOnly + refresh (hoje o token
 - persistência de sessão em disco + retomada automática após restart/deploy;
 - reconexão automática com backoff exponencial; `logged_out` limpa credenciais e pede novo QR;
 - sincronização de chats, contatos e grupos (com participantes e admins);
-- fotos de perfil de contatos e grupos, baixadas e armazenadas localmente (preenchimento automático das conversas existentes ao conectar, com botão de atualizar no painel);
+- fotos de perfil de contatos, grupos e participantes de grupo, baixadas e armazenadas localmente (conversas preenchidas automaticamente ao conectar; participantes buscados sob demanda ao abrir o grupo, com revalidação semanal e botão de atualizar no painel);
 - recebimento de mensagens em tempo real (texto, imagem, áudio, vídeo, documento, sticker, localização, contato) com download e armazenamento de mídia;
 - identificação do participante que enviou cada mensagem de grupo (nome + telefone, cor por remetente);
 - envio de texto e de arquivos/áudios/imagens/PDFs pela Inbox;

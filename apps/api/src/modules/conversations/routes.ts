@@ -112,6 +112,12 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       }),
     ]);
 
+    // Busca as fotos dos participantes em segundo plano; o frontend é
+    // avisado por WebSocket quando houver novidade.
+    if (group) {
+      void deps.instanceManager.syncParticipantAvatars(id, request.user.organizationId);
+    }
+
     return {
       conversation: serializeConversation(conversation),
       group: group
@@ -125,6 +131,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
               phoneNumber: participant.phoneNumber,
               name: participant.name,
               isAdmin: participant.isAdmin || participant.isSuperAdmin,
+              hasAvatar: participant.avatarUrl != null,
             })),
           }
         : null,
@@ -153,6 +160,20 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     });
     if (!conversation?.profilePicture) throw new NotFoundError("Foto de perfil");
     const data = await deps.storage.read(conversation.profilePicture);
+    reply.header("Content-Type", "image/jpeg");
+    reply.header("Cache-Control", "private, max-age=86400");
+    return reply.send(data);
+  });
+
+  /** Foto de perfil de um participante de grupo, autenticada. */
+  app.get("/group-participants/:id/avatar", { preHandler: authenticate }, async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const participant = await deps.prisma.groupParticipant.findFirst({
+      where: { id, group: { organizationId: request.user.organizationId } },
+      select: { avatarUrl: true },
+    });
+    if (!participant?.avatarUrl) throw new NotFoundError("Foto de perfil");
+    const data = await deps.storage.read(participant.avatarUrl);
     reply.header("Content-Type", "image/jpeg");
     reply.header("Cache-Control", "private, max-age=86400");
     return reply.send(data);

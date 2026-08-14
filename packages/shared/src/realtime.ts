@@ -8,6 +8,7 @@ export const RealtimeEvents = {
   MessageNew: "message:new",
   MessageStatus: "message:status",
   ConversationUpdated: "conversation:updated",
+  GroupParticipants: "group:participants",
   InstanceStatus: "instance:status",
   InstanceQr: "instance:qr",
 } as const;

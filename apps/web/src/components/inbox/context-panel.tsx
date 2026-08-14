@@ -11,8 +11,8 @@ import type {
   TagDto,
   UserDto,
 } from "@/lib/types";
-import { Avatar, Badge, Button, Textarea } from "@/components/ui";
-import { ConversationAvatar } from "./conversation-avatar";
+import { Badge, Button, Textarea } from "@/components/ui";
+import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
 
 const ACTION_LABELS: Record<string, string> = {
   assigned: "assumiu o atendimento",
@@ -245,7 +245,12 @@ export function ContextPanel({
           <div className="thin-scroll max-h-48 space-y-1.5 overflow-y-auto">
             {detail.group.participants.map((participant) => (
               <div key={participant.id} className="flex items-center gap-2 text-xs">
-                <Avatar name={participant.name ?? participant.phoneNumber} size="sm" className="h-6 w-6 text-[9px]" />
+                <ParticipantAvatar
+                  participantId={participant.id}
+                  name={participant.name ?? participant.phoneNumber}
+                  hasAvatar={participant.hasAvatar}
+                  className="h-6 w-6 text-[9px]"
+                />
                 <span className="min-w-0 flex-1 truncate text-slate-700">
                   {participant.name ?? formatPhone(participant.phoneNumber)}
                 </span>

@@ -91,6 +91,7 @@ export interface GroupDetailDto {
     phoneNumber: string;
     name: string | null;
     isAdmin: boolean;
+    hasAvatar: boolean;
   }>;
 }
 

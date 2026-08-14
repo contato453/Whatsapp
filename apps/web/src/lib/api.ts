@@ -85,11 +85,11 @@ export async function fetchMediaBlobUrl(messageId: string): Promise<string> {
  */
 const avatarCache = new Map<string, Promise<string>>();
 
-export function fetchConversationAvatarUrl(conversationId: string): Promise<string> {
-  const cached = avatarCache.get(conversationId);
+function fetchAvatar(cacheKey: string, path: string): Promise<string> {
+  const cached = avatarCache.get(cacheKey);
   if (cached) return cached;
   const token = getToken();
-  const promise = fetch(`${API_URL}/conversations/${conversationId}/avatar`, {
+  const promise = fetch(`${API_URL}${path}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   })
     .then(async (response) => {
@@ -97,14 +97,22 @@ export function fetchConversationAvatarUrl(conversationId: string): Promise<stri
       return URL.createObjectURL(await response.blob());
     })
     .catch((err) => {
-      avatarCache.delete(conversationId);
+      avatarCache.delete(cacheKey);
       throw err;
     });
-  avatarCache.set(conversationId, promise);
+  avatarCache.set(cacheKey, promise);
   return promise;
+}
+
+export function fetchConversationAvatarUrl(conversationId: string): Promise<string> {
+  return fetchAvatar(`conv:${conversationId}`, `/conversations/${conversationId}/avatar`);
+}
+
+export function fetchParticipantAvatarUrl(participantId: string): Promise<string> {
+  return fetchAvatar(`part:${participantId}`, `/group-participants/${participantId}/avatar`);
 }
 
 /** Descarta o cache de uma foto (após atualização manual). */
 export function invalidateConversationAvatar(conversationId: string): void {
-  avatarCache.delete(conversationId);
+  avatarCache.delete(`conv:${conversationId}`);
 }

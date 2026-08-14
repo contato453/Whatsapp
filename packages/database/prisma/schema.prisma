@@ -179,15 +179,19 @@ model WhatsAppGroup {
 }
 
 model GroupParticipant {
-  id                String   @id @default(uuid())
+  id                String    @id @default(uuid())
   groupId           String
   externalContactId String
   phoneNumber       String
   name              String?
-  isAdmin           Boolean  @default(false)
-  isSuperAdmin      Boolean  @default(false)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  isAdmin           Boolean   @default(false)
+  isSuperAdmin      Boolean   @default(false)
+  /// Chave do arquivo da foto no storage (null = sem foto conhecida)
+  avatarUrl         String?
+  /// Última tentativa de buscar a foto — evita reconsultar o WhatsApp toda hora
+  avatarCheckedAt   DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   group WhatsAppGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
 

@@ -18,6 +18,10 @@ import type { AuditService } from "../modules/audit/service.js";
 const AVATAR_FETCH_DELAY_MS = 300;
 /** Máximo de fotos buscadas por rodada de backfill. */
 const AVATAR_BACKFILL_LIMIT = 300;
+/** Máximo de participantes consultados por abertura de grupo. */
+const PARTICIPANT_AVATAR_LIMIT = 80;
+/** Revalida a foto de um participante no máximo a cada 7 dias. */
+const PARTICIPANT_AVATAR_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Orquestra o ciclo de vida das instâncias de WhatsApp:
@@ -262,6 +266,75 @@ export class InstanceManager {
       });
       this.avatarsUnavailable.add(conversation.id);
       return false;
+    }
+  }
+
+  /**
+   * Busca as fotos dos participantes de um grupo sob demanda (quando a
+   * conversa é aberta). Só consulta quem ainda não foi verificado ou cuja
+   * verificação está antiga, e avisa o frontend ao terminar.
+   */
+  async syncParticipantAvatars(conversationId: string, organizationId: string): Promise<void> {
+    try {
+      const group = await this.prisma.whatsAppGroup.findFirst({
+        where: { conversationId, organizationId },
+        select: { id: true, whatsappInstanceId: true },
+      });
+      if (!group) return;
+
+      const staleBefore = new Date(Date.now() - PARTICIPANT_AVATAR_TTL_MS);
+      const pending = await this.prisma.groupParticipant.findMany({
+        where: {
+          groupId: group.id,
+          OR: [{ avatarCheckedAt: null }, { avatarCheckedAt: { lt: staleBefore } }],
+        },
+        select: { id: true, externalContactId: true },
+        take: PARTICIPANT_AVATAR_LIMIT,
+      });
+      if (pending.length === 0) return;
+
+      let updated = 0;
+      for (const participant of pending) {
+        let key: string | null = null;
+        try {
+          const picture = await this.provider.getProfilePicture(
+            group.whatsappInstanceId,
+            participant.externalContactId,
+          );
+          if (picture) {
+            key = await this.storage.save(picture.data, {
+              instanceId: group.whatsappInstanceId,
+              extension: extensionFromMime(picture.mimeType) ?? "jpg",
+            });
+            updated += 1;
+          }
+        } catch {
+          // segue para o próximo participante — foto é informação acessória
+        }
+        await this.prisma.groupParticipant.update({
+          where: { id: participant.id },
+          data: { avatarCheckedAt: new Date(), ...(key ? { avatarUrl: key } : {}) },
+        });
+        await new Promise((resolve) => setTimeout(resolve, AVATAR_FETCH_DELAY_MS));
+      }
+
+      this.logger.info({
+        conversationId,
+        event: "participant_avatars_synced",
+        checked: pending.length,
+        updated,
+      });
+      if (updated > 0) {
+        this.io
+          .to(orgRoom(organizationId))
+          .emit(RealtimeEvents.GroupParticipants, { conversationId });
+      }
+    } catch (err) {
+      this.logger.warn({
+        conversationId,
+        event: "participant_avatars_failed",
+        error: String(err),
+      });
     }
   }
 

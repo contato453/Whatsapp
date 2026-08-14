@@ -179,15 +179,23 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         ) ?? null,
       );
     };
+    // Fotos dos participantes chegaram: recarrega o painel de contexto.
+    const onGroupParticipants = (payload: { conversationId: string }) => {
+      if (payload.conversationId === conversationId) {
+        loadDetail();
+      }
+    };
     socket.on(RealtimeEvents.MessageNew, onMessageNew);
     socket.on(RealtimeEvents.ConversationUpdated, onConversationUpdated);
     socket.on(RealtimeEvents.MessageStatus, onMessageStatus);
+    socket.on(RealtimeEvents.GroupParticipants, onGroupParticipants);
     return () => {
       socket.off(RealtimeEvents.MessageNew, onMessageNew);
       socket.off(RealtimeEvents.ConversationUpdated, onConversationUpdated);
       socket.off(RealtimeEvents.MessageStatus, onMessageStatus);
+      socket.off(RealtimeEvents.GroupParticipants, onGroupParticipants);
     };
-  }, [socket, conversationId]);
+  }, [socket, conversationId, loadDetail]);
 
   // ---------- Envio ----------
   async function sendText() {
