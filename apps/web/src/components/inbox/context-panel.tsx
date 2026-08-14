@@ -2,19 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  CheckCircle2,
-  MessageSquare,
-  RefreshCw,
-  StickyNote,
-  UserMinus,
-  UserPlus,
-  X,
-} from "lucide-react";
+import { MessageSquare, RefreshCw, StickyNote, X } from "lucide-react";
 import { CONVERSATION_STATUSES, CONVERSATION_STATUS_LABELS } from "@azvchat/shared";
 import { api, invalidateConversationAvatar } from "@/lib/api";
 import { cn, formatDateTime, formatPhone } from "@/lib/utils";
-import { useAuth } from "@/lib/auth-context";
 import type {
   ConversationDetailDto,
   DepartmentDto,
@@ -89,7 +80,6 @@ export function ContextPanel({
   tags: TagDto[];
   onChanged: () => void;
 }) {
-  const { user: me } = useAuth();
   const router = useRouter();
   const conversation = detail.conversation;
   const [noteText, setNoteText] = useState("");
@@ -282,41 +272,9 @@ export function ContextPanel({
             />
           </div>
         </div>
-        <div className="flex flex-wrap gap-2 pt-1">
-          {!conversation.assignedUser || conversation.assignedUser.id !== me?.id ? (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              onClick={() => run(() => api.post(`/conversations/${conversation.id}/assign`))}
-            >
-              <UserPlus className="h-3.5 w-3.5" /> Assumir
-            </Button>
-          ) : (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              onClick={() => run(() => api.post(`/conversations/${conversation.id}/unassign`))}
-            >
-              <UserMinus className="h-3.5 w-3.5" /> Liberar
-            </Button>
-          )}
-          {conversation.status !== "resolved" && (
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={busy}
-              onClick={() =>
-                run(() =>
-                  api.post(`/conversations/${conversation.id}/status`, { status: "resolved" }),
-                )
-              }
-            >
-              <CheckCircle2 className="h-3.5 w-3.5" /> Concluir
-            </Button>
-          )}
-        </div>
+        {/* Sem botões de "Assumir" e "Concluir": o responsável é trocado no
+            seletor logo acima e o status, na barra da conversa. Dois caminhos
+            para a mesma ação só criam dúvida sobre qual usar. */}
       </section>
 
       {/* Etiquetas */}
