@@ -128,7 +128,47 @@ export class MessageIngestService {
     return { conversationId: conversation.id, messageId: created.id, isNewMessage: true };
   }
 
-  private async upsertConversation(message: NormalizedMessage, organizationId: string) {
+  /**
+   * Garante a conversa de um contato que ainda não mandou mensagem —
+   * usado quando a primeira interação é uma ligação.
+   */
+  async ensureConversation(
+    input: {
+      instanceId: string;
+      externalChatId: string;
+      isGroup: boolean;
+      callerName: string | null;
+      callerPhone: string | null;
+    },
+    organizationId: string,
+  ) {
+    return this.upsertConversation(
+      {
+        instanceId: input.instanceId,
+        externalChatId: input.externalChatId,
+        chatType: input.isGroup ? "group" : "individual",
+        chatName: null,
+        direction: "inbound",
+        senderName: input.callerName,
+        senderPhone: input.callerPhone,
+      },
+      organizationId,
+    );
+  }
+
+  private async upsertConversation(
+    message: Pick<
+      NormalizedMessage,
+      | "instanceId"
+      | "externalChatId"
+      | "chatType"
+      | "chatName"
+      | "direction"
+      | "senderName"
+      | "senderPhone"
+    >,
+    organizationId: string,
+  ) {
     const fallbackTitle =
       message.chatName ??
       (message.chatType === "group"
