@@ -140,6 +140,9 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
             participantCount: group.participantCount,
             participants: group.participants.map((participant) => ({
               id: participant.id,
+              // Permite ligar o remetente de cada mensagem ao participante
+              // (e, com isso, exibir a foto dele no chat).
+              externalContactId: participant.externalContactId,
               phoneNumber: participant.phoneNumber,
               name: participant.name,
               isAdmin: participant.isAdmin || participant.isSuperAdmin,

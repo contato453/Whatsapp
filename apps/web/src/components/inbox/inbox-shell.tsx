@@ -37,9 +37,9 @@ import type {
   TagDto,
   UserDto,
 } from "@/lib/types";
-import { Button, EmptyState, Input, Modal, Spinner, Textarea } from "@/components/ui";
+import { Avatar, Button, EmptyState, Input, Modal, Spinner, Textarea } from "@/components/ui";
 import { ConversationListItem } from "./conversation-list";
-import { ConversationAvatar } from "./conversation-avatar";
+import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
 import { AudioRecorder } from "./audio-recorder";
 import { PollModal, ScheduleModal } from "./composer-modals";
 import { MessageBubble } from "./message-bubble";
@@ -577,6 +577,59 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const conversation = detail?.conversation;
   const isGroup = conversation?.type === "group";
 
+  /** Liga o remetente de cada mensagem ao participante, para exibir a foto. */
+  const participantBySender = useMemo(() => {
+    const map = new Map<string, { id: string; hasAvatar: boolean; name: string }>();
+    for (const participant of detail?.group?.participants ?? []) {
+      map.set(participant.externalContactId, {
+        id: participant.id,
+        hasAvatar: participant.hasAvatar,
+        name: participant.name ?? participant.phoneNumber,
+      });
+    }
+    return map;
+  }, [detail?.group?.participants]);
+
+  /** Foto de quem enviou a mensagem (participante do grupo ou o contato). */
+  function senderAvatarFor(message: MessageDto) {
+    if (!conversation) return null;
+    if (conversation.type === "group") {
+      const participant = message.senderExternalId
+        ? participantBySender.get(message.senderExternalId)
+        : undefined;
+      if (participant) {
+        return (
+          <ParticipantAvatar
+            participantId={participant.id}
+            name={participant.name}
+            hasAvatar={participant.hasAvatar}
+            className="h-8 w-8 text-[10px]"
+          />
+        );
+      }
+      // Participante ainda não sincronizado: iniciais a partir do nome recebido.
+      // Sem nome nem telefone (ex.: registro de chamada), não exibe avatar.
+      if (!message.senderName && !message.senderPhone) return null;
+      return (
+        <Avatar
+          name={message.senderName ?? message.senderPhone ?? "?"}
+          size="sm"
+          className="h-8 w-8 text-[10px]"
+        />
+      );
+    }
+    // Conversa individual: a foto do contato é a da própria conversa
+    return (
+      <ConversationAvatar
+        conversationId={conversation.id}
+        name={conversation.title}
+        hasAvatar={conversation.hasAvatar}
+        size="sm"
+        className="h-8 w-8 text-[10px]"
+      />
+    );
+  }
+
   // ---------- Respostas rápidas (atalho "/") ----------
   const slashQuery =
     draft.startsWith("/") && !draft.includes("\n") ? draft.slice(1).toLowerCase() : null;
@@ -893,6 +946,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                       onForward={(message) => setForwarding(message)}
                       onEdit={(message) => void handleEdit(message)}
                       onDelete={(message) => void handleDelete(message)}
+                      senderAvatar={senderAvatarFor(item.message)}
                     />
                     </div>
                   ) : (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Ban,
   BarChart3,
@@ -151,6 +151,7 @@ export function MessageBubble({
   onForward,
   onEdit,
   onDelete,
+  senderAvatar,
 }: {
   message: MessageDto;
   isGroup: boolean;
@@ -160,6 +161,8 @@ export function MessageBubble({
   onForward: (message: MessageDto) => void;
   onEdit: (message: MessageDto) => void;
   onDelete: (message: MessageDto) => void;
+  /** Foto de quem enviou — exibida ao lado das mensagens recebidas */
+  senderAvatar?: ReactNode;
 }) {
   const outbound = message.direction === "outbound";
   const senderKey = message.senderExternalId ?? message.senderPhone ?? "?";
@@ -185,8 +188,14 @@ export function MessageBubble({
   return (
     <div
       ref={containerRef}
-      className={cn("group relative flex items-center gap-1", outbound ? "justify-end" : "justify-start")}
+      className={cn("group relative flex items-end gap-1", outbound ? "justify-end" : "justify-start")}
     >
+      {/* Foto de quem enviou (mensagens recebidas); espaçador nas seguintes
+          do mesmo remetente para manter o alinhamento das bolhas. */}
+      {!outbound && (
+        <div className="mb-0.5 w-8 shrink-0">{showSender ? senderAvatar : null}</div>
+      )}
+
       {/* Ações aparecem ao passar o mouse */}
       {outbound && (
         <MessageActions
@@ -212,8 +221,8 @@ export function MessageBubble({
             : "rounded-bl-md border border-slate-200 bg-white text-slate-900",
         )}
       >
-        {/* Identificação obrigatória do participante em grupos */}
-        {isGroup && !outbound && showSender && (
+        {/* Identificação do participante em grupos (quando identificável) */}
+        {isGroup && !outbound && showSender && (message.senderName || message.senderPhone) && (
           <p
             className="mb-0.5 flex items-center gap-1 text-xs font-semibold"
             style={{ color: senderColor(senderKey) }}

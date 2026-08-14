@@ -121,6 +121,7 @@ export interface GroupDetailDto {
   participantCount: number;
   participants: Array<{
     id: string;
+    externalContactId: string;
     phoneNumber: string;
     name: string | null;
     isAdmin: boolean;
