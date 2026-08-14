@@ -768,7 +768,12 @@ export class InstanceManager {
             externalId: contact.externalId,
           },
         },
-        update: { ...(contact.name ? { name: contact.name } : {}) },
+        update: {
+          ...(contact.name ? { name: contact.name } : {}),
+          // Mesmo motivo dos participantes: o telefone pode só aparecer
+          // numa sincronização posterior à criação do contato.
+          ...(contact.phoneNumber ? { phoneNumber: contact.phoneNumber } : {}),
+        },
         create: {
           organizationId,
           whatsappInstanceId: instanceId,
@@ -842,6 +847,10 @@ export class InstanceManager {
             isAdmin: participant.isAdmin,
             isSuperAdmin: participant.isSuperAdmin,
             ...(participant.name ? { name: participant.name } : {}),
+            // O telefone precisa ser atualizado, e não só gravado na criação:
+            // em grupos "@lid" ele costuma chegar em uma sincronização
+            // posterior à que criou o participante.
+            ...(participant.phoneNumber ? { phoneNumber: participant.phoneNumber } : {}),
           },
           create: {
             groupId: record.id,

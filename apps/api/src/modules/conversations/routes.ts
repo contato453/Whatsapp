@@ -6,6 +6,7 @@ import { accessibleInstanceIds, instanceScope } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
 import { ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import { serializeConversation, serializeUser } from "../../lib/serialize.js";
+import { resolveContacts, type SenderInfo } from "../../lib/sender-directory.js";
 import { instanceAudience } from "../../realtime/socket.js";
 import type { AppDeps } from "../../types.js";
 
@@ -130,6 +131,16 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       void deps.instanceManager.syncParticipantAvatars(id, request.user.organizationId);
     }
 
+    // Em grupos "@lid" os metadados nem sempre trazem o telefone de cada
+    // participante — completamos com o que o cadastro de contatos souber.
+    const participantContacts = group
+      ? await resolveContacts(
+          deps.prisma,
+          conversation.whatsappInstanceId,
+          group.participants.map((participant) => participant.externalContactId),
+        )
+      : new Map<string, SenderInfo>();
+
     return {
       conversation: serializeConversation(conversation),
       group: group
@@ -138,16 +149,19 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
             name: group.name,
             description: group.description,
             participantCount: group.participantCount,
-            participants: group.participants.map((participant) => ({
-              id: participant.id,
-              // Permite ligar o remetente de cada mensagem ao participante
-              // (e, com isso, exibir a foto dele no chat).
-              externalContactId: participant.externalContactId,
-              phoneNumber: participant.phoneNumber,
-              name: participant.name,
-              isAdmin: participant.isAdmin || participant.isSuperAdmin,
-              hasAvatar: participant.avatarUrl != null,
-            })),
+            participants: group.participants.map((participant) => {
+              const known = participantContacts.get(participant.externalContactId);
+              return {
+                id: participant.id,
+                // Permite ligar o remetente de cada mensagem ao participante
+                // (e, com isso, exibir a foto dele no chat).
+                externalContactId: participant.externalContactId,
+                phoneNumber: participant.phoneNumber || known?.phoneNumber || "",
+                name: participant.name || known?.name || null,
+                isAdmin: participant.isAdmin || participant.isSuperAdmin,
+                hasAvatar: participant.avatarUrl != null,
+              };
+            }),
           }
         : null,
       assignmentHistory: history.map((entry) => ({

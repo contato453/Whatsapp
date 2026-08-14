@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PrismaClient } from "@azvchat/database";
-import { resolveSenders } from "../src/lib/sender-directory.js";
+import { resolveContacts, resolveSenders } from "../src/lib/sender-directory.js";
 import { serializeMessage } from "../src/lib/serialize.js";
 import type { Message } from "@azvchat/database";
 
@@ -70,6 +70,22 @@ describe("resolveSenders", () => {
       [null, null],
     );
     expect(directory.size).toBe(0);
+  });
+});
+
+describe("resolveContacts", () => {
+  it("usa o cadastro de contatos para completar a lista de participantes", async () => {
+    const directory = await resolveContacts(
+      fakePrisma({
+        contacts: [
+          { externalId: "9@lid", phoneNumber: "5511955554444", name: "Kamille", pushName: null },
+        ],
+      }),
+      "inst-1",
+      ["9@lid", "outro@lid"],
+    );
+    expect(directory.get("9@lid")?.phoneNumber).toBe("5511955554444");
+    expect(directory.get("outro@lid")).toBeUndefined();
   });
 });
 
