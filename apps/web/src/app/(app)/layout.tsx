@@ -17,6 +17,7 @@ import {
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
 import { Avatar, Spinner } from "@/components/ui";
+import { CallAlerts } from "@/components/call-alerts";
 import { Logo } from "@/components/logo";
 
 const NAV = [
@@ -94,6 +95,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         </div>
       </aside>
       <main className="min-w-0 flex-1 overflow-hidden">{children}</main>
+      {/* Chamada tocando: aviso em qualquer tela do sistema. */}
+      <CallAlerts />
     </div>
   );
 }
