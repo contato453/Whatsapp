@@ -157,6 +157,9 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const [quickReplyIndex, setQuickReplyIndex] = useState(0);
   const [quickReplyDismissed, setQuickReplyDismissed] = useState(false);
 
+  /** Supervisor e admin enxergam vários números/departamentos; usuário, não. */
+  const canFilterScope = me?.role === "admin" || me?.role === "supervisor";
+
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -740,31 +743,38 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
               </button>
             ))}
           </div>
-          <div className="grid grid-cols-3 gap-1.5">
-            <select
-              className="rounded-lg border border-slate-200 px-1.5 py-1 text-[11px] text-slate-600"
-              value={instanceFilter}
-              onChange={(event) => setInstanceFilter(event.target.value)}
-            >
-              <option value="">WhatsApp</option>
-              {instances.map((instance) => (
-                <option key={instance.id} value={instance.id}>
-                  {instance.name}
-                </option>
-              ))}
-            </select>
-            <select
-              className="rounded-lg border border-slate-200 px-1.5 py-1 text-[11px] text-slate-600"
-              value={departmentFilter}
-              onChange={(event) => setDepartmentFilter(event.target.value)}
-            >
-              <option value="">Depto</option>
-              {departments.map((department) => (
-                <option key={department.id} value={department.id}>
-                  {department.name}
-                </option>
-              ))}
-            </select>
+          {/* Número e departamento só filtram para quem enxerga mais de um
+              recorte. Para o usuário comum a lista já vem restrita, e os dois
+              seletores só ocupariam espaço sem mudar nada. */}
+          <div className={cn("grid gap-1.5", canFilterScope ? "grid-cols-3" : "grid-cols-1")}>
+            {canFilterScope && (
+              <>
+                <select
+                  className="rounded-lg border border-slate-200 px-1.5 py-1 text-[11px] text-slate-600"
+                  value={instanceFilter}
+                  onChange={(event) => setInstanceFilter(event.target.value)}
+                >
+                  <option value="">WhatsApp</option>
+                  {instances.map((instance) => (
+                    <option key={instance.id} value={instance.id}>
+                      {instance.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="rounded-lg border border-slate-200 px-1.5 py-1 text-[11px] text-slate-600"
+                  value={departmentFilter}
+                  onChange={(event) => setDepartmentFilter(event.target.value)}
+                >
+                  <option value="">Depto</option>
+                  {departments.map((department) => (
+                    <option key={department.id} value={department.id}>
+                      {department.name}
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
             <select
               className="rounded-lg border border-slate-200 px-1.5 py-1 text-[11px] text-slate-600"
               value={tagFilter}
