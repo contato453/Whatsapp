@@ -1,7 +1,8 @@
 # API + provider de WhatsApp (sessões).
 # As sessões e mídias ficam em volumes: /app/data/sessions e /app/data/media.
 FROM node:22-slim AS base
-RUN corepack enable && apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
+# git é necessário: o Baileys tem uma dependência (libsignal) instalada via repositório git
+RUN corepack enable && apt-get update && apt-get install -y --no-install-recommends openssl git ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
 FROM base AS deps
