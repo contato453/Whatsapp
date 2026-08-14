@@ -98,3 +98,45 @@ export function instanceScope(ids: string[] | null): { whatsappInstanceId?: { in
 export function instanceIdScope(ids: string[] | null): { id?: { in: string[] } } {
   return ids ? { id: { in: ids } } : {};
 }
+
+/** Os departamentos em que o usuário atua. `null` = todos (admin). */
+export async function accessibleDepartmentIds(
+  prisma: PrismaClient,
+  user: AuthTokenPayload,
+): Promise<string[] | null> {
+  if (user.role === "admin") return null;
+  const links = await prisma.userDepartment.findMany({
+    where: { userId: user.sub, department: { organizationId: user.organizationId } },
+    select: { departmentId: true },
+  });
+  return links.map((link) => link.departmentId);
+}
+
+/**
+ * Filtro de leitura para recursos que pertencem a um departamento
+ * (etiquetas e respostas rápidas).
+ *
+ * `departmentId: null` significa "geral" e aparece para todo mundo — é o
+ * que preserva o que já existia antes de os recursos terem departamento.
+ */
+export function departmentResourceScope(
+  ids: string[] | null,
+): { OR?: Array<{ departmentId: null } | { departmentId: { in: string[] } }> } {
+  if (!ids) return {};
+  return { OR: [{ departmentId: null }, { departmentId: { in: ids } }] };
+}
+
+/**
+ * Pode criar ou alterar um recurso neste departamento?
+ *
+ * Admin faz tudo, inclusive o geral. Os demais só dentro dos próprios
+ * departamentos — e nunca no geral, que vale para a organização inteira.
+ */
+export function canWriteInDepartment(
+  ids: string[] | null,
+  departmentId: string | null,
+): boolean {
+  if (!ids) return true;
+  if (!departmentId) return false;
+  return ids.includes(departmentId);
+}

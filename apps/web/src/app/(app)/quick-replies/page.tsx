@@ -3,12 +3,21 @@
 import { useCallback, useEffect, useState } from "react";
 import { Pencil, Plus, Trash2, Zap } from "lucide-react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import type { QuickReplyDto } from "@/lib/types";
 import { Button, Card, EmptyState, Field, Input, Modal, Spinner, Textarea } from "@/components/ui";
+import {
+  DepartmentSelect,
+  departmentLabel,
+  groupByDepartment,
+  useMyDepartments,
+} from "@/components/department-picker";
 
-const EMPTY_FORM = { shortcut: "", title: "", content: "" };
+const EMPTY_FORM = { shortcut: "", title: "", content: "", departmentId: "" };
 
 export default function QuickRepliesPage() {
+  const { user: me } = useAuth();
+  const departments = useMyDepartments();
   const [replies, setReplies] = useState<QuickReplyDto[] | null>(null);
   const [editing, setEditing] = useState<QuickReplyDto | "new" | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -22,16 +31,33 @@ export default function QuickRepliesPage() {
   }, []);
   useEffect(load, [load]);
 
+  const isAdmin = me?.role === "admin";
+
   function openNew() {
-    setForm(EMPTY_FORM);
+    // Sem "Geral" para quem não é admin: já entra no departamento dele.
+    setForm({
+      ...EMPTY_FORM,
+      departmentId: isAdmin ? "" : (departments[0]?.id ?? ""),
+    });
     setError(null);
     setEditing("new");
   }
 
   function openEdit(reply: QuickReplyDto) {
-    setForm({ shortcut: reply.shortcut, title: reply.title ?? "", content: reply.content });
+    setForm({
+      shortcut: reply.shortcut,
+      title: reply.title ?? "",
+      content: reply.content,
+      departmentId: reply.departmentId ?? "",
+    });
     setError(null);
     setEditing(reply);
+  }
+
+  /** Só mexe no que é do departamento dele; o geral é do admin. */
+  function canManage(reply: QuickReplyDto): boolean {
+    if (isAdmin) return true;
+    return reply.departmentId != null && departments.some((d) => d.id === reply.departmentId);
   }
 
   async function save() {
@@ -41,6 +67,7 @@ export default function QuickRepliesPage() {
       shortcut: form.shortcut.trim().toLowerCase(),
       title: form.title.trim() || undefined,
       content: form.content.trim(),
+      departmentId: form.departmentId || null,
     };
     try {
       if (editing === "new") {
@@ -59,8 +86,12 @@ export default function QuickRepliesPage() {
 
   async function remove(reply: QuickReplyDto) {
     if (!window.confirm(`Excluir a resposta /${reply.shortcut}?`)) return;
-    await api.delete(`/quick-replies/${reply.id}`);
-    load();
+    try {
+      await api.delete(`/quick-replies/${reply.id}`);
+      load();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Erro ao excluir");
+    }
   }
 
   return (
@@ -87,8 +118,14 @@ export default function QuickRepliesPage() {
           description='Crie atalhos como /bomdia ou /boleto e use-os na Inbox digitando "/".'
         />
       ) : (
-        <Card className="divide-y divide-slate-100">
-          {replies.map((reply) => (
+        <div className="space-y-4">
+          {groupByDepartment(replies).map((group) => (
+          <div key={group.departmentId ?? "geral"}>
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+              {departmentLabel(group.departmentId, departments)}
+            </h2>
+            <Card className="divide-y divide-slate-100">
+          {group.items.map((reply) => (
             <div key={reply.id} className="flex items-start gap-3 px-5 py-3.5">
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold text-brand-700">
@@ -99,25 +136,30 @@ export default function QuickRepliesPage() {
                 </p>
                 <p className="mt-0.5 whitespace-pre-wrap text-sm text-slate-600">{reply.content}</p>
               </div>
-              <div className="flex shrink-0 gap-1">
-                <button
-                  onClick={() => openEdit(reply)}
-                  className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-                  title="Editar"
-                >
-                  <Pencil className="h-4 w-4" />
-                </button>
-                <button
-                  onClick={() => void remove(reply)}
-                  className="rounded-lg p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-600"
-                  title="Excluir"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
+              {canManage(reply) && (
+                <div className="flex shrink-0 gap-1">
+                  <button
+                    onClick={() => openEdit(reply)}
+                    className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                    title="Editar"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => void remove(reply)}
+                    className="rounded-lg p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-600"
+                    title="Excluir"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
             </div>
           ))}
-        </Card>
+            </Card>
+          </div>
+          ))}
+        </div>
       )}
 
       <Modal
@@ -143,6 +185,14 @@ export default function QuickRepliesPage() {
               placeholder="Ex.: Saudação da manhã"
             />
           </Field>
+          <Field label="Departamento">
+            <DepartmentSelect
+              value={form.departmentId}
+              departments={departments}
+              canUseGeneral={!!isAdmin}
+              onChange={(value) => setForm({ ...form, departmentId: value })}
+            />
+          </Field>
           <Field label="Mensagem">
             <Textarea
               rows={5}
@@ -154,7 +204,12 @@ export default function QuickRepliesPage() {
           {error && <p className="text-sm text-red-600">{error}</p>}
           <Button
             className="w-full"
-            disabled={busy || form.shortcut.length === 0 || form.content.trim().length === 0}
+            disabled={
+              busy ||
+              form.shortcut.length === 0 ||
+              form.content.trim().length === 0 ||
+              (!isAdmin && !form.departmentId)
+            }
             onClick={() => void save()}
           >
             Salvar

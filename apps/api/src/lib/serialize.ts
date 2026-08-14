@@ -91,6 +91,8 @@ export function serializeTag(tag: Tag) {
     id: tag.id,
     name: tag.name,
     color: tag.color,
+    // null = etiqueta geral, visível a todos os departamentos
+    departmentId: tag.departmentId,
   };
 }
 

@@ -102,6 +102,8 @@ model Department {
   conversations   Conversation[]
   userAccess      UserDepartment[]
   instances       WhatsAppInstance[]
+  tags            Tag[]
+  quickReplies    QuickReply[]
 
   @@unique([organizationId, name])
   @@map("departments")
@@ -423,13 +425,19 @@ model Tag {
   organizationId String
   name           String
   color          String   @default("#6366f1")
+  /// Departamento dono da etiqueta. null = geral, visível a todos.
+  departmentId   String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   organization  Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  department    Department?       @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   conversations ConversationTag[]
 
+  // Nome único na organização inteira: a etiqueta aparece na conversa sem
+  // dizer de qual departamento é, então dois "URGENTE" seriam indistinguíveis.
   @@unique([organizationId, name])
+  @@index([departmentId])
   @@map("tags")
 }
 
@@ -490,14 +498,20 @@ model QuickReply {
   shortcut       String
   title          String?
   content        String
+  /// Departamento dono da resposta. null = geral, visível a todos.
+  departmentId   String?
   createdById    String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  department   Department?  @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   createdBy    User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
 
+  // Atalho único na organização: "/bomdia" não pode significar duas coisas
+  // diferentes dependendo de quem digita.
   @@unique([organizationId, shortcut])
+  @@index([departmentId])
   @@map("quick_replies")
 }
 

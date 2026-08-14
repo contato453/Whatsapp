@@ -67,6 +67,8 @@ export interface TagDto {
   id: string;
   name: string;
   color: string;
+  /** Departamento dono; null = geral, visível a todos */
+  departmentId: string | null;
 }
 
 export interface ConversationDto {
@@ -187,6 +189,8 @@ export interface QuickReplyDto {
   shortcut: string;
   title: string | null;
   content: string;
+  /** Departamento dono; null = geral, visível a todos */
+  departmentId: string | null;
   createdAt: string;
 }
 

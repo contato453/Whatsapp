@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { accessibleDepartmentIds } from "../../lib/access.js";
 import { authenticate, requireRole } from "../../lib/auth.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
 import { serializeDepartment } from "../../lib/serialize.js";
@@ -53,6 +54,23 @@ export async function departmentRoutes(app: FastifyInstance, deps: AppDeps): Pro
   app.get("/departments", { preHandler: authenticate }, async (request) => {
     const departments = await deps.prisma.department.findMany({
       where: { organizationId: request.user.organizationId },
+      orderBy: { name: "asc" },
+    });
+    return { departments: departments.map(serializeDepartment) };
+  });
+
+  /**
+   * Os departamentos em que a pessoa pode criar etiquetas e respostas
+   * rápidas. Admin recebe todos. Serve para a tela oferecer só o que a API
+   * vai aceitar, em vez de deixar escolher e recusar depois.
+   */
+  app.get("/departments/mine", { preHandler: authenticate }, async (request) => {
+    const ids = await accessibleDepartmentIds(deps.prisma, request.user);
+    const departments = await deps.prisma.department.findMany({
+      where: {
+        organizationId: request.user.organizationId,
+        ...(ids ? { id: { in: ids } } : {}),
+      },
       orderBy: { name: "asc" },
     });
     return { departments: departments.map(serializeDepartment) };
