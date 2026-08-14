@@ -19,6 +19,7 @@ interface UserForm {
   password: string;
   role: string;
   status: "active" | "inactive";
+  signMessages: boolean;
   allInstances: boolean;
   instanceIds: string[];
 }
@@ -29,6 +30,7 @@ const EMPTY_FORM: UserForm = {
   password: "",
   role: "agent",
   status: "active",
+  signMessages: false,
   allInstances: true,
   instanceIds: [],
 };
@@ -40,6 +42,7 @@ function formFromUser(user: UserWithAccessDto): UserForm {
     password: "",
     role: user.role,
     status: user.status,
+    signMessages: user.signMessages,
     allInstances: user.whatsappInstanceIds.length === 0,
     instanceIds: user.whatsappInstanceIds,
   };
@@ -116,6 +119,7 @@ export default function UsersPage() {
         email: form.email,
         password: form.password,
         role: form.role,
+        signMessages: form.signMessages,
         whatsappInstanceIds: selectedInstanceIds(),
       });
       closeModals();
@@ -137,6 +141,7 @@ export default function UsersPage() {
         email: form.email,
         ...(form.password ? { password: form.password } : {}),
         ...(editing.id === me?.id ? {} : { role: form.role, status: form.status }),
+        signMessages: form.signMessages,
         whatsappInstanceIds: selectedInstanceIds(),
       });
       closeModals();
@@ -156,6 +161,24 @@ export default function UsersPage() {
   }
 
   const editingSelf = editing?.id === me?.id;
+
+  const signatureField = (
+    <label className="flex items-start gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700">
+      <input
+        type="checkbox"
+        className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+        checked={form.signMessages}
+        onChange={(event) => setForm({ ...form, signMessages: event.target.checked })}
+      />
+      <span>
+        Assinar mensagens com o nome
+        <span className="mt-0.5 block text-xs text-slate-400">
+          O texto sai como &ldquo;{form.name || "Nome do atendente"}:&rdquo; na primeira linha, para
+          o cliente saber quem está atendendo.
+        </span>
+      </span>
+    </label>
+  );
 
   const accessFields = (
     <div className="space-y-2">
@@ -236,6 +259,11 @@ export default function UsersPage() {
                         .join(", ")}
                 </p>
               </div>
+              {user.signMessages && (
+                <Badge className="bg-brand-50 text-brand-700" title="Mensagens saem assinadas com o nome">
+                  assina
+                </Badge>
+              )}
               <Badge className="bg-slate-100 text-slate-600">{ROLE_LABELS[user.role] ?? user.role}</Badge>
               <Badge color={user.status === "active" ? "#16a34a" : "#94a3b8"}>
                 {user.status === "active" ? "Ativo" : "Inativo"}
@@ -285,6 +313,7 @@ export default function UsersPage() {
               <option value="admin">Administrador</option>
             </select>
           </Field>
+          {signatureField}
           {accessFields}
           {error && <p className="text-sm text-red-600">{error}</p>}
           <Button className="w-full" disabled={busy} onClick={() => void createUser()}>
@@ -343,6 +372,7 @@ export default function UsersPage() {
               Você não pode alterar o próprio papel nem se desativar.
             </p>
           )}
+          {signatureField}
           {form.role === "admin" ? (
             <p className="text-xs text-slate-500">
               Administradores sempre têm acesso a todas as conexões de WhatsApp.

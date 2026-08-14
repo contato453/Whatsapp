@@ -14,6 +14,7 @@ import {
   type QuotedPreview,
 } from "../../lib/serialize.js";
 import { resolveSenders, type SenderDirectory } from "../../lib/sender-directory.js";
+import { applySignature, type Signer } from "../../lib/signature.js";
 import { instanceAudience } from "../../realtime/socket.js";
 import { buildPreview } from "../../services/message-ingest.js";
 import type { AppDeps } from "../../types.js";
@@ -86,6 +87,18 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
 
   function senderOf(directory: SenderDirectory, senderExternalId: string | null) {
     return senderExternalId ? (directory.get(senderExternalId) ?? null) : null;
+  }
+
+  /**
+   * Assinatura configurada no cadastro do atendente. Lida do banco a cada
+   * envio de propósito: ligar ou desligar a opção passa a valer na hora,
+   * sem depender de o atendente entrar de novo no sistema.
+   */
+  async function currentSigner(userId: string): Promise<Signer | null> {
+    return deps.prisma.user.findUnique({
+      where: { id: userId },
+      select: { name: true, signMessages: true },
+    });
   }
 
   /**
@@ -547,10 +560,15 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       }
     }
 
+    // O texto é gravado já assinado: a conversa precisa mostrar exatamente
+    // o que o cliente recebeu.
+    const outgoing =
+      applySignature(content, await currentSigner(request.user.sub)) ?? content;
+
     const result = await deps.provider.sendText(
       conversation.whatsappInstanceId,
       conversation.externalChatId,
-      content,
+      outgoing,
       quoted,
     );
 
@@ -561,7 +579,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
         externalMessageId: result.externalMessageId,
         direction: "outbound",
         type: "text",
-        content,
+        content: outgoing,
         quotedMessageId: quotedExternalId,
         senderName: request.user.name,
         timestamp: result.timestamp,
@@ -573,7 +591,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       where: { id },
       data: {
         lastMessageAt: result.timestamp,
-        lastMessagePreview: buildPreview({ type: "text", content }),
+        lastMessagePreview: buildPreview({ type: "text", content: outgoing }),
       },
     });
     deps.audit.record({
@@ -600,10 +618,14 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       }
       let buffer = await file.toBuffer();
       let mimeType = file.mimetype || "application/octet-stream";
-      const caption =
+      const rawCaption =
         typeof (file.fields.caption as { value?: unknown } | undefined)?.value === "string"
           ? ((file.fields.caption as { value: string }).value || undefined)
           : undefined;
+      // Legenda vazia continua vazia — assinar criaria uma legenda só com
+      // o nome do atendente embaixo da mídia.
+      const caption =
+        applySignature(rawCaption ?? null, await currentSigner(request.user.sub)) ?? undefined;
       let asVoiceNote =
         (file.fields.asVoiceNote as { value?: unknown } | undefined)?.value === "true";
       const asSticker =

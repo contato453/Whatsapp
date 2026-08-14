@@ -58,6 +58,8 @@ model User {
   role           UserRole   @default(agent)
   status         UserStatus @default(active)
   avatarUrl      String?
+  /// Prefixa as mensagens enviadas com o nome do atendente ("Fulano:")
+  signMessages   Boolean    @default(false)
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
 
