@@ -1,0 +1,83 @@
+# ==============================================================
+# Produção: docker compose -f docker-compose.prod.yml up -d --build
+#
+# Requer um arquivo .env na raiz com:
+#   POSTGRES_PASSWORD=...   (senha forte do banco)
+#   JWT_SECRET=...          (openssl rand -hex 32)
+#   APP_DOMAIN=app.seudominio.com.br
+#   API_DOMAIN=api.seudominio.com.br
+#
+# Nenhuma porta interna é exposta — todo tráfego entra pelo Caddy
+# (80/443) com HTTPS automático via Let's Encrypt.
+# ==============================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: zapdesk
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      POSTGRES_DB: zapdesk
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zapdesk"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://zapdesk:${POSTGRES_PASSWORD}@postgres:5432/zapdesk?schema=public
+      JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET no .env}
+      WEB_ORIGIN: https://${APP_DOMAIN:?defina APP_DOMAIN no .env}
+      API_PORT: 4000
+      WHATSAPP_SESSION_DIR: /app/data/sessions
+      MEDIA_DIR: /app/data/media
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      # Sessões do WhatsApp e mídias sobrevivem a deploys e reinicializações.
+      - whatsapp_sessions:/app/data/sessions
+      - media_store:/app/data/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: https://${API_DOMAIN:?defina API_DOMAIN no .env}
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+      API_DOMAIN: ${API_DOMAIN}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  whatsapp_sessions:
+  media_store:
+  caddy_data:
+  caddy_config:

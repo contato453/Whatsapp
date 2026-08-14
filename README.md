@@ -87,7 +87,9 @@ pnpm db:deploy    # prisma migrate deploy (produção)
 
 ## Deploy (VPS Linux)
 
-### Com Docker Compose
+**Guia completo e passo a passo: [DEPLOY.md](./DEPLOY.md)** — inclui `docker-compose.prod.yml` com proxy HTTPS automático (Caddy), backups e checklist de segurança.
+
+### Com Docker Compose (desenvolvimento/rede local)
 
 ```bash
 cp .env.example .env   # defina JWT_SECRET, POSTGRES_PASSWORD, WEB_ORIGIN, NEXT_PUBLIC_API_URL

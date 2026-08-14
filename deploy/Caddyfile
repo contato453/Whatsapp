@@ -1,0 +1,13 @@
+# Proxy reverso com HTTPS automático (Let's Encrypt).
+# Os domínios vêm das variáveis APP_DOMAIN e API_DOMAIN do .env.
+
+{$APP_DOMAIN} {
+	encode gzip
+	reverse_proxy web:3000
+}
+
+{$API_DOMAIN} {
+	encode gzip
+	# WebSockets (Socket.IO) passam automaticamente pelo reverse_proxy
+	reverse_proxy api:4000
+}
