@@ -143,11 +143,22 @@ proteger a rota na API e para montar o menu no frontend.
 | --- | --- |
 | Criar e editar usuário; excluir número ou departamento | admin |
 | Criar/conectar número, criar departamento e etiqueta, ver auditoria, editar nota de terceiro | supervisor |
-| Inbox, atribuição, notas próprias, respostas rápidas | usuário |
+| Inbox, atribuição, notas próprias, respostas rápidas, **próprio perfil e senha** | usuário |
 
 O menu lateral esconde o que o papel não alcança e a URL digitada direto cai em "acesso
 restrito". Isso é conveniência de interface: **a autorização de verdade é sempre a do
 servidor**, que responde 403 de qualquer jeito.
+
+### O que cada um muda em si mesmo
+
+Em **Configurações** qualquer usuário ajusta o próprio nome, a assinatura das mensagens e a
+senha, sem depender de administrador. A troca de senha exige a senha atual (token roubado ou
+máquina destravada não vira troca silenciosa) e tem limite de 5 tentativas por minuto, como
+o login.
+
+E-mail, papel, status e recorte de acesso ficam fora: são a credencial de entrada e o nível
+de permissão, alterados só em **Usuários**, por administrador. Salvar o perfil devolve um
+token novo, porque é o JWT que carimba o nome de quem enviou cada mensagem.
 
 ### Dado de cadastro não circula
 
