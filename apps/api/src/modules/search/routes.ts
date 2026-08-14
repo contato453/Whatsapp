@@ -60,7 +60,7 @@ export async function searchRoutes(app: FastifyInstance, deps: AppDeps): Promise
       }),
       deps.prisma.groupParticipant.findMany({
         where: {
-          group: groupScope(access, organizationId),
+          group: { organizationId, ...groupScope(access) },
           OR: [
             { name: { contains: q, mode: "insensitive" } },
             { phoneNumber: { contains: q.replace(/\D/g, "") || q } },

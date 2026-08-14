@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { canWriteInDepartment, departmentResourceScope } from "../src/lib/access.js";
+import {
+  canWriteInDepartment,
+  departmentResourceScope,
+  groupScope,
+} from "../src/lib/access.js";
 
 /**
  * Etiquetas e respostas rápidas por departamento.
@@ -49,5 +53,30 @@ describe("canWriteInDepartment", () => {
   it("usuário sem departamento não escreve em lugar nenhum", () => {
     expect(canWriteInDepartment([], "dep-1")).toBe(false);
     expect(canWriteInDepartment([], null)).toBe(false);
+  });
+});
+
+describe("groupScope", () => {
+  const admin = { instanceIds: null, departmentIds: null, ownOnly: false, userId: "u1" };
+
+  it("usa 'is' na relação opcional com a conversa", () => {
+    // Sem o 'is', o Prisma trata o objeto vazio do admin como filtro que
+    // não casa nada — e ele deixa de enxergar qualquer participante.
+    const scope = groupScope(admin);
+    expect(scope.OR).toEqual([
+      { conversationId: null },
+      { conversation: { is: {} } },
+    ]);
+  });
+
+  it("mantém o recorte de número e de conversa do usuário", () => {
+    const scope = groupScope({
+      instanceIds: ["inst-1"],
+      departmentIds: ["dep-1"],
+      ownOnly: true,
+      userId: "u1",
+    });
+    expect(scope.whatsappInstanceId).toEqual({ in: ["inst-1"] });
+    expect(scope.OR?.[1]).toHaveProperty("conversation.is.AND");
   });
 });
