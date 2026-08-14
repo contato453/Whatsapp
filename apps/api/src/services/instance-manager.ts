@@ -8,7 +8,7 @@ import { RealtimeEvents } from "@zapdesk/shared";
 import type { WhatsAppProvider } from "@zapdesk/whatsapp";
 import type { Server } from "socket.io";
 import type { Logger } from "pino";
-import { instanceAudience, orgRoom } from "../realtime/socket.js";
+import { instanceAudience } from "../realtime/socket.js";
 import { serializeConversation, serializeMessage } from "../lib/serialize.js";
 import { extensionFromMime, type MediaStorage } from "../lib/media-storage.js";
 import type { MessageIngestService } from "./message-ingest.js";
@@ -202,7 +202,7 @@ export class InstanceManager {
           data: { deletedAt: new Date(), content: null },
         });
         this.io
-          .to(orgRoom(organizationId))
+          .to(instanceAudience(organizationId, event.instanceId))
           .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
       });
     });
@@ -221,7 +221,7 @@ export class InstanceManager {
           data: { content: event.newText, editedAt: new Date() },
         });
         this.io
-          .to(orgRoom(organizationId))
+          .to(instanceAudience(organizationId, event.instanceId))
           .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
       });
     });

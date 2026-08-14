@@ -12,7 +12,7 @@ import {
   serializeMessage,
   type QuotedPreview,
 } from "../../lib/serialize.js";
-import { instanceAudience, orgRoom } from "../../realtime/socket.js";
+import { instanceAudience } from "../../realtime/socket.js";
 import { buildPreview } from "../../services/message-ingest.js";
 import type { AppDeps } from "../../types.js";
 
@@ -231,7 +231,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       entityId: id,
     });
     deps.io
-      .to(orgRoom(request.user.organizationId))
+      .to(instanceAudience(request.user.organizationId, message.conversation.whatsappInstanceId))
       .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
     return { ok: true };
   });
@@ -278,7 +278,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       entityId: id,
     });
     deps.io
-      .to(orgRoom(request.user.organizationId))
+      .to(instanceAudience(request.user.organizationId, message.conversation.whatsappInstanceId))
       .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
     return { message: serializeMessage(updated) };
   });
