@@ -130,50 +130,74 @@ export default function WhatsAppPage() {
           description='Clique em "Adicionar WhatsApp" para criar a primeira instância e escanear o QR Code.'
         />
       ) : (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
-          {instances.map((instance) => {
-            const status = STATUS_LABEL[instance.status];
-            return (
-              <Card key={instance.id} className="p-5">
-                <div className="mb-3 flex items-start justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-500">
-                      <Smartphone className="h-5 w-5" />
+        <Card className="overflow-hidden">
+          <div className="hidden items-center gap-4 border-b border-slate-200 bg-slate-50 px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:flex">
+            <span className="min-w-0 flex-1">Instância</span>
+            <span className="w-44 shrink-0">Número</span>
+            <span className="w-36 shrink-0">Status</span>
+            <span className="w-44 shrink-0">Última conexão</span>
+            <span className="w-56 shrink-0 text-right">Ações</span>
+          </div>
+          <ul className="divide-y divide-slate-200">
+            {instances.map((instance) => {
+              const status = STATUS_LABEL[instance.status];
+              return (
+                <li
+                  key={instance.id}
+                  className="flex flex-col gap-3 px-5 py-3.5 transition-colors hover:bg-slate-50 lg:flex-row lg:items-center lg:gap-4"
+                >
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-500">
+                      <Smartphone className="h-4 w-4" />
                     </div>
-                    <div>
-                      <p className="font-semibold text-slate-900">{instance.name}</p>
-                      <p className="text-xs text-slate-500">
-                        {instance.phoneNumber ? formatPhone(instance.phoneNumber) : "Número não vinculado"}
-                      </p>
-                    </div>
+                    <p className="truncate font-semibold text-slate-900">{instance.name}</p>
                   </div>
-                  <Badge color={status.color}>{status.label}</Badge>
-                </div>
-                <p className="mb-4 text-xs text-slate-400">
-                  Última conexão: {instance.lastConnectionAt ? formatDateTime(instance.lastConnectionAt) : "nunca"}
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {instance.status === "connected" ? (
-                    <Button size="sm" variant="outline" disabled={busy === instance.id} onClick={() => disconnect(instance)}>
-                      <Unplug className="h-3.5 w-3.5" /> Desconectar
+
+                  <div className="w-44 shrink-0">
+                    {instance.phoneNumber ? (
+                      <span className="font-mono text-sm text-slate-700">{formatPhone(instance.phoneNumber)}</span>
+                    ) : (
+                      <span className="text-sm text-slate-400">Não vinculado</span>
+                    )}
+                  </div>
+
+                  <div className="w-36 shrink-0">
+                    <Badge color={status.color}>{status.label}</Badge>
+                  </div>
+
+                  <div className="w-44 shrink-0 text-xs text-slate-400">
+                    <span className="lg:hidden">Última conexão: </span>
+                    {instance.lastConnectionAt ? formatDateTime(instance.lastConnectionAt) : "nunca"}
+                  </div>
+
+                  <div className="flex w-56 shrink-0 flex-wrap gap-2 lg:justify-end">
+                    {instance.status === "connected" ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busy === instance.id}
+                        onClick={() => disconnect(instance)}
+                      >
+                        <Unplug className="h-3.5 w-3.5" /> Desconectar
+                      </Button>
+                    ) : instance.status === "qr_required" ? (
+                      <Button size="sm" disabled={busy === instance.id} onClick={() => connect(instance)}>
+                        <QrCode className="h-3.5 w-3.5" /> Ver QR Code
+                      </Button>
+                    ) : (
+                      <Button size="sm" disabled={busy === instance.id} onClick={() => connect(instance)}>
+                        <PlugZap className="h-3.5 w-3.5" /> Conectar
+                      </Button>
+                    )}
+                    <Button size="sm" variant="danger" disabled={busy === instance.id} onClick={() => remove(instance)}>
+                      <Trash2 className="h-3.5 w-3.5" /> Excluir
                     </Button>
-                  ) : instance.status === "qr_required" ? (
-                    <Button size="sm" disabled={busy === instance.id} onClick={() => connect(instance)}>
-                      <QrCode className="h-3.5 w-3.5" /> Ver QR Code
-                    </Button>
-                  ) : (
-                    <Button size="sm" disabled={busy === instance.id} onClick={() => connect(instance)}>
-                      <PlugZap className="h-3.5 w-3.5" /> Conectar
-                    </Button>
-                  )}
-                  <Button size="sm" variant="danger" disabled={busy === instance.id} onClick={() => remove(instance)}>
-                    <Trash2 className="h-3.5 w-3.5" /> Excluir
-                  </Button>
-                </div>
-              </Card>
-            );
-          })}
-        </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
       )}
 
       <Modal open={creating} onClose={() => setCreating(false)} title="Adicionar WhatsApp">

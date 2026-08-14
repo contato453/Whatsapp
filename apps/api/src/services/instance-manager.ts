@@ -202,7 +202,7 @@ export class InstanceManager {
           data: { deletedAt: new Date(), content: null },
         });
         this.io
-          .to(orgRoom(organizationId))
+          .to(instanceAudience(organizationId, event.instanceId))
           .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
       });
     });
@@ -221,7 +221,7 @@ export class InstanceManager {
           data: { content: event.newText, editedAt: new Date() },
         });
         this.io
-          .to(orgRoom(organizationId))
+          .to(instanceAudience(organizationId, event.instanceId))
           .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
       });
     });
