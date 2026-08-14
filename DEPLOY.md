@@ -155,6 +155,7 @@ Copie os arquivos de backup para fora da VPS (Google Drive, S3, outro servidor).
 | QR Code não aparece | API sem acesso à internet ou firewall de saída | `docker compose ... logs api` e verifique erros de conexão |
 | "Erro interno" ao usar | Migration pendente | `docker compose ... restart api` (roda `migrate deploy` no boot) |
 | Sessão caiu e não reconecta | Celular ficou muito tempo offline ou sessão revogada | Reconecte pelo QR em /whatsapp |
+| Esqueci a senha do admin | — | `docker compose -f docker-compose.prod.yml exec -e RESET_EMAIL=seu@email.com -e RESET_PASSWORD='NovaSenha' api node packages/database/scripts/reset-password.mjs` |
 
 ## Segurança — checklist final
 
