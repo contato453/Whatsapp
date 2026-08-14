@@ -1,3 +1,16 @@
 packages:
   - "apps/*"
   - "packages/*"
+
+# Dependências autorizadas a rodar scripts de build no install
+# (local canônico desta config no pnpm >= 10.17)
+onlyBuiltDependencies:
+  - "@prisma/client"
+  - "@prisma/engines"
+  - "@whiskeysockets/baileys"
+  - esbuild
+  - prisma
+  - protobufjs
+  - sharp
+  - bufferutil
+  - utf-8-validate
