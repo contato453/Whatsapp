@@ -72,6 +72,7 @@ model User {
   quickReplies          QuickReply[]
   scheduledMessages     ScheduledMessage[]
   whatsappAccess        UserWhatsAppInstance[]
+  departmentAccess      UserDepartment[]
 
   @@index([organizationId])
   @@map("users")
@@ -90,8 +91,10 @@ model Department {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization  Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   conversations Conversation[]
+  userAccess    UserDepartment[]
+  instances     WhatsAppInstance[]
 
   @@unique([organizationId, name])
   @@map("departments")
@@ -115,6 +118,8 @@ model WhatsAppInstance {
   organizationId      String
   name                String
   phoneNumber         String?
+  /// Departamento em que as conversas deste número entram por padrão.
+  departmentId        String?
   status              InstanceStatus @default(disconnected)
   provider            String         @default("qrcode")
   sessionId           String         @unique @default(uuid())
@@ -124,17 +129,19 @@ model WhatsAppInstance {
   updatedAt           DateTime       @updatedAt
 
   organization  Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  department    Department?            @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   conversations Conversation[]
   groups        WhatsAppGroup[]
   contacts      Contact[]
   userAccess    UserWhatsAppInstance[]
 
   @@index([organizationId])
+  @@index([departmentId])
   @@map("whatsapp_instances")
 }
 
-/// Quais números de WhatsApp cada atendente enxerga.
-/// Sem nenhuma linha para o usuário = acesso a todas as conexões da organização.
+/// Quais números de WhatsApp cada usuário enxerga.
+/// Sem nenhuma linha = sem acesso a conversa nenhuma (admin é a exceção).
 model UserWhatsAppInstance {
   userId             String
   whatsappInstanceId String
@@ -146,6 +153,21 @@ model UserWhatsAppInstance {
   @@id([userId, whatsappInstanceId])
   @@index([whatsappInstanceId])
   @@map("user_whatsapp_instances")
+}
+
+/// Em quais departamentos cada usuário atua.
+/// Sem nenhuma linha = sem acesso a conversa nenhuma (admin é a exceção).
+model UserDepartment {
+  userId       String
+  departmentId String
+  createdAt    DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@id([userId, departmentId])
+  @@index([departmentId])
+  @@map("user_departments")
 }
 
 // ============================================================

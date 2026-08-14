@@ -11,7 +11,7 @@ import { AuditService } from "./modules/audit/service.js";
 import { MessageIngestService } from "./services/message-ingest.js";
 import { InstanceManager } from "./services/instance-manager.js";
 import { ScheduledMessageWorker } from "./services/scheduler.js";
-import { accessibleInstanceIds } from "./lib/access.js";
+import { loadConversationAccess } from "./lib/access.js";
 import type { AuthTokenPayload } from "./lib/auth.js";
 import type { AppDeps } from "./types.js";
 
@@ -54,7 +54,10 @@ async function main(): Promise<void> {
   const io = createRealtime(app.server, {
     corsOrigins: config.corsOrigins,
     verifyToken: (token) => app.jwt.verify<AuthTokenPayload>(token),
-    resolveInstanceAccess: (user) => accessibleInstanceIds(prisma, user),
+    resolveAccess: async (user) => {
+      const access = await loadConversationAccess(prisma, user);
+      return { instanceIds: access.instanceIds, departmentIds: access.departmentIds };
+    },
     logger,
   });
   deps.io = io;

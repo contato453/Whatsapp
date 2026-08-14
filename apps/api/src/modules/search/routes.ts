@@ -1,6 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { accessibleInstanceIds, instanceScope } from "../../lib/access.js";
+import {
+  conversationScope,
+  instanceScope,
+  loadConversationAccess,
+} from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
 import { serializeConversation, serializeMessage } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
@@ -19,16 +23,14 @@ export async function searchRoutes(app: FastifyInstance, deps: AppDeps): Promise
     const { q, limit } = searchSchema.parse(request.query);
     const organizationId = request.user.organizationId;
     // A busca global respeita as conexões liberadas para o usuário.
-    const allowed = await accessibleInstanceIds(deps.prisma, request.user);
-    const conversationScope = allowed
-      ? { conversation: { whatsappInstanceId: { in: allowed } } }
-      : {};
+    const access = await loadConversationAccess(deps.prisma, request.user);
+    const scope = conversationScope(access);
 
     const [conversations, messages, participants] = await Promise.all([
       deps.prisma.conversation.findMany({
         where: {
           organizationId,
-          ...instanceScope(allowed),
+          ...scope,
           OR: [
             { title: { contains: q, mode: "insensitive" } },
             { externalChatId: { contains: q } },
@@ -48,7 +50,7 @@ export async function searchRoutes(app: FastifyInstance, deps: AppDeps): Promise
       deps.prisma.message.findMany({
         where: {
           organizationId,
-          ...conversationScope,
+          conversation: scope,
           OR: [
             { content: { contains: q, mode: "insensitive" } },
             { filename: { contains: q, mode: "insensitive" } },
@@ -62,7 +64,11 @@ export async function searchRoutes(app: FastifyInstance, deps: AppDeps): Promise
       }),
       deps.prisma.groupParticipant.findMany({
         where: {
-          group: { organizationId, ...instanceScope(allowed) },
+          group: {
+            organizationId,
+            ...instanceScope(access.instanceIds),
+            OR: [{ conversationId: null }, { conversation: scope }],
+          },
           OR: [
             { name: { contains: q, mode: "insensitive" } },
             { phoneNumber: { contains: q.replace(/\D/g, "") || q } },

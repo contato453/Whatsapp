@@ -6,8 +6,10 @@ import { AppError, NotFoundError } from "../../lib/errors.js";
 import { serializeUserWithAccess } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
 
-/** Lista de conexões liberadas — vazia significa "todas". */
+/** Conexões liberadas. Lista vazia = o usuário não enxerga conversa alguma. */
 const instanceIdsSchema = z.array(z.string().uuid()).max(100);
+/** Departamentos em que atua. Lista vazia = não enxerga conversa alguma. */
+const departmentIdsSchema = z.array(z.string().uuid()).max(100);
 
 const createUserSchema = z.object({
   name: z.string().min(2).max(120),
@@ -17,6 +19,7 @@ const createUserSchema = z.object({
   /** Prefixa as mensagens enviadas com o nome do atendente */
   signMessages: z.boolean().optional(),
   whatsappInstanceIds: instanceIdsSchema.optional(),
+  departmentIds: departmentIdsSchema.optional(),
 });
 
 const updateUserSchema = z.object({
@@ -27,6 +30,7 @@ const updateUserSchema = z.object({
   status: z.enum(["active", "inactive"]).optional(),
   signMessages: z.boolean().optional(),
   whatsappInstanceIds: instanceIdsSchema.optional(),
+  departmentIds: departmentIdsSchema.optional(),
 });
 
 export async function userRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
@@ -44,11 +48,28 @@ export async function userRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
     return unique;
   }
 
+  /** Garante que todos os departamentos informados pertencem à organização. */
+  async function assertDepartmentsInOrg(ids: string[], organizationId: string): Promise<string[]> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return [];
+    const found = await deps.prisma.department.findMany({
+      where: { id: { in: unique }, organizationId },
+      select: { id: true },
+    });
+    if (found.length !== unique.length) {
+      throw new AppError("Departamento inválido", 400, "invalid_department");
+    }
+    return unique;
+  }
+
   app.get("/users", { preHandler: authenticate }, async (request) => {
     const users = await deps.prisma.user.findMany({
       where: { organizationId: request.user.organizationId },
       orderBy: { name: "asc" },
-      include: { whatsappAccess: { select: { whatsappInstanceId: true } } },
+      include: {
+        whatsappAccess: { select: { whatsappInstanceId: true } },
+        departmentAccess: { select: { departmentId: true } },
+      },
     });
     return { users: users.map(serializeUserWithAccess) };
   });
@@ -59,10 +80,10 @@ export async function userRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
     if (existing) {
       throw new AppError("Já existe um usuário com este e-mail", 409, "email_taken");
     }
-    const instanceIds = await assertInstancesInOrg(
-      body.whatsappInstanceIds ?? [],
-      request.user.organizationId,
-    );
+    const [instanceIds, departmentIds] = await Promise.all([
+      assertInstancesInOrg(body.whatsappInstanceIds ?? [], request.user.organizationId),
+      assertDepartmentsInOrg(body.departmentIds ?? [], request.user.organizationId),
+    ]);
     const user = await deps.prisma.user.create({
       data: {
         organizationId: request.user.organizationId,
@@ -74,8 +95,14 @@ export async function userRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
         whatsappAccess: {
           create: instanceIds.map((whatsappInstanceId) => ({ whatsappInstanceId })),
         },
+        departmentAccess: {
+          create: departmentIds.map((departmentId) => ({ departmentId })),
+        },
       },
-      include: { whatsappAccess: { select: { whatsappInstanceId: true } } },
+      include: {
+        whatsappAccess: { select: { whatsappInstanceId: true } },
+        departmentAccess: { select: { departmentId: true } },
+      },
     });
     deps.audit.record({
       organizationId: request.user.organizationId,
@@ -115,6 +142,9 @@ export async function userRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
     const instanceIds = body.whatsappInstanceIds
       ? await assertInstancesInOrg(body.whatsappInstanceIds, request.user.organizationId)
       : null;
+    const departmentIds = body.departmentIds
+      ? await assertDepartmentsInOrg(body.departmentIds, request.user.organizationId)
+      : null;
 
     const updated = await deps.prisma.$transaction(async (tx) => {
       if (instanceIds) {
@@ -122,6 +152,14 @@ export async function userRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
         if (instanceIds.length > 0) {
           await tx.userWhatsAppInstance.createMany({
             data: instanceIds.map((whatsappInstanceId) => ({ userId: id, whatsappInstanceId })),
+          });
+        }
+      }
+      if (departmentIds) {
+        await tx.userDepartment.deleteMany({ where: { userId: id } });
+        if (departmentIds.length > 0) {
+          await tx.userDepartment.createMany({
+            data: departmentIds.map((departmentId) => ({ userId: id, departmentId })),
           });
         }
       }
@@ -135,7 +173,10 @@ export async function userRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
           ...(body.signMessages === undefined ? {} : { signMessages: body.signMessages }),
           ...(body.password ? { passwordHash: await bcrypt.hash(body.password, 10) } : {}),
         },
-        include: { whatsappAccess: { select: { whatsappInstanceId: true } } },
+        include: {
+          whatsappAccess: { select: { whatsappInstanceId: true } },
+          departmentAccess: { select: { departmentId: true } },
+        },
       });
     });
 
@@ -145,7 +186,14 @@ export async function userRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
       action: "user.updated",
       entityType: "User",
       entityId: id,
-      ...(instanceIds ? { metadata: { whatsappInstanceIds: instanceIds } } : {}),
+      ...(instanceIds || departmentIds
+        ? {
+            metadata: {
+              ...(instanceIds ? { whatsappInstanceIds: instanceIds } : {}),
+              ...(departmentIds ? { departmentIds } : {}),
+            },
+          }
+        : {}),
     });
     return { user: serializeUserWithAccess(updated) };
   });

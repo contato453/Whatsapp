@@ -1,16 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Pencil, Plus, Save, Smartphone, UserRound } from "lucide-react";
+import { Building2, Pencil, Plus, Save, Smartphone, UserRound } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import type { InstanceDto, UserWithAccessDto } from "@/lib/types";
+import type { DepartmentDto, InstanceDto, UserWithAccessDto } from "@/lib/types";
 import { Avatar, Badge, Button, Card, Field, Input, Modal, Spinner } from "@/components/ui";
 
 const ROLE_LABELS: Record<string, string> = {
   admin: "Administrador",
   supervisor: "Supervisor",
-  agent: "Atendente",
+  agent: "Usuário",
 };
 
 interface UserForm {
@@ -20,8 +20,8 @@ interface UserForm {
   role: string;
   status: "active" | "inactive";
   signMessages: boolean;
-  allInstances: boolean;
   instanceIds: string[];
+  departmentIds: string[];
 }
 
 const EMPTY_FORM: UserForm = {
@@ -31,8 +31,8 @@ const EMPTY_FORM: UserForm = {
   role: "agent",
   status: "active",
   signMessages: false,
-  allInstances: true,
   instanceIds: [],
+  departmentIds: [],
 };
 
 function formFromUser(user: UserWithAccessDto): UserForm {
@@ -43,8 +43,8 @@ function formFromUser(user: UserWithAccessDto): UserForm {
     role: user.role,
     status: user.status,
     signMessages: user.signMessages,
-    allInstances: user.whatsappInstanceIds.length === 0,
     instanceIds: user.whatsappInstanceIds,
+    departmentIds: user.departmentIds,
   };
 }
 
@@ -52,6 +52,7 @@ export default function UsersPage() {
   const { user: me } = useAuth();
   const [users, setUsers] = useState<UserWithAccessDto[] | null>(null);
   const [instances, setInstances] = useState<InstanceDto[]>([]);
+  const [departments, setDepartments] = useState<DepartmentDto[]>([]);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<UserWithAccessDto | null>(null);
   const [form, setForm] = useState<UserForm>(EMPTY_FORM);
@@ -68,11 +69,19 @@ export default function UsersPage() {
       .get<{ instances: InstanceDto[] }>("/whatsapp-instances")
       .then((data) => setInstances(data.instances))
       .catch(() => setInstances([]));
+    api
+      .get<{ departments: DepartmentDto[] }>("/departments")
+      .then((data) => setDepartments(data.departments))
+      .catch(() => setDepartments([]));
   }, []);
 
   const instanceNames = useMemo(
     () => new Map(instances.map((instance) => [instance.id, instance.name])),
     [instances],
+  );
+  const departmentNames = useMemo(
+    () => new Map(departments.map((department) => [department.id, department.name])),
+    [departments],
   );
 
   const isAdmin = me?.role === "admin";
@@ -104,10 +113,22 @@ export default function UsersPage() {
     }));
   }
 
-  /** Conexões enviadas à API: lista vazia significa "todas". */
+  function toggleDepartment(departmentId: string) {
+    setForm((current) => ({
+      ...current,
+      departmentIds: current.departmentIds.includes(departmentId)
+        ? current.departmentIds.filter((id) => id !== departmentId)
+        : [...current.departmentIds, departmentId],
+    }));
+  }
+
+  /** Admin enxerga a organização inteira — não precisa de marcação. */
   function selectedInstanceIds(): string[] {
-    if (form.allInstances || form.role === "admin") return [];
-    return form.instanceIds;
+    return form.role === "admin" ? [] : form.instanceIds;
+  }
+
+  function selectedDepartmentIds(): string[] {
+    return form.role === "admin" ? [] : form.departmentIds;
   }
 
   async function createUser() {
@@ -121,6 +142,7 @@ export default function UsersPage() {
         role: form.role,
         signMessages: form.signMessages,
         whatsappInstanceIds: selectedInstanceIds(),
+        departmentIds: selectedDepartmentIds(),
       });
       closeModals();
       load();
@@ -143,6 +165,7 @@ export default function UsersPage() {
         ...(editing.id === me?.id ? {} : { role: form.role, status: form.status }),
         signMessages: form.signMessages,
         whatsappInstanceIds: selectedInstanceIds(),
+        departmentIds: selectedDepartmentIds(),
       });
       closeModals();
       load();
@@ -180,58 +203,121 @@ export default function UsersPage() {
     </label>
   );
 
-  const accessFields = (
-    <div className="space-y-2">
-      <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
-        Acesso aos WhatsApps
-      </span>
-      <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700">
-        <input
-          type="checkbox"
-          className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
-          checked={form.allInstances}
-          onChange={(event) => setForm({ ...form, allInstances: event.target.checked })}
-        />
-        Todas as conexões (inclusive as criadas no futuro)
-      </label>
-      {!form.allInstances && (
-        <div className="thin-scroll max-h-48 space-y-1 overflow-y-auto rounded-lg border border-slate-200 p-2">
-          {instances.length === 0 ? (
-            <p className="px-1 py-2 text-xs text-slate-400">Nenhuma conexão cadastrada ainda.</p>
-          ) : (
-            instances.map((instance) => (
-              <label
-                key={instance.id}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
-              >
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
-                  checked={form.instanceIds.includes(instance.id)}
-                  onChange={() => toggleInstance(instance.id)}
-                />
-                <Smartphone className="h-3.5 w-3.5 text-slate-400" />
-                <span className="truncate">{instance.name}</span>
-                {instance.phoneNumber && (
-                  <span className="text-xs text-slate-400">{instance.phoneNumber}</span>
-                )}
-              </label>
-            ))
-          )}
+  const accessFields =
+    form.role === "admin" ? (
+      <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+        Administrador enxerga todos os números e todos os departamentos.
+      </p>
+    ) : (
+      <div className="space-y-4">
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Acesso aos WhatsApps
+            </span>
+            <button
+              type="button"
+              className="text-xs font-medium text-brand-600 hover:underline"
+              onClick={() =>
+                setForm((current) => ({
+                  ...current,
+                  instanceIds:
+                    current.instanceIds.length === instances.length
+                      ? []
+                      : instances.map((instance) => instance.id),
+                }))
+              }
+            >
+              {form.instanceIds.length === instances.length ? "Desmarcar todos" : "Marcar todos"}
+            </button>
+          </div>
+          <div className="thin-scroll max-h-40 space-y-1 overflow-y-auto rounded-lg border border-slate-200 p-2">
+            {instances.length === 0 ? (
+              <p className="px-1 py-2 text-xs text-slate-400">Nenhuma conexão cadastrada ainda.</p>
+            ) : (
+              instances.map((instance) => (
+                <label
+                  key={instance.id}
+                  className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                >
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                    checked={form.instanceIds.includes(instance.id)}
+                    onChange={() => toggleInstance(instance.id)}
+                  />
+                  <Smartphone className="h-3.5 w-3.5 text-slate-400" />
+                  <span className="truncate">{instance.name}</span>
+                  {instance.phoneNumber && (
+                    <span className="text-xs text-slate-400">{instance.phoneNumber}</span>
+                  )}
+                </label>
+              ))
+            )}
+          </div>
         </div>
-      )}
-      {!form.allInstances && form.instanceIds.length === 0 && (
-        <p className="text-xs text-amber-600">
-          Nenhuma conexão marcada — sem seleção, o atendente volta a enxergar todas.
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Departamentos
+            </span>
+            <button
+              type="button"
+              className="text-xs font-medium text-brand-600 hover:underline"
+              onClick={() =>
+                setForm((current) => ({
+                  ...current,
+                  departmentIds:
+                    current.departmentIds.length === departments.length
+                      ? []
+                      : departments.map((department) => department.id),
+                }))
+              }
+            >
+              {form.departmentIds.length === departments.length ? "Desmarcar todos" : "Marcar todos"}
+            </button>
+          </div>
+          <div className="thin-scroll max-h-40 space-y-1 overflow-y-auto rounded-lg border border-slate-200 p-2">
+            {departments.length === 0 ? (
+              <p className="px-1 py-2 text-xs text-slate-400">Nenhum departamento cadastrado ainda.</p>
+            ) : (
+              departments.map((department) => (
+                <label
+                  key={department.id}
+                  className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                >
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                    checked={form.departmentIds.includes(department.id)}
+                    onChange={() => toggleDepartment(department.id)}
+                  />
+                  <Building2 className="h-3.5 w-3.5 text-slate-400" />
+                  <span className="truncate">{department.name}</span>
+                </label>
+              ))
+            )}
+          </div>
+        </div>
+
+        {(form.instanceIds.length === 0 || form.departmentIds.length === 0) && (
+          <p className="text-xs text-amber-600">
+            Sem número ou sem departamento marcado, este usuário não enxerga conversa alguma.
+          </p>
+        )}
+        <p className="text-xs text-slate-400">
+          {form.role === "supervisor"
+            ? "Supervisor vê todas as conversas dos departamentos marcados, dentro dos números marcados."
+            : "Usuário vê, dentro dos números e departamentos marcados, as conversas atribuídas a ele e as que ainda não têm responsável."}
         </p>
-      )}
-    </div>
-  );
+      </div>
+    );
 
   return (
     <div className="thin-scroll h-full overflow-y-auto p-8">
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-slate-900">Atendentes</h1>
+        <h1 className="text-2xl font-bold text-slate-900">Usuários</h1>
         {isAdmin && (
           <Button onClick={openCreate}>
             <Plus className="h-4 w-4" /> Novo usuário
@@ -252,11 +338,15 @@ export default function UsersPage() {
                 <p className="truncate text-sm font-semibold text-slate-900">{user.name}</p>
                 <p className="truncate text-xs text-slate-500">{user.email}</p>
                 <p className="mt-0.5 truncate text-xs text-slate-400">
-                  {user.role === "admin" || user.whatsappInstanceIds.length === 0
-                    ? "Acesso a todas as conexões"
-                    : user.whatsappInstanceIds
-                        .map((id) => instanceNames.get(id) ?? "Conexão removida")
-                        .join(", ")}
+                  {user.role === "admin"
+                    ? "Acesso total"
+                    : user.whatsappInstanceIds.length === 0 || user.departmentIds.length === 0
+                      ? "Sem acesso a conversas"
+                      : `${user.whatsappInstanceIds
+                          .map((id) => instanceNames.get(id) ?? "Conexão removida")
+                          .join(", ")} · ${user.departmentIds
+                          .map((id) => departmentNames.get(id) ?? "Departamento removido")
+                          .join(", ")}`}
                 </p>
               </div>
               {user.signMessages && (
@@ -308,7 +398,7 @@ export default function UsersPage() {
               value={form.role}
               onChange={(event) => setForm({ ...form, role: event.target.value })}
             >
-              <option value="agent">Atendente</option>
+              <option value="agent">Usuário</option>
               <option value="supervisor">Supervisor</option>
               <option value="admin">Administrador</option>
             </select>
@@ -322,7 +412,7 @@ export default function UsersPage() {
         </div>
       </Modal>
 
-      <Modal open={editing != null} onClose={closeModals} title="Editar atendente">
+      <Modal open={editing != null} onClose={closeModals} title="Editar usuário">
         <div className="space-y-4">
           <Field label="Nome">
             <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
@@ -349,7 +439,7 @@ export default function UsersPage() {
               disabled={editingSelf}
               onChange={(event) => setForm({ ...form, role: event.target.value })}
             >
-              <option value="agent">Atendente</option>
+              <option value="agent">Usuário</option>
               <option value="supervisor">Supervisor</option>
               <option value="admin">Administrador</option>
             </select>

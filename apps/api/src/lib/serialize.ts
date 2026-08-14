@@ -30,11 +30,15 @@ export function serializeUser(user: User) {
  * liberadas para o usuário (lista vazia = acesso a todas).
  */
 export function serializeUserWithAccess(
-  user: User & { whatsappAccess?: Array<{ whatsappInstanceId: string }> },
+  user: User & {
+    whatsappAccess?: Array<{ whatsappInstanceId: string }>;
+    departmentAccess?: Array<{ departmentId: string }>;
+  },
 ) {
   return {
     ...serializeUser(user),
     whatsappInstanceIds: user.whatsappAccess?.map((link) => link.whatsappInstanceId) ?? [],
+    departmentIds: user.departmentAccess?.map((link) => link.departmentId) ?? [],
   };
 }
 
@@ -43,6 +47,7 @@ export function serializeInstance(instance: WhatsAppInstance) {
     id: instance.id,
     name: instance.name,
     phoneNumber: instance.phoneNumber,
+    departmentId: instance.departmentId,
     status: instance.status,
     provider: instance.provider,
     lastConnectionAt: instance.lastConnectionAt?.toISOString() ?? null,
