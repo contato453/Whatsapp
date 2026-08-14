@@ -7,7 +7,6 @@ import {
   Inbox,
   LayoutDashboard,
   LogOut,
-  MessageSquareText,
   Settings,
   Smartphone,
   Tags,
@@ -18,6 +17,7 @@ import {
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
 import { Avatar, Spinner } from "@/components/ui";
+import { Logo } from "@/components/logo";
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -52,11 +52,9 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50">
       <aside className="flex w-56 shrink-0 flex-col border-r border-slate-800 bg-slate-900">
-        <div className="flex items-center gap-2 px-4 py-5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600 text-white">
-            <MessageSquareText className="h-4 w-4" />
-          </div>
-          <span className="text-base font-bold text-white">ZapDesk</span>
+        <div className="px-4 py-5">
+          {/* Sidebar é fundo escuro: marca na versão branca. */}
+          <Logo tone="dark" />
         </div>
         <nav className="flex-1 space-y-0.5 px-2">
           {NAV.map((item) => {

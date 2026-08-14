@@ -1,4 +1,4 @@
-# ZapDesk — Plataforma de Atendimento por WhatsApp
+# AZVCHAT — Plataforma de Atendimento por WhatsApp
 
 Plataforma web para centralizar atendimentos realizados por **múltiplos números de WhatsApp**, com **grupos como entidade de primeira classe** — cada cliente pode ter vários grupos (Geral, Contábil, Fiscal, DP...) e todos convergem para uma Inbox única.
 
