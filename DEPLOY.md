@@ -1,4 +1,4 @@
-# Guia de Deploy — ZapDesk em produção (VPS)
+# Guia de Deploy — AZVCHAT em produção (VPS)
 
 Passo a passo para colocar o sistema no ar num servidor Linux, com HTTPS automático. Tempo estimado: 30–45 minutos.
 
