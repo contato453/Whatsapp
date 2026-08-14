@@ -1,0 +1,414 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// Organização (preparação multi-tenant / SaaS)
+// ============================================================
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users               User[]
+  departments         Department[]
+  whatsappInstances   WhatsAppInstance[]
+  conversations       Conversation[]
+  contacts            Contact[]
+  groups              WhatsAppGroup[]
+  messages            Message[]
+  tags                Tag[]
+  internalNotes       InternalNote[]
+  assignmentHistories ConversationAssignmentHistory[]
+  auditLogs           AuditLog[]
+
+  @@map("organizations")
+}
+
+// ============================================================
+// Usuários / Atendentes
+// ============================================================
+
+enum UserRole {
+  admin
+  supervisor
+  agent
+}
+
+enum UserStatus {
+  active
+  inactive
+}
+
+model User {
+  id             String     @id @default(uuid())
+  organizationId String
+  name           String
+  email          String     @unique
+  passwordHash   String
+  role           UserRole   @default(agent)
+  status         UserStatus @default(active)
+  avatarUrl      String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  organization          Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignedConversations Conversation[]                  @relation("AssignedConversations")
+  sentMessages          Message[]
+  internalNotes         InternalNote[]
+  performedAssignments  ConversationAssignmentHistory[] @relation("PerformedAssignments")
+  auditLogs             AuditLog[]
+
+  @@index([organizationId])
+  @@map("users")
+}
+
+// ============================================================
+// Departamentos
+// ============================================================
+
+model Department {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  description    String?
+  color          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  @@unique([organizationId, name])
+  @@map("departments")
+}
+
+// ============================================================
+// Instâncias de WhatsApp (multi-número)
+// ============================================================
+
+enum InstanceStatus {
+  disconnected
+  connecting
+  qr_required
+  connected
+  reconnecting
+  error
+}
+
+model WhatsAppInstance {
+  id                  String         @id @default(uuid())
+  organizationId      String
+  name                String
+  phoneNumber         String?
+  status              InstanceStatus @default(disconnected)
+  provider            String         @default("qrcode")
+  sessionId           String         @unique @default(uuid())
+  lastConnectionAt    DateTime?
+  lastDisconnectionAt DateTime?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  organization  Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+  groups        WhatsAppGroup[]
+  contacts      Contact[]
+
+  @@index([organizationId])
+  @@map("whatsapp_instances")
+}
+
+// ============================================================
+// Contatos
+// ============================================================
+
+model Contact {
+  id                 String   @id @default(uuid())
+  organizationId     String
+  whatsappInstanceId String
+  externalId         String
+  phoneNumber        String?
+  name               String?
+  pushName           String?
+  avatarUrl          String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  instance     WhatsAppInstance @relation(fields: [whatsappInstanceId], references: [id], onDelete: Cascade)
+
+  @@unique([whatsappInstanceId, externalId])
+  @@index([organizationId, phoneNumber])
+  @@map("contacts")
+}
+
+// ============================================================
+// Grupos (entidade de primeira classe)
+// ============================================================
+
+model WhatsAppGroup {
+  id                 String    @id @default(uuid())
+  organizationId     String
+  whatsappInstanceId String
+  externalId         String
+  name               String
+  description        String?
+  imageUrl           String?
+  participantCount   Int       @default(0)
+  conversationId     String?   @unique
+  archivedAt         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  instance     WhatsAppInstance   @relation(fields: [whatsappInstanceId], references: [id], onDelete: Cascade)
+  conversation Conversation?      @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  participants GroupParticipant[]
+
+  @@unique([whatsappInstanceId, externalId])
+  @@map("whatsapp_groups")
+}
+
+model GroupParticipant {
+  id                String   @id @default(uuid())
+  groupId           String
+  externalContactId String
+  phoneNumber       String
+  name              String?
+  isAdmin           Boolean  @default(false)
+  isSuperAdmin      Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  group WhatsAppGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, externalContactId])
+  @@map("group_participants")
+}
+
+// ============================================================
+// Conversas
+// ============================================================
+
+enum ConversationType {
+  individual
+  group
+}
+
+enum ConversationStatus {
+  new
+  open
+  waiting
+  resolved
+  archived
+}
+
+model Conversation {
+  id                 String             @id @default(uuid())
+  organizationId     String
+  whatsappInstanceId String
+  externalChatId     String
+  type               ConversationType
+  title              String
+  profilePicture     String?
+  status             ConversationStatus @default(new)
+  assignedUserId     String?
+  departmentId       String?
+  unreadCount        Int                @default(0)
+  lastMessageAt      DateTime?
+  lastMessagePreview String?
+  // Integrações futuras (CRM, processos, contratos...) — sem dependência específica
+  externalReference  String?
+  externalSource     String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  organization      Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  instance          WhatsAppInstance                @relation(fields: [whatsappInstanceId], references: [id], onDelete: Cascade)
+  assignedUser      User?                           @relation("AssignedConversations", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  department        Department?                     @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  messages          Message[]
+  group             WhatsAppGroup?
+  internalNotes     InternalNote[]
+  tags              ConversationTag[]
+  assignmentHistory ConversationAssignmentHistory[]
+
+  @@unique([whatsappInstanceId, externalChatId])
+  @@index([organizationId, status])
+  @@index([organizationId, lastMessageAt])
+  @@map("conversations")
+}
+
+// ============================================================
+// Mensagens
+// ============================================================
+
+enum MessageDirection {
+  inbound
+  outbound
+}
+
+enum MessageType {
+  text
+  image
+  audio
+  video
+  document
+  sticker
+  location
+  contact
+  other
+}
+
+enum MessageStatus {
+  pending
+  sent
+  delivered
+  read
+  failed
+}
+
+model Message {
+  id                String           @id @default(uuid())
+  organizationId    String
+  conversationId    String
+  externalMessageId String?
+  senderExternalId  String?
+  senderName        String?
+  senderPhone       String?
+  direction         MessageDirection
+  type              MessageType
+  content           String?
+  mediaUrl          String?
+  mimeType          String?
+  filename          String?
+  quotedMessageId   String?
+  timestamp         DateTime
+  status            MessageStatus    @default(pending)
+  sentByUserId      String?
+  createdAt         DateTime         @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sentByUser   User?        @relation(fields: [sentByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([conversationId, externalMessageId])
+  @@index([conversationId, timestamp])
+  @@index([organizationId, timestamp])
+  @@map("messages")
+}
+
+// ============================================================
+// Notas internas (não vão para o WhatsApp)
+// ============================================================
+
+model InternalNote {
+  id             String   @id @default(uuid())
+  organizationId String
+  conversationId String
+  userId         String?
+  content        String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId])
+  @@map("internal_notes")
+}
+
+// ============================================================
+// Etiquetas
+// ============================================================
+
+model Tag {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  color          String   @default("#6366f1")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization  Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversations ConversationTag[]
+
+  @@unique([organizationId, name])
+  @@map("tags")
+}
+
+model ConversationTag {
+  conversationId String
+  tagId          String
+  createdAt      DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  tag          Tag          @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, tagId])
+  @@map("conversation_tags")
+}
+
+// ============================================================
+// Histórico de atribuição de atendimento
+// ============================================================
+
+enum AssignmentAction {
+  assigned
+  transferred_user
+  transferred_department
+  unassigned
+  resolved
+  reopened
+}
+
+model ConversationAssignmentHistory {
+  id                String           @id @default(uuid())
+  organizationId    String
+  conversationId    String
+  action            AssignmentAction
+  fromUserId        String?
+  toUserId          String?
+  fromDepartmentId  String?
+  toDepartmentId    String?
+  performedByUserId String?
+  note              String?
+  createdAt         DateTime         @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  performedBy  User?        @relation("PerformedAssignments", fields: [performedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+  @@map("conversation_assignment_history")
+}
+
+// ============================================================
+// Auditoria
+// ============================================================
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  organizationId String?
+  userId         String?
+  action         String
+  entityType     String?
+  entityId       String?
+  metadata       Json?
+  ip             String?
+  createdAt      DateTime @default(now())
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@map("audit_logs")
+}

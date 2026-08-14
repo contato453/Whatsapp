@@ -1,0 +1,27 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# builds
+dist/
+.next/
+out/
+*.tsbuildinfo
+
+# env
+.env
+.env.local
+.env.*.local
+
+# runtime data (sessões WhatsApp, mídia recebida)
+data/
+sessions/
+media-store/
+
+# logs
+*.log
+logs/
+
+# misc
+.DS_Store
+coverage/

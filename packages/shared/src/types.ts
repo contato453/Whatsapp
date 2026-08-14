@@ -1,0 +1,114 @@
+import type {
+  ConnectionStatus,
+  ConversationType,
+  MessageDirection,
+  MessageStatus,
+  MessageType,
+} from "./enums.js";
+
+/**
+ * Contratos neutros de provider — nenhum tipo aqui pode referenciar
+ * Baileys, whatsapp-web.js ou qualquer implementação concreta.
+ */
+
+export interface MediaPayload {
+  /** Conteúdo binário do arquivo */
+  data: Buffer;
+  mimeType: string;
+  filename?: string;
+  /** Legenda opcional (imagens/vídeos/documentos) */
+  caption?: string;
+  /** Tipo lógico da mídia */
+  type: "image" | "audio" | "video" | "document" | "sticker";
+  /** Enviar áudio como mensagem de voz (PTT) */
+  asVoiceNote?: boolean;
+}
+
+export interface MessageResult {
+  externalMessageId: string;
+  timestamp: Date;
+}
+
+/** Chat normalizado vindo do provider (individual ou grupo) */
+export interface ProviderChat {
+  externalChatId: string;
+  type: ConversationType;
+  name: string | null;
+  unreadCount: number;
+  lastMessageAt: Date | null;
+}
+
+/** Grupo normalizado vindo do provider */
+export interface ProviderGroup {
+  externalId: string;
+  name: string;
+  description: string | null;
+  participantCount: number;
+  participants: ProviderGroupParticipant[];
+}
+
+export interface ProviderGroupParticipant {
+  externalContactId: string;
+  phoneNumber: string;
+  name: string | null;
+  isAdmin: boolean;
+  isSuperAdmin: boolean;
+}
+
+/** Contato normalizado vindo do provider */
+export interface ProviderContact {
+  externalId: string;
+  phoneNumber: string;
+  name: string | null;
+}
+
+/** Mensagem normalizada vinda do provider (inbound ou echo de outbound) */
+export interface NormalizedMessage {
+  instanceId: string;
+  externalMessageId: string;
+  externalChatId: string;
+  chatType: ConversationType;
+  chatName: string | null;
+  direction: MessageDirection;
+  type: MessageType;
+  /** Texto ou legenda */
+  content: string | null;
+  /** Remetente dentro do chat (JID do participante em grupos) */
+  senderExternalId: string | null;
+  senderPhone: string | null;
+  senderName: string | null;
+  quotedExternalMessageId: string | null;
+  timestamp: Date;
+  media: {
+    mimeType: string | null;
+    filename: string | null;
+    /** Função que baixa o binário sob demanda (lazy) */
+    download: () => Promise<Buffer>;
+  } | null;
+}
+
+export interface MessageStatusUpdate {
+  instanceId: string;
+  externalChatId: string;
+  externalMessageId: string;
+  status: MessageStatus;
+}
+
+export interface InstanceStatusEvent {
+  instanceId: string;
+  status: ConnectionStatus;
+  /** Motivo legível (ex.: "logged_out", "connection_lost") */
+  reason?: string;
+}
+
+export interface QrCodeEvent {
+  instanceId: string;
+  /** QR code como data URL (image/png) pronto para exibir */
+  qrDataUrl: string;
+}
+
+/** Referência externa opcional para integrações futuras (CRM, ERP, Azevedo OS...) */
+export interface ExternalRef {
+  externalReference?: string | null;
+  externalSource?: string | null;
+}
