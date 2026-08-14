@@ -318,7 +318,8 @@ export class InstanceManager {
         if (!existing && event.status === "ringing") {
           this.io.to(room).emit(RealtimeEvents.CallIncoming, {
             conversationId: conversation.id,
-            conversationTitle: full?.title ?? conversation.title,
+            conversationTitle:
+              full?.customTitle ?? full?.title ?? conversation.customTitle ?? conversation.title,
             callerName,
             callerPhone: event.fromPhone,
             isVideo: event.isVideo,

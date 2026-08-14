@@ -1,19 +1,92 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, RefreshCw, StickyNote, UserMinus, UserPlus, X } from "lucide-react";
+import {
+  Check,
+  CheckCircle2,
+  FileText,
+  Pencil,
+  RefreshCw,
+  StickyNote,
+  UserMinus,
+  UserPlus,
+  X,
+} from "lucide-react";
 import { CONVERSATION_STATUSES, CONVERSATION_STATUS_LABELS } from "@azvchat/shared";
-import { api, invalidateConversationAvatar } from "@/lib/api";
+import { api, fetchMediaBlobUrl, invalidateConversationAvatar } from "@/lib/api";
 import { cn, formatDateTime, formatPhone } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
 import type {
   ConversationDetailDto,
+  ConversationFileDto,
   DepartmentDto,
   TagDto,
   UserDirectoryDto,
 } from "@/lib/types";
 import { Badge, Button, Textarea } from "@/components/ui";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
+
+/**
+ * Telefone de uma conversa individual. O endereço do WhatsApp vem como
+ * "5521999999999@s.whatsapp.net"; contas novas usam "@lid", que não carrega
+ * o telefone — nesse caso não há o que exibir.
+ */
+function phoneFromChatId(externalChatId: string): string | null {
+  const [numero, dominio] = externalChatId.split("@");
+  if (!numero || dominio === "lid" || !/^\d{8,15}$/.test(numero)) return null;
+  return numero;
+}
+
+/** Campo de texto que salva ao sair ou no Enter, com rótulo curto. */
+function InlineField({
+  label,
+  value,
+  placeholder,
+  disabled,
+  onSave,
+}: {
+  label: string;
+  value: string | null;
+  placeholder: string;
+  disabled?: boolean;
+  onSave: (valor: string | null) => void | Promise<void>;
+}) {
+  const [texto, setTexto] = useState(value ?? "");
+  useEffect(() => setTexto(value ?? ""), [value]);
+
+  function salvar() {
+    const limpo = texto.trim();
+    if (limpo === (value ?? "")) return;
+    void onSave(limpo.length > 0 ? limpo : null);
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="shrink-0 text-slate-500">{label}</span>
+      <input
+        className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-right text-xs text-slate-700 focus:border-brand-500 focus:outline-none"
+        value={texto}
+        placeholder={placeholder}
+        disabled={disabled}
+        onChange={(event) => setTexto(event.target.value)}
+        onBlur={salvar}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+          if (event.key === "Escape") setTexto(value ?? "");
+        }}
+      />
+    </div>
+  );
+}
+
+/** Nome exibido quando o arquivo chegou sem nome original. */
+const FILE_TYPE_LABELS: Record<string, string> = {
+  image: "Imagem",
+  audio: "Áudio",
+  video: "Vídeo",
+  document: "Documento",
+  sticker: "Figurinha",
+};
 
 const ACTION_LABELS: Record<string, string> = {
   assigned: "assumiu o atendimento",
@@ -95,6 +168,71 @@ export function ContextPanel({
     }
   }
 
+  // Nome próprio da conversa.
+  const [renaming, setRenaming] = useState(false);
+  const [nome, setNome] = useState(conversation.customTitle ?? "");
+  useEffect(() => {
+    setNome(conversation.customTitle ?? "");
+    setRenaming(false);
+  }, [conversation.id, conversation.customTitle]);
+
+  async function salvarNome() {
+    const valor = nome.trim();
+    setRenaming(false);
+    if (valor === (conversation.customTitle ?? "")) return;
+    await run(() =>
+      api.patch(`/conversations/${conversation.id}`, {
+        customTitle: valor.length > 0 ? valor : null,
+      }),
+    );
+  }
+
+  const telefone =
+    conversation.type === "individual"
+      ? (() => {
+          const numero = phoneFromChatId(conversation.externalChatId);
+          return numero ? formatPhone(numero) : null;
+        })()
+      : null;
+
+  // Nome próprio de participante de grupo.
+  const [renamingParticipant, setRenamingParticipant] = useState<string | null>(null);
+  async function salvarParticipante(participantId: string, valor: string) {
+    setRenamingParticipant(null);
+    const limpo = valor.trim();
+    await run(() =>
+      api.patch(`/group-participants/${participantId}`, {
+        customName: limpo.length > 0 ? limpo : null,
+      }),
+    );
+  }
+
+  // Arquivos da conversa, carregados sob demanda ao abrir a seção.
+  const [files, setFiles] = useState<ConversationFileDto[] | null>(null);
+  const [showFiles, setShowFiles] = useState(false);
+  useEffect(() => {
+    setFiles(null);
+    setShowFiles(false);
+  }, [conversation.id]);
+  useEffect(() => {
+    if (!showFiles || files) return;
+    api
+      .get<{ files: ConversationFileDto[] }>(`/conversations/${conversation.id}/files`)
+      .then((data) => setFiles(data.files))
+      .catch(() => setFiles([]));
+  }, [showFiles, files, conversation.id]);
+
+  /** A mídia é servida autenticada, então baixa o blob antes de salvar. */
+  async function baixarArquivo(file: ConversationFileDto) {
+    const url = await fetchMediaBlobUrl(file.id);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = file.filename ?? `${file.type}-${file.id.slice(0, 8)}`;
+    link.click();
+    // Sem o revoke o blob fica na memória da aba até o reload.
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }
+
   // Código do cadastro: editado localmente e salvo ao sair do campo.
   const [reference, setReference] = useState(conversation.externalReference ?? "");
   useEffect(() => {
@@ -138,11 +276,52 @@ export function ContextPanel({
             size="lg"
           />
           <div className="min-w-0 flex-1">
-            <p className="truncate font-semibold text-slate-900">{conversation.title}</p>
+            {renaming ? (
+              <div className="flex items-center gap-1">
+                <input
+                  autoFocus
+                  className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2 py-1 text-sm font-semibold text-slate-900 focus:border-brand-500 focus:outline-none"
+                  value={nome}
+                  placeholder={conversation.whatsappTitle}
+                  onChange={(event) => setNome(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void salvarNome();
+                    if (event.key === "Escape") {
+                      setNome(conversation.customTitle ?? "");
+                      setRenaming(false);
+                    }
+                  }}
+                />
+                <button
+                  title="Salvar nome"
+                  className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                  onClick={() => void salvarNome()}
+                >
+                  <Check className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1">
+                <p className="truncate font-semibold text-slate-900">{conversation.title}</p>
+                <button
+                  title="Editar nome"
+                  className="shrink-0 rounded-lg p-1 text-slate-300 hover:bg-slate-100 hover:text-slate-600"
+                  onClick={() => setRenaming(true)}
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+              </div>
+            )}
+            {/* Com nome próprio, o do WhatsApp fica embaixo como referência. */}
+            {conversation.customTitle && (
+              <p className="truncate text-xs text-slate-400">
+                No WhatsApp: {conversation.whatsappTitle}
+              </p>
+            )}
             <p className="text-xs text-slate-500">
               {conversation.type === "group"
                 ? `Grupo · ${detail.group?.participantCount ?? "?"} participantes`
-                : "Conversa individual"}
+                : (telefone ?? "Conversa individual")}
             </p>
             <p className="text-xs text-slate-400">via {conversation.instanceName ?? "—"}</p>
           </div>
@@ -253,6 +432,16 @@ export function ContextPanel({
               }}
             />
           </div>
+          {/* Sócio representante perante a Receita Federal */}
+          <InlineField
+            label="Sócio"
+            value={conversation.partnerName}
+            placeholder="Nome do sócio"
+            disabled={busy}
+            onSave={(valor) =>
+              run(() => api.patch(`/conversations/${conversation.id}`, { partnerName: valor }))
+            }
+          />
         </div>
         <div className="flex flex-wrap gap-2 pt-1">
           {!conversation.assignedUser || conversation.assignedUser.id !== me?.id ? (
@@ -336,6 +525,43 @@ export function ContextPanel({
         )}
       </section>
 
+      {/* Arquivos trocados na conversa */}
+      <section className="space-y-2">
+        <button
+          className="flex w-full items-center gap-1 text-xs font-semibold uppercase tracking-wide text-slate-400 hover:text-slate-600"
+          onClick={() => setShowFiles((atual) => !atual)}
+        >
+          <FileText className="h-3.5 w-3.5" /> Arquivos
+          <span className="ml-auto font-normal normal-case tracking-normal text-slate-400">
+            {showFiles ? "ocultar" : "ver"}
+          </span>
+        </button>
+        {showFiles &&
+          (files === null ? (
+            <p className="text-xs text-slate-400">Carregando...</p>
+          ) : files.length === 0 ? (
+            <p className="text-xs text-slate-400">Nenhum arquivo nesta conversa ainda.</p>
+          ) : (
+            <div className="thin-scroll max-h-48 space-y-1 overflow-y-auto">
+              {files.map((file) => (
+                <button
+                  key={file.id}
+                  onClick={() => void baixarArquivo(file)}
+                  className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs hover:bg-slate-50"
+                >
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                  <span className="min-w-0 flex-1 truncate text-slate-700">
+                    {file.filename ?? FILE_TYPE_LABELS[file.type] ?? "Arquivo"}
+                  </span>
+                  <span className="shrink-0 text-[11px] text-slate-400">
+                    {formatDateTime(file.timestamp)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ))}
+      </section>
+
       {/* Participantes do grupo */}
       {detail.group && (
         <section className="space-y-2">
@@ -353,15 +579,36 @@ export function ContextPanel({
                 />
                 <div className="min-w-0 flex-1">
                   {/* Nome quando conhecido; o telefone aparece logo abaixo */}
-                  <p className="truncate text-slate-700">
-                    {participant.name || formatPhone(participant.phoneNumber) || "Participante"}
-                  </p>
-                  {participant.name && participant.phoneNumber && (
+                  {renamingParticipant === participant.id ? (
+                    <input
+                      autoFocus
+                      className="w-full rounded-lg border border-slate-300 px-2 py-0.5 text-xs text-slate-700 focus:border-brand-500 focus:outline-none"
+                      defaultValue={participant.customName ?? ""}
+                      placeholder={participant.whatsappName ?? "Nome do participante"}
+                      onBlur={(event) => void salvarParticipante(participant.id, event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") event.currentTarget.blur();
+                        if (event.key === "Escape") setRenamingParticipant(null);
+                      }}
+                    />
+                  ) : (
+                    <p className="truncate text-slate-700">
+                      {participant.name || formatPhone(participant.phoneNumber) || "Participante"}
+                    </p>
+                  )}
+                  {participant.phoneNumber && (
                     <p className="truncate text-[11px] text-slate-400">
                       {formatPhone(participant.phoneNumber)}
                     </p>
                   )}
                 </div>
+                <button
+                  title={participant.name ? "Editar nome" : "Dar um nome a este participante"}
+                  className="shrink-0 rounded-lg p-1 text-slate-300 hover:bg-slate-100 hover:text-slate-600"
+                  onClick={() => setRenamingParticipant(participant.id)}
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
                 {participant.isAdmin && <Badge className="bg-amber-50 text-amber-700">admin</Badge>}
               </div>
             ))}

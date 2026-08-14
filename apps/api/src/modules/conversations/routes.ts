@@ -2,11 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Prisma } from "@azvchat/database";
 import { z } from "zod";
 import { CONVERSATION_STATUSES, RealtimeEvents } from "@azvchat/shared";
-import {
-  conversationScope,
-  instanceScope,
-  loadConversationAccess,
-} from "../../lib/access.js";
+import { conversationScope, groupScope, loadConversationAccess } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
 import { ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import { serializeConversation, serializeUserDirectory } from "../../lib/serialize.js";
@@ -82,6 +78,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
         ? {
             OR: [
               { title: { contains: query.q, mode: "insensitive" as const } },
+              { customTitle: { contains: query.q, mode: "insensitive" as const } },
               { externalReference: { contains: query.q, mode: "insensitive" as const } },
             ],
           }
@@ -187,6 +184,14 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
                 externalContactId: participant.externalContactId,
                 phoneNumber: participant.phoneNumber || known?.phoneNumber || "",
                 name:
+                  participant.customName ||
+                  participant.name ||
+                  known?.name ||
+                  pushNames.get(participant.externalContactId) ||
+                  null,
+                customName: participant.customName,
+                /// Nome de origem, exibido como referência quando há nome próprio.
+                whatsappName:
                   participant.name ||
                   known?.name ||
                   pushNames.get(participant.externalContactId) ||
@@ -235,12 +240,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     const participant = await deps.prisma.groupParticipant.findFirst({
       where: {
         id,
-        group: {
-          organizationId: request.user.organizationId,
-          ...instanceScope(access.instanceIds),
-          // Grupo já virou conversa: vale o mesmo recorte da conversa.
-          OR: [{ conversationId: null }, { conversation: conversationScope(access) }],
-        },
+        group: groupScope(access, request.user.organizationId),
       },
       select: { avatarUrl: true },
     });
@@ -509,6 +509,123 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     });
     await emitConversationUpdated(id, request.user.organizationId);
     return { ok: true };
+  });
+
+  /**
+   * Nome próprio da conversa e sócio representante.
+   *
+   * O nome digitado vive em `customTitle`, separado do `title` que vem do
+   * WhatsApp — assim a sincronização continua atualizando o nome de origem
+   * sem nunca apagar o que a equipe definiu.
+   */
+  app.patch("/conversations/:id", { preHandler: authenticate }, async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({
+        customTitle: z.string().trim().max(120).nullable().optional(),
+        partnerName: z.string().trim().max(120).nullable().optional(),
+      })
+      .parse(request.body);
+    await findConversationOr404(id, request.user);
+
+    const limpo = (valor: string | null | undefined) =>
+      valor === undefined ? undefined : valor && valor.length > 0 ? valor : null;
+    const customTitle = limpo(body.customTitle);
+    const partnerName = limpo(body.partnerName);
+
+    await deps.prisma.conversation.update({
+      where: { id },
+      data: {
+        ...(customTitle !== undefined ? { customTitle } : {}),
+        ...(partnerName !== undefined ? { partnerName } : {}),
+      },
+    });
+    deps.audit.record({
+      organizationId: request.user.organizationId,
+      userId: request.user.sub,
+      action: "conversation.renamed",
+      entityType: "Conversation",
+      entityId: id,
+      metadata: {
+        ...(customTitle !== undefined ? { customTitle } : {}),
+        ...(partnerName !== undefined ? { partnerName } : {}),
+      },
+    });
+    await emitConversationUpdated(id, request.user.organizationId);
+    return { ok: true };
+  });
+
+  /** Nome próprio de um participante de grupo. */
+  app.patch("/group-participants/:id", { preHandler: authenticate }, async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { customName } = z
+      .object({ customName: z.string().trim().max(120).nullable() })
+      .parse(request.body);
+    const access = await loadConversationAccess(deps.prisma, request.user);
+    const participant = await deps.prisma.groupParticipant.findFirst({
+      where: {
+        id,
+        group: groupScope(access, request.user.organizationId),
+      },
+      select: { id: true, group: { select: { conversationId: true } } },
+    });
+    if (!participant) throw new NotFoundError("Participante");
+
+    const valor = customName && customName.length > 0 ? customName : null;
+    await deps.prisma.groupParticipant.update({
+      where: { id },
+      data: { customName: valor },
+    });
+    deps.audit.record({
+      organizationId: request.user.organizationId,
+      userId: request.user.sub,
+      action: "group_participant.renamed",
+      entityType: "GroupParticipant",
+      entityId: id,
+      metadata: { customName: valor },
+    });
+    return { ok: true };
+  });
+
+  /**
+   * Arquivos trocados na conversa — documentos, imagens, áudios e vídeos em
+   * um só lugar, sem precisar rolar o histórico atrás de um vencimento.
+   */
+  app.get("/conversations/:id/files", { preHandler: authenticate }, async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { limit } = z
+      .object({ limit: z.coerce.number().min(1).max(200).default(100) })
+      .parse(request.query);
+    await findConversationOr404(id, request.user);
+    const files = await deps.prisma.message.findMany({
+      where: {
+        conversationId: id,
+        deletedAt: null,
+        mediaUrl: { not: null },
+      },
+      orderBy: { timestamp: "desc" },
+      take: limit,
+      select: {
+        id: true,
+        type: true,
+        filename: true,
+        mimeType: true,
+        direction: true,
+        senderName: true,
+        timestamp: true,
+      },
+    });
+    return {
+      files: files.map((file) => ({
+        id: file.id,
+        type: file.type,
+        filename: file.filename,
+        mimeType: file.mimeType,
+        direction: file.direction,
+        senderName: file.senderName,
+        timestamp: file.timestamp.toISOString(),
+      })),
+    };
   });
 
   // ---------------- Etiquetas da conversa ----------------

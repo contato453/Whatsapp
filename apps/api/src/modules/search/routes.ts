@@ -1,10 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import {
-  conversationScope,
-  instanceScope,
-  loadConversationAccess,
-} from "../../lib/access.js";
+import { conversationScope, groupScope, loadConversationAccess } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
 import { serializeConversation, serializeMessage } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
@@ -60,15 +56,11 @@ export async function searchRoutes(app: FastifyInstance, deps: AppDeps): Promise
         },
         orderBy: { timestamp: "desc" },
         take: limit,
-        include: { conversation: { select: { id: true, title: true, type: true } } },
+        include: { conversation: { select: { id: true, title: true, customTitle: true, type: true } } },
       }),
       deps.prisma.groupParticipant.findMany({
         where: {
-          group: {
-            organizationId,
-            ...instanceScope(access.instanceIds),
-            OR: [{ conversationId: null }, { conversation: scope }],
-          },
+          group: groupScope(access, organizationId),
           OR: [
             { name: { contains: q, mode: "insensitive" } },
             { phoneNumber: { contains: q.replace(/\D/g, "") || q } },
@@ -83,7 +75,7 @@ export async function searchRoutes(app: FastifyInstance, deps: AppDeps): Promise
       conversations: conversations.map(serializeConversation),
       messages: messages.map((message) => ({
         ...serializeMessage(message),
-        conversationTitle: message.conversation.title,
+        conversationTitle: message.conversation.customTitle || message.conversation.title,
         conversationType: message.conversation.type,
       })),
       participants: participants.map((participant) => ({

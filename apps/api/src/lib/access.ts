@@ -76,6 +76,29 @@ export function conversationScope(access: ConversationAccess): Prisma.Conversati
   return filters.length > 0 ? { AND: filters } : {};
 }
 
+/**
+ * Filtro para grupos, a partir do recorte de conversa.
+ *
+ * Grupo ainda sem conversa fica visível para quem tem o número; com conversa,
+ * vale o recorte dela. O `OR` só entra quando existe recorte: para admin,
+ * `conversationScope` é vazio, e um `{ conversation: {} }` dentro de `OR` é
+ * descartado pelo Prisma — sobraria `conversationId: null`, que esconderia
+ * todo grupo que já virou conversa.
+ */
+export function groupScope(
+  access: ConversationAccess,
+  organizationId: string,
+): Prisma.WhatsAppGroupWhereInput {
+  const scope = conversationScope(access);
+  return {
+    organizationId,
+    ...(access.instanceIds ? { whatsappInstanceId: { in: access.instanceIds } } : {}),
+    ...(Object.keys(scope).length > 0
+      ? { OR: [{ conversationId: null }, { conversation: scope }] }
+      : {}),
+  };
+}
+
 /** Os números que o usuário enxerga. `null` = todos (admin). */
 export async function accessibleInstanceIds(
   prisma: PrismaClient,

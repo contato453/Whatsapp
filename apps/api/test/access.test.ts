@@ -3,6 +3,7 @@ import type { PrismaClient } from "@azvchat/database";
 import {
   accessibleInstanceIds,
   conversationScope,
+  groupScope,
   instanceIdScope,
   instanceScope,
   loadConversationAccess,
@@ -139,5 +140,39 @@ describe("conversationScope (regra de visibilidade)", () => {
         { OR: [{ assignedUserId: "user-1" }, { assignedUserId: null }] },
       ],
     });
+  });
+});
+
+describe("groupScope (filtro de grupo)", () => {
+  const restrito: ConversationAccess = {
+    instanceIds: ["chip-a"],
+    departmentIds: ["dep-1"],
+    ownOnly: true,
+    userId: "user-1",
+  };
+  const admin: ConversationAccess = {
+    instanceIds: null,
+    departmentIds: null,
+    ownOnly: false,
+    userId: "admin-1",
+  };
+
+  it("usuário restrito: grupo sem conversa, ou com conversa que ele enxerga", () => {
+    const filtro = groupScope(restrito, "org-1");
+    expect(filtro.organizationId).toBe("org-1");
+    expect(filtro.whatsappInstanceId).toEqual({ in: ["chip-a"] });
+    expect(filtro.OR).toEqual([
+      { conversationId: null },
+      { conversation: conversationScope(restrito) },
+    ]);
+  });
+
+  it("admin não ganha OR nenhum", () => {
+    // Um `{ conversation: {} }` dentro de OR é descartado pelo Prisma, e o
+    // que sobraria — `conversationId: null` — esconderia todo grupo que já
+    // virou conversa. Foi o que quebrou a foto dos participantes para o admin.
+    const filtro = groupScope(admin, "org-1");
+    expect(filtro).toEqual({ organizationId: "org-1" });
+    expect(filtro.OR).toBeUndefined();
   });
 });
