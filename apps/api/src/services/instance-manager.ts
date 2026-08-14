@@ -8,7 +8,7 @@ import { RealtimeEvents } from "@zapdesk/shared";
 import type { WhatsAppProvider } from "@zapdesk/whatsapp";
 import type { Server } from "socket.io";
 import type { Logger } from "pino";
-import { instanceAudience } from "../realtime/socket.js";
+import { instanceAudience, orgRoom } from "../realtime/socket.js";
 import { serializeConversation, serializeMessage } from "../lib/serialize.js";
 import { extensionFromMime, type MediaStorage } from "../lib/media-storage.js";
 import type { MessageIngestService } from "./message-ingest.js";

@@ -12,7 +12,7 @@ import {
   serializeMessage,
   type QuotedPreview,
 } from "../../lib/serialize.js";
-import { instanceAudience } from "../../realtime/socket.js";
+import { instanceAudience, orgRoom } from "../../realtime/socket.js";
 import { buildPreview } from "../../services/message-ingest.js";
 import type { AppDeps } from "../../types.js";
 
