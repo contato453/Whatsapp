@@ -62,10 +62,25 @@ export interface ConversationDto {
   createdAt: string;
 }
 
+export interface MessageReactionDto {
+  emoji: string;
+  senderName: string | null;
+  fromMe: boolean;
+}
+
+export interface QuotedPreviewDto {
+  id: string | null;
+  senderName: string | null;
+  content: string | null;
+  type: string;
+}
+
 export interface MessageDto {
   id: string;
   conversationId: string;
   externalMessageId: string | null;
+  reactions: MessageReactionDto[];
+  quoted: QuotedPreviewDto | null;
   senderExternalId: string | null;
   senderName: string | null;
   senderPhone: string | null;
@@ -97,6 +112,7 @@ export interface GroupDetailDto {
 
 export interface NoteDto {
   id: string;
+  conversationId?: string;
   content: string;
   user: UserDto | null;
   createdAt: string;

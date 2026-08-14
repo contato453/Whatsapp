@@ -3,7 +3,7 @@ import type { Prisma } from "@zapdesk/database";
 import { z } from "zod";
 import { RealtimeEvents } from "@zapdesk/shared";
 import { authenticate } from "../../lib/auth.js";
-import { NotFoundError } from "../../lib/errors.js";
+import { ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import { serializeConversation, serializeUser } from "../../lib/serialize.js";
 import { orgRoom } from "../../realtime/socket.js";
 import type { AppDeps } from "../../types.js";
@@ -432,13 +432,31 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       },
       include: { user: true },
     });
-    return reply.status(201).send({
-      note: {
-        id: note.id,
-        content: note.content,
-        user: note.user ? serializeUser(note.user) : null,
-        createdAt: note.createdAt.toISOString(),
-      },
+    const payload = {
+      id: note.id,
+      conversationId: id,
+      content: note.content,
+      user: note.user ? serializeUser(note.user) : null,
+      createdAt: note.createdAt.toISOString(),
+    };
+    // Aparece na hora para toda a equipe, dentro da conversa.
+    deps.io.to(orgRoom(request.user.organizationId)).emit(RealtimeEvents.InternalNote, payload);
+    return reply.status(201).send({ note: payload });
+  });
+
+  /** Remove uma nota interna (autor ou supervisor/admin). */
+  app.delete("/conversations/:id/notes/:noteId", { preHandler: authenticate }, async (request) => {
+    const { id, noteId } = z
+      .object({ id: z.string().uuid(), noteId: z.string().uuid() })
+      .parse(request.params);
+    const note = await deps.prisma.internalNote.findFirst({
+      where: { id: noteId, conversationId: id, organizationId: request.user.organizationId },
     });
+    if (!note) throw new NotFoundError("Nota interna");
+    if (note.userId !== request.user.sub && request.user.role === "agent") {
+      throw new ForbiddenError("Só o autor pode excluir esta nota");
+    }
+    await deps.prisma.internalNote.delete({ where: { id: noteId } });
+    return { ok: true };
   });
 }

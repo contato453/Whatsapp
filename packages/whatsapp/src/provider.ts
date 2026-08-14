@@ -9,6 +9,8 @@ import type {
   ProviderContact,
   ProviderGroup,
   QrCodeEvent,
+  QuotedMessageRef,
+  ReactionEvent,
 } from "@zapdesk/shared";
 
 /**
@@ -21,6 +23,7 @@ export interface WhatsAppProviderEvents {
   status: (event: InstanceStatusEvent & { phoneNumber?: string | null }) => void;
   message: (message: NormalizedMessage) => void;
   "message-status": (update: MessageStatusUpdate) => void;
+  "message-reaction": (reaction: ReactionEvent) => void;
   "chats-sync": (event: { instanceId: string; chats: ProviderChat[] }) => void;
   "contacts-sync": (event: { instanceId: string; contacts: ProviderContact[] }) => void;
   "groups-sync": (event: { instanceId: string; groups: ProviderGroup[] }) => void;
@@ -68,9 +71,30 @@ export interface WhatsAppProvider {
     externalId: string,
   ): Promise<{ data: Buffer; mimeType: string } | null>;
 
-  sendText(instanceId: string, chatId: string, text: string): Promise<MessageResult>;
+  sendText(
+    instanceId: string,
+    chatId: string,
+    text: string,
+    quoted?: QuotedMessageRef,
+  ): Promise<MessageResult>;
 
-  sendMedia(instanceId: string, chatId: string, media: MediaPayload): Promise<MessageResult>;
+  sendMedia(
+    instanceId: string,
+    chatId: string,
+    media: MediaPayload,
+    quoted?: QuotedMessageRef,
+  ): Promise<MessageResult>;
+
+  /**
+   * Reage a uma mensagem. Emoji vazio remove a reação.
+   * `target` identifica a mensagem original no WhatsApp.
+   */
+  sendReaction(
+    instanceId: string,
+    chatId: string,
+    target: { externalMessageId: string; fromMe: boolean; participantExternalId: string | null },
+    emoji: string,
+  ): Promise<void>;
 
   getChats(instanceId: string): Promise<ProviderChat[]>;
 

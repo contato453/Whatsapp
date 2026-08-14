@@ -1,10 +1,28 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Check, CheckCheck, Clock, Download, FileText, MapPin, User, XCircle } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  Check,
+  CheckCheck,
+  Clock,
+  Copy,
+  CornerUpLeft,
+  Download,
+  FileText,
+  Forward,
+  MapPin,
+  MoreVertical,
+  Smile,
+  User,
+  XCircle,
+} from "lucide-react";
 import { fetchMediaBlobUrl } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { MessageDto } from "@/lib/types";
+import { AudioPlayer } from "./audio-player";
+
+/** Emojis oferecidos no acesso rápido de reação. */
+export const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
 
 function StatusIcon({ status }: { status: MessageDto["status"] }) {
   if (status === "pending") return <Clock className="h-3 w-3" />;
@@ -22,7 +40,7 @@ function senderColor(key: string): string {
   return SENDER_COLORS[Math.abs(hash) % SENDER_COLORS.length] ?? "#4f46e5";
 }
 
-function MediaContent({ message }: { message: MessageDto }) {
+function MediaContent({ message, outbound }: { message: MessageDto; outbound: boolean }) {
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const isVisual = message.type === "image" || message.type === "sticker";
@@ -80,7 +98,7 @@ function MediaContent({ message }: { message: MessageDto }) {
   if (isAudio) {
     if (failed) return <p className="text-xs italic opacity-70">Falha ao carregar áudio</p>;
     if (!url) return <div className="h-10 w-56 animate-pulse rounded-lg bg-slate-200/60" />;
-    return <audio controls src={url} className="max-w-full" />;
+    return <AudioPlayer src={url} outbound={outbound} />;
   }
   if (isVideo) {
     if (failed) return <p className="text-xs italic opacity-70">Falha ao carregar vídeo</p>;
@@ -104,22 +122,75 @@ function MediaContent({ message }: { message: MessageDto }) {
   );
 }
 
+/** Agrupa reações iguais para exibir "👍 2". */
+function groupReactions(message: MessageDto) {
+  const map = new Map<string, { count: number; names: string[]; mine: boolean }>();
+  for (const reaction of message.reactions) {
+    const entry = map.get(reaction.emoji) ?? { count: 0, names: [], mine: false };
+    entry.count += 1;
+    if (reaction.senderName) entry.names.push(reaction.senderName);
+    if (reaction.fromMe) entry.mine = true;
+    map.set(reaction.emoji, entry);
+  }
+  return [...map.entries()];
+}
+
 export function MessageBubble({
   message,
   isGroup,
   showSender,
+  onReact,
+  onReply,
+  onForward,
 }: {
   message: MessageDto;
   isGroup: boolean;
   showSender: boolean;
+  onReact: (message: MessageDto, emoji: string) => void;
+  onReply: (message: MessageDto) => void;
+  onForward: (message: MessageDto) => void;
 }) {
   const outbound = message.direction === "outbound";
   const senderKey = message.senderExternalId ?? message.senderPhone ?? "?";
   const senderLabel =
     message.senderName ?? (message.senderPhone ? `+${message.senderPhone}` : "Desconhecido");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const reactions = groupReactions(message);
+
+  useEffect(() => {
+    if (!menuOpen && !emojiOpen) return;
+    const close = (event: MouseEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setMenuOpen(false);
+        setEmojiOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [menuOpen, emojiOpen]);
 
   return (
-    <div className={cn("flex", outbound ? "justify-end" : "justify-start")}>
+    <div
+      ref={containerRef}
+      className={cn("group relative flex items-center gap-1", outbound ? "justify-end" : "justify-start")}
+    >
+      {/* Ações aparecem ao passar o mouse */}
+      {outbound && (
+        <MessageActions
+          side="left"
+          message={message}
+          menuOpen={menuOpen}
+          emojiOpen={emojiOpen}
+          setMenuOpen={setMenuOpen}
+          setEmojiOpen={setEmojiOpen}
+          onReact={onReact}
+          onReply={onReply}
+          onForward={onForward}
+        />
+      )}
+
       <div
         className={cn(
           "max-w-[75%] rounded-2xl px-3.5 py-2 shadow-sm",
@@ -145,6 +216,21 @@ export function MessageBubble({
           <p className="mb-0.5 text-xs font-semibold text-white/80">{message.senderName}</p>
         )}
 
+        {/* Pré-visualização da mensagem citada */}
+        {message.quoted && (
+          <div
+            className={cn(
+              "mb-1.5 border-l-2 py-0.5 pl-2 text-xs",
+              outbound ? "border-white/50 text-white/80" : "border-brand-400 text-slate-500",
+            )}
+          >
+            <p className="font-semibold">{message.quoted.senderName ?? "Mensagem"}</p>
+            <p className="line-clamp-2">
+              {message.quoted.content ?? `[${message.quoted.type}]`}
+            </p>
+          </div>
+        )}
+
         {message.type === "location" ? (
           <p className="flex items-center gap-1.5 text-sm">
             <MapPin className="h-4 w-4" /> {message.content ?? "Localização"}
@@ -153,7 +239,7 @@ export function MessageBubble({
           <p className="whitespace-pre-wrap break-words text-sm">{message.content}</p>
         ) : (
           <div className="space-y-1.5">
-            <MediaContent message={message} />
+            <MediaContent message={message} outbound={outbound} />
             {message.content && (
               <p className="whitespace-pre-wrap break-words text-sm">{message.content}</p>
             )}
@@ -172,7 +258,158 @@ export function MessageBubble({
           })}
           {outbound && <StatusIcon status={message.status} />}
         </p>
+
+        {/* Reações */}
+        {reactions.length > 0 && (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {reactions.map(([emoji, info]) => (
+              <button
+                key={emoji}
+                onClick={() => onReact(message, info.mine ? "" : emoji)}
+                title={info.names.join(", ")}
+                className={cn(
+                  "flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[11px] transition-colors",
+                  info.mine
+                    ? "border-brand-400 bg-brand-50 text-brand-700"
+                    : outbound
+                      ? "border-white/30 bg-white/15 text-white"
+                      : "border-slate-200 bg-slate-50 text-slate-600",
+                )}
+              >
+                <span>{emoji}</span>
+                {info.count > 1 && <span className="font-medium">{info.count}</span>}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
+
+      {!outbound && (
+        <MessageActions
+          side="right"
+          message={message}
+          menuOpen={menuOpen}
+          emojiOpen={emojiOpen}
+          setMenuOpen={setMenuOpen}
+          setEmojiOpen={setEmojiOpen}
+          onReact={onReact}
+          onReply={onReply}
+          onForward={onForward}
+        />
+      )}
+    </div>
+  );
+}
+
+function MessageActions({
+  side,
+  message,
+  menuOpen,
+  emojiOpen,
+  setMenuOpen,
+  setEmojiOpen,
+  onReact,
+  onReply,
+  onForward,
+}: {
+  side: "left" | "right";
+  message: MessageDto;
+  menuOpen: boolean;
+  emojiOpen: boolean;
+  setMenuOpen: (value: boolean) => void;
+  setEmojiOpen: (value: boolean) => void;
+  onReact: (message: MessageDto, emoji: string) => void;
+  onReply: (message: MessageDto) => void;
+  onForward: (message: MessageDto) => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "relative flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100",
+        (menuOpen || emojiOpen) && "opacity-100",
+      )}
+    >
+      <button
+        onClick={() => {
+          setEmojiOpen(!emojiOpen);
+          setMenuOpen(false);
+        }}
+        title="Reagir"
+        className="rounded-full p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-600"
+      >
+        <Smile className="h-4 w-4" />
+      </button>
+      <button
+        onClick={() => {
+          setMenuOpen(!menuOpen);
+          setEmojiOpen(false);
+        }}
+        title="Mais ações"
+        className="rounded-full p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-600"
+      >
+        <MoreVertical className="h-4 w-4" />
+      </button>
+
+      {emojiOpen && (
+        <div
+          className={cn(
+            "absolute bottom-full z-20 mb-1 flex gap-0.5 rounded-full border border-slate-200 bg-white p-1 shadow-lg",
+            side === "left" ? "left-0" : "right-0",
+          )}
+        >
+          {QUICK_REACTIONS.map((emoji) => (
+            <button
+              key={emoji}
+              onClick={() => {
+                onReact(message, emoji);
+                setEmojiOpen(false);
+              }}
+              className="rounded-full px-1 text-lg transition-transform hover:scale-125"
+            >
+              {emoji}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {menuOpen && (
+        <div
+          className={cn(
+            "absolute bottom-full z-20 mb-1 w-44 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg",
+            side === "left" ? "left-0" : "right-0",
+          )}
+        >
+          <button
+            onClick={() => {
+              onReply(message);
+              setMenuOpen(false);
+            }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50"
+          >
+            <CornerUpLeft className="h-3.5 w-3.5" /> Responder
+          </button>
+          <button
+            onClick={() => {
+              onForward(message);
+              setMenuOpen(false);
+            }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50"
+          >
+            <Forward className="h-3.5 w-3.5" /> Encaminhar
+          </button>
+          {message.content && (
+            <button
+              onClick={() => {
+                void navigator.clipboard.writeText(message.content ?? "");
+                setMenuOpen(false);
+              }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50"
+            >
+              <Copy className="h-3.5 w-3.5" /> Copiar texto
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
