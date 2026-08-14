@@ -165,7 +165,47 @@ export async function userRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
       ? await assertDepartmentsInOrg(body.departmentIds, request.user.organizationId)
       : null;
 
+    /**
+     * A organização nunca pode ficar sem administrador ativo — sem ninguém
+     * para criar usuário, liberar número ou reativar quem foi desativado, o
+     * conserto só sai no banco.
+     *
+     * A trava de auto-edição acima já cobre o caso simples (o último admin
+     * não se rebaixa nem se desativa). O que sobra é dois administradores
+     * se rebaixando um ao outro ao mesmo tempo, e é por isso que a
+     * verificação vive dentro da transação, com as linhas travadas.
+     */
+    const removesAdmin =
+      user.role === "admin" &&
+      ((body.role != null && body.role !== "admin") || body.status === "inactive");
+
     const updated = await deps.prisma.$transaction(async (tx) => {
+      if (removesAdmin) {
+        // Segura os admins ativos até o fim da transação: sem o FOR UPDATE,
+        // as duas requisições simultâneas leriam "ainda existe outro" e as
+        // duas passariam, zerando a administração.
+        await tx.$queryRaw`
+          SELECT id FROM users
+          WHERE "organizationId" = ${request.user.organizationId}
+            AND role::text = 'admin'
+            AND status::text = 'active'
+          FOR UPDATE`;
+        const remaining = await tx.user.count({
+          where: {
+            organizationId: request.user.organizationId,
+            role: "admin",
+            status: "active",
+            id: { not: id },
+          },
+        });
+        if (remaining === 0) {
+          throw new AppError(
+            "A organização precisa de pelo menos um administrador ativo",
+            400,
+            "last_admin",
+          );
+        }
+      }
       if (instanceIds) {
         await tx.userWhatsAppInstance.deleteMany({ where: { userId: id } });
         if (instanceIds.length > 0) {

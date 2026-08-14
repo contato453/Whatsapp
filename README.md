@@ -149,6 +149,17 @@ O menu lateral esconde o que o papel não alcança e a URL digitada direto cai e
 restrito". Isso é conveniência de interface: **a autorização de verdade é sempre a do
 servidor**, que responde 403 de qualquer jeito.
 
+Quem cria um número **passa a enxergá-lo na hora** — o vínculo nasce junto da conexão, e as
+abas já abertas entram nas salas de tempo real sem precisar recarregar (o QR Code se renova a
+cada poucos segundos; sem isso a pessoa encararia um código vencido). Admin não recebe
+vínculo porque já enxerga tudo. O departamento padrão continua valendo: número criado
+apontando para departamento alheio funciona, só que as conversas vão para o time daquele
+departamento, não para quem criou.
+
+A organização **nunca fica sem administrador ativo**: rebaixar ou desativar o último é
+recusado, inclusive quando dois administradores tentam se rebaixar no mesmo instante (a
+verificação roda dentro da transação, com as linhas travadas).
+
 ### O que cada um muda em si mesmo
 
 Em **Configurações** qualquer usuário ajusta o próprio nome, a assinatura das mensagens e a

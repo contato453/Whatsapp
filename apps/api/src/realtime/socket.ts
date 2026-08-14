@@ -1,5 +1,5 @@
 import type { Server as HttpServer } from "node:http";
-import { Server } from "socket.io";
+import { Server, type Socket } from "socket.io";
 import type { Logger } from "pino";
 import type { AuthTokenPayload } from "../lib/auth.js";
 
@@ -81,21 +81,8 @@ export function createRealtime(
       // admin: organização inteira
       void socket.join(orgRoom(user.organizationId));
     } else {
-      // Conversa sem departamento entra no balde "none" — é o caso de número
-      // sem departamento padrão configurado.
-      const departmentKeys = [...access.departmentIds, NO_DEPARTMENT];
       for (const instanceId of access.instanceIds) {
-        // Eventos do próprio número (QR, status da conexão) não dependem de
-        // departamento nem de responsável.
-        void socket.join(instanceRoom(instanceId));
-        for (const departmentKey of departmentKeys) {
-          if (user.role === "supervisor") {
-            void socket.join(supervisorRoom(instanceId, departmentKey));
-          } else {
-            void socket.join(unassignedRoom(instanceId, departmentKey));
-            void socket.join(assigneeRoom(instanceId, departmentKey, user.sub));
-          }
-        }
+        joinInstanceRooms(socket, instanceId);
       }
     }
 
@@ -109,6 +96,50 @@ export function createRealtime(
 }
 
 const NO_DEPARTMENT = "none";
+
+/**
+ * Salas de um número para um socket já autenticado. Conversa sem
+ * departamento entra no balde "none" — é o caso de número sem departamento
+ * padrão configurado.
+ */
+function joinInstanceRooms(socket: Socket, instanceId: string): void {
+  const user = socket.data.user as AuthTokenPayload;
+  const access = socket.data.access as RealtimeAccess;
+  // Admin recebe tudo pela sala da organização; não usa sala por número.
+  if (!access.departmentIds) return;
+
+  // Eventos do próprio número (QR, status da conexão) não dependem de
+  // departamento nem de responsável.
+  void socket.join(instanceRoom(instanceId));
+  for (const departmentKey of [...access.departmentIds, NO_DEPARTMENT]) {
+    if (user.role === "supervisor") {
+      void socket.join(supervisorRoom(instanceId, departmentKey));
+    } else {
+      void socket.join(unassignedRoom(instanceId, departmentKey));
+      void socket.join(assigneeRoom(instanceId, departmentKey, user.sub));
+    }
+  }
+}
+
+/**
+ * Acesso a número concedido no meio da sessão — hoje, o supervisor que
+ * acabou de criar o número. As abas abertas dele entram nas salas na hora.
+ *
+ * Sem isso o QR Code, que se renova a cada poucos segundos, só chegaria
+ * depois de recarregar a página: a pessoa ficaria encarando um código
+ * vencido que o celular se recusa a ler.
+ */
+export function grantInstanceAccess(io: Server, userId: string, instanceId: string): void {
+  for (const socket of io.sockets.sockets.values()) {
+    const user = socket.data.user as AuthTokenPayload | undefined;
+    if (user?.sub !== userId) continue;
+    const access = socket.data.access as RealtimeAccess | undefined;
+    if (access?.instanceIds && !access.instanceIds.includes(instanceId)) {
+      access.instanceIds.push(instanceId);
+    }
+    joinInstanceRooms(socket, instanceId);
+  }
+}
 
 export function orgRoom(organizationId: string): string {
   return `org:${organizationId}`;
