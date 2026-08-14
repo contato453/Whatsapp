@@ -77,7 +77,15 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       ...(query.instanceId ? { whatsappInstanceId: query.instanceId } : {}),
       ...(query.unread ? { unreadCount: { gt: 0 } } : {}),
       ...(query.tagId ? { tags: { some: { tagId: query.tagId } } } : {}),
-      ...(query.q ? { title: { contains: query.q, mode: "insensitive" } } : {}),
+      // Busca pelo nome ou pelo código do cadastro ("EMPRESA 001")
+      ...(query.q
+        ? {
+            OR: [
+              { title: { contains: query.q, mode: "insensitive" as const } },
+              { externalReference: { contains: query.q, mode: "insensitive" as const } },
+            ],
+          }
+        : {}),
     };
     if (query.assigned === "me") {
       where.assignedUserId = request.user.sub;
@@ -135,15 +143,32 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       void deps.instanceManager.syncParticipantAvatars(id, request.user.organizationId);
     }
 
-    // Em grupos "@lid" os metadados nem sempre trazem o telefone de cada
-    // participante — completamos com o que o cadastro de contatos souber.
-    const participantContacts = group
-      ? await resolveContacts(
-          deps.prisma,
-          conversation.whatsappInstanceId,
-          group.participants.map((participant) => participant.externalContactId),
-        )
-      : new Map<string, SenderInfo>();
+    // Em grupos "@lid" os metadados nem sempre trazem nome e telefone de
+    // cada participante. Completamos com duas fontes: o cadastro de
+    // contatos e o nome que o WhatsApp envia junto das mensagens (pushName).
+    const participantIds = group?.participants.map((p) => p.externalContactId) ?? [];
+    const [participantContacts, namesFromMessages] = await Promise.all([
+      group
+        ? resolveContacts(deps.prisma, conversation.whatsappInstanceId, participantIds)
+        : Promise.resolve(new Map<string, SenderInfo>()),
+      group
+        ? deps.prisma.message.findMany({
+            where: {
+              conversationId: id,
+              senderExternalId: { in: participantIds },
+              senderName: { not: null },
+            },
+            distinct: ["senderExternalId"],
+            orderBy: { timestamp: "desc" },
+            select: { senderExternalId: true, senderName: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const pushNames = new Map(
+      namesFromMessages
+        .filter((entry) => entry.senderExternalId)
+        .map((entry) => [entry.senderExternalId as string, entry.senderName]),
+    );
 
     return {
       conversation: serializeConversation(conversation),
@@ -161,7 +186,11 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
                 // (e, com isso, exibir a foto dele no chat).
                 externalContactId: participant.externalContactId,
                 phoneNumber: participant.phoneNumber || known?.phoneNumber || "",
-                name: participant.name || known?.name || null,
+                name:
+                  participant.name ||
+                  known?.name ||
+                  pushNames.get(participant.externalContactId) ||
+                  null,
                 isAdmin: participant.isAdmin || participant.isSuperAdmin,
                 hasAvatar: participant.avatarUrl != null,
               };
@@ -445,6 +474,38 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       entityType: "Conversation",
       entityId: id,
       metadata: { from: conversation.status, to: status },
+    });
+    await emitConversationUpdated(id, request.user.organizationId);
+    return { ok: true };
+  });
+
+  /**
+   * Código do cadastro da empresa/grupo no escritório ("EMPRESA 001").
+   *
+   * Usa o campo externalReference, que já existia no modelo para referência
+   * a sistemas externos. externalSource marca que veio digitado, e não de
+   * uma integração — para uma sincronização futura saber o que pode
+   * sobrescrever.
+   */
+  app.patch("/conversations/:id/reference", { preHandler: authenticate }, async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { externalReference } = z
+      .object({ externalReference: z.string().trim().max(40).nullable() })
+      .parse(request.body);
+    await findConversationOr404(id, request.user);
+
+    const value = externalReference && externalReference.length > 0 ? externalReference : null;
+    await deps.prisma.conversation.update({
+      where: { id },
+      data: { externalReference: value, externalSource: value ? "manual" : null },
+    });
+    deps.audit.record({
+      organizationId: request.user.organizationId,
+      userId: request.user.sub,
+      action: "conversation.reference_changed",
+      entityType: "Conversation",
+      entityId: id,
+      metadata: { externalReference: value },
     });
     await emitConversationUpdated(id, request.user.organizationId);
     return { ok: true };

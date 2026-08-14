@@ -20,6 +20,7 @@ export function serializeUser(user: User) {
     role: user.role,
     status: user.status,
     avatarUrl: user.avatarUrl,
+    signMessages: user.signMessages,
     createdAt: user.createdAt.toISOString(),
   };
 }

@@ -95,6 +95,22 @@ export function ContextPanel({
     }
   }
 
+  // Código do cadastro: editado localmente e salvo ao sair do campo.
+  const [reference, setReference] = useState(conversation.externalReference ?? "");
+  useEffect(() => {
+    setReference(conversation.externalReference ?? "");
+  }, [conversation.id, conversation.externalReference]);
+
+  async function saveReference() {
+    const value = reference.trim();
+    if (value === (conversation.externalReference ?? "")) return;
+    await run(() =>
+      api.patch(`/conversations/${conversation.id}/reference`, {
+        externalReference: value.length > 0 ? value : null,
+      }),
+    );
+  }
+
   const availableTags = tags.filter(
     (tag) => !conversation.tags.some((assigned) => assigned.id === tag.id),
   );
@@ -208,6 +224,23 @@ export function ContextPanel({
                 </option>
               ))}
             </select>
+          </div>
+          {/* Código do cadastro da empresa/grupo no escritório */}
+          <div className="flex items-center justify-between">
+            <span className="text-slate-500">Cadastro</span>
+            <input
+              className="max-w-[55%] rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-amber-800 placeholder:font-normal placeholder:normal-case placeholder:tracking-normal placeholder:text-slate-400"
+              value={reference}
+              maxLength={40}
+              placeholder="EMPRESA 001"
+              disabled={busy}
+              onChange={(event) => setReference(event.target.value)}
+              onBlur={() => void saveReference()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
+                if (event.key === "Escape") setReference(conversation.externalReference ?? "");
+              }}
+            />
           </div>
         </div>
         <div className="flex flex-wrap gap-2 pt-1">

@@ -17,6 +17,8 @@ export interface UserDto {
   role: UserRole;
   status: "active" | "inactive";
   avatarUrl: string | null;
+  /** Prefixa as mensagens enviadas com o nome do atendente */
+  signMessages: boolean;
   createdAt: string;
 }
 
@@ -70,6 +72,8 @@ export interface ConversationDto {
   unreadCount: number;
   lastMessageAt: string | null;
   lastMessagePreview: string | null;
+  /** Código do cadastro no escritório ("EMPRESA 001", "GRUPO 040") */
+  externalReference: string | null;
   createdAt: string;
 }
 

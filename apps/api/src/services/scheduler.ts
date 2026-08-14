@@ -5,6 +5,7 @@ import type { Server } from "socket.io";
 import type { Logger } from "pino";
 import { conversationAudience } from "../realtime/socket.js";
 import { serializeConversation, serializeMessage } from "../lib/serialize.js";
+import { applySignature } from "../lib/signature.js";
 import { buildPreview } from "./message-ingest.js";
 
 /** Intervalo de verificação da fila de agendamentos. */
@@ -81,17 +82,21 @@ export class ScheduledMessageWorker {
     };
   }): Promise<void> {
     try {
-      const result = await this.provider.sendText(
-        scheduled.conversation.whatsappInstanceId,
-        scheduled.conversation.externalChatId,
-        scheduled.content,
-      );
+      // A assinatura é lida na hora do envio, e não no agendamento: vale a
+      // configuração que estiver valendo quando a mensagem de fato sair.
       const sender = scheduled.createdById
         ? await this.prisma.user.findUnique({
             where: { id: scheduled.createdById },
-            select: { name: true },
+            select: { name: true, signMessages: true },
           })
         : null;
+      const outgoing = applySignature(scheduled.content, sender) ?? scheduled.content;
+
+      const result = await this.provider.sendText(
+        scheduled.conversation.whatsappInstanceId,
+        scheduled.conversation.externalChatId,
+        outgoing,
+      );
 
       const message = await this.prisma.message.create({
         data: {
@@ -100,7 +105,7 @@ export class ScheduledMessageWorker {
           externalMessageId: result.externalMessageId,
           direction: "outbound",
           type: "text",
-          content: scheduled.content,
+          content: outgoing,
           senderName: sender?.name ?? null,
           timestamp: result.timestamp,
           status: "sent",
@@ -115,7 +120,7 @@ export class ScheduledMessageWorker {
         where: { id: scheduled.conversationId },
         data: {
           lastMessageAt: result.timestamp,
-          lastMessagePreview: buildPreview({ type: "text", content: scheduled.content }),
+          lastMessagePreview: buildPreview({ type: "text", content: outgoing }),
         },
       });
 

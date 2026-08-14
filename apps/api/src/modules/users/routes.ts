@@ -16,6 +16,8 @@ const createUserSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6, "Senha deve ter no mínimo 6 caracteres").max(72),
   role: z.enum(["admin", "supervisor", "agent"]).default("agent"),
+  /** Prefixa as mensagens enviadas com o nome do atendente */
+  signMessages: z.boolean().optional(),
   whatsappInstanceIds: instanceIdsSchema.optional(),
   departmentIds: departmentIdsSchema.optional(),
 });
@@ -26,6 +28,7 @@ const updateUserSchema = z.object({
   password: z.string().min(6).max(72).optional(),
   role: z.enum(["admin", "supervisor", "agent"]).optional(),
   status: z.enum(["active", "inactive"]).optional(),
+  signMessages: z.boolean().optional(),
   whatsappInstanceIds: instanceIdsSchema.optional(),
   departmentIds: departmentIdsSchema.optional(),
 });
@@ -88,6 +91,7 @@ export async function userRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
         email: body.email,
         passwordHash: await bcrypt.hash(body.password, 10),
         role: body.role,
+        signMessages: body.signMessages ?? false,
         whatsappAccess: {
           create: instanceIds.map((whatsappInstanceId) => ({ whatsappInstanceId })),
         },
@@ -166,6 +170,7 @@ export async function userRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
           ...(body.email ? { email: body.email } : {}),
           ...(body.role ? { role: body.role } : {}),
           ...(body.status ? { status: body.status } : {}),
+          ...(body.signMessages === undefined ? {} : { signMessages: body.signMessages }),
           ...(body.password ? { passwordHash: await bcrypt.hash(body.password, 10) } : {}),
         },
         include: {
