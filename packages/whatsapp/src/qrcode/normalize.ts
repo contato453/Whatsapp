@@ -241,15 +241,17 @@ export function extractSender(
   key: proto.IMessageKey | null | undefined,
   ownJid: string | null,
 ): { senderExternalId: string | null; senderPhone: string | null } {
+  // phoneFromJid retorna null para JIDs "@lid" — esses identificadores
+  // internos não são telefone e não podem ser exibidos como tal.
   const remoteJid = key?.remoteJid ?? null;
   if (key?.fromMe) {
-    return { senderExternalId: ownJid, senderPhone: jidToPhone(ownJid) };
+    return { senderExternalId: ownJid, senderPhone: phoneFromJid(ownJid) };
   }
   if (isGroupJid(remoteJid)) {
     const participant = key?.participant ?? null;
-    return { senderExternalId: participant, senderPhone: jidToPhone(participant) };
+    return { senderExternalId: participant, senderPhone: phoneFromJid(participant) };
   }
-  return { senderExternalId: remoteJid, senderPhone: jidToPhone(remoteJid) };
+  return { senderExternalId: remoteJid, senderPhone: phoneFromJid(remoteJid) };
 }
 
 /** Tipo estrutural compatível com Long (protobuf) sem depender do pacote "long". */
