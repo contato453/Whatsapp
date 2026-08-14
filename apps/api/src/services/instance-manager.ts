@@ -186,6 +186,44 @@ export class InstanceManager {
       });
     });
 
+    // Cliente apagou uma mensagem para todos
+    this.provider.on("message-deleted", (event) => {
+      void this.withOrg(event.instanceId, async (organizationId) => {
+        const message = await this.findMessageByExternalId(
+          event.instanceId,
+          event.externalChatId,
+          event.targetExternalMessageId,
+        );
+        if (!message || message.deletedAt) return;
+        const updated = await this.prisma.message.update({
+          where: { id: message.id },
+          data: { deletedAt: new Date(), content: null },
+        });
+        this.io
+          .to(orgRoom(organizationId))
+          .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
+      });
+    });
+
+    // Cliente editou o texto de uma mensagem
+    this.provider.on("message-edited", (event) => {
+      void this.withOrg(event.instanceId, async (organizationId) => {
+        const message = await this.findMessageByExternalId(
+          event.instanceId,
+          event.externalChatId,
+          event.targetExternalMessageId,
+        );
+        if (!message || message.deletedAt) return;
+        const updated = await this.prisma.message.update({
+          where: { id: message.id },
+          data: { content: event.newText, editedAt: new Date() },
+        });
+        this.io
+          .to(orgRoom(organizationId))
+          .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
+      });
+    });
+
     this.provider.on("chats-sync", (event) => {
       void this.withOrg(event.instanceId, (organizationId) =>
         this.syncChats(event.instanceId, organizationId, event.chats),
@@ -202,6 +240,32 @@ export class InstanceManager {
       void this.withOrg(event.instanceId, (organizationId) =>
         this.syncGroups(event.instanceId, organizationId, event.groups),
       );
+    });
+  }
+
+  /** Localiza uma mensagem persistida a partir do id externo do WhatsApp. */
+  private async findMessageByExternalId(
+    instanceId: string,
+    externalChatId: string,
+    externalMessageId: string,
+  ) {
+    const conversation = await this.prisma.conversation.findUnique({
+      where: {
+        whatsappInstanceId_externalChatId: {
+          whatsappInstanceId: instanceId,
+          externalChatId,
+        },
+      },
+      select: { id: true },
+    });
+    if (!conversation) return null;
+    return this.prisma.message.findUnique({
+      where: {
+        conversationId_externalMessageId: {
+          conversationId: conversation.id,
+          externalMessageId,
+        },
+      },
     });
   }
 

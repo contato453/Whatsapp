@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  Ban,
   Check,
   CheckCheck,
   Clock,
@@ -12,7 +13,9 @@ import {
   Forward,
   MapPin,
   MoreVertical,
+  Pencil,
   Smile,
+  Trash2,
   User,
   XCircle,
 } from "lucide-react";
@@ -142,6 +145,8 @@ export function MessageBubble({
   onReact,
   onReply,
   onForward,
+  onEdit,
+  onDelete,
 }: {
   message: MessageDto;
   isGroup: boolean;
@@ -149,6 +154,8 @@ export function MessageBubble({
   onReact: (message: MessageDto, emoji: string) => void;
   onReply: (message: MessageDto) => void;
   onForward: (message: MessageDto) => void;
+  onEdit: (message: MessageDto) => void;
+  onDelete: (message: MessageDto) => void;
 }) {
   const outbound = message.direction === "outbound";
   const senderKey = message.senderExternalId ?? message.senderPhone ?? "?";
@@ -188,6 +195,8 @@ export function MessageBubble({
           onReact={onReact}
           onReply={onReply}
           onForward={onForward}
+          onEdit={onEdit}
+          onDelete={onDelete}
         />
       )}
 
@@ -231,7 +240,16 @@ export function MessageBubble({
           </div>
         )}
 
-        {message.type === "location" ? (
+        {message.deletedAt ? (
+          <p
+            className={cn(
+              "flex items-center gap-1.5 text-sm italic",
+              outbound ? "text-white/70" : "text-slate-400",
+            )}
+          >
+            <Ban className="h-3.5 w-3.5" /> Esta mensagem foi apagada
+          </p>
+        ) : message.type === "location" ? (
           <p className="flex items-center gap-1.5 text-sm">
             <MapPin className="h-4 w-4" /> {message.content ?? "Localização"}
           </p>
@@ -252,11 +270,12 @@ export function MessageBubble({
             outbound ? "text-white/70" : "text-slate-400",
           )}
         >
+          {message.editedAt && !message.deletedAt && <span className="italic">editada</span>}
           {new Date(message.timestamp).toLocaleTimeString("pt-BR", {
             hour: "2-digit",
             minute: "2-digit",
           })}
-          {outbound && <StatusIcon status={message.status} />}
+          {outbound && !message.deletedAt && <StatusIcon status={message.status} />}
         </p>
 
         {/* Reações */}
@@ -295,6 +314,8 @@ export function MessageBubble({
           onReact={onReact}
           onReply={onReply}
           onForward={onForward}
+          onEdit={onEdit}
+          onDelete={onDelete}
         />
       )}
     </div>
@@ -311,6 +332,8 @@ function MessageActions({
   onReact,
   onReply,
   onForward,
+  onEdit,
+  onDelete,
 }: {
   side: "left" | "right";
   message: MessageDto;
@@ -321,7 +344,15 @@ function MessageActions({
   onReact: (message: MessageDto, emoji: string) => void;
   onReply: (message: MessageDto) => void;
   onForward: (message: MessageDto) => void;
+  onEdit: (message: MessageDto) => void;
+  onDelete: (message: MessageDto) => void;
 }) {
+  const outbound = message.direction === "outbound";
+  const canEdit = outbound && message.type === "text" && !message.deletedAt;
+  const canDelete = outbound && !message.deletedAt;
+
+  if (message.deletedAt) return null;
+
   return (
     <div
       className={cn(
@@ -406,6 +437,28 @@ function MessageActions({
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50"
             >
               <Copy className="h-3.5 w-3.5" /> Copiar texto
+            </button>
+          )}
+          {canEdit && (
+            <button
+              onClick={() => {
+                onEdit(message);
+                setMenuOpen(false);
+              }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50"
+            >
+              <Pencil className="h-3.5 w-3.5" /> Editar
+            </button>
+          )}
+          {canDelete && (
+            <button
+              onClick={() => {
+                onDelete(message);
+                setMenuOpen(false);
+              }}
+              className="flex w-full items-center gap-2 border-t border-slate-100 px-3 py-1.5 text-left text-xs text-red-600 hover:bg-red-50"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Apagar para todos
             </button>
           )}
         </div>

@@ -5,6 +5,7 @@ import { RealtimeEvents } from "@zapdesk/shared";
 import { authenticate } from "../../lib/auth.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
 import { extensionFromMime } from "../../lib/media-storage.js";
+import { transcodeToOpusOgg } from "../../lib/audio-transcode.js";
 import {
   serializeConversation,
   serializeMessage,
@@ -184,6 +185,92 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
     return { ok: true };
   });
 
+  /** Apaga a mensagem para todos (só mensagens enviadas por nós). */
+  app.delete("/messages/:id", { preHandler: authenticate }, async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const message = await deps.prisma.message.findFirst({
+      where: { id, organizationId: request.user.organizationId },
+      include: { conversation: true },
+    });
+    if (!message?.externalMessageId) throw new NotFoundError("Mensagem");
+    if (message.direction !== "outbound") {
+      throw new AppError("Só é possível apagar mensagens enviadas por você", 400, "not_outbound");
+    }
+    if (message.deletedAt) return { ok: true };
+
+    await deps.provider.deleteMessage(
+      message.conversation.whatsappInstanceId,
+      message.conversation.externalChatId,
+      {
+        externalMessageId: message.externalMessageId,
+        fromMe: true,
+        participantExternalId: null,
+      },
+    );
+    const updated = await deps.prisma.message.update({
+      where: { id },
+      data: { deletedAt: new Date(), deletedByUserId: request.user.sub, content: null },
+    });
+    deps.audit.record({
+      organizationId: request.user.organizationId,
+      userId: request.user.sub,
+      action: "message.deleted",
+      entityType: "Message",
+      entityId: id,
+    });
+    deps.io
+      .to(orgRoom(request.user.organizationId))
+      .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
+    return { ok: true };
+  });
+
+  /** Edita o texto de uma mensagem enviada. */
+  app.patch("/messages/:id", { preHandler: authenticate }, async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { content } = z.object({ content: z.string().min(1).max(65_000) }).parse(request.body);
+    const message = await deps.prisma.message.findFirst({
+      where: { id, organizationId: request.user.organizationId },
+      include: { conversation: true },
+    });
+    if (!message?.externalMessageId) throw new NotFoundError("Mensagem");
+    if (message.direction !== "outbound" || message.type !== "text") {
+      throw new AppError(
+        "Só é possível editar mensagens de texto enviadas por você",
+        400,
+        "not_editable",
+      );
+    }
+    if (message.deletedAt) {
+      throw new AppError("Mensagem apagada não pode ser editada", 400, "deleted");
+    }
+
+    await deps.provider.editMessage(
+      message.conversation.whatsappInstanceId,
+      message.conversation.externalChatId,
+      {
+        externalMessageId: message.externalMessageId,
+        fromMe: true,
+        participantExternalId: null,
+      },
+      content,
+    );
+    const updated = await deps.prisma.message.update({
+      where: { id },
+      data: { content, editedAt: new Date() },
+    });
+    deps.audit.record({
+      organizationId: request.user.organizationId,
+      userId: request.user.sub,
+      action: "message.edited",
+      entityType: "Message",
+      entityId: id,
+    });
+    deps.io
+      .to(orgRoom(request.user.organizationId))
+      .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
+    return { message: serializeMessage(updated) };
+  });
+
   /** Encaminha uma mensagem (texto ou mídia) para outra conversa. */
   app.post("/messages/:id/forward", { preHandler: authenticate }, async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
@@ -338,14 +425,31 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       if (!file) {
         throw new AppError("Arquivo é obrigatório", 400, "file_required");
       }
-      const buffer = await file.toBuffer();
-      const mimeType = file.mimetype || "application/octet-stream";
+      let buffer = await file.toBuffer();
+      let mimeType = file.mimetype || "application/octet-stream";
       const caption =
         typeof (file.fields.caption as { value?: unknown } | undefined)?.value === "string"
           ? ((file.fields.caption as { value: string }).value || undefined)
           : undefined;
-      const asVoiceNote =
+      let asVoiceNote =
         (file.fields.asVoiceNote as { value?: unknown } | undefined)?.value === "true";
+
+      // Mensagem de voz: o navegador grava em WebM/Opus e o WhatsApp espera
+      // OGG/Opus. Sem ffmpeg, envia como arquivo de áudio comum.
+      if (asVoiceNote && mimeType.startsWith("audio/") && !mimeType.includes("ogg")) {
+        const converted = await transcodeToOpusOgg(buffer, deps.logger);
+        if (converted) {
+          buffer = converted;
+          mimeType = "audio/ogg; codecs=opus";
+        } else {
+          asVoiceNote = false;
+          deps.logger.warn({
+            conversationId: id,
+            event: "voice_note_fallback",
+            reason: "ffmpeg indisponível — enviado como arquivo de áudio",
+          });
+        }
+      }
 
       const mediaType = mediaTypeFromMime(mimeType);
       const result = await deps.provider.sendMedia(

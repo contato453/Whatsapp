@@ -299,6 +299,11 @@ model Message {
   timestamp         DateTime
   status            MessageStatus    @default(pending)
   sentByUserId      String?
+  /// Apagada para todos (mantemos a linha para histórico/auditoria)
+  deletedAt         DateTime?
+  deletedByUserId   String?
+  /// Última edição do texto, quando houve
+  editedAt          DateTime?
   createdAt         DateTime         @default(now())
 
   organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)

@@ -26,7 +26,7 @@ import type {
   ProviderGroup,
   QuotedMessageRef,
 } from "@zapdesk/shared";
-import type { WhatsAppProvider, WhatsAppProviderEvents } from "../provider.js";
+import type { MessageTarget, WhatsAppProvider, WhatsAppProviderEvents } from "../provider.js";
 import {
   chatTypeFromJid,
   directionFromKey,
@@ -329,6 +329,34 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     const remoteJid = message.key?.remoteJid;
     if (!remoteJid || isIgnorableJid(remoteJid)) return;
 
+    // Apagar/editar chegam como protocolMessage — viram eventos próprios.
+    const protocolMessage = message.message?.protocolMessage;
+    if (protocolMessage?.key?.id) {
+      // type 0 = REVOKE (apagada para todos)
+      if (protocolMessage.type === 0) {
+        this.emit("message-deleted", {
+          instanceId,
+          externalChatId: remoteJid,
+          targetExternalMessageId: protocolMessage.key.id,
+        });
+        return;
+      }
+      // Edição: o novo conteúdo vem em editedMessage
+      const editedText =
+        protocolMessage.editedMessage?.conversation ??
+        protocolMessage.editedMessage?.extendedTextMessage?.text;
+      if (editedText) {
+        this.emit("message-edited", {
+          instanceId,
+          externalChatId: remoteJid,
+          targetExternalMessageId: protocolMessage.key.id,
+          newText: editedText,
+        });
+        return;
+      }
+      return;
+    }
+
     // Reações vêm como mensagens; viram evento próprio.
     const reaction = unwrapMessage(message.message)?.reactionMessage;
     if (reaction?.key?.id) {
@@ -524,27 +552,62 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     };
   }
 
+  /** Chave da mensagem no formato esperado pelo Baileys. */
+  private targetKey(chatId: string, target: MessageTarget) {
+    return {
+      remoteJid: chatId,
+      id: target.externalMessageId,
+      fromMe: target.fromMe,
+      ...(target.participantExternalId ? { participant: target.participantExternalId } : {}),
+    };
+  }
+
   async sendReaction(
     instanceId: string,
     chatId: string,
-    target: { externalMessageId: string; fromMe: boolean; participantExternalId: string | null },
+    target: MessageTarget,
     emoji: string,
   ): Promise<void> {
     const socket = this.requireSocket(instanceId);
     await socket.sendMessage(chatId, {
       react: {
         text: emoji, // string vazia remove a reação
-        key: {
-          remoteJid: chatId,
-          id: target.externalMessageId,
-          fromMe: target.fromMe,
-          ...(target.participantExternalId ? { participant: target.participantExternalId } : {}),
-        },
+        key: this.targetKey(chatId, target),
       },
     });
     this.logger.info({
       instanceId,
       event: emoji ? "reaction_sent" : "reaction_removed",
+      chatId,
+      messageId: target.externalMessageId,
+    });
+  }
+
+  async deleteMessage(instanceId: string, chatId: string, target: MessageTarget): Promise<void> {
+    const socket = this.requireSocket(instanceId);
+    await socket.sendMessage(chatId, { delete: this.targetKey(chatId, target) });
+    this.logger.info({
+      instanceId,
+      event: "message_deleted",
+      chatId,
+      messageId: target.externalMessageId,
+    });
+  }
+
+  async editMessage(
+    instanceId: string,
+    chatId: string,
+    target: MessageTarget,
+    newText: string,
+  ): Promise<void> {
+    const socket = this.requireSocket(instanceId);
+    await socket.sendMessage(chatId, {
+      text: newText,
+      edit: this.targetKey(chatId, target),
+    });
+    this.logger.info({
+      instanceId,
+      event: "message_edited",
       chatId,
       messageId: target.externalMessageId,
     });

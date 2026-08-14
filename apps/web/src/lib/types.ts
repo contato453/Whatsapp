@@ -94,6 +94,8 @@ export interface MessageDto {
   timestamp: string;
   status: MessageStatus;
   sentByUserId: string | null;
+  deletedAt: string | null;
+  editedAt: string | null;
 }
 
 export interface GroupDetailDto {

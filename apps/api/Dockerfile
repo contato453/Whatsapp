@@ -1,9 +1,10 @@
 # API + provider de WhatsApp (sessões).
 # As sessões e mídias ficam em volumes: /app/data/sessions e /app/data/media.
 FROM node:22-slim AS base
-# git é necessário: o Baileys tem uma dependência (libsignal) instalada via repositório git.
+# git: o Baileys tem uma dependência (libsignal) instalada via repositório git.
+# ffmpeg: converte áudios gravados no navegador para o formato de voz do WhatsApp.
 # O rewrite força HTTPS no lugar de SSH (containers não têm chave SSH).
-RUN corepack enable && apt-get update && apt-get install -y --no-install-recommends openssl git ca-certificates && rm -rf /var/lib/apt/lists/* \
+RUN corepack enable && apt-get update && apt-get install -y --no-install-recommends openssl git ca-certificates ffmpeg && rm -rf /var/lib/apt/lists/* \
   && git config --global url."https://github.com/".insteadOf "git@github.com:" \
   && git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
 WORKDIR /app

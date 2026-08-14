@@ -35,6 +35,7 @@ import type {
 import { Button, EmptyState, Input, Modal, Spinner, Textarea } from "@/components/ui";
 import { ConversationListItem } from "./conversation-list";
 import { ConversationAvatar } from "./conversation-avatar";
+import { AudioRecorder } from "./audio-recorder";
 
 /** Nota interna exibida dentro da conversa — nunca vai para o WhatsApp. */
 function InternalNoteItem({ note }: { note: NoteDto }) {
@@ -257,6 +258,13 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         ) ?? null,
       );
     };
+    // Mensagem editada ou apagada (por nós, por outro atendente ou pelo cliente)
+    const onMessageUpdated = (payload: MessageDto) => {
+      if (payload.conversationId !== conversationId) return;
+      setMessages((current) =>
+        current?.map((message) => (message.id === payload.id ? payload : message)) ?? null,
+      );
+    };
     const onNote = (payload: NoteDto & { conversationId?: string }) => {
       if (payload.conversationId !== conversationId) return;
       setDetail((current) =>
@@ -275,6 +283,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     socket.on(RealtimeEvents.MessageStatus, onMessageStatus);
     socket.on(RealtimeEvents.GroupParticipants, onGroupParticipants);
     socket.on(RealtimeEvents.MessageReaction, onReaction);
+    socket.on(RealtimeEvents.MessageUpdated, onMessageUpdated);
     socket.on(RealtimeEvents.InternalNote, onNote);
     return () => {
       socket.off(RealtimeEvents.MessageNew, onMessageNew);
@@ -282,6 +291,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       socket.off(RealtimeEvents.MessageStatus, onMessageStatus);
       socket.off(RealtimeEvents.GroupParticipants, onGroupParticipants);
       socket.off(RealtimeEvents.MessageReaction, onReaction);
+      socket.off(RealtimeEvents.MessageUpdated, onMessageUpdated);
       socket.off(RealtimeEvents.InternalNote, onNote);
     };
   }, [socket, conversationId, loadDetail]);
@@ -349,6 +359,63 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     } catch (err) {
       window.alert(err instanceof Error ? err.message : "Falha ao reagir");
       loadDetail();
+    }
+  }
+
+  async function handleEdit(message: MessageDto) {
+    const next = window.prompt("Editar mensagem:", message.content ?? "");
+    if (next === null) return;
+    const content = next.trim();
+    if (!content || content === message.content) return;
+    try {
+      const result = await api.patch<{ message: MessageDto }>(`/messages/${message.id}`, {
+        content,
+      });
+      setMessages((current) =>
+        current?.map((entry) => (entry.id === message.id ? result.message : entry)) ?? null,
+      );
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Falha ao editar mensagem");
+    }
+  }
+
+  async function handleDelete(message: MessageDto) {
+    if (!window.confirm("Apagar esta mensagem para todos? Não é possível desfazer.")) return;
+    try {
+      await api.delete(`/messages/${message.id}`);
+      setMessages((current) =>
+        current?.map((entry) =>
+          entry.id === message.id
+            ? { ...entry, deletedAt: new Date().toISOString(), content: null }
+            : entry,
+        ) ?? null,
+      );
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Falha ao apagar mensagem");
+    }
+  }
+
+  /** Envia um áudio gravado no navegador como mensagem de voz. */
+  async function sendVoiceNote(file: File) {
+    if (!conversationId) return;
+    setSending(true);
+    try {
+      const form = new FormData();
+      form.append("asVoiceNote", "true");
+      form.append("file", file);
+      const result = await api.postForm<{ message: MessageDto }>(
+        `/conversations/${conversationId}/messages/media`,
+        form,
+      );
+      setMessages((current) => {
+        if (!current) return [result.message];
+        if (current.some((message) => message.id === result.message.id)) return current;
+        return [...current, result.message];
+      });
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Falha ao enviar áudio");
+    } finally {
+      setSending(false);
     }
   }
 
@@ -619,6 +686,8 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                         setComposerMode("message");
                       }}
                       onForward={(message) => setForwarding(message)}
+                      onEdit={(message) => void handleEdit(message)}
+                      onDelete={(message) => void handleDelete(message)}
                     />
                   ) : (
                     <InternalNoteItem key={`note-${item.note.id}`} note={item.note} />
@@ -731,16 +800,19 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   }}
                 />
                 {composerMode === "message" && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="mb-1"
-                    title="Enviar arquivo"
-                    disabled={sending}
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    <Paperclip className="h-4 w-4" />
-                  </Button>
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="mb-1"
+                      title="Enviar arquivo"
+                      disabled={sending}
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      <Paperclip className="h-4 w-4" />
+                    </Button>
+                    <AudioRecorder disabled={sending} onSend={sendVoiceNote} />
+                  </>
                 )}
                 <Textarea
                   rows={1}

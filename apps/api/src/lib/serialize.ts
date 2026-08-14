@@ -126,5 +126,7 @@ export function serializeMessage(
     timestamp: message.timestamp.toISOString(),
     status: message.status,
     sentByUserId: message.sentByUserId,
+    deletedAt: message.deletedAt?.toISOString() ?? null,
+    editedAt: message.editedAt?.toISOString() ?? null,
   };
 }
