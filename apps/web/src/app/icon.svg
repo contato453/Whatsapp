@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!--
+    Favicon do AZVCHAT, redesenhado a partir da logo: balão de conversa em
+    contorno com degradê azul-marinho → verde, "AZ" dentro, as reticências
+    e o check verde transbordando o canto superior direito. O check faz as
+    vezes do "V", como na logo.
+
+    Fundo branco arredondado de propósito: o contorno azul-marinho sumiria
+    numa aba de tema escuro se ficasse sobre transparente.
+  -->
+  <defs>
+    <linearGradient id="azv" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#0F2A4C"/>
+      <stop offset="0.55" stop-color="#124E5C"/>
+      <stop offset="1" stop-color="#17BF6B"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="64" height="64" rx="13" fill="#ffffff"/>
+
+  <!-- Balão: contorno arredondado com a ponta embaixo, à esquerda -->
+  <path
+    d="M13 12h30a11 11 0 0 1 11 11v14a11 11 0 0 1-11 11H28L18 58V48h-5a11 11 0 0 1-11-11V23a11 11 0 0 1 11-11Z"
+    fill="none"
+    stroke="url(#azv)"
+    stroke-width="4.5"
+    stroke-linejoin="round"
+  />
+
+  <!-- "A" sem travessão, como na logo -->
+  <path fill="#0F2A4C" d="M16 17l8.5 19h-5.5L16 28.5 12.5 36H7l8.5-19Z"/>
+
+  <!-- "Z" -->
+  <path fill="#0F2A4C" d="M26 17h14.5v4.8L33 31.2h7.5V36H26v-4.8l7.5-9.4H26V17Z"/>
+
+  <!-- Reticências de "digitando" -->
+  <circle cx="26" cy="42" r="2.6" fill="#17BF6B"/>
+  <circle cx="33" cy="42" r="2.6" fill="#17BF6B"/>
+  <circle cx="40" cy="42" r="2.6" fill="#17BF6B"/>
+
+  <!-- Check verde que também faz o papel do "V" -->
+  <path
+    d="M41 26l6 10 11-24"
+    fill="none"
+    stroke="#17BF6B"
+    stroke-width="6.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>
