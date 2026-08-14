@@ -3,6 +3,7 @@ import type { PrismaClient } from "@azvchat/database";
 import {
   accessibleInstanceIds,
   conversationScope,
+  groupScope,
   instanceIdScope,
   instanceScope,
   loadConversationAccess,
@@ -139,5 +140,39 @@ describe("conversationScope (regra de visibilidade)", () => {
         { OR: [{ assignedUserId: "user-1" }, { assignedUserId: null }] },
       ],
     });
+  });
+});
+
+describe("groupScope (filtro de grupo)", () => {
+  const restrito: ConversationAccess = {
+    instanceIds: ["chip-a"],
+    departmentIds: ["dep-1"],
+    ownOnly: true,
+    userId: "user-1",
+  };
+  const admin: ConversationAccess = {
+    instanceIds: null,
+    departmentIds: null,
+    ownOnly: false,
+    userId: "admin-1",
+  };
+
+  it("usuário restrito: grupo sem conversa, ou com conversa que ele enxerga", () => {
+    const filtro = groupScope(restrito);
+    expect(filtro.whatsappInstanceId).toEqual({ in: ["chip-a"] });
+    expect(filtro.OR).toEqual([
+      { conversationId: null },
+      { conversation: { is: conversationScope(restrito) } },
+    ]);
+  });
+
+  it("admin enxerga grupo que já virou conversa", () => {
+    // O `is` é o que faz o caso do admin funcionar: `conversation: {}` solto
+    // dentro de um OR é descartado pelo Prisma, e sobraria `conversationId:
+    // null` — que esconderia todo grupo com conversa. Com `is: {}` a
+    // condição vira "existe conversa", que é o que se quer.
+    const filtro = groupScope(admin);
+    expect(filtro.whatsappInstanceId).toBeUndefined();
+    expect(filtro.OR).toEqual([{ conversationId: null }, { conversation: { is: {} } }]);
   });
 });

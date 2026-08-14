@@ -114,7 +114,14 @@ export function serializeConversation(conversation: ConversationWithRelations) {
     instanceStatus: conversation.instance?.status ?? null,
     externalChatId: conversation.externalChatId,
     type: conversation.type,
-    title: conversation.title,
+    // `title` é o nome efetivo: o que a equipe definiu tem prioridade sobre o
+    // que vem do WhatsApp. Assim toda a interface exibe o nome certo sem
+    // precisar decidir nada.
+    title: conversation.customTitle || conversation.title,
+    customTitle: conversation.customTitle,
+    /// Nome do WhatsApp, exibido como referência quando há nome próprio.
+    whatsappTitle: conversation.title,
+    partnerName: conversation.partnerName,
     // A chave interna do arquivo nunca vai ao frontend; ele busca a imagem
     // pelo endpoint autenticado /conversations/:id/avatar.
     hasAvatar: conversation.profilePicture != null,

@@ -235,7 +235,10 @@ model GroupParticipant {
   groupId           String
   externalContactId String
   phoneNumber       String
+  /// Nome que vem do WhatsApp (perfil ou agenda do celular conectado).
   name              String?
+  /// Nome definido pela equipe — ganha do `name` na exibição.
+  customName        String?
   isAdmin           Boolean   @default(false)
   isSuperAdmin      Boolean   @default(false)
   /// Chave do arquivo da foto no storage (null = sem foto conhecida)
@@ -273,7 +276,13 @@ model Conversation {
   whatsappInstanceId String
   externalChatId     String
   type               ConversationType
+  /// Nome que vem do WhatsApp (nome do grupo ou do perfil). O sync sobrescreve.
   title              String
+  /// Nome definido pela equipe. Tem prioridade sobre `title` na exibição e
+  /// nunca é tocado pela sincronização.
+  customTitle        String?
+  /// Sócio representante da empresa perante a Receita Federal.
+  partnerName        String?
   profilePicture     String?
   status             ConversationStatus @default(open)
   assignedUserId     String?

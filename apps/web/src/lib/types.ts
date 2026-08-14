@@ -84,7 +84,14 @@ export interface ConversationDto {
   instanceStatus: ConnectionStatus | null;
   externalChatId: string;
   type: ConversationType;
+  /** Nome efetivo: o próprio, quando existe; senão o do WhatsApp. */
   title: string;
+  /** Nome definido pela equipe (null = usando o do WhatsApp). */
+  customTitle: string | null;
+  /** Nome que veio do WhatsApp, exibido como referência. */
+  whatsappTitle: string;
+  /** Sócio representante perante a Receita Federal. */
+  partnerName: string | null;
   hasAvatar: boolean;
   status: ConversationStatus;
   assignedUser: UserDirectoryDto | null;
@@ -150,10 +157,23 @@ export interface GroupDetailDto {
     id: string;
     externalContactId: string;
     phoneNumber: string;
+    /** Nome efetivo: o próprio, quando existe; senão o do WhatsApp. */
     name: string | null;
+    customName: string | null;
+    whatsappName: string | null;
     isAdmin: boolean;
     hasAvatar: boolean;
   }>;
+}
+
+export interface ConversationFileDto {
+  id: string;
+  type: MessageType;
+  filename: string | null;
+  mimeType: string | null;
+  direction: MessageDirection;
+  senderName: string | null;
+  timestamp: string;
 }
 
 export interface NoteDto {
