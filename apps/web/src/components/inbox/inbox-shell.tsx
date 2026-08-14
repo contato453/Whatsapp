@@ -3,12 +3,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  CornerUpLeft,
+  Forward,
+  History,
   Inbox as InboxIcon,
   Info,
   Paperclip,
   Search,
   Send,
+  StickyNote,
   Users2,
+  X,
   Zap,
 } from "lucide-react";
 import { RealtimeEvents } from "@zapdesk/shared";
@@ -22,13 +27,37 @@ import type {
   DepartmentDto,
   InstanceDto,
   MessageDto,
+  NoteDto,
   QuickReplyDto,
   TagDto,
   UserDto,
 } from "@/lib/types";
-import { Button, EmptyState, Input, Spinner, Textarea } from "@/components/ui";
+import { Button, EmptyState, Input, Modal, Spinner, Textarea } from "@/components/ui";
 import { ConversationListItem } from "./conversation-list";
 import { ConversationAvatar } from "./conversation-avatar";
+
+/** Nota interna exibida dentro da conversa — nunca vai para o WhatsApp. */
+function InternalNoteItem({ note }: { note: NoteDto }) {
+  return (
+    <div className="flex justify-center py-1">
+      <div className="max-w-[80%] rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 shadow-sm">
+        <p className="mb-0.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+          <StickyNote className="h-3 w-3" /> Nota interna
+        </p>
+        <p className="whitespace-pre-wrap break-words text-sm text-slate-700">{note.content}</p>
+        <p className="mt-1 text-[10px] text-amber-600/80">
+          {note.user?.name ?? "—"} ·{" "}
+          {new Date(note.createdAt).toLocaleString("pt-BR", {
+            day: "2-digit",
+            month: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </p>
+      </div>
+    </div>
+  );
+}
 import { MessageBubble } from "./message-bubble";
 import { ContextPanel } from "./context-panel";
 
@@ -69,9 +98,16 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
 
   const [detail, setDetail] = useState<ConversationDetailDto | null>(null);
   const [messages, setMessages] = useState<MessageDto[] | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [showPanel, setShowPanel] = useState(true);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  /** "message" envia ao WhatsApp; "note" grava nota interna da equipe. */
+  const [composerMode, setComposerMode] = useState<"message" | "note">("message");
+  const [replyTo, setReplyTo] = useState<MessageDto | null>(null);
+  const [forwarding, setForwarding] = useState<MessageDto | null>(null);
+  const [forwardSearch, setForwardSearch] = useState("");
 
   const [users, setUsers] = useState<UserDto[]>([]);
   const [departments, setDepartments] = useState<DepartmentDto[]>([]);
@@ -132,14 +168,38 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   useEffect(() => {
     setDetail(null);
     setMessages(null);
+    setReplyTo(null);
+    setComposerMode("message");
     if (!conversationId) return;
     loadDetail();
     api
-      .get<{ messages: MessageDto[] }>(`/conversations/${conversationId}/messages?limit=60`)
-      .then((data) => setMessages(data.messages))
+      .get<{ messages: MessageDto[]; hasMore: boolean }>(
+        `/conversations/${conversationId}/messages?limit=60`,
+      )
+      .then((data) => {
+        setMessages(data.messages);
+        setHasMore(data.hasMore);
+      })
       .catch(() => setMessages([]));
     void api.post(`/conversations/${conversationId}/read`).catch(() => undefined);
   }, [conversationId, loadDetail]);
+
+  /** Carrega o trecho anterior do histórico (paginação para trás). */
+  async function loadOlderMessages() {
+    if (!conversationId || !messages?.length || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const oldest = messages[0];
+      if (!oldest) return;
+      const data = await api.get<{ messages: MessageDto[]; hasMore: boolean }>(
+        `/conversations/${conversationId}/messages?limit=60&before=${encodeURIComponent(oldest.timestamp)}`,
+      );
+      setMessages((current) => [...data.messages, ...(current ?? [])]);
+      setHasMore(data.hasMore);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "auto" });
@@ -185,15 +245,44 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         loadDetail();
       }
     };
+    const onReaction = (payload: {
+      conversationId: string;
+      messageId: string;
+      reactions: MessageDto["reactions"];
+    }) => {
+      if (payload.conversationId !== conversationId) return;
+      setMessages((current) =>
+        current?.map((message) =>
+          message.id === payload.messageId ? { ...message, reactions: payload.reactions } : message,
+        ) ?? null,
+      );
+    };
+    const onNote = (payload: NoteDto & { conversationId?: string }) => {
+      if (payload.conversationId !== conversationId) return;
+      setDetail((current) =>
+        current
+          ? {
+              ...current,
+              notes: current.notes.some((note) => note.id === payload.id)
+                ? current.notes
+                : [payload, ...current.notes],
+            }
+          : current,
+      );
+    };
     socket.on(RealtimeEvents.MessageNew, onMessageNew);
     socket.on(RealtimeEvents.ConversationUpdated, onConversationUpdated);
     socket.on(RealtimeEvents.MessageStatus, onMessageStatus);
     socket.on(RealtimeEvents.GroupParticipants, onGroupParticipants);
+    socket.on(RealtimeEvents.MessageReaction, onReaction);
+    socket.on(RealtimeEvents.InternalNote, onNote);
     return () => {
       socket.off(RealtimeEvents.MessageNew, onMessageNew);
       socket.off(RealtimeEvents.ConversationUpdated, onConversationUpdated);
       socket.off(RealtimeEvents.MessageStatus, onMessageStatus);
       socket.off(RealtimeEvents.GroupParticipants, onGroupParticipants);
+      socket.off(RealtimeEvents.MessageReaction, onReaction);
+      socket.off(RealtimeEvents.InternalNote, onNote);
     };
   }, [socket, conversationId, loadDetail]);
 
@@ -203,10 +292,27 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     setSending(true);
     const content = draft.trim();
     setDraft("");
+
+    // Modo nota interna: grava sem enviar nada ao WhatsApp.
+    if (composerMode === "note") {
+      try {
+        await api.post(`/conversations/${conversationId}/notes`, { content });
+        loadDetail();
+      } catch (err) {
+        setDraft(content);
+        window.alert(err instanceof Error ? err.message : "Falha ao salvar nota");
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+
+    const replyId = replyTo?.id;
+    setReplyTo(null);
     try {
       const result = await api.post<{ message: MessageDto }>(
         `/conversations/${conversationId}/messages`,
-        { content },
+        { content, ...(replyId ? { replyToMessageId: replyId } : {}) },
       );
       setMessages((current) => {
         if (!current) return [result.message];
@@ -218,6 +324,45 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       window.alert(err instanceof Error ? err.message : "Falha ao enviar mensagem");
     } finally {
       setSending(false);
+    }
+  }
+
+  async function handleReact(message: MessageDto, emoji: string) {
+    // Atualização otimista: a confirmação chega pelo WebSocket.
+    setMessages((current) =>
+      current?.map((entry) =>
+        entry.id === message.id
+          ? {
+              ...entry,
+              reactions: emoji
+                ? [
+                    ...entry.reactions.filter((reaction) => !reaction.fromMe),
+                    { emoji, senderName: me?.name ?? null, fromMe: true },
+                  ]
+                : entry.reactions.filter((reaction) => !reaction.fromMe),
+            }
+          : entry,
+      ) ?? null,
+    );
+    try {
+      await api.post(`/messages/${message.id}/reactions`, { emoji });
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Falha ao reagir");
+      loadDetail();
+    }
+  }
+
+  async function handleForward(targetConversationId: string) {
+    if (!forwarding) return;
+    const message = forwarding;
+    setForwarding(null);
+    setForwardSearch("");
+    try {
+      await api.post(`/messages/${message.id}/forward`, {
+        conversationId: targetConversationId,
+      });
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Falha ao encaminhar");
     }
   }
 
@@ -276,17 +421,39 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     setQuickReplyDismissed(true);
   }
 
-  const groupedMessages = useMemo(() => {
+  /**
+   * Linha do tempo: mensagens do WhatsApp e notas internas da equipe
+   * intercaladas por horário. As notas nunca são enviadas ao cliente.
+   */
+  const timeline = useMemo(() => {
     if (!messages) return [];
-    return messages.map((message, index) => {
+    const items: Array<
+      | { kind: "message"; at: number; message: MessageDto; showSender: boolean }
+      | { kind: "note"; at: number; note: NoteDto }
+    > = messages.map((message, index) => {
       const previous = messages[index - 1];
       const showSender =
         !previous ||
         previous.senderExternalId !== message.senderExternalId ||
         previous.direction !== message.direction;
-      return { message, showSender };
+      return {
+        kind: "message" as const,
+        at: new Date(message.timestamp).getTime(),
+        message,
+        showSender,
+      };
     });
-  }, [messages]);
+
+    const oldest = items[0]?.at ?? 0;
+    for (const note of detail?.notes ?? []) {
+      const at = new Date(note.createdAt).getTime();
+      // Só intercala notas dentro do trecho de histórico carregado.
+      if (at >= oldest) {
+        items.push({ kind: "note" as const, at, note });
+      }
+    }
+    return items.sort((a, b) => a.at - b.at);
+  }, [messages, detail?.notes]);
 
   return (
     <div className="flex h-full">
@@ -419,26 +586,111 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
             </header>
 
             <div className="thin-scroll flex-1 space-y-2 overflow-y-auto px-4 py-4">
+              {hasMore && messages && messages.length > 0 && (
+                <div className="flex justify-center pb-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={loadingMore}
+                    onClick={() => void loadOlderMessages()}
+                  >
+                    <History className="h-3.5 w-3.5" />
+                    {loadingMore ? "Carregando..." : "Carregar mensagens anteriores"}
+                  </Button>
+                </div>
+              )}
               {!messages ? (
                 <div className="flex justify-center py-10">
                   <Spinner />
                 </div>
-              ) : messages.length === 0 ? (
+              ) : timeline.length === 0 ? (
                 <EmptyState title="Sem mensagens ainda" description="As novas mensagens deste chat aparecerão aqui em tempo real." />
               ) : (
-                groupedMessages.map(({ message, showSender }) => (
-                  <MessageBubble
-                    key={message.id}
-                    message={message}
-                    isGroup={isGroup ?? false}
-                    showSender={showSender}
-                  />
-                ))
+                timeline.map((item) =>
+                  item.kind === "message" ? (
+                    <MessageBubble
+                      key={item.message.id}
+                      message={item.message}
+                      isGroup={isGroup ?? false}
+                      showSender={item.showSender}
+                      onReact={(message, emoji) => void handleReact(message, emoji)}
+                      onReply={(message) => {
+                        setReplyTo(message);
+                        setComposerMode("message");
+                      }}
+                      onForward={(message) => setForwarding(message)}
+                    />
+                  ) : (
+                    <InternalNoteItem key={`note-${item.note.id}`} note={item.note} />
+                  ),
+                )
               )}
               <div ref={bottomRef} />
             </div>
 
-            <footer className="relative border-t border-slate-200 bg-white p-3">
+            <footer
+              className={cn(
+                "relative border-t p-3 transition-colors",
+                composerMode === "note"
+                  ? "border-amber-300 bg-amber-50"
+                  : "border-slate-200 bg-white",
+              )}
+            >
+              {/* Alternância entre resposta ao cliente e nota interna */}
+              <div className="mb-2 flex items-center gap-1">
+                <button
+                  onClick={() => setComposerMode("message")}
+                  className={cn(
+                    "rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
+                    composerMode === "message"
+                      ? "bg-brand-600 text-white"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200",
+                  )}
+                >
+                  Responder ao cliente
+                </button>
+                <button
+                  onClick={() => {
+                    setComposerMode("note");
+                    setReplyTo(null);
+                  }}
+                  className={cn(
+                    "flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
+                    composerMode === "note"
+                      ? "bg-amber-500 text-white"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200",
+                  )}
+                >
+                  <StickyNote className="h-3 w-3" /> Nota interna
+                </button>
+                {composerMode === "note" && (
+                  <span className="ml-1 text-[11px] text-amber-700">
+                    Visível só para a equipe — não vai para o WhatsApp
+                  </span>
+                )}
+              </div>
+
+              {/* Mensagem sendo respondida */}
+              {replyTo && composerMode === "message" && (
+                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-500 bg-slate-50 px-2.5 py-1.5">
+                  <CornerUpLeft className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-600" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[11px] font-semibold text-slate-700">
+                      Respondendo {replyTo.senderName ?? "mensagem"}
+                    </p>
+                    <p className="truncate text-xs text-slate-500">
+                      {replyTo.content ?? `[${replyTo.type}]`}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setReplyTo(null)}
+                    className="rounded p-0.5 text-slate-400 hover:text-slate-600"
+                    aria-label="Cancelar resposta"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )}
               {quickReplyOpen && (
                 <div className="absolute bottom-full left-3 right-3 z-20 mb-1 max-h-72 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
                   <p className="flex items-center gap-1.5 border-b border-slate-100 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
@@ -478,16 +730,18 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                     if (file) void sendFile(file);
                   }}
                 />
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="mb-1"
-                  title="Enviar arquivo"
-                  disabled={sending}
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <Paperclip className="h-4 w-4" />
-                </Button>
+                {composerMode === "message" && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="mb-1"
+                    title="Enviar arquivo"
+                    disabled={sending}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <Paperclip className="h-4 w-4" />
+                  </Button>
+                )}
                 <Textarea
                   rows={1}
                   value={draft}
@@ -524,16 +778,25 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                       void sendText();
                     }
                   }}
-                  placeholder={`Mensagem para ${conversation.title}... ("/" para respostas rápidas, Enter envia)`}
+                  placeholder={
+                    composerMode === "note"
+                      ? "Anotação interna sobre este atendimento..."
+                      : `Mensagem para ${conversation.title}... ("/" para respostas rápidas, Enter envia)`
+                  }
                   className="max-h-32 min-h-[40px] resize-none"
                 />
                 <Button
                   className="mb-0.5"
+                  variant={composerMode === "note" ? "secondary" : "primary"}
                   disabled={sending || draft.trim().length === 0}
                   onClick={() => void sendText()}
-                  title="Enviar"
+                  title={composerMode === "note" ? "Salvar nota" : "Enviar"}
                 >
-                  <Send className="h-4 w-4" />
+                  {composerMode === "note" ? (
+                    <StickyNote className="h-4 w-4" />
+                  ) : (
+                    <Send className="h-4 w-4" />
+                  )}
                 </Button>
               </div>
               {me && conversation.assignedUser && conversation.assignedUser.id !== me.id && (
@@ -545,6 +808,58 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
           </>
         )}
       </div>
+
+      {/* Encaminhar mensagem */}
+      <Modal
+        open={forwarding != null}
+        onClose={() => {
+          setForwarding(null);
+          setForwardSearch("");
+        }}
+        title="Encaminhar mensagem"
+      >
+        <div className="space-y-3">
+          <div className="rounded-lg bg-slate-50 p-2.5 text-xs text-slate-600">
+            {forwarding?.content ?? `[${forwarding?.type}]`}
+          </div>
+          <Input
+            placeholder="Buscar conversa ou grupo..."
+            value={forwardSearch}
+            onChange={(event) => setForwardSearch(event.target.value)}
+            autoFocus
+          />
+          <div className="thin-scroll max-h-64 space-y-1 overflow-y-auto">
+            {(conversations ?? [])
+              .filter(
+                (entry) =>
+                  entry.id !== conversationId &&
+                  entry.title.toLowerCase().includes(forwardSearch.toLowerCase()),
+              )
+              .slice(0, 30)
+              .map((entry) => (
+                <button
+                  key={entry.id}
+                  onClick={() => void handleForward(entry.id)}
+                  className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-slate-50"
+                >
+                  <ConversationAvatar
+                    conversationId={entry.id}
+                    name={entry.title}
+                    hasAvatar={entry.hasAvatar}
+                    size="sm"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm text-slate-800">{entry.title}</p>
+                    <p className="truncate text-[11px] text-slate-400">
+                      {entry.type === "group" ? "Grupo" : "Contato"} · {entry.instanceName}
+                    </p>
+                  </div>
+                  <Forward className="h-4 w-4 shrink-0 text-slate-300" />
+                </button>
+              ))}
+          </div>
+        </div>
+      </Modal>
 
       {/* Coluna direita: contexto */}
       {conversationId && detail && showPanel && (

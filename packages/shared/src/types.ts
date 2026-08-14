@@ -87,6 +87,28 @@ export interface NormalizedMessage {
   } | null;
 }
 
+/** Reação (emoji) recebida do provider. Texto vazio = reação removida. */
+export interface ReactionEvent {
+  instanceId: string;
+  externalChatId: string;
+  /** Mensagem que recebeu a reação */
+  targetExternalMessageId: string;
+  emoji: string;
+  senderExternalId: string;
+  senderName: string | null;
+  fromMe: boolean;
+}
+
+/** Referência a uma mensagem citada, para reply. */
+export interface QuotedMessageRef {
+  externalMessageId: string;
+  /** JID do autor da mensagem citada (participante, em grupos) */
+  participantExternalId: string | null;
+  fromMe: boolean;
+  /** Texto aproximado da mensagem citada (usado na pré-visualização) */
+  text: string | null;
+}
+
 export interface MessageStatusUpdate {
   instanceId: string;
   externalChatId: string;

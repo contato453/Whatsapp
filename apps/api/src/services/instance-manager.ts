@@ -124,6 +124,70 @@ export class InstanceManager {
       });
     });
 
+    this.provider.on("message-reaction", (reaction) => {
+      void this.withOrg(reaction.instanceId, async (organizationId) => {
+        const conversation = await this.prisma.conversation.findUnique({
+          where: {
+            whatsappInstanceId_externalChatId: {
+              whatsappInstanceId: reaction.instanceId,
+              externalChatId: reaction.externalChatId,
+            },
+          },
+          select: { id: true },
+        });
+        if (!conversation) return;
+        const message = await this.prisma.message.findUnique({
+          where: {
+            conversationId_externalMessageId: {
+              conversationId: conversation.id,
+              externalMessageId: reaction.targetExternalMessageId,
+            },
+          },
+          select: { id: true },
+        });
+        if (!message) return;
+
+        if (reaction.emoji) {
+          await this.prisma.messageReaction.upsert({
+            where: {
+              messageId_senderExternalId: {
+                messageId: message.id,
+                senderExternalId: reaction.senderExternalId,
+              },
+            },
+            update: { emoji: reaction.emoji, senderName: reaction.senderName },
+            create: {
+              messageId: message.id,
+              emoji: reaction.emoji,
+              senderExternalId: reaction.senderExternalId,
+              senderName: reaction.senderName,
+              fromMe: reaction.fromMe,
+            },
+          });
+        } else {
+          // Emoji vazio = reação removida
+          await this.prisma.messageReaction.deleteMany({
+            where: { messageId: message.id, senderExternalId: reaction.senderExternalId },
+          });
+        }
+
+        const reactions = await this.prisma.messageReaction.findMany({
+          where: { messageId: message.id },
+        });
+        this.io
+          .to(instanceAudience(organizationId, reaction.instanceId))
+          .emit(RealtimeEvents.MessageReaction, {
+          conversationId: conversation.id,
+          messageId: message.id,
+          reactions: reactions.map((entry) => ({
+            emoji: entry.emoji,
+            senderName: entry.senderName,
+            fromMe: entry.fromMe,
+          })),
+        });
+      });
+    });
+
     this.provider.on("chats-sync", (event) => {
       void this.withOrg(event.instanceId, (organizationId) =>
         this.syncChats(event.instanceId, organizationId, event.chats),

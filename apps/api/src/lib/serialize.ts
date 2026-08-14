@@ -98,11 +98,34 @@ export function serializeConversation(conversation: ConversationWithRelations) {
   };
 }
 
-export function serializeMessage(message: Message) {
+export interface MessageReactionView {
+  emoji: string;
+  senderName: string | null;
+  fromMe: boolean;
+}
+
+/** Mensagem citada, resumida para a pré-visualização no chat. */
+export interface QuotedPreview {
+  id: string | null;
+  senderName: string | null;
+  content: string | null;
+  type: string;
+}
+
+export function serializeMessage(
+  message: Message & { reactions?: Array<{ emoji: string; senderName: string | null; fromMe: boolean }> },
+  quoted?: QuotedPreview | null,
+) {
   return {
     id: message.id,
     conversationId: message.conversationId,
     externalMessageId: message.externalMessageId,
+    reactions: message.reactions?.map((entry) => ({
+      emoji: entry.emoji,
+      senderName: entry.senderName,
+      fromMe: entry.fromMe,
+    })) ?? [],
+    quoted: quoted ?? null,
     senderExternalId: message.senderExternalId,
     senderName: message.senderName,
     senderPhone: message.senderPhone,
