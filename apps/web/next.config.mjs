@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  transpilePackages: ["@zapdesk/shared"],
+  transpilePackages: ["@azvchat/shared"],
   eslint: {
     // lint roda separadamente no monorepo
     ignoreDuringBuilds: true,

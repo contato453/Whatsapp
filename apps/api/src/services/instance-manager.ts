@@ -1,11 +1,11 @@
-import type { PrismaClient } from "@zapdesk/database";
+import type { PrismaClient } from "@azvchat/database";
 import type {
   ProviderContact,
   ProviderChat,
   ProviderGroup,
-} from "@zapdesk/shared";
-import { RealtimeEvents } from "@zapdesk/shared";
-import type { WhatsAppProvider } from "@zapdesk/whatsapp";
+} from "@azvchat/shared";
+import { RealtimeEvents } from "@azvchat/shared";
+import type { WhatsAppProvider } from "@azvchat/whatsapp";
 import type { Server } from "socket.io";
 import type { Logger } from "pino";
 import { instanceAudience } from "../realtime/socket.js";

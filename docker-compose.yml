@@ -2,13 +2,13 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: zapdesk
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-zapdesk}
-      POSTGRES_DB: zapdesk
+      POSTGRES_USER: azvchat
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-azvchat}
+      POSTGRES_DB: azvchat
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U zapdesk"]
+      test: ["CMD-SHELL", "pg_isready -U azvchat"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -20,7 +20,7 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     environment:
-      DATABASE_URL: postgresql://zapdesk:${POSTGRES_PASSWORD:-zapdesk}@postgres:5432/zapdesk?schema=public
+      DATABASE_URL: postgresql://azvchat:${POSTGRES_PASSWORD:-azvchat}@postgres:5432/azvchat?schema=public
       JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET no .env}
       WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
       API_PORT: 4000

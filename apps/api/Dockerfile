@@ -15,7 +15,7 @@ COPY apps/api/package.json apps/api/
 COPY packages/shared/package.json packages/shared/
 COPY packages/database/package.json packages/database/
 COPY packages/whatsapp/package.json packages/whatsapp/
-RUN pnpm install --frozen-lockfile --filter @zapdesk/api... --filter @zapdesk/database...
+RUN pnpm install --frozen-lockfile --filter @azvchat/api... --filter @azvchat/database...
 
 FROM base AS runtime
 ENV NODE_ENV=production
@@ -23,9 +23,9 @@ COPY --from=deps /app /app
 COPY tsconfig.base.json ./
 COPY packages ./packages
 COPY apps/api ./apps/api
-RUN pnpm --filter @zapdesk/database generate
+RUN pnpm --filter @azvchat/database generate
 RUN mkdir -p /app/data/sessions /app/data/media
 
 EXPOSE 4000
 # Aplica migrations pendentes e sobe a API.
-CMD ["sh", "-c", "pnpm --filter @zapdesk/database migrate:deploy && pnpm --filter @zapdesk/api start"]
+CMD ["sh", "-c", "pnpm --filter @azvchat/database migrate:deploy && pnpm --filter @azvchat/api start"]

@@ -1,5 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import type { UserRole } from "@zapdesk/shared";
+import type { UserRole } from "@azvchat/shared";
 import { ForbiddenError, UnauthorizedError } from "./errors.js";
 
 /** Payload do JWT — nunca incluir dados sensíveis aqui. */

@@ -21,7 +21,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { RealtimeEvents } from "@zapdesk/shared";
+import { RealtimeEvents } from "@azvchat/shared";
 import { api } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { useAuth } from "@/lib/auth-context";

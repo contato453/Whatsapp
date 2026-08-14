@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Plug, PlugZap, Plus, QrCode, Smartphone, Trash2, Unplug } from "lucide-react";
-import { RealtimeEvents, type ConnectionStatus } from "@zapdesk/shared";
+import { RealtimeEvents, type ConnectionStatus } from "@azvchat/shared";
 import { api } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { formatDateTime, formatPhone } from "@/lib/utils";

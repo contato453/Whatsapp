@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
-import type { MediaPayload, QuotedMessageRef } from "@zapdesk/shared";
-import { RealtimeEvents } from "@zapdesk/shared";
+import type { MediaPayload, QuotedMessageRef } from "@azvchat/shared";
+import { RealtimeEvents } from "@azvchat/shared";
 import { accessibleInstanceIds, instanceScope } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";

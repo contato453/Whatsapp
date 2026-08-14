@@ -22,7 +22,7 @@ jobs:
     env:
       # O `prisma generate` exige a variável do datasource, mas não abre
       # conexão: nenhum banco é acessado durante o CI.
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/zapdesk
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/azvchat
 
     steps:
       - name: Checkout

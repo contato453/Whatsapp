@@ -6,7 +6,7 @@ import type {
   MessageStatus,
   MessageType,
   UserRole,
-} from "@zapdesk/shared";
+} from "@azvchat/shared";
 
 /** DTOs retornados pela API (datas como string ISO). */
 

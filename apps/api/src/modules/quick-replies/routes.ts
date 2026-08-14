@@ -3,7 +3,7 @@ import { z } from "zod";
 import { authenticate } from "../../lib/auth.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
 import type { AppDeps } from "../../types.js";
-import type { QuickReply } from "@zapdesk/database";
+import type { QuickReply } from "@azvchat/database";
 
 const quickReplySchema = z.object({
   shortcut: z
