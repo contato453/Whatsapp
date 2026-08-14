@@ -2,12 +2,16 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Prisma } from "@azvchat/database";
 import { z } from "zod";
 import { CONVERSATION_STATUSES, RealtimeEvents } from "@azvchat/shared";
-import { accessibleInstanceIds, instanceScope } from "../../lib/access.js";
+import {
+  conversationScope,
+  instanceScope,
+  loadConversationAccess,
+} from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
 import { ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import { serializeConversation, serializeUser } from "../../lib/serialize.js";
 import { resolveContacts, type SenderInfo } from "../../lib/sender-directory.js";
-import { instanceAudience } from "../../realtime/socket.js";
+import { conversationAudience } from "../../realtime/socket.js";
 import type { AppDeps } from "../../types.js";
 
 const listQuerySchema = z.object({
@@ -36,9 +40,9 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
    * conversa de um número sem acesso responde 404, como se não existisse.
    */
   async function findConversationOr404(id: string, user: FastifyRequest["user"]) {
-    const allowed = await accessibleInstanceIds(deps.prisma, user);
+    const access = await loadConversationAccess(deps.prisma, user);
     const conversation = await deps.prisma.conversation.findFirst({
-      where: { id, organizationId: user.organizationId, ...instanceScope(allowed) },
+      where: { id, organizationId: user.organizationId, ...conversationScope(access) },
       include: conversationInclude,
     });
     if (!conversation) throw new NotFoundError("Conversa");
@@ -52,21 +56,21 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     });
     if (conversation) {
       deps.io
-        .to(instanceAudience(organizationId, conversation.whatsappInstanceId))
+        .to(conversationAudience(organizationId, conversation))
         .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation));
     }
   }
 
   app.get("/conversations", { preHandler: authenticate }, async (request) => {
     const query = listQuerySchema.parse(request.query);
-    const allowed = await accessibleInstanceIds(deps.prisma, request.user);
+    const access = await loadConversationAccess(deps.prisma, request.user);
     // Filtro por um número ao qual o usuário não tem acesso: lista vazia.
-    if (query.instanceId && allowed && !allowed.includes(query.instanceId)) {
+    if (query.instanceId && access.instanceIds && !access.instanceIds.includes(query.instanceId)) {
       return { conversations: [], total: 0 };
     }
     const where: Prisma.ConversationWhereInput = {
       organizationId: request.user.organizationId,
-      ...instanceScope(allowed),
+      ...conversationScope(access),
       ...(query.status ? { status: query.status } : {}),
       ...(query.type ? { type: query.type } : {}),
       ...(query.departmentId ? { departmentId: query.departmentId } : {}),
@@ -212,9 +216,9 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
   /** Foto de perfil da conversa (contato ou grupo), autenticada. */
   app.get("/conversations/:id/avatar", { preHandler: authenticate }, async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const allowed = await accessibleInstanceIds(deps.prisma, request.user);
+    const access = await loadConversationAccess(deps.prisma, request.user);
     const conversation = await deps.prisma.conversation.findFirst({
-      where: { id, organizationId: request.user.organizationId, ...instanceScope(allowed) },
+      where: { id, organizationId: request.user.organizationId, ...conversationScope(access) },
       select: { profilePicture: true },
     });
     if (!conversation?.profilePicture) throw new NotFoundError("Foto de perfil");
@@ -227,11 +231,16 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
   /** Foto de perfil de um participante de grupo, autenticada. */
   app.get("/group-participants/:id/avatar", { preHandler: authenticate }, async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const allowed = await accessibleInstanceIds(deps.prisma, request.user);
+    const access = await loadConversationAccess(deps.prisma, request.user);
     const participant = await deps.prisma.groupParticipant.findFirst({
       where: {
         id,
-        group: { organizationId: request.user.organizationId, ...instanceScope(allowed) },
+        group: {
+          organizationId: request.user.organizationId,
+          ...instanceScope(access.instanceIds),
+          // Grupo já virou conversa: vale o mesmo recorte da conversa.
+          OR: [{ conversationId: null }, { conversation: conversationScope(access) }],
+        },
       },
       select: { avatarUrl: true },
     });
@@ -564,7 +573,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     };
     // Aparece na hora para toda a equipe, dentro da conversa.
     deps.io
-      .to(instanceAudience(request.user.organizationId, conversation.whatsappInstanceId))
+      .to(conversationAudience(request.user.organizationId, conversation))
       .emit(RealtimeEvents.InternalNote, payload);
     return reply.status(201).send({ note: payload });
   });

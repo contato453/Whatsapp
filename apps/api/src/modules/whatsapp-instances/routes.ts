@@ -8,6 +8,13 @@ import type { AppDeps } from "../../types.js";
 
 const createInstanceSchema = z.object({
   name: z.string().min(2).max(80),
+  /** Departamento em que as conversas deste número entram por padrão. */
+  departmentId: z.string().uuid().nullable().optional(),
+});
+
+const updateInstanceSchema = z.object({
+  name: z.string().min(2).max(80).optional(),
+  departmentId: z.string().uuid().nullable().optional(),
 });
 
 export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
@@ -30,15 +37,30 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
     return { instances: instances.map(serializeInstance) };
   });
 
+  /** Garante que o departamento informado pertence à organização. */
+  async function assertDepartmentInOrg(
+    departmentId: string | null | undefined,
+    organizationId: string,
+  ): Promise<void> {
+    if (!departmentId) return;
+    const found = await deps.prisma.department.findFirst({
+      where: { id: departmentId, organizationId },
+      select: { id: true },
+    });
+    if (!found) throw new NotFoundError("Departamento");
+  }
+
   app.post(
     "/whatsapp-instances",
     { preHandler: requireRole("supervisor") },
     async (request, reply) => {
       const body = createInstanceSchema.parse(request.body);
+      await assertDepartmentInOrg(body.departmentId, request.user.organizationId);
       const instance = await deps.prisma.whatsAppInstance.create({
         data: {
           organizationId: request.user.organizationId,
           name: body.name,
+          departmentId: body.departmentId ?? null,
           provider: "qrcode",
         },
       });
@@ -51,6 +73,33 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
         entityId: instance.id,
       });
       return reply.status(201).send({ instance: serializeInstance(instance) });
+    },
+  );
+
+  app.patch(
+    "/whatsapp-instances/:id",
+    { preHandler: requireRole("supervisor") },
+    async (request) => {
+      const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+      const body = updateInstanceSchema.parse(request.body);
+      await findInstanceOr404(id, request.user);
+      await assertDepartmentInOrg(body.departmentId, request.user.organizationId);
+      const instance = await deps.prisma.whatsAppInstance.update({
+        where: { id },
+        data: {
+          ...(body.name ? { name: body.name } : {}),
+          ...(body.departmentId !== undefined ? { departmentId: body.departmentId } : {}),
+        },
+      });
+      deps.audit.record({
+        organizationId: request.user.organizationId,
+        userId: request.user.sub,
+        action: "whatsapp.instance_updated",
+        entityType: "WhatsAppInstance",
+        entityId: id,
+        metadata: { departmentId: body.departmentId ?? null },
+      });
+      return { instance: serializeInstance(instance) };
     },
   );
 

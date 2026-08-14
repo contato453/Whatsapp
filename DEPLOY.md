@@ -104,10 +104,12 @@ docker compose -f docker-compose.prod.yml exec \
 ## Passo 8 — Usar
 
 1. Acesse `https://app.seudominio.com.br` e faça login;
-2. Vá em **WhatsApp → Adicionar WhatsApp → Conectar** e escaneie o QR Code;
-3. Cadastre os atendentes em **Atendentes** (cada um com sua senha e papel);
-4. Use **Editar** no atendente para ajustar dados, senha, situação e marcar a quais
-   números de WhatsApp ele tem acesso (sem marcação = todos os números);
+2. Vá em **WhatsApp → Adicionar WhatsApp**, escolha o **departamento padrão** do número
+   e clique em **Conectar** para escanear o QR Code;
+3. Cadastre os usuários em **Usuários** (cada um com sua senha e papel);
+4. Use **Editar** no usuário para ajustar dados, senha, situação e marcar **a quais números
+   e a quais departamentos** ele tem acesso. Sem número ou sem departamento marcado, o
+   usuário não enxerga conversa alguma — a marcação é obrigatória, não opcional;
 5. As sessões ficam no volume `whatsapp_sessions` — sobrevivem a deploys e reboots.
 
 ## Operação do dia a dia
@@ -218,5 +220,5 @@ Copie os arquivos de backup para fora da VPS (Google Drive, S3, outro servidor).
 - [ ] `.env` da VPS nunca commitado nem compartilhado;
 - [ ] Firewall ativo (somente portas 22, 80, 443);
 - [ ] Backups automáticos configurados;
-- [ ] Cada atendente com seu próprio usuário (não compartilhe logins);
+- [ ] Cada pessoa com seu próprio usuário (não compartilhe logins);
 - [ ] Número de WhatsApp dedicado ao atendimento (integração QR não é oficial — risco de banimento existe).

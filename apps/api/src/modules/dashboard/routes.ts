@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { CONVERSATION_STATUSES_ACTIVE } from "@azvchat/shared";
-import { accessibleInstanceIds, instanceIdScope, instanceScope } from "../../lib/access.js";
+import { conversationScope, instanceIdScope, loadConversationAccess } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
 import type { AppDeps } from "../../types.js";
 
@@ -11,12 +11,10 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
     startOfDay.setHours(0, 0, 0, 0);
 
     // Números que o usuário enxerga — os indicadores seguem o mesmo recorte.
-    const allowed = await accessibleInstanceIds(deps.prisma, request.user);
-    const instanceFilter = instanceIdScope(allowed);
-    const conversationFilter = instanceScope(allowed);
-    const messageFilter = allowed
-      ? { conversation: { whatsappInstanceId: { in: allowed } } }
-      : {};
+    const access = await loadConversationAccess(deps.prisma, request.user);
+    const instanceFilter = instanceIdScope(access.instanceIds);
+    const conversationFilter = conversationScope(access);
+    const messageFilter = { conversation: conversationFilter };
 
     const [
       instancesConnected,

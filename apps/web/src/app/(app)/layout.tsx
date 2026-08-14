@@ -24,7 +24,7 @@ const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/inbox", label: "Inbox", icon: Inbox },
   { href: "/whatsapp", label: "WhatsApp", icon: Smartphone },
-  { href: "/users", label: "Atendentes", icon: Users },
+  { href: "/users", label: "Usuários", icon: Users },
   { href: "/departments", label: "Departamentos", icon: Building2 },
   { href: "/tags", label: "Etiquetas", icon: Tags },
   { href: "/quick-replies", label: "Respostas rápidas", icon: Zap },
