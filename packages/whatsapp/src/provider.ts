@@ -1,4 +1,5 @@
 import type {
+  CallEvent,
   ConnectionStatus,
   InstanceStatusEvent,
   MediaPayload,
@@ -45,6 +46,8 @@ export interface WhatsAppProviderEvents {
     targetExternalMessageId: string;
     newText: string;
   }) => void;
+  /** Chamada de voz/vídeo registrada no chat */
+  call: (event: CallEvent) => void;
   "chats-sync": (event: { instanceId: string; chats: ProviderChat[] }) => void;
   "contacts-sync": (event: { instanceId: string; contacts: ProviderContact[] }) => void;
   "groups-sync": (event: { instanceId: string; groups: ProviderGroup[] }) => void;

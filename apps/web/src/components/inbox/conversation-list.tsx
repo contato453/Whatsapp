@@ -1,6 +1,7 @@
 "use client";
 
-import { Users2, User } from "lucide-react";
+import { Users2, User, UserRound } from "lucide-react";
+import type { ConnectionStatus } from "@zapdesk/shared";
 import { cn, formatTime } from "@/lib/utils";
 import type { ConversationDto } from "@/lib/types";
 import { Badge } from "@/components/ui";
@@ -20,6 +21,25 @@ const STATUS_LABELS: Record<ConversationDto["status"], string> = {
   waiting: "Aguardando",
   resolved: "Finalizada",
   archived: "Arquivada",
+};
+
+/** Cores e rótulos do estado da conexão do número (chip). */
+const INSTANCE_STATUS_COLORS: Record<ConnectionStatus, string> = {
+  connected: "#16a34a",
+  connecting: "#d97706",
+  qr_required: "#d97706",
+  reconnecting: "#d97706",
+  disconnected: "#dc2626",
+  error: "#dc2626",
+};
+
+const INSTANCE_STATUS_LABELS: Record<ConnectionStatus, string> = {
+  connected: "conectado",
+  connecting: "conectando",
+  qr_required: "aguardando QR Code",
+  reconnecting: "reconectando",
+  disconnected: "desconectado",
+  error: "com erro",
 };
 
 export function ConversationListItem({
@@ -77,16 +97,24 @@ export function ConversationListItem({
           <div className="mt-1.5 flex flex-wrap items-center gap-1">
             <Badge color={STATUS_COLORS[conversation.status]}>{STATUS_LABELS[conversation.status]}</Badge>
             {conversation.instanceName && (
-              <Badge className="bg-slate-100 text-slate-500">{conversation.instanceName}</Badge>
+              <Badge
+                className="bg-slate-100 text-slate-500"
+                // Bolinha indica se o número está conectado no momento
+                title={`Conexão: ${INSTANCE_STATUS_LABELS[conversation.instanceStatus ?? "disconnected"]}`}
+              >
+                <span
+                  className="h-1.5 w-1.5 shrink-0 rounded-full"
+                  style={{
+                    backgroundColor:
+                      INSTANCE_STATUS_COLORS[conversation.instanceStatus ?? "disconnected"],
+                  }}
+                />
+                {conversation.instanceName}
+              </Badge>
             )}
             {conversation.department && (
               <Badge color={conversation.department.color ?? "#64748b"}>
                 {conversation.department.name}
-              </Badge>
-            )}
-            {conversation.assignedUser && (
-              <Badge className="bg-slate-100 text-slate-600">
-                {conversation.assignedUser.name.split(" ")[0]}
               </Badge>
             )}
             {conversation.tags.slice(0, 2).map((tag) => (
@@ -95,6 +123,16 @@ export function ConversationListItem({
               </Badge>
             ))}
           </div>
+
+          {/* Responsável sempre visível — inclusive quando ninguém assumiu */}
+          <p className="mt-1 flex items-center gap-1 text-[11px]">
+            <UserRound className="h-3 w-3 shrink-0 text-slate-400" />
+            {conversation.assignedUser ? (
+              <span className="truncate text-slate-600">{conversation.assignedUser.name}</span>
+            ) : (
+              <span className="font-medium text-amber-600">Sem responsável</span>
+            )}
+          </p>
         </div>
       </div>
     </button>

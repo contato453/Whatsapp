@@ -56,6 +56,7 @@ export interface ConversationDto {
   id: string;
   whatsappInstanceId: string;
   instanceName: string | null;
+  instanceStatus: ConnectionStatus | null;
   externalChatId: string;
   type: ConversationType;
   title: string;
@@ -105,7 +106,12 @@ export interface MessageDto {
   deletedAt: string | null;
   editedAt: string | null;
   /** Dados extras por tipo — em enquetes traz { pollOptions } */
-  metadata: { pollOptions?: string[]; selectableCount?: number } | null;
+  metadata: {
+    pollOptions?: string[];
+    selectableCount?: number;
+    callStatus?: string;
+    isVideo?: boolean;
+  } | null;
 }
 
 export interface GroupDetailDto {

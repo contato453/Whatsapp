@@ -36,6 +36,7 @@ import {
   isGroupJid,
   isIgnorableJid,
   jidToPhone,
+  phoneFromJid,
   toDate,
   unwrapMessage,
 } from "./normalize.js";
@@ -208,6 +209,31 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     socket.ev.on("messages.update", (updates) => {
       for (const update of updates) {
         this.handleMessageStatusUpdate(instanceId, update.key, update.update?.status ?? undefined);
+      }
+    });
+
+    // Chamadas de voz/vídeo: viram registro na conversa.
+    socket.ev.on("call", (calls) => {
+      for (const call of calls) {
+        const chatId = call.chatId ?? call.from;
+        if (!chatId) continue;
+        const status =
+          call.status === "accept"
+            ? "accepted"
+            : call.status === "reject"
+              ? "rejected"
+              : call.status === "timeout"
+                ? "missed"
+                : "ringing";
+        this.emit("call", {
+          instanceId,
+          callId: call.id,
+          externalChatId: chatId,
+          fromExternalId: call.from ?? null,
+          isVideo: call.isVideo ?? false,
+          status,
+          timestamp: call.date instanceof Date ? call.date : new Date(),
+        });
       }
     });
 
@@ -744,8 +770,11 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
       participantCount: group.participants.length,
       participants: group.participants.map((participant) => ({
         externalContactId: participant.id,
-        phoneNumber: jidToPhone(participant.id) ?? "",
-        name: null,
+        // participant.id pode ser um LID (identificador interno); o telefone
+        // real, quando disponível, vem em participant.jid.
+        phoneNumber: phoneFromJid(participant.jid ?? participant.id) ?? "",
+        name:
+          participant.name ?? participant.notify ?? participant.verifiedName ?? null,
         isAdmin: participant.admin === "admin",
         isSuperAdmin: participant.admin === "superadmin",
       })),

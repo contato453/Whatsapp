@@ -20,6 +20,14 @@ const AVATAR_FETCH_DELAY_MS = 300;
 const AVATAR_BACKFILL_LIMIT = 300;
 /** Máximo de participantes consultados por abertura de grupo. */
 const PARTICIPANT_AVATAR_LIMIT = 80;
+/** Textos exibidos para cada desfecho de chamada. */
+const CALL_LABELS: Record<string, (isVideo: boolean) => string> = {
+  ringing: (isVideo) => (isVideo ? "Chamada de vídeo recebida" : "Chamada de voz recebida"),
+  accepted: (isVideo) => (isVideo ? "Chamada de vídeo atendida" : "Chamada de voz atendida"),
+  rejected: (isVideo) => (isVideo ? "Chamada de vídeo recusada" : "Chamada de voz recusada"),
+  missed: (isVideo) => (isVideo ? "Chamada de vídeo perdida" : "Chamada de voz perdida"),
+};
+
 /** Revalida a foto de um participante no máximo a cada 7 dias. */
 const PARTICIPANT_AVATAR_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -64,6 +72,17 @@ export class InstanceManager {
     this.provider.on("message", (message) => {
       void this.withOrg(message.instanceId, async (organizationId) => {
         const result = await this.ingest.ingest(message, { organizationId });
+        // O nome que o WhatsApp envia junto da mensagem (pushName) costuma
+        // ser a melhor fonte para identificar participantes de grupo.
+        if (message.chatType === "group" && message.senderExternalId && message.senderName) {
+          void this.enrichParticipant(
+            message.instanceId,
+            message.externalChatId,
+            message.senderExternalId,
+            message.senderName,
+            message.senderPhone,
+          );
+        }
         if (!result?.isNewMessage) return;
         const [conversation, persisted] = await Promise.all([
           this.prisma.conversation.findUnique({
@@ -188,6 +207,88 @@ export class InstanceManager {
       });
     });
 
+    // Chamada de voz/vídeo — vira um registro dentro da conversa
+    this.provider.on("call", (event) => {
+      void this.withOrg(event.instanceId, async (organizationId) => {
+        const conversation = await this.prisma.conversation.findUnique({
+          where: {
+            whatsappInstanceId_externalChatId: {
+              whatsappInstanceId: event.instanceId,
+              externalChatId: event.externalChatId,
+            },
+          },
+          select: { id: true, status: true },
+        });
+        if (!conversation) return;
+
+        const label = (CALL_LABELS[event.status] ?? CALL_LABELS.ringing)?.(event.isVideo) ?? "Chamada";
+        // Mesma chamada emite vários eventos (tocando → atendida/perdida):
+        // usamos o id da chamada para atualizar em vez de duplicar.
+        const existing = await this.prisma.message.findUnique({
+          where: {
+            conversationId_externalMessageId: {
+              conversationId: conversation.id,
+              externalMessageId: `call:${event.callId}`,
+            },
+          },
+          select: { id: true },
+        });
+
+        const message = existing
+          ? await this.prisma.message.update({
+              where: { id: existing.id },
+              data: { content: label, metadata: { callStatus: event.status, isVideo: event.isVideo } },
+            })
+          : await this.prisma.message.create({
+              data: {
+                organizationId,
+                conversationId: conversation.id,
+                externalMessageId: `call:${event.callId}`,
+                direction: "inbound",
+                type: "call",
+                content: label,
+                metadata: { callStatus: event.status, isVideo: event.isVideo },
+                senderExternalId: event.fromExternalId,
+                timestamp: event.timestamp,
+                status: "delivered",
+              },
+            });
+
+        await this.prisma.conversation.update({
+          where: { id: conversation.id },
+          data: {
+            lastMessageAt: event.timestamp,
+            lastMessagePreview: label,
+            ...(conversation.status === "new" ? { status: "open" as const } : {}),
+          },
+        });
+
+        const full = await this.prisma.conversation.findUnique({
+          where: { id: conversation.id },
+          include: {
+            assignedUser: true,
+            department: true,
+            instance: true,
+            tags: { include: { tag: true } },
+          },
+        });
+        const room = instanceAudience(organizationId, event.instanceId);
+        if (existing) {
+          this.io.to(room).emit(RealtimeEvents.MessageUpdated, serializeMessage(message));
+        } else if (full) {
+          this.io.to(room).emit(RealtimeEvents.MessageNew, {
+            conversation: serializeConversation(full),
+            message: serializeMessage(message),
+          });
+        }
+        if (full) {
+          this.io
+            .to(room)
+            .emit(RealtimeEvents.ConversationUpdated, serializeConversation(full));
+        }
+      });
+    });
+
     // Cliente apagou uma mensagem para todos
     this.provider.on("message-deleted", (event) => {
       void this.withOrg(event.instanceId, async (organizationId) => {
@@ -243,6 +344,51 @@ export class InstanceManager {
         this.syncGroups(event.instanceId, organizationId, event.groups),
       );
     });
+  }
+
+  /**
+   * Completa nome/telefone de um participante de grupo a partir dos dados
+   * que chegam nas mensagens — o WhatsApp não entrega esses campos na
+   * listagem de participantes quando o grupo usa identificadores internos.
+   */
+  private async enrichParticipant(
+    instanceId: string,
+    externalChatId: string,
+    externalContactId: string,
+    name: string,
+    phone: string | null,
+  ): Promise<void> {
+    try {
+      const group = await this.prisma.whatsAppGroup.findUnique({
+        where: {
+          whatsappInstanceId_externalId: {
+            whatsappInstanceId: instanceId,
+            externalId: externalChatId,
+          },
+        },
+        select: { id: true },
+      });
+      if (!group) return;
+      const participant = await this.prisma.groupParticipant.findUnique({
+        where: {
+          groupId_externalContactId: { groupId: group.id, externalContactId },
+        },
+        select: { id: true, name: true, phoneNumber: true },
+      });
+      if (!participant) return;
+      const needsName = !participant.name || participant.name !== name;
+      const needsPhone = !participant.phoneNumber && !!phone;
+      if (!needsName && !needsPhone) return;
+      await this.prisma.groupParticipant.update({
+        where: { id: participant.id },
+        data: {
+          ...(needsName ? { name } : {}),
+          ...(needsPhone && phone ? { phoneNumber: phone } : {}),
+        },
+      });
+    } catch (err) {
+      this.logger.debug({ event: "participant_enrich_failed", error: String(err) });
+    }
   }
 
   /** Localiza uma mensagem persistida a partir do id externo do WhatsApp. */

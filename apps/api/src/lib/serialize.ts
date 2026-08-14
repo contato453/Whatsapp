@@ -79,6 +79,8 @@ export function serializeConversation(conversation: ConversationWithRelations) {
     id: conversation.id,
     whatsappInstanceId: conversation.whatsappInstanceId,
     instanceName: conversation.instance?.name ?? null,
+    // Status da conexão do número, para sinalizar na lista de conversas
+    instanceStatus: conversation.instance?.status ?? null,
     externalChatId: conversation.externalChatId,
     type: conversation.type,
     title: conversation.title,

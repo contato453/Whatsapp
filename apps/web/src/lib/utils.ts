@@ -30,6 +30,32 @@ export function formatDateTime(iso: string | null): string {
   });
 }
 
+/**
+ * Rótulo do separador de dia na conversa:
+ * "Hoje", "Ontem" ou "terça-feira, 12 de agosto de 2026".
+ */
+export function formatDayLabel(iso: string): string {
+  const date = new Date(iso);
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+
+  if (date.toDateString() === today.toDateString()) return "Hoje";
+  if (date.toDateString() === yesterday.toDateString()) return "Ontem";
+
+  return date.toLocaleDateString("pt-BR", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+/** Duas datas caem no mesmo dia? */
+export function isSameDay(a: string, b: string): boolean {
+  return new Date(a).toDateString() === new Date(b).toDateString();
+}
+
 export function initials(name: string): string {
   return name
     .split(/\s+/)

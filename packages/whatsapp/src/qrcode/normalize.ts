@@ -31,6 +31,20 @@ export function isGroupJid(jid: string | null | undefined): boolean {
   return typeof jid === "string" && jid.endsWith("@g.us");
 }
 
+/**
+ * JIDs "@lid" são identificadores internos e anônimos do WhatsApp — o
+ * número neles NÃO é telefone. Precisamos ignorá-los ao exibir contatos.
+ */
+export function isLidJid(jid: string | null | undefined): boolean {
+  return typeof jid === "string" && jid.endsWith("@lid");
+}
+
+/** Extrai o telefone somente quando o JID for de fato do tipo telefone. */
+export function phoneFromJid(jid: string | null | undefined): string | null {
+  if (!jid || isLidJid(jid) || isGroupJid(jid)) return null;
+  return jidToPhone(jid);
+}
+
 export function chatTypeFromJid(jid: string): ConversationType {
   return isGroupJid(jid) ? "group" : "individual";
 }

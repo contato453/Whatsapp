@@ -15,9 +15,12 @@ import {
   MapPin,
   MoreVertical,
   Pencil,
+  Phone,
+  PhoneMissed,
   Smile,
   Trash2,
   User,
+  Video,
   XCircle,
 } from "lucide-react";
 import { fetchMediaBlobUrl } from "@/lib/api";
@@ -249,6 +252,26 @@ export function MessageBubble({
             )}
           >
             <Ban className="h-3.5 w-3.5" /> Esta mensagem foi apagada
+          </p>
+        ) : message.type === "call" ? (
+          <p
+            className={cn(
+              "flex items-center gap-1.5 text-sm",
+              message.metadata?.callStatus === "missed" ||
+                message.metadata?.callStatus === "rejected"
+                ? "text-red-600"
+                : "text-slate-700",
+            )}
+          >
+            {message.metadata?.isVideo ? (
+              <Video className="h-4 w-4" />
+            ) : message.metadata?.callStatus === "missed" ||
+              message.metadata?.callStatus === "rejected" ? (
+              <PhoneMissed className="h-4 w-4" />
+            ) : (
+              <Phone className="h-4 w-4" />
+            )}
+            {message.content ?? "Chamada"}
           </p>
         ) : message.type === "poll" ? (
           <div className="space-y-1.5">

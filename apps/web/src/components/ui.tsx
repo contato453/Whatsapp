@@ -83,13 +83,16 @@ export function Badge({
   children,
   color,
   className,
+  title,
 }: {
   children: ReactNode;
   color?: string;
   className?: string;
+  title?: string;
 }) {
   return (
     <span
+      title={title}
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium",
         !color && "bg-slate-100 text-slate-700",

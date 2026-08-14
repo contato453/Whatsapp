@@ -38,6 +38,7 @@ export const MESSAGE_TYPES = [
   "location",
   "contact",
   "poll",
+  "call",
   "other",
 ] as const;
 export type MessageType = (typeof MESSAGE_TYPES)[number];

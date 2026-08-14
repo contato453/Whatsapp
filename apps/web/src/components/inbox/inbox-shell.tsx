@@ -11,10 +11,12 @@ import {
   Inbox as InboxIcon,
   Info,
   Paperclip,
+  Pencil,
   Search,
   Send,
   Sticker,
   StickyNote,
+  Trash2,
   Users2,
   X,
   Zap,
@@ -23,7 +25,7 @@ import { RealtimeEvents } from "@zapdesk/shared";
 import { api } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { useAuth } from "@/lib/auth-context";
-import { cn, formatDateTime } from "@/lib/utils";
+import { cn, formatDateTime, formatDayLabel } from "@/lib/utils";
 import type {
   ConversationDetailDto,
   ConversationDto,
@@ -44,10 +46,20 @@ import { MessageBubble } from "./message-bubble";
 import { ContextPanel } from "./context-panel";
 
 /** Nota interna exibida dentro da conversa — nunca vai para o WhatsApp. */
-function InternalNoteItem({ note }: { note: NoteDto }) {
+function InternalNoteItem({
+  note,
+  canManage,
+  onEdit,
+  onDelete,
+}: {
+  note: NoteDto;
+  canManage: boolean;
+  onEdit: (note: NoteDto) => void;
+  onDelete: (note: NoteDto) => void;
+}) {
   return (
-    <div className="flex justify-center py-1">
-      <div className="max-w-[80%] rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 shadow-sm">
+    <div className="group flex justify-center py-1">
+      <div className="relative max-w-[80%] rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 shadow-sm">
         <p className="mb-0.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
           <StickyNote className="h-3 w-3" /> Nota interna
         </p>
@@ -61,6 +73,24 @@ function InternalNoteItem({ note }: { note: NoteDto }) {
             minute: "2-digit",
           })}
         </p>
+        {canManage && (
+          <div className="absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+            <button
+              onClick={() => onEdit(note)}
+              title="Editar nota"
+              className="rounded p-1 text-amber-600/70 hover:bg-amber-100 hover:text-amber-800"
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+            <button
+              onClick={() => onDelete(note)}
+              title="Apagar nota"
+              className="rounded p-1 text-amber-600/70 hover:bg-red-50 hover:text-red-600"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -288,6 +318,19 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         ) ?? null,
       );
     };
+    // Conexão do número mudou: reflete o indicador nos cards da lista.
+    const onInstanceStatus = (payload: {
+      instanceId: string;
+      status: ConversationDto["instanceStatus"];
+    }) => {
+      setConversations((current) =>
+        current?.map((conversation) =>
+          conversation.whatsappInstanceId === payload.instanceId
+            ? { ...conversation, instanceStatus: payload.status }
+            : conversation,
+        ) ?? null,
+      );
+    };
     // Fotos dos participantes chegaram: recarrega o painel de contexto.
     const onGroupParticipants = (payload: { conversationId: string }) => {
       if (payload.conversationId === conversationId) {
@@ -330,6 +373,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     socket.on(RealtimeEvents.ConversationUpdated, onConversationUpdated);
     socket.on(RealtimeEvents.MessageStatus, onMessageStatus);
     socket.on(RealtimeEvents.GroupParticipants, onGroupParticipants);
+    socket.on(RealtimeEvents.InstanceStatus, onInstanceStatus);
     socket.on(RealtimeEvents.MessageReaction, onReaction);
     socket.on(RealtimeEvents.MessageUpdated, onMessageUpdated);
     socket.on(RealtimeEvents.InternalNote, onNote);
@@ -338,6 +382,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       socket.off(RealtimeEvents.ConversationUpdated, onConversationUpdated);
       socket.off(RealtimeEvents.MessageStatus, onMessageStatus);
       socket.off(RealtimeEvents.GroupParticipants, onGroupParticipants);
+      socket.off(RealtimeEvents.InstanceStatus, onInstanceStatus);
       socket.off(RealtimeEvents.MessageReaction, onReaction);
       socket.off(RealtimeEvents.MessageUpdated, onMessageUpdated);
       socket.off(RealtimeEvents.InternalNote, onNote);
@@ -407,6 +452,29 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     } catch (err) {
       window.alert(err instanceof Error ? err.message : "Falha ao reagir");
       loadDetail();
+    }
+  }
+
+  async function handleEditNote(note: NoteDto) {
+    const next = window.prompt("Editar nota interna:", note.content);
+    if (next === null) return;
+    const content = next.trim();
+    if (!content || content === note.content) return;
+    try {
+      await api.patch(`/conversations/${conversationId}/notes/${note.id}`, { content });
+      loadDetail();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Falha ao editar nota");
+    }
+  }
+
+  async function handleDeleteNote(note: NoteDto) {
+    if (!window.confirm("Apagar esta nota interna?")) return;
+    try {
+      await api.delete(`/conversations/${conversationId}/notes/${note.id}`);
+      loadDetail();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Falha ao apagar nota");
     }
   }
 
@@ -569,7 +637,27 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         items.push({ kind: "note" as const, at, note });
       }
     }
-    return items.sort((a, b) => a.at - b.at);
+    const sorted = items.sort((a, b) => a.at - b.at);
+
+    // Insere o separador de data sempre que o dia muda.
+    const withDividers: Array<
+      | (typeof sorted)[number]
+      | { kind: "day"; at: number; label: string }
+    > = [];
+    let lastDay: string | null = null;
+    for (const item of sorted) {
+      const day = new Date(item.at).toDateString();
+      if (day !== lastDay) {
+        withDividers.push({
+          kind: "day" as const,
+          at: item.at,
+          label: formatDayLabel(new Date(item.at).toISOString()),
+        });
+        lastDay = day;
+      }
+      withDividers.push(item);
+    }
+    return withDividers;
   }, [messages, detail?.notes]);
 
   return (
@@ -778,7 +866,13 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                 <EmptyState title="Sem mensagens ainda" description="As novas mensagens deste chat aparecerão aqui em tempo real." />
               ) : (
                 timeline.map((item) =>
-                  item.kind === "message" ? (
+                  item.kind === "day" ? (
+                    <div key={`day-${item.at}`} className="flex justify-center py-2">
+                      <span className="rounded-full bg-slate-200/70 px-3 py-1 text-[11px] font-medium capitalize text-slate-600">
+                        {item.label}
+                      </span>
+                    </div>
+                  ) : item.kind === "message" ? (
                     <div
                       key={item.message.id}
                       id={`message-${item.message.id}`}
@@ -802,7 +896,15 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                     />
                     </div>
                   ) : (
-                    <InternalNoteItem key={`note-${item.note.id}`} note={item.note} />
+                    <InternalNoteItem
+                      key={`note-${item.note.id}`}
+                      note={item.note}
+                      canManage={
+                        item.note.user?.id === me?.id || me?.role === "admin" || me?.role === "supervisor"
+                      }
+                      onEdit={(note) => void handleEditNote(note)}
+                      onDelete={(note) => void handleDeleteNote(note)}
+                    />
                   ),
                 )
               )}

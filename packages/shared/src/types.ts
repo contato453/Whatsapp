@@ -111,6 +111,19 @@ export interface QuotedMessageRef {
   text: string | null;
 }
 
+/** Registro de chamada (voz ou vídeo) observado na conexão. */
+export interface CallEvent {
+  instanceId: string;
+  /** Identificador da chamada no WhatsApp (usado para deduplicar) */
+  callId: string;
+  externalChatId: string;
+  fromExternalId: string | null;
+  isVideo: boolean;
+  /** offer/ringing = tocando; accept = atendida; reject/timeout = não atendida */
+  status: "ringing" | "accepted" | "rejected" | "missed";
+  timestamp: Date;
+}
+
 export interface MessageStatusUpdate {
   instanceId: string;
   externalChatId: string;

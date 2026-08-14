@@ -463,6 +463,42 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     return reply.status(201).send({ note: payload });
   });
 
+  /** Edita uma nota interna (autor, supervisor ou admin). */
+  app.patch("/conversations/:id/notes/:noteId", { preHandler: authenticate }, async (request) => {
+    const { id, noteId } = z
+      .object({ id: z.string().uuid(), noteId: z.string().uuid() })
+      .parse(request.params);
+    const { content } = z.object({ content: z.string().min(1).max(2000) }).parse(request.body);
+    const note = await deps.prisma.internalNote.findFirst({
+      where: { id: noteId, conversationId: id, organizationId: request.user.organizationId },
+    });
+    if (!note) throw new NotFoundError("Nota interna");
+    if (note.userId !== request.user.sub && request.user.role === "agent") {
+      throw new ForbiddenError("Só o autor pode editar esta nota");
+    }
+    const updated = await deps.prisma.internalNote.update({
+      where: { id: noteId },
+      data: { content },
+      include: { user: true },
+    });
+    deps.audit.record({
+      organizationId: request.user.organizationId,
+      userId: request.user.sub,
+      action: "note.updated",
+      entityType: "InternalNote",
+      entityId: noteId,
+    });
+    return {
+      note: {
+        id: updated.id,
+        conversationId: id,
+        content: updated.content,
+        user: updated.user ? serializeUser(updated.user) : null,
+        createdAt: updated.createdAt.toISOString(),
+      },
+    };
+  });
+
   /** Remove uma nota interna (autor ou supervisor/admin). */
   app.delete("/conversations/:id/notes/:noteId", { preHandler: authenticate }, async (request) => {
     const { id, noteId } = z
@@ -476,6 +512,13 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       throw new ForbiddenError("Só o autor pode excluir esta nota");
     }
     await deps.prisma.internalNote.delete({ where: { id: noteId } });
+    deps.audit.record({
+      organizationId: request.user.organizationId,
+      userId: request.user.sub,
+      action: "note.deleted",
+      entityType: "InternalNote",
+      entityId: noteId,
+    });
     return { ok: true };
   });
 }

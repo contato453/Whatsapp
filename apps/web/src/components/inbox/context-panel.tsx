@@ -249,11 +249,19 @@ export function ContextPanel({
                   participantId={participant.id}
                   name={participant.name ?? participant.phoneNumber}
                   hasAvatar={participant.hasAvatar}
-                  className="h-6 w-6 text-[9px]"
+                  className="h-7 w-7 text-[9px]"
                 />
-                <span className="min-w-0 flex-1 truncate text-slate-700">
-                  {participant.name ?? formatPhone(participant.phoneNumber)}
-                </span>
+                <div className="min-w-0 flex-1">
+                  {/* Nome quando conhecido; o telefone aparece logo abaixo */}
+                  <p className="truncate text-slate-700">
+                    {participant.name || formatPhone(participant.phoneNumber) || "Participante"}
+                  </p>
+                  {participant.name && participant.phoneNumber && (
+                    <p className="truncate text-[11px] text-slate-400">
+                      {formatPhone(participant.phoneNumber)}
+                    </p>
+                  )}
+                </div>
                 {participant.isAdmin && <Badge className="bg-amber-50 text-amber-700">admin</Badge>}
               </div>
             ))}

@@ -291,6 +291,7 @@ enum MessageType {
   location
   contact
   poll
+  call
   other
 }
 
