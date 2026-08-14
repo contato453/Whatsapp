@@ -130,6 +130,7 @@ Para produção séria, considere ainda: tokens httpOnly + refresh (hoje o token
 - persistência de sessão em disco + retomada automática após restart/deploy;
 - reconexão automática com backoff exponencial; `logged_out` limpa credenciais e pede novo QR;
 - sincronização de chats, contatos e grupos (com participantes e admins);
+- fotos de perfil de contatos e grupos, baixadas e armazenadas localmente (preenchimento automático das conversas existentes ao conectar, com botão de atualizar no painel);
 - recebimento de mensagens em tempo real (texto, imagem, áudio, vídeo, documento, sticker, localização, contato) com download e armazenamento de mídia;
 - identificação do participante que enviou cada mensagem de grupo (nome + telefone, cor por remetente);
 - envio de texto e de arquivos/áudios/imagens/PDFs pela Inbox;
@@ -145,7 +146,6 @@ Para produção séria, considere ainda: tokens httpOnly + refresh (hoje o token
 ## O que ainda falta (próximos passos sugeridos)
 
 - **Validação em produção do pareamento QR**: o ambiente onde este código foi desenvolvido bloqueia a saída para `web.whatsapp.com`, então o handshake final com o WhatsApp não pôde ser exercitado de ponta a ponta aqui. O fluxo (QR → conexão → eventos) usa o caminho padrão e estável do Baileys, mas o primeiro pareamento real deve ser feito em ambiente com rede aberta;
-- foto de perfil de contatos/grupos (campo já existe; falta buscar via provider);
 - envio de áudio gravado no navegador (hoje envia arquivos de áudio; gravação nativa é próximo passo);
 - mensagens citadas (reply) na UI — o dado já é persistido (`quotedMessageId`);
 - paginação infinita na lista de mensagens (hoje carrega as últimas 60);

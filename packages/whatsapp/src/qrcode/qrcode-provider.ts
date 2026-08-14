@@ -522,6 +522,36 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     };
   }
 
+  async getProfilePicture(
+    instanceId: string,
+    externalId: string,
+  ): Promise<{ data: Buffer; mimeType: string } | null> {
+    const socket = this.requireSocket(instanceId);
+    let url: string | undefined;
+    try {
+      // "image" = alta resolução; lança/retorna undefined quando não há foto
+      // ou quando a privacidade do contato bloqueia o acesso.
+      url = await socket.profilePictureUrl(externalId, "image");
+    } catch {
+      return null;
+    }
+    if (!url) return null;
+    try {
+      const response = await fetch(url);
+      if (!response.ok) return null;
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const mimeType = response.headers.get("content-type") ?? "image/jpeg";
+      return { data: buffer, mimeType };
+    } catch (err) {
+      this.logger.debug({
+        instanceId,
+        event: "profile_picture_download_failed",
+        error: String(err),
+      });
+      return null;
+    }
+  }
+
   async getChats(instanceId: string): Promise<ProviderChat[]> {
     const state = this.sessions.get(instanceId);
     return state ? [...state.chats.values()] : [];

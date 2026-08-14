@@ -69,7 +69,9 @@ export function serializeConversation(conversation: ConversationWithRelations) {
     externalChatId: conversation.externalChatId,
     type: conversation.type,
     title: conversation.title,
-    profilePicture: conversation.profilePicture,
+    // A chave interna do arquivo nunca vai ao frontend; ele busca a imagem
+    // pelo endpoint autenticado /conversations/:id/avatar.
+    hasAvatar: conversation.profilePicture != null,
     status: conversation.status,
     assignedUser: conversation.assignedUser ? serializeUser(conversation.assignedUser) : null,
     department: conversation.department ? serializeDepartment(conversation.department) : null,

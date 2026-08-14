@@ -10,8 +10,14 @@ import type { Server } from "socket.io";
 import type { Logger } from "pino";
 import { orgRoom } from "../realtime/socket.js";
 import { serializeConversation, serializeMessage } from "../lib/serialize.js";
+import { extensionFromMime, type MediaStorage } from "../lib/media-storage.js";
 import type { MessageIngestService } from "./message-ingest.js";
 import type { AuditService } from "../modules/audit/service.js";
+
+/** Intervalo entre downloads de foto para não sobrecarregar o WhatsApp. */
+const AVATAR_FETCH_DELAY_MS = 300;
+/** Máximo de fotos buscadas por rodada de backfill. */
+const AVATAR_BACKFILL_LIMIT = 300;
 
 /**
  * Orquestra o ciclo de vida das instâncias de WhatsApp:
@@ -23,6 +29,9 @@ import type { AuditService } from "../modules/audit/service.js";
  */
 export class InstanceManager {
   private readonly orgByInstance = new Map<string, string>();
+  /** Conversas sem foto disponível — evita repetir download a cada evento. */
+  private readonly avatarsUnavailable = new Set<string>();
+  private avatarSyncRunning = false;
 
   constructor(
     private readonly prisma: PrismaClient,
@@ -30,6 +39,7 @@ export class InstanceManager {
     private readonly ingest: MessageIngestService,
     private readonly io: Server,
     private readonly audit: AuditService,
+    private readonly storage: MediaStorage,
     private readonly logger: Logger,
   ) {}
 
@@ -206,7 +216,105 @@ export class InstanceManager {
         phoneNumber,
         reason,
       });
+
+      if (status === "connected") {
+        // Aguarda a sincronização inicial de chats/grupos antes de buscar fotos.
+        setTimeout(() => {
+          void this.backfillAvatars(instanceId, organizationId);
+        }, 15_000);
+      }
     });
+  }
+
+  /**
+   * Baixa e armazena a foto de perfil de uma conversa (contato ou grupo).
+   * Retorna true se a foto foi atualizada.
+   */
+  async syncConversationAvatar(
+    conversation: { id: string; whatsappInstanceId: string; externalChatId: string },
+    options: { force?: boolean } = {},
+  ): Promise<boolean> {
+    if (!options.force && this.avatarsUnavailable.has(conversation.id)) return false;
+    try {
+      const picture = await this.provider.getProfilePicture(
+        conversation.whatsappInstanceId,
+        conversation.externalChatId,
+      );
+      if (!picture) {
+        this.avatarsUnavailable.add(conversation.id);
+        return false;
+      }
+      const key = await this.storage.save(picture.data, {
+        instanceId: conversation.whatsappInstanceId,
+        extension: extensionFromMime(picture.mimeType) ?? "jpg",
+      });
+      await this.prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { profilePicture: key },
+      });
+      this.avatarsUnavailable.delete(conversation.id);
+      return true;
+    } catch (err) {
+      this.logger.debug({
+        conversationId: conversation.id,
+        event: "avatar_sync_failed",
+        error: String(err),
+      });
+      this.avatarsUnavailable.add(conversation.id);
+      return false;
+    }
+  }
+
+  /**
+   * Preenche as fotos das conversas que ainda não têm — roda quando a
+   * instância conecta e após sincronizações, em ritmo controlado para não
+   * sobrecarregar o WhatsApp.
+   */
+  private async backfillAvatars(instanceId: string, organizationId: string): Promise<void> {
+    if (this.avatarSyncRunning) return;
+    this.avatarSyncRunning = true;
+    try {
+      const pending = await this.prisma.conversation.findMany({
+        where: {
+          whatsappInstanceId: instanceId,
+          profilePicture: null,
+          id: { notIn: [...this.avatarsUnavailable] },
+        },
+        select: { id: true, whatsappInstanceId: true, externalChatId: true },
+        orderBy: { lastMessageAt: { sort: "desc", nulls: "last" } },
+        take: AVATAR_BACKFILL_LIMIT,
+      });
+      if (pending.length === 0) return;
+
+      this.logger.info({ instanceId, event: "avatar_backfill_started", count: pending.length });
+      let updated = 0;
+      for (const conversation of pending) {
+        const changed = await this.syncConversationAvatar(conversation);
+        if (changed) {
+          updated += 1;
+          const full = await this.prisma.conversation.findUnique({
+            where: { id: conversation.id },
+            include: {
+              assignedUser: true,
+              department: true,
+              instance: true,
+              tags: { include: { tag: true } },
+            },
+          });
+          if (full) {
+            this.io
+              .to(orgRoom(organizationId))
+              .emit(RealtimeEvents.ConversationUpdated, serializeConversation(full));
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, AVATAR_FETCH_DELAY_MS));
+      }
+      this.logger.info({ instanceId, event: "avatar_backfill_finished", updated });
+    } catch (err) {
+      this.logger.warn({ instanceId, event: "avatar_backfill_failed", error: String(err) });
+    } finally {
+      this.avatarSyncRunning = false;
+    }
   }
 
   private async syncChats(
@@ -240,6 +348,7 @@ export class InstanceManager {
       });
     }
     this.logger.info({ instanceId, event: "chats_synced", count: chats.length });
+    void this.backfillAvatars(instanceId, organizationId);
   }
 
   private async syncContacts(
@@ -342,5 +451,6 @@ export class InstanceManager {
       }
     }
     this.logger.info({ instanceId, event: "groups_synced", count: groups.length });
+    void this.backfillAvatars(instanceId, organizationId);
   }
 }

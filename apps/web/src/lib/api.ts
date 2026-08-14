@@ -78,3 +78,33 @@ export async function fetchMediaBlobUrl(messageId: string): Promise<string> {
   const blob = await response.blob();
   return URL.createObjectURL(blob);
 }
+
+/**
+ * Fotos de perfil aparecem em várias telas ao mesmo tempo (lista, cabeçalho,
+ * painel). O cache evita baixar a mesma imagem repetidas vezes.
+ */
+const avatarCache = new Map<string, Promise<string>>();
+
+export function fetchConversationAvatarUrl(conversationId: string): Promise<string> {
+  const cached = avatarCache.get(conversationId);
+  if (cached) return cached;
+  const token = getToken();
+  const promise = fetch(`${API_URL}/conversations/${conversationId}/avatar`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+    .then(async (response) => {
+      if (!response.ok) throw new ApiError("Sem foto de perfil", response.status);
+      return URL.createObjectURL(await response.blob());
+    })
+    .catch((err) => {
+      avatarCache.delete(conversationId);
+      throw err;
+    });
+  avatarCache.set(conversationId, promise);
+  return promise;
+}
+
+/** Descarta o cache de uma foto (após atualização manual). */
+export function invalidateConversationAvatar(conversationId: string): void {
+  avatarCache.delete(conversationId);
+}

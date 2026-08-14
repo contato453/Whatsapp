@@ -28,6 +28,7 @@ import type {
 } from "@/lib/types";
 import { Button, EmptyState, Input, Spinner, Textarea } from "@/components/ui";
 import { ConversationListItem } from "./conversation-list";
+import { ConversationAvatar } from "./conversation-avatar";
 import { MessageBubble } from "./message-bubble";
 import { ContextPanel } from "./context-panel";
 
@@ -388,6 +389,12 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
           <>
             <header className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
               <div className="flex min-w-0 items-center gap-2.5">
+                <ConversationAvatar
+                  conversationId={conversation.id}
+                  name={conversation.title}
+                  hasAvatar={conversation.hasAvatar}
+                  size="sm"
+                />
                 {isGroup && <Users2 className="h-4 w-4 shrink-0 text-slate-400" />}
                 <div className="min-w-0">
                   <h2 className="truncate text-sm font-semibold text-slate-900">{conversation.title}</h2>

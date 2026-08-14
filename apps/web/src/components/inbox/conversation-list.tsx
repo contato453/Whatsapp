@@ -3,7 +3,8 @@
 import { Users2, User } from "lucide-react";
 import { cn, formatTime } from "@/lib/utils";
 import type { ConversationDto } from "@/lib/types";
-import { Avatar, Badge } from "@/components/ui";
+import { Badge } from "@/components/ui";
+import { ConversationAvatar } from "./conversation-avatar";
 
 const STATUS_COLORS: Record<ConversationDto["status"], string> = {
   new: "#0891b2",
@@ -40,7 +41,11 @@ export function ConversationListItem({
     >
       <div className="flex items-start gap-2.5">
         <div className="relative shrink-0">
-          <Avatar name={conversation.title} src={conversation.profilePicture} />
+          <ConversationAvatar
+            conversationId={conversation.id}
+            name={conversation.title}
+            hasAvatar={conversation.hasAvatar}
+          />
           <span
             className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-white text-slate-500 shadow"
             title={conversation.type === "group" ? "Grupo" : "Contato"}

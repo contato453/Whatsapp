@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { CheckCircle2, RotateCcw, StickyNote, UserMinus, UserPlus, X } from "lucide-react";
-import { api } from "@/lib/api";
+import { CheckCircle2, RefreshCw, RotateCcw, StickyNote, UserMinus, UserPlus, X } from "lucide-react";
+import { api, invalidateConversationAvatar } from "@/lib/api";
 import { formatDateTime, formatPhone } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
 import type {
@@ -12,6 +12,7 @@ import type {
   UserDto,
 } from "@/lib/types";
 import { Avatar, Badge, Button, Textarea } from "@/components/ui";
+import { ConversationAvatar } from "./conversation-avatar";
 
 const ACTION_LABELS: Record<string, string> = {
   assigned: "assumiu o atendimento",
@@ -59,8 +60,13 @@ export function ContextPanel({
       {/* Dados da conversa */}
       <section>
         <div className="flex items-center gap-3">
-          <Avatar name={conversation.title} src={conversation.profilePicture} size="lg" />
-          <div className="min-w-0">
+          <ConversationAvatar
+            conversationId={conversation.id}
+            name={conversation.title}
+            hasAvatar={conversation.hasAvatar}
+            size="lg"
+          />
+          <div className="min-w-0 flex-1">
             <p className="truncate font-semibold text-slate-900">{conversation.title}</p>
             <p className="text-xs text-slate-500">
               {conversation.type === "group"
@@ -69,6 +75,19 @@ export function ContextPanel({
             </p>
             <p className="text-xs text-slate-400">via {conversation.instanceName ?? "—"}</p>
           </div>
+          <button
+            title="Atualizar foto de perfil"
+            disabled={busy}
+            onClick={() =>
+              run(async () => {
+                await api.post(`/conversations/${conversation.id}/avatar/refresh`);
+                invalidateConversationAvatar(conversation.id);
+              })
+            }
+            className="rounded-lg p-1.5 text-slate-300 hover:bg-slate-100 hover:text-slate-600"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
         </div>
         {detail.group?.description && (
           <p className="mt-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-500">

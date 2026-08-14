@@ -57,6 +57,17 @@ export interface WhatsAppProvider {
   /** Número conectado (E.164 sem +) ou null se desconhecido. */
   getPhoneNumber(instanceId: string): string | null;
 
+  /**
+   * Foto de perfil de um contato ou grupo, já baixada como binário.
+   * Retorna null quando não há foto ou o perfil é privado.
+   * O provider é responsável por resolver a URL interna — a aplicação
+   * nunca lida com CDNs específicos do fornecedor.
+   */
+  getProfilePicture(
+    instanceId: string,
+    externalId: string,
+  ): Promise<{ data: Buffer; mimeType: string } | null>;
+
   sendText(instanceId: string, chatId: string, text: string): Promise<MessageResult>;
 
   sendMedia(instanceId: string, chatId: string, media: MediaPayload): Promise<MessageResult>;

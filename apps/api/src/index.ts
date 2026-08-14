@@ -56,7 +56,15 @@ async function main(): Promise<void> {
   });
   deps.io = io;
 
-  const instanceManager = new InstanceManager(prisma, provider, ingest, io, audit, logger);
+  const instanceManager = new InstanceManager(
+    prisma,
+    provider,
+    ingest,
+    io,
+    audit,
+    storage,
+    logger,
+  );
   instanceManager.wireProviderEvents();
   deps.instanceManager = instanceManager;
 

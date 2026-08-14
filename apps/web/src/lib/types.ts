@@ -51,7 +51,7 @@ export interface ConversationDto {
   externalChatId: string;
   type: ConversationType;
   title: string;
-  profilePicture: string | null;
+  hasAvatar: boolean;
   status: ConversationStatus;
   assignedUser: UserDto | null;
   department: DepartmentDto | null;

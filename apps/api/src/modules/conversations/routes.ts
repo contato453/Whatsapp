@@ -144,6 +144,38 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     };
   });
 
+  /** Foto de perfil da conversa (contato ou grupo), autenticada. */
+  app.get("/conversations/:id/avatar", { preHandler: authenticate }, async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const conversation = await deps.prisma.conversation.findFirst({
+      where: { id, organizationId: request.user.organizationId },
+      select: { profilePicture: true },
+    });
+    if (!conversation?.profilePicture) throw new NotFoundError("Foto de perfil");
+    const data = await deps.storage.read(conversation.profilePicture);
+    reply.header("Content-Type", "image/jpeg");
+    reply.header("Cache-Control", "private, max-age=86400");
+    return reply.send(data);
+  });
+
+  /** Força nova busca da foto de perfil (ex.: contato trocou a imagem). */
+  app.post("/conversations/:id/avatar/refresh", { preHandler: authenticate }, async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const conversation = await findConversationOr404(id, request.user.organizationId);
+    const updated = await deps.instanceManager.syncConversationAvatar(
+      {
+        id: conversation.id,
+        whatsappInstanceId: conversation.whatsappInstanceId,
+        externalChatId: conversation.externalChatId,
+      },
+      { force: true },
+    );
+    if (updated) {
+      await emitConversationUpdated(id, request.user.organizationId);
+    }
+    return { updated };
+  });
+
   app.post("/conversations/:id/read", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     await findConversationOr404(id, request.user.organizationId);
