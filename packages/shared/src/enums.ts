@@ -17,13 +17,34 @@ export const CONVERSATION_TYPES = ["individual", "group"] as const;
 export type ConversationType = (typeof CONVERSATION_TYPES)[number];
 
 export const CONVERSATION_STATUSES = [
-  "new",
   "open",
-  "waiting",
+  "waiting_client",
+  "waiting_internal",
   "resolved",
-  "archived",
 ] as const;
 export type ConversationStatus = (typeof CONVERSATION_STATUSES)[number];
+
+/** Rótulos exibidos na interface — fonte única para badges, abas e seletores. */
+export const CONVERSATION_STATUS_LABELS: Record<ConversationStatus, string> = {
+  open: "Aberto",
+  waiting_client: "AG. Cliente",
+  waiting_internal: "AG. Operacional",
+  resolved: "Concluído",
+};
+
+export const CONVERSATION_STATUS_COLORS: Record<ConversationStatus, string> = {
+  open: "#16a34a",
+  waiting_client: "#d97706",
+  waiting_internal: "#0891b2",
+  resolved: "#64748b",
+};
+
+/** Status em que a conversa ainda exige acompanhamento da equipe. */
+export const CONVERSATION_STATUSES_ACTIVE = [
+  "open",
+  "waiting_client",
+  "waiting_internal",
+] as const;
 
 export const MESSAGE_DIRECTIONS = ["inbound", "outbound"] as const;
 export type MessageDirection = (typeof MESSAGE_DIRECTIONS)[number];

@@ -259,7 +259,11 @@ export class InstanceManager {
           data: {
             lastMessageAt: event.timestamp,
             lastMessagePreview: label,
-            ...(conversation.status === "new" ? { status: "open" as const } : {}),
+            // Chamada recebida é contato do cliente: devolve para a fila,
+            // igual a uma mensagem nova.
+            ...(conversation.status === "resolved" || conversation.status === "waiting_client"
+              ? { status: "open" as const }
+              : {}),
           },
         });
 
@@ -713,7 +717,7 @@ export class InstanceManager {
           externalChatId: chat.externalChatId,
           type: chat.type,
           title,
-          status: "new",
+          status: "open",
           unreadCount: chat.unreadCount,
           lastMessageAt: chat.lastMessageAt,
         },
@@ -770,7 +774,7 @@ export class InstanceManager {
           externalChatId: group.externalId,
           type: "group",
           title: group.name,
-          status: "new",
+          status: "open",
         },
       });
 

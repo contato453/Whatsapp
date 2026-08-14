@@ -1,27 +1,15 @@
 "use client";
 
 import { Users2, User, UserRound } from "lucide-react";
-import type { ConnectionStatus } from "@azvchat/shared";
+import {
+  CONVERSATION_STATUS_COLORS,
+  CONVERSATION_STATUS_LABELS,
+  type ConnectionStatus,
+} from "@azvchat/shared";
 import { cn, formatTime } from "@/lib/utils";
 import type { ConversationDto } from "@/lib/types";
 import { Badge } from "@/components/ui";
 import { ConversationAvatar } from "./conversation-avatar";
-
-const STATUS_COLORS: Record<ConversationDto["status"], string> = {
-  new: "#0891b2",
-  open: "#16a34a",
-  waiting: "#d97706",
-  resolved: "#64748b",
-  archived: "#94a3b8",
-};
-
-const STATUS_LABELS: Record<ConversationDto["status"], string> = {
-  new: "Nova",
-  open: "Aberta",
-  waiting: "Aguardando",
-  resolved: "Finalizada",
-  archived: "Arquivada",
-};
 
 /** Cores e rótulos do estado da conexão do número (chip). */
 const INSTANCE_STATUS_COLORS: Record<ConnectionStatus, string> = {
@@ -95,7 +83,9 @@ export function ConversationListItem({
             )}
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-1">
-            <Badge color={STATUS_COLORS[conversation.status]}>{STATUS_LABELS[conversation.status]}</Badge>
+            <Badge color={CONVERSATION_STATUS_COLORS[conversation.status]}>
+              {CONVERSATION_STATUS_LABELS[conversation.status]}
+            </Badge>
             {conversation.instanceName && (
               <Badge
                 className="bg-slate-100 text-slate-500"
@@ -138,5 +128,3 @@ export function ConversationListItem({
     </button>
   );
 }
-
-export { STATUS_LABELS as CONVERSATION_STATUS_LABELS, STATUS_COLORS as CONVERSATION_STATUS_COLORS };

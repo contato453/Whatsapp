@@ -83,15 +83,22 @@ export default function DashboardPage() {
           accent="#dc2626"
         />
         <Stat
-          label="Conversas abertas"
+          label="Aberto"
           value={stats.conversationsOpen}
           icon={<InboxIcon className="h-5 w-5" />}
+          accent="#16a34a"
         />
         <Stat
-          label="Aguardando atendimento"
-          value={stats.conversationsWaiting}
+          label="AG. Cliente"
+          value={stats.conversationsWaitingClient}
           icon={<Clock className="h-5 w-5" />}
           accent="#d97706"
+        />
+        <Stat
+          label="AG. Operacional"
+          value={stats.conversationsWaitingInternal}
+          icon={<Clock className="h-5 w-5" />}
+          accent="#0891b2"
         />
         <Stat
           label="Sem responsável"

@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { CheckCircle2, RefreshCw, RotateCcw, StickyNote, UserMinus, UserPlus, X } from "lucide-react";
+import { CheckCircle2, RefreshCw, StickyNote, UserMinus, UserPlus, X } from "lucide-react";
+import { CONVERSATION_STATUSES, CONVERSATION_STATUS_LABELS } from "@azvchat/shared";
 import { api, invalidateConversationAvatar } from "@/lib/api";
 import { formatDateTime, formatPhone } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
@@ -19,7 +20,7 @@ const ACTION_LABELS: Record<string, string> = {
   transferred_user: "transferiu o atendimento",
   transferred_department: "transferiu para departamento",
   unassigned: "removeu o responsável",
-  resolved: "finalizou o atendimento",
+  resolved: "concluiu o atendimento",
   reopened: "reabriu o atendimento",
 };
 
@@ -101,6 +102,27 @@ export function ContextPanel({
         <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Atendimento</h3>
         <div className="space-y-2 text-sm">
           <div className="flex items-center justify-between">
+            <span className="text-slate-500">Status</span>
+            <select
+              className="max-w-[55%] rounded-lg border border-slate-200 px-2 py-1 text-xs"
+              value={conversation.status}
+              disabled={busy}
+              onChange={(event) =>
+                void run(() =>
+                  api.post(`/conversations/${conversation.id}/status`, {
+                    status: event.target.value,
+                  }),
+                )
+              }
+            >
+              {CONVERSATION_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {CONVERSATION_STATUS_LABELS[status]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center justify-between">
             <span className="text-slate-500">Responsável</span>
             <select
               className="max-w-[55%] rounded-lg border border-slate-200 px-2 py-1 text-xs"
@@ -169,23 +191,18 @@ export function ContextPanel({
               <UserMinus className="h-3.5 w-3.5" /> Liberar
             </Button>
           )}
-          {conversation.status !== "resolved" ? (
+          {conversation.status !== "resolved" && (
             <Button
               size="sm"
               variant="secondary"
               disabled={busy}
-              onClick={() => run(() => api.post(`/conversations/${conversation.id}/resolve`))}
+              onClick={() =>
+                run(() =>
+                  api.post(`/conversations/${conversation.id}/status`, { status: "resolved" }),
+                )
+              }
             >
-              <CheckCircle2 className="h-3.5 w-3.5" /> Finalizar
-            </Button>
-          ) : (
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={busy}
-              onClick={() => run(() => api.post(`/conversations/${conversation.id}/reopen`))}
-            >
-              <RotateCcw className="h-3.5 w-3.5" /> Reabrir
+              <CheckCircle2 className="h-3.5 w-3.5" /> Concluir
             </Button>
           )}
         </div>
