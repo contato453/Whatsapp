@@ -124,6 +124,60 @@ docker compose -f docker-compose.prod.yml up -d --build
 
 As migrations rodam sozinhas no start da API. As sessões do WhatsApp **não caem** — nada de QR de novo.
 
+### Deploy automático (opcional)
+
+Com isto ligado, todo merge na branch padrão que passar no CI sobe sozinho na VPS —
+o passo a passo manual acima deixa de ser necessário no dia a dia.
+
+O workflow é `.github/workflows/deploy.yml`. Ele só roda **depois que o CI fecha verde**,
+então commit quebrado não chega em produção. Também dá para disparar na mão em
+**Actions → Deploy → Run workflow**, útil para repetir um deploy que falhou no meio.
+
+**1. Criar uma chave SSH dedicada ao deploy** (no seu computador, não na VPS):
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/azvchat_deploy -C "deploy azvchat" -N ""
+```
+
+Use uma chave só para isso. Se um dia precisar cortar o acesso, você revoga esta sem
+mexer na sua chave pessoal.
+
+**2. Autorizar a chave na VPS:**
+
+```bash
+ssh-copy-id -i ~/.ssh/azvchat_deploy.pub root@IP_DA_VPS
+```
+
+**3. Pegar a identidade do servidor** (evita aceitar qualquer host que responda pelo IP):
+
+```bash
+ssh-keyscan -H IP_DA_VPS
+```
+
+**4. Cadastrar os segredos** no GitHub, em **Settings → Secrets and variables → Actions →
+New repository secret**:
+
+| Segredo | Obrigatório | Valor |
+| --- | --- | --- |
+| `VPS_HOST` | sim | IP ou domínio da VPS |
+| `VPS_USER` | sim | usuário do SSH (ex.: `root`) |
+| `VPS_SSH_KEY` | sim | conteúdo de `~/.ssh/azvchat_deploy` — a chave **privada**, inteira, incluindo as linhas BEGIN e END |
+| `VPS_KNOWN_HOSTS` | recomendado | saída do `ssh-keyscan` do passo 3 |
+| `VPS_PORT` | não | porta do SSH, se não for 22 |
+| `VPS_PATH` | não | caminho do clone na VPS, se não for `~/Whatsapp` |
+
+Sem `VPS_KNOWN_HOSTS` o deploy funciona, mas aceita a chave do servidor na primeira
+conexão e registra um aviso no log do Actions.
+
+**O que o deploy faz**, exatamente o que você faria na mão: `git fetch` e `merge --ff-only`
+da branch padrão, `docker compose up -d --build` e, por fim, espera a API registrar
+`api_started` no log. Se a API não subir em 100 segundos, o deploy **falha** e imprime as
+últimas 40 linhas do log — você fica sabendo, em vez de descobrir pelo cliente.
+
+O `merge --ff-only` é proposital: se alguém editou um arquivo versionado direto na VPS, o
+deploy para e avisa, em vez de sobrescrever o trabalho em silêncio. Arquivos não
+versionados (`.env`, `data/`) nunca são tocados.
+
 ### Migração única: renomear o banco de `zapdesk` para `azvchat`
 
 Só é necessário em instalações que subiram **antes** da renomeação do sistema para AZVCHAT. Instalação nova já nasce com os nomes corretos e pode pular esta seção.

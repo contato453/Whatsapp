@@ -1,0 +1,139 @@
+name: Deploy
+
+# Sobe na VPS por SSH. Dispara só quando o CI da branch padrão fecha verde,
+# então commit quebrado nunca chega em produção. Também dá para rodar na mão
+# pela aba Actions (Run workflow), útil para repetir um deploy que falhou no
+# meio sem precisar de um commit novo.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches:
+      - claude/whatsapp-support-platform-ezyvx0
+      - main
+      - master
+  workflow_dispatch:
+
+# Um deploy por vez, e nunca cancelar um que já começou: interromper no meio
+# do `docker compose up` deixaria a VPS em estado indefinido.
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Atualizar a VPS
+    runs-on: ubuntu-latest
+    # No workflow_dispatch não existe workflow_run, e aí a condição do CI verde
+    # não se aplica — quem clicou assumiu a responsabilidade.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      - name: Conferir se os segredos estão configurados
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          faltando=""
+          [ -z "$VPS_HOST" ] && faltando="$faltando VPS_HOST"
+          [ -z "$VPS_USER" ] && faltando="$faltando VPS_USER"
+          [ -z "$VPS_SSH_KEY" ] && faltando="$faltando VPS_SSH_KEY"
+          if [ -n "$faltando" ]; then
+            echo "::error::Segredos faltando:$faltando — veja a seção de deploy automático no DEPLOY.md"
+            exit 1
+          fi
+
+      - name: Preparar a chave SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          porta="${VPS_PORT:-22}"
+          if [ -n "$VPS_KNOWN_HOSTS" ]; then
+            # Preferido: a identidade do servidor vem de um segredo, não da rede.
+            printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            echo "::warning::VPS_KNOWN_HOSTS não configurado — a chave do servidor será aceita na primeira conexão (TOFU)."
+            ssh-keyscan -p "$porta" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Atualizar e subir os containers
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          # Onde o repositório está clonado na VPS. Padrão: ~/Whatsapp
+          VPS_PATH: ${{ secrets.VPS_PATH }}
+          DEPLOY_BRANCH: claude/whatsapp-support-platform-ezyvx0
+        run: |
+          set -euo pipefail
+          porta="${VPS_PORT:-22}"
+          caminho="${VPS_PATH:-}"
+          ssh -i ~/.ssh/id_deploy -p "$porta" -o BatchMode=yes \
+            "$VPS_USER@$VPS_HOST" \
+            "DEPLOY_BRANCH='$DEPLOY_BRANCH' CAMINHO='$caminho' bash -s" <<'REMOTO'
+          set -euo pipefail
+          cd "${CAMINHO:-$HOME/Whatsapp}"
+
+          echo "==> Atualizando o código"
+          git fetch origin "$DEPLOY_BRANCH"
+          # Garante que o deploy atualiza a branch certa, mesmo que a VPS
+          # tenha ficado em HEAD solto ou em outra branch.
+          git checkout "$DEPLOY_BRANCH" 2>/dev/null || git checkout -b "$DEPLOY_BRANCH" "origin/$DEPLOY_BRANCH"
+          # --ff-only falha em vez de criar merge: se alguém editou arquivo
+          # versionado direto na VPS, o deploy para e avisa, em vez de
+          # sobrescrever em silêncio.
+          git merge --ff-only "origin/$DEPLOY_BRANCH"
+          echo "Commit em produção: $(git rev-parse --short HEAD) — $(git log -1 --pretty=%s)"
+
+          echo "==> Subindo os containers"
+          # As migrations rodam no boot da API; as sessões de WhatsApp ficam
+          # em volume nomeado e sobrevivem ao restart.
+          docker compose -f docker-compose.prod.yml up -d --build
+
+          echo "==> Estado dos containers"
+          docker compose -f docker-compose.prod.yml ps
+          REMOTO
+
+      - name: Confirmar que a API subiu
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_PATH: ${{ secrets.VPS_PATH }}
+        run: |
+          set -euo pipefail
+          porta="${VPS_PORT:-22}"
+          caminho="${VPS_PATH:-}"
+          ssh -i ~/.ssh/id_deploy -p "$porta" -o BatchMode=yes \
+            "$VPS_USER@$VPS_HOST" \
+            "CAMINHO='$caminho' bash -s" <<'REMOTO'
+          set -euo pipefail
+          cd "${CAMINHO:-$HOME/Whatsapp}"
+          # A API leva alguns segundos para aplicar migrations e abrir a porta.
+          for tentativa in $(seq 1 20); do
+            if docker compose -f docker-compose.prod.yml logs --since 5m api 2>/dev/null | grep -q api_started; then
+              echo "API no ar."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "A API não registrou api_started em 100s. Últimas linhas do log:"
+          docker compose -f docker-compose.prod.yml logs --tail=40 api
+          exit 1
+          REMOTO
+
+      - name: Limpar a chave
+        if: always()
+        run: rm -f ~/.ssh/id_deploy
