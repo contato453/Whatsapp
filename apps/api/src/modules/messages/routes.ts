@@ -1,7 +1,8 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { MediaPayload, QuotedMessageRef } from "@zapdesk/shared";
 import { RealtimeEvents } from "@zapdesk/shared";
+import { accessibleInstanceIds, instanceScope } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
 import { extensionFromMime } from "../../lib/media-storage.js";
@@ -11,7 +12,7 @@ import {
   serializeMessage,
   type QuotedPreview,
 } from "../../lib/serialize.js";
-import { orgRoom } from "../../realtime/socket.js";
+import { instanceAudience } from "../../realtime/socket.js";
 import { buildPreview } from "../../services/message-ingest.js";
 import type { AppDeps } from "../../types.js";
 
@@ -28,9 +29,11 @@ function mediaTypeFromMime(mimeType: string): MediaPayload["type"] {
 }
 
 export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
-  async function findConversationOr404(id: string, organizationId: string) {
+  /** Escopado por organização e pelas conexões liberadas para o usuário. */
+  async function findConversationOr404(id: string, user: FastifyRequest["user"]) {
+    const allowed = await accessibleInstanceIds(deps.prisma, user);
     const conversation = await deps.prisma.conversation.findFirst({
-      where: { id, organizationId },
+      where: { id, organizationId: user.organizationId, ...instanceScope(allowed) },
       include: { instance: true },
     });
     if (!conversation) throw new NotFoundError("Conversa");
@@ -55,7 +58,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       deps.prisma.message.findUnique({ where: { id: messageId } }),
     ]);
     if (!conversation || !message) return;
-    const room = orgRoom(organizationId);
+    const room = instanceAudience(organizationId, conversation.whatsappInstanceId);
     deps.io.to(room).emit(RealtimeEvents.MessageNew, {
       conversation: serializeConversation(conversation),
       message: serializeMessage(message),
@@ -106,7 +109,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
   app.get("/conversations/:id/messages", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const query = listQuerySchema.parse(request.query);
-    await findConversationOr404(id, request.user.organizationId);
+    await findConversationOr404(id, request.user);
     const messages = await deps.prisma.message.findMany({
       where: {
         conversationId: id,
@@ -135,8 +138,13 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
   app.post("/messages/:id/reactions", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const { emoji } = z.object({ emoji: z.string().max(16) }).parse(request.body);
+    const allowed = await accessibleInstanceIds(deps.prisma, request.user);
     const message = await deps.prisma.message.findFirst({
-      where: { id, organizationId: request.user.organizationId },
+      where: {
+        id,
+        organizationId: request.user.organizationId,
+        ...(allowed ? { conversation: { whatsappInstanceId: { in: allowed } } } : {}),
+      },
       include: { conversation: true },
     });
     if (!message?.externalMessageId) throw new NotFoundError("Mensagem");
@@ -173,7 +181,11 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
     }
 
     const reactions = await deps.prisma.messageReaction.findMany({ where: { messageId: id } });
-    deps.io.to(orgRoom(request.user.organizationId)).emit(RealtimeEvents.MessageReaction, {
+    const audience = instanceAudience(
+      request.user.organizationId,
+      message.conversation.whatsappInstanceId,
+    );
+    deps.io.to(audience).emit(RealtimeEvents.MessageReaction, {
       conversationId: message.conversationId,
       messageId: id,
       reactions: reactions.map((entry) => ({
@@ -278,11 +290,18 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       .object({ conversationId: z.string().uuid() })
       .parse(request.body);
 
+    const allowedForForward = await accessibleInstanceIds(deps.prisma, request.user);
     const original = await deps.prisma.message.findFirst({
-      where: { id, organizationId: request.user.organizationId },
+      where: {
+        id,
+        organizationId: request.user.organizationId,
+        ...(allowedForForward
+          ? { conversation: { whatsappInstanceId: { in: allowedForForward } } }
+          : {}),
+      },
     });
     if (!original) throw new NotFoundError("Mensagem");
-    const target = await findConversationOr404(conversationId, request.user.organizationId);
+    const target = await findConversationOr404(conversationId, request.user);
 
     let result: Awaited<ReturnType<typeof deps.provider.sendText>>;
     if (original.mediaUrl) {
@@ -352,7 +371,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
         replyToMessageId: z.string().uuid().optional(),
       })
       .parse(request.body);
-    const conversation = await findConversationOr404(id, request.user.organizationId);
+    const conversation = await findConversationOr404(id, request.user);
 
     // Reply: monta a referência da mensagem citada a partir do que temos salvo.
     let quoted: QuotedMessageRef | undefined;
@@ -419,7 +438,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
     { preHandler: authenticate },
     async (request, reply) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-      const conversation = await findConversationOr404(id, request.user.organizationId);
+      const conversation = await findConversationOr404(id, request.user);
 
       const file = await request.file();
       if (!file) {
@@ -511,8 +530,13 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
   /** Download/exibição da mídia de uma mensagem (autenticado, escopado por organização). */
   app.get("/messages/:id/media", { preHandler: authenticate }, async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const allowed = await accessibleInstanceIds(deps.prisma, request.user);
     const message = await deps.prisma.message.findFirst({
-      where: { id, organizationId: request.user.organizationId },
+      where: {
+        id,
+        organizationId: request.user.organizationId,
+        ...(allowed ? { conversation: { whatsappInstanceId: { in: allowed } } } : {}),
+      },
     });
     if (!message?.mediaUrl) throw new NotFoundError("Mídia");
     const data = await deps.storage.read(message.mediaUrl);

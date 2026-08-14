@@ -20,6 +20,14 @@ export interface UserDto {
   createdAt: string;
 }
 
+/**
+ * Usuário na tela de atendentes: inclui as conexões de WhatsApp liberadas.
+ * Lista vazia = acesso a todas as conexões da organização.
+ */
+export interface UserWithAccessDto extends UserDto {
+  whatsappInstanceIds: string[];
+}
+
 export interface InstanceDto {
   id: string;
   name: string;

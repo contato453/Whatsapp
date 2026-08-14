@@ -24,6 +24,19 @@ export function serializeUser(user: User) {
   };
 }
 
+/**
+ * Versão usada na tela de atendentes: inclui as conexões de WhatsApp
+ * liberadas para o usuário (lista vazia = acesso a todas).
+ */
+export function serializeUserWithAccess(
+  user: User & { whatsappAccess?: Array<{ whatsappInstanceId: string }> },
+) {
+  return {
+    ...serializeUser(user),
+    whatsappInstanceIds: user.whatsappAccess?.map((link) => link.whatsappInstanceId) ?? [],
+  };
+}
+
 export function serializeInstance(instance: WhatsAppInstance) {
   return {
     id: instance.id,

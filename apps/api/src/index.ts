@@ -10,6 +10,7 @@ import { LocalMediaStorage } from "./lib/media-storage.js";
 import { AuditService } from "./modules/audit/service.js";
 import { MessageIngestService } from "./services/message-ingest.js";
 import { InstanceManager } from "./services/instance-manager.js";
+import { accessibleInstanceIds } from "./lib/access.js";
 import type { AuthTokenPayload } from "./lib/auth.js";
 import type { AppDeps } from "./types.js";
 
@@ -52,6 +53,7 @@ async function main(): Promise<void> {
   const io = createRealtime(app.server, {
     corsOrigins: config.corsOrigins,
     verifyToken: (token) => app.jwt.verify<AuthTokenPayload>(token),
+    resolveInstanceAccess: (user) => accessibleInstanceIds(prisma, user),
     logger,
   });
   deps.io = io;

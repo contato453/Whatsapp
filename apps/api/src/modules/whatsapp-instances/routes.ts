@@ -1,5 +1,6 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { accessibleInstanceIds, instanceIdScope } from "../../lib/access.js";
 import { authenticate, requireRole } from "../../lib/auth.js";
 import { NotFoundError } from "../../lib/errors.js";
 import { serializeInstance } from "../../lib/serialize.js";
@@ -10,17 +11,20 @@ const createInstanceSchema = z.object({
 });
 
 export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
-  async function findInstanceOr404(id: string, organizationId: string) {
+  async function findInstanceOr404(id: string, user: FastifyRequest["user"]) {
+    const allowed = await accessibleInstanceIds(deps.prisma, user);
     const instance = await deps.prisma.whatsAppInstance.findFirst({
-      where: { id, organizationId },
+      where: { id, organizationId: user.organizationId, ...instanceIdScope(allowed) },
     });
     if (!instance) throw new NotFoundError("Instância de WhatsApp");
     return instance;
   }
 
   app.get("/whatsapp-instances", { preHandler: authenticate }, async (request) => {
+    // Atendentes com acesso restrito só enxergam os números liberados para eles.
+    const allowed = await accessibleInstanceIds(deps.prisma, request.user);
     const instances = await deps.prisma.whatsAppInstance.findMany({
-      where: { organizationId: request.user.organizationId },
+      where: { organizationId: request.user.organizationId, ...instanceIdScope(allowed) },
       orderBy: { createdAt: "asc" },
     });
     return { instances: instances.map(serializeInstance) };
@@ -55,7 +59,7 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
     { preHandler: requireRole("supervisor") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-      const instance = await findInstanceOr404(id, request.user.organizationId);
+      const instance = await findInstanceOr404(id, request.user);
       deps.instanceManager.registerInstance(instance.id, instance.organizationId);
       await deps.provider.connect(instance.id);
       const status = await deps.provider.getConnectionStatus(instance.id);
@@ -69,7 +73,7 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
     { preHandler: requireRole("supervisor") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-      await findInstanceOr404(id, request.user.organizationId);
+      await findInstanceOr404(id, request.user);
       await deps.provider.disconnect(id);
       deps.audit.record({
         organizationId: request.user.organizationId,
@@ -87,7 +91,7 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
     { preHandler: requireRole("supervisor") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-      await findInstanceOr404(id, request.user.organizationId);
+      await findInstanceOr404(id, request.user);
       await deps.provider.logout(id);
       deps.audit.record({
         organizationId: request.user.organizationId,
@@ -102,7 +106,7 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
 
   app.get("/whatsapp-instances/:id/qr", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    await findInstanceOr404(id, request.user.organizationId);
+    await findInstanceOr404(id, request.user);
     const [status, qrDataUrl] = await Promise.all([
       deps.provider.getConnectionStatus(id),
       deps.provider.getQRCode(id),
@@ -115,7 +119,7 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
     { preHandler: requireRole("admin") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-      await findInstanceOr404(id, request.user.organizationId);
+      await findInstanceOr404(id, request.user);
       await deps.provider.logout(id).catch(() => undefined);
       await deps.prisma.whatsAppInstance.delete({ where: { id } });
       deps.audit.record({

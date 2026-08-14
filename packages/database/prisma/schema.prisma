@@ -67,6 +67,7 @@ model User {
   performedAssignments  ConversationAssignmentHistory[] @relation("PerformedAssignments")
   auditLogs             AuditLog[]
   quickReplies          QuickReply[]
+  whatsappAccess        UserWhatsAppInstance[]
 
   @@index([organizationId])
   @@map("users")
@@ -118,13 +119,29 @@ model WhatsAppInstance {
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
-  organization  Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization  Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   conversations Conversation[]
   groups        WhatsAppGroup[]
   contacts      Contact[]
+  userAccess    UserWhatsAppInstance[]
 
   @@index([organizationId])
   @@map("whatsapp_instances")
+}
+
+/// Quais números de WhatsApp cada atendente enxerga.
+/// Sem nenhuma linha para o usuário = acesso a todas as conexões da organização.
+model UserWhatsAppInstance {
+  userId             String
+  whatsappInstanceId String
+  createdAt          DateTime @default(now())
+
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  instance WhatsAppInstance @relation(fields: [whatsappInstanceId], references: [id], onDelete: Cascade)
+
+  @@id([userId, whatsappInstanceId])
+  @@index([whatsappInstanceId])
+  @@map("user_whatsapp_instances")
 }
 
 // ============================================================
