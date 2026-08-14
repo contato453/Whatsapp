@@ -9,10 +9,10 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "generate": "prisma generate",
-    "migrate:dev": "prisma migrate dev",
-    "migrate:deploy": "prisma migrate deploy",
-    "seed": "tsx src/seed.ts",
+    "generate": "node scripts/with-env.mjs prisma generate",
+    "migrate:dev": "node scripts/with-env.mjs prisma migrate dev",
+    "migrate:deploy": "node scripts/with-env.mjs prisma migrate deploy",
+    "seed": "node scripts/with-env.mjs tsx src/seed.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "test": "echo 'no tests'"

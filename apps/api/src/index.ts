@@ -1,3 +1,4 @@
+import "./lib/load-env.js";
 import { mkdir } from "node:fs/promises";
 import pino from "pino";
 import { getPrisma, disconnectPrisma } from "@zapdesk/database";
