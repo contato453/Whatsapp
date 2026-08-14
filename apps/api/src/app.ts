@@ -16,6 +16,7 @@ import { scheduledMessageRoutes } from "./modules/scheduled-messages/routes.js";
 import { dashboardRoutes } from "./modules/dashboard/routes.js";
 import { searchRoutes } from "./modules/search/routes.js";
 import { auditRoutes } from "./modules/audit/routes.js";
+import { reportRoutes } from "./modules/reports/routes.js";
 import type { AppDeps } from "./types.js";
 
 /**
@@ -64,6 +65,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     await scheduledMessageRoutes(instance, deps);
     await dashboardRoutes(instance, deps);
     await searchRoutes(instance, deps);
+    await reportRoutes(instance, deps);
     await auditRoutes(instance, deps);
   });
 

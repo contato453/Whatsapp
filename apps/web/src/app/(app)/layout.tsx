@@ -12,6 +12,7 @@ import {
   Tags,
   Users,
   Building2,
+  BarChart3,
   Zap,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
@@ -26,6 +27,7 @@ const NAV = [
   { href: "/whatsapp", label: "WhatsApp", icon: Smartphone },
   { href: "/users", label: "Usuários", icon: Users },
   { href: "/departments", label: "Departamentos", icon: Building2 },
+  { href: "/reports", label: "Relatórios", icon: BarChart3 },
   { href: "/tags", label: "Etiquetas", icon: Tags },
   { href: "/quick-replies", label: "Respostas rápidas", icon: Zap },
   { href: "/settings", label: "Configurações", icon: Settings },

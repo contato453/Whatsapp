@@ -181,6 +181,32 @@ export interface QuickReplyDto {
   createdAt: string;
 }
 
+export interface AgentReportRowDto {
+  user: UserDto;
+  messagesSent: number;
+  conversationsHandled: number;
+  /** Média em segundos; null quando não houve resposta a medir */
+  avgResponseSeconds: number | null;
+  responsesMeasured: number;
+  conversationsResolved: number;
+  /** Fila atual da pessoa — não depende do período */
+  openNow: number;
+}
+
+export interface AgentReportDto {
+  from: string;
+  to: string;
+  rows: AgentReportRowDto[];
+  totals: {
+    messagesReceived: number;
+    messagesSent: number;
+    conversationsResolved: number;
+    openNow: number;
+  };
+  /** true quando o período estourou o teto e os números ficaram parciais */
+  truncated: boolean;
+}
+
 export interface DashboardStatsDto {
   instancesConnected: number;
   instancesDisconnected: number;
