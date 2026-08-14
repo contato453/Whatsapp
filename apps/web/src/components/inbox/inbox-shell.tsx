@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  BarChart3,
   CalendarClock,
   CornerUpLeft,
   Forward,
@@ -14,7 +13,6 @@ import {
   Pencil,
   Search,
   Send,
-  Sticker,
   StickyNote,
   Trash2,
   Users2,
@@ -41,7 +39,7 @@ import { Avatar, Button, EmptyState, Input, Modal, Spinner, Textarea } from "@/c
 import { ConversationListItem } from "./conversation-list";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
 import { AudioRecorder } from "./audio-recorder";
-import { PollModal, ScheduleModal } from "./composer-modals";
+import { ScheduleModal } from "./composer-modals";
 import { MessageBubble } from "./message-bubble";
 import { ContextPanel } from "./context-panel";
 
@@ -144,7 +142,6 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const [replyTo, setReplyTo] = useState<MessageDto | null>(null);
   const [forwarding, setForwarding] = useState<MessageDto | null>(null);
   const [forwardSearch, setForwardSearch] = useState("");
-  const [pollOpen, setPollOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   // Busca dentro da conversa aberta
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
@@ -162,7 +159,6 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const stickerInputRef = useRef<HTMLInputElement | null>(null);
 
   // ---------- Carregamento de dados auxiliares ----------
   useEffect(() => {
@@ -552,12 +548,11 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     }
   }
 
-  async function sendFile(file: File, options: { asSticker?: boolean } = {}) {
+  async function sendFile(file: File) {
     if (!conversationId || sending) return;
     setSending(true);
     try {
       const form = new FormData();
-      if (options.asSticker) form.append("asSticker", "true");
       form.append("file", file);
       const result = await api.postForm<{ message: MessageDto }>(
         `/conversations/${conversationId}/messages/media`,
@@ -573,7 +568,6 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     } finally {
       setSending(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
-      if (stickerInputRef.current) stickerInputRef.current.value = "";
     }
   }
 
@@ -991,7 +985,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                 <button
                   onClick={() => setComposerMode("message")}
                   className={cn(
-                    "rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
+                    "shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
                     composerMode === "message"
                       ? "bg-brand-600 text-white"
                       : "bg-slate-100 text-slate-600 hover:bg-slate-200",
@@ -1005,7 +999,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                     setReplyTo(null);
                   }}
                   className={cn(
-                    "flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
+                    "flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
                     composerMode === "note"
                       ? "bg-amber-500 text-white"
                       : "bg-slate-100 text-slate-600 hover:bg-slate-200",
@@ -1014,8 +1008,8 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   <StickyNote className="h-3 w-3" /> Nota interna
                 </button>
                 {composerMode === "note" && (
-                  <span className="ml-1 text-[11px] text-amber-700">
-                    Visível só para a equipe — não vai para o WhatsApp
+                  <span className="ml-1 min-w-0 truncate text-[11px] text-amber-700">
+                    Só a equipe vê — não vai ao WhatsApp
                   </span>
                 )}
               </div>
@@ -1070,7 +1064,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   ))}
                 </div>
               )}
-              <div className="flex items-end gap-2">
+              <div className="space-y-2">
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -1080,63 +1074,10 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                     if (file) void sendFile(file);
                   }}
                 />
-                <input
-                  ref={stickerInputRef}
-                  type="file"
-                  accept="image/*"
-                  hidden
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (file) void sendFile(file, { asSticker: true });
-                  }}
-                />
-                {composerMode === "message" && (
-                  <>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="mb-1"
-                      title="Enviar arquivo"
-                      disabled={sending}
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      <Paperclip className="h-4 w-4" />
-                    </Button>
-                    <AudioRecorder disabled={sending} onSend={sendVoiceNote} />
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="mb-1"
-                      title="Enviar figurinha (converte a imagem)"
-                      disabled={sending}
-                      onClick={() => stickerInputRef.current?.click()}
-                    >
-                      <Sticker className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="mb-1"
-                      title="Criar enquete"
-                      disabled={sending}
-                      onClick={() => setPollOpen(true)}
-                    >
-                      <BarChart3 className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="mb-1"
-                      title="Agendar mensagem"
-                      disabled={sending}
-                      onClick={() => setScheduleOpen(true)}
-                    >
-                      <CalendarClock className="h-4 w-4" />
-                    </Button>
-                  </>
-                )}
+                {/* O campo ocupa a linha inteira: duas linhas de texto ficam
+                    visíveis sem precisar rolar. As ações vão para baixo. */}
                 <Textarea
-                  rows={1}
+                  rows={2}
                   value={draft}
                   disabled={sending}
                   onChange={(event) => setDraft(event.target.value)}
@@ -1174,23 +1115,54 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   placeholder={
                     composerMode === "note"
                       ? "Anotação interna sobre este atendimento..."
-                      : `Mensagem para ${conversation.title}... ("/" para respostas rápidas, Enter envia)`
+                      : `Mensagem para ${conversation.title}...`
                   }
-                  className="max-h-32 min-h-[40px] resize-none"
+                  className="max-h-40 min-h-[60px] w-full resize-none"
                 />
-                <Button
-                  className="mb-0.5"
-                  variant={composerMode === "note" ? "secondary" : "primary"}
-                  disabled={sending || draft.trim().length === 0}
-                  onClick={() => void sendText()}
-                  title={composerMode === "note" ? "Salvar nota" : "Enviar"}
-                >
-                  {composerMode === "note" ? (
-                    <StickyNote className="h-4 w-4" />
-                  ) : (
-                    <Send className="h-4 w-4" />
+
+                <div className="flex items-center gap-1">
+                  {composerMode === "message" && (
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        title="Enviar arquivo"
+                        disabled={sending}
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        <Paperclip className="h-4 w-4" />
+                      </Button>
+                      <AudioRecorder disabled={sending} onSend={sendVoiceNote} />
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        title="Agendar mensagem"
+                        disabled={sending}
+                        onClick={() => setScheduleOpen(true)}
+                      >
+                        <CalendarClock className="h-4 w-4" />
+                      </Button>
+                    </>
                   )}
-                </Button>
+                  <span className="ml-auto hidden truncate whitespace-nowrap pr-1 text-[11px] text-slate-400 xl:block">
+                    {composerMode === "message" && '"/" respostas rápidas · Enter envia'}
+                  </span>
+                  <Button
+                    variant={composerMode === "note" ? "secondary" : "primary"}
+                    disabled={sending || draft.trim().length === 0}
+                    onClick={() => void sendText()}
+                  >
+                    {composerMode === "note" ? (
+                      <>
+                        <StickyNote className="h-4 w-4" /> Salvar nota
+                      </>
+                    ) : (
+                      <>
+                        <Send className="h-4 w-4" /> Enviar
+                      </>
+                    )}
+                  </Button>
+                </div>
               </div>
               {me && conversation.assignedUser && conversation.assignedUser.id !== me.id && (
                 <p className="mt-1.5 text-[11px] text-amber-600">
@@ -1256,12 +1228,6 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
 
       {conversationId && (
         <>
-          <PollModal
-            open={pollOpen}
-            onClose={() => setPollOpen(false)}
-            conversationId={conversationId}
-            onSent={() => undefined}
-          />
           <ScheduleModal
             open={scheduleOpen}
             onClose={() => setScheduleOpen(false)}
