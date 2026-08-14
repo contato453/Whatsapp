@@ -924,7 +924,9 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
               </div>
             )}
 
-            <div className="thin-scroll flex-1 space-y-2 overflow-y-auto px-4 py-4">
+            {/* overflow-x-hidden: nome de arquivo ou link longo não pode
+                criar barra de rolagem lateral na conversa. */}
+            <div className="thin-scroll flex-1 space-y-2 overflow-y-auto overflow-x-hidden px-4 py-4">
               {hasMore && messages && messages.length > 0 && (
                 <div className="flex justify-center pb-2">
                   <Button

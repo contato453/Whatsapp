@@ -117,10 +117,14 @@ function MediaContent({ message, outbound }: { message: MessageDto; outbound: bo
   return (
     <button
       onClick={download}
-      className="flex items-center gap-2.5 rounded-lg bg-black/5 px-3 py-2 text-left transition-colors hover:bg-black/10"
+      // Cortado na tela, mas o nome inteiro fica acessível ao passar o mouse.
+      title={message.filename ?? "Documento"}
+      className="flex w-full min-w-0 items-center gap-2.5 rounded-lg bg-black/5 px-3 py-2 text-left transition-colors hover:bg-black/10"
     >
       <FileText className="h-8 w-8 shrink-0 opacity-60" />
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
+        {/* Nome longo sem espaços (bem comum em anexo) não pode empurrar a
+            bolha para fora da tela: corta com reticências. */}
         <p className="truncate text-sm font-medium">{message.filename ?? "Documento"}</p>
         <p className="flex items-center gap-1 text-xs opacity-60">
           <Download className="h-3 w-3" /> Baixar
@@ -216,7 +220,7 @@ export function MessageBubble({
 
       <div
         className={cn(
-          "max-w-[75%] rounded-2xl px-3.5 py-2 shadow-sm",
+          "max-w-[75%] overflow-hidden rounded-2xl px-3.5 py-2 shadow-sm",
           outbound
             ? "rounded-br-md bg-brand-600 text-white"
             : "rounded-bl-md border border-slate-200 bg-white text-slate-900",
