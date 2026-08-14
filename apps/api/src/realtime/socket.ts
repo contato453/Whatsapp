@@ -7,13 +7,24 @@ export interface VerifyToken {
   (token: string): AuthTokenPayload;
 }
 
+export interface ResolveInstanceAccess {
+  /** Conexões liberadas para o usuário — `null` = todas. */
+  (user: AuthTokenPayload): Promise<string[] | null>;
+}
+
 /**
- * Camada de tempo real. Cada cliente autenticado entra na sala da sua
- * organização; todos os eventos são publicados por organização.
+ * Camada de tempo real. Quem enxerga todas as conexões entra na sala da
+ * organização; quem tem acesso restrito entra apenas nas salas dos números
+ * liberados — assim eventos de outros números nunca chegam ao navegador.
  */
 export function createRealtime(
   httpServer: HttpServer,
-  options: { corsOrigins: string[]; verifyToken: VerifyToken; logger: Logger },
+  options: {
+    corsOrigins: string[];
+    verifyToken: VerifyToken;
+    resolveInstanceAccess: ResolveInstanceAccess;
+    logger: Logger;
+  },
 ): Server {
   const io = new Server(httpServer, {
     cors: {
@@ -28,18 +39,36 @@ export function createRealtime(
       next(new Error("unauthorized"));
       return;
     }
+    let payload: AuthTokenPayload;
     try {
-      const payload = options.verifyToken(token);
-      socket.data.user = payload;
-      next();
+      payload = options.verifyToken(token);
     } catch {
       next(new Error("unauthorized"));
+      return;
     }
+    socket.data.user = payload;
+    options
+      .resolveInstanceAccess(payload)
+      .then((allowed) => {
+        socket.data.allowedInstanceIds = allowed;
+        next();
+      })
+      .catch((err) => {
+        options.logger.warn({ event: "socket_access_failed", error: String(err) });
+        next(new Error("unauthorized"));
+      });
   });
 
   io.on("connection", (socket) => {
     const user = socket.data.user as AuthTokenPayload;
-    void socket.join(orgRoom(user.organizationId));
+    const allowed = socket.data.allowedInstanceIds as string[] | null;
+    if (allowed) {
+      for (const instanceId of allowed) {
+        void socket.join(instanceRoom(instanceId));
+      }
+    } else {
+      void socket.join(orgRoom(user.organizationId));
+    }
     options.logger.debug({ event: "socket_connected", userId: user.sub });
     socket.on("disconnect", () => {
       options.logger.debug({ event: "socket_disconnected", userId: user.sub });
@@ -51,4 +80,17 @@ export function createRealtime(
 
 export function orgRoom(organizationId: string): string {
   return `org:${organizationId}`;
+}
+
+export function instanceRoom(instanceId: string): string {
+  return `instance:${instanceId}`;
+}
+
+/**
+ * Destinatários de um evento ligado a um número: quem vê a organização
+ * inteira mais quem tem acesso apenas àquele número. Cada socket está em
+ * um único desses grupos, então não há entrega duplicada.
+ */
+export function instanceAudience(organizationId: string, instanceId: string): string[] {
+  return [orgRoom(organizationId), instanceRoom(instanceId)];
 }

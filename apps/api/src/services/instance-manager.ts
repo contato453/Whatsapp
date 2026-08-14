@@ -8,7 +8,7 @@ import { RealtimeEvents } from "@zapdesk/shared";
 import type { WhatsAppProvider } from "@zapdesk/whatsapp";
 import type { Server } from "socket.io";
 import type { Logger } from "pino";
-import { orgRoom } from "../realtime/socket.js";
+import { instanceAudience } from "../realtime/socket.js";
 import { serializeConversation, serializeMessage } from "../lib/serialize.js";
 import { extensionFromMime, type MediaStorage } from "../lib/media-storage.js";
 import type { MessageIngestService } from "./message-ingest.js";
@@ -54,7 +54,7 @@ export class InstanceManager {
 
     this.provider.on("qr", (event) => {
       void this.withOrg(event.instanceId, (organizationId) => {
-        this.io.to(orgRoom(organizationId)).emit(RealtimeEvents.InstanceQr, {
+        this.io.to(instanceAudience(organizationId, event.instanceId)).emit(RealtimeEvents.InstanceQr, {
           instanceId: event.instanceId,
           qrDataUrl: event.qrDataUrl,
         });
@@ -78,7 +78,7 @@ export class InstanceManager {
           this.prisma.message.findUnique({ where: { id: result.messageId } }),
         ]);
         if (!conversation || !persisted) return;
-        const room = orgRoom(organizationId);
+        const room = instanceAudience(organizationId, conversation.whatsappInstanceId);
         this.io.to(room).emit(RealtimeEvents.MessageNew, {
           conversation: serializeConversation(conversation),
           message: serializeMessage(persisted),
@@ -116,7 +116,7 @@ export class InstanceManager {
           where: { id: message.id },
           data: { status: update.status },
         });
-        this.io.to(orgRoom(organizationId)).emit(RealtimeEvents.MessageStatus, {
+        this.io.to(instanceAudience(organizationId, update.instanceId)).emit(RealtimeEvents.MessageStatus, {
           conversationId: conversation.id,
           messageId: message.id,
           status: update.status,
@@ -214,7 +214,7 @@ export class InstanceManager {
         entityId: instanceId,
         metadata: reason ? { reason } : undefined,
       });
-      this.io.to(orgRoom(organizationId)).emit(RealtimeEvents.InstanceStatus, {
+      this.io.to(instanceAudience(organizationId, instanceId)).emit(RealtimeEvents.InstanceStatus, {
         instanceId,
         status,
         phoneNumber,
@@ -351,7 +351,7 @@ export class InstanceManager {
       });
       if (updated > 0) {
         this.io
-          .to(orgRoom(organizationId))
+          .to(instanceAudience(organizationId, group.whatsappInstanceId))
           .emit(RealtimeEvents.GroupParticipants, { conversationId });
       }
     } catch (err) {
@@ -401,7 +401,7 @@ export class InstanceManager {
           });
           if (full) {
             this.io
-              .to(orgRoom(organizationId))
+              .to(instanceAudience(organizationId, instanceId))
               .emit(RealtimeEvents.ConversationUpdated, serializeConversation(full));
           }
         }
