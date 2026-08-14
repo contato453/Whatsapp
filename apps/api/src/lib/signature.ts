@@ -1,10 +1,12 @@
+import { bold } from "@azvchat/shared";
+
 /**
  * Assinatura do atendente nas mensagens enviadas.
  *
  * Quando ligada no cadastro do usuário, o texto sai prefixado com o nome
- * dele — "Fernanda Oliveira:\nBoa tarde" —, do mesmo jeito que o WhatsApp
- * Business assina respostas de equipe. Serve para o cliente saber com quem
- * está falando quando várias pessoas atendem pelo mesmo número.
+ * dele em negrito — "*Fernanda Oliveira:*\nBoa tarde" —, do mesmo jeito que
+ * o WhatsApp Business assina respostas de equipe. Serve para o cliente
+ * saber com quem está falando quando várias pessoas usam o mesmo número.
  */
 
 export interface Signer {
@@ -12,10 +14,15 @@ export interface Signer {
   signMessages: boolean;
 }
 
-/** Já assinada? Evita duplicar quando o atendente digita o próprio nome. */
+/**
+ * Já assinada? Evita duplicar quando o atendente digita o próprio nome.
+ * Aceita com e sem os asteriscos: mensagens assinadas antes de a
+ * assinatura virar negrito continuam sendo reconhecidas.
+ */
 function alreadySigned(content: string, name: string): boolean {
-  const firstLine = content.split("\n", 1)[0]?.trim() ?? "";
-  return firstLine.toLowerCase() === `${name.trim().toLowerCase()}:`;
+  const firstLine = content.split("\n", 1)[0]?.trim().toLowerCase() ?? "";
+  const expected = `${name.trim().toLowerCase()}:`;
+  return firstLine === expected || firstLine === `*${expected}*`;
 }
 
 /**
@@ -31,5 +38,7 @@ export function applySignature(
   const name = signer.name.trim();
   if (!name || content.trim().length === 0) return content;
   if (alreadySigned(content, name)) return content;
-  return `${name}:\n${content}`;
+  // Negrito do WhatsApp: destaca quem está atendendo, separando a
+  // assinatura do texto da mensagem.
+  return `${bold(`${name}:`)}\n${content}`;
 }

@@ -1,5 +1,6 @@
 import type { PrismaClient, Prisma } from "@azvchat/database";
 import type { NormalizedMessage } from "@azvchat/shared";
+import { stripWhatsAppFormatting } from "@azvchat/shared";
 import type { Logger } from "pino";
 import type { MediaStorage } from "../lib/media-storage.js";
 import { extensionFromMime } from "../lib/media-storage.js";
@@ -10,9 +11,13 @@ export interface IngestResult {
   isNewMessage: boolean;
 }
 
-/** Gera o texto de preview exibido na lista de conversas. */
+/**
+ * Gera o texto de preview exibido na lista de conversas.
+ * Sem os marcadores de formatação: "*Fernanda:*" viraria ruído na prévia.
+ */
 export function buildPreview(message: Pick<NormalizedMessage, "type" | "content">): string {
-  if (message.type === "text") return (message.content ?? "").slice(0, 120);
+  const content = message.content ? stripWhatsAppFormatting(message.content) : null;
+  if (message.type === "text") return (content ?? "").slice(0, 120);
   const labels: Record<string, string> = {
     image: "📷 Imagem",
     audio: "🎤 Áudio",
@@ -24,7 +29,7 @@ export function buildPreview(message: Pick<NormalizedMessage, "type" | "content"
     other: "Mensagem",
   };
   const label = labels[message.type] ?? "Mensagem";
-  return message.content ? `${label} — ${message.content}`.slice(0, 120) : label;
+  return content ? `${label} — ${content}`.slice(0, 120) : label;
 }
 
 /**

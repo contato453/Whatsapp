@@ -5,8 +5,9 @@ const on = { name: "Fernanda Oliveira", signMessages: true };
 const off = { name: "Fernanda Oliveira", signMessages: false };
 
 describe("applySignature", () => {
-  it("prefixa o nome do atendente quando a assinatura está ligada", () => {
-    expect(applySignature("Boa tarde", on)).toBe("Fernanda Oliveira:\nBoa tarde");
+  it("prefixa o nome do atendente em negrito quando a assinatura está ligada", () => {
+    // Asteriscos: é assim que o WhatsApp marca negrito.
+    expect(applySignature("Boa tarde", on)).toBe("*Fernanda Oliveira:*\nBoa tarde");
   });
 
   it("não mexe no texto quando está desligada", () => {
@@ -19,6 +20,11 @@ describe("applySignature", () => {
 
   it("não duplica a assinatura se o atendente já digitou o nome", () => {
     const signed = "Fernanda Oliveira:\nBoa tarde";
+    expect(applySignature(signed, on)).toBe(signed);
+  });
+
+  it("reconhece assinatura já em negrito e não duplica", () => {
+    const signed = "*Fernanda Oliveira:*\nBoa tarde";
     expect(applySignature(signed, on)).toBe(signed);
   });
 
@@ -35,6 +41,6 @@ describe("applySignature", () => {
   });
 
   it("assina texto de várias linhas mantendo o corpo intacto", () => {
-    expect(applySignature("Linha 1\nLinha 2", on)).toBe("Fernanda Oliveira:\nLinha 1\nLinha 2");
+    expect(applySignature("Linha 1\nLinha 2", on)).toBe("*Fernanda Oliveira:*\nLinha 1\nLinha 2");
   });
 });
