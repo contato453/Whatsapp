@@ -210,16 +210,28 @@ export class InstanceManager {
     // Chamada de voz/vídeo — vira um registro dentro da conversa
     this.provider.on("call", (event) => {
       void this.withOrg(event.instanceId, async (organizationId) => {
-        const conversation = await this.prisma.conversation.findUnique({
-          where: {
-            whatsappInstanceId_externalChatId: {
-              whatsappInstanceId: event.instanceId,
-              externalChatId: event.externalChatId,
-            },
+        // Quem nunca escreveu e só ligou também precisa aparecer na fila,
+        // então a conversa é criada na primeira chamada.
+        const caller = event.fromExternalId
+          ? await this.prisma.contact.findFirst({
+              where: {
+                whatsappInstanceId: event.instanceId,
+                externalId: event.fromExternalId,
+              },
+              select: { name: true, pushName: true },
+            })
+          : null;
+        const callerName = caller?.name ?? caller?.pushName ?? null;
+        const conversation = await this.ingest.ensureConversation(
+          {
+            instanceId: event.instanceId,
+            externalChatId: event.externalChatId,
+            isGroup: event.isGroup,
+            callerName,
+            callerPhone: event.fromPhone,
           },
-          select: { id: true, status: true },
-        });
-        if (!conversation) return;
+          organizationId,
+        );
 
         const label = (CALL_LABELS[event.status] ?? CALL_LABELS.ringing)?.(event.isVideo) ?? "Chamada";
         // Mesma chamada emite vários eventos (tocando → atendida/perdida):
@@ -259,7 +271,11 @@ export class InstanceManager {
           data: {
             lastMessageAt: event.timestamp,
             lastMessagePreview: label,
-            ...(conversation.status === "new" ? { status: "open" as const } : {}),
+            // Chamada recebida é contato do cliente: devolve para a fila,
+            // igual a uma mensagem nova.
+            ...(conversation.status === "resolved" || conversation.status === "waiting_client"
+              ? { status: "open" as const }
+              : {}),
           },
         });
 
@@ -285,6 +301,22 @@ export class InstanceManager {
           this.io
             .to(room)
             .emit(RealtimeEvents.ConversationUpdated, serializeConversation(full));
+        }
+
+        // Está tocando agora: avisa o responsável em qualquer tela do sistema.
+        // O sistema nunca atende nem rejeita — o telefone segue tocando.
+        if (!existing && event.status === "ringing") {
+          this.io.to(room).emit(RealtimeEvents.CallIncoming, {
+            conversationId: conversation.id,
+            conversationTitle: full?.title ?? conversation.title,
+            callerName,
+            callerPhone: event.fromPhone,
+            isVideo: event.isVideo,
+            isGroup: event.isGroup,
+            assignedUserId: full?.assignedUserId ?? conversation.assignedUserId,
+            instanceId: event.instanceId,
+            at: event.timestamp.toISOString(),
+          });
         }
       });
     });
@@ -713,7 +745,7 @@ export class InstanceManager {
           externalChatId: chat.externalChatId,
           type: chat.type,
           title,
-          status: "new",
+          status: "open",
           unreadCount: chat.unreadCount,
           lastMessageAt: chat.lastMessageAt,
         },
@@ -770,7 +802,7 @@ export class InstanceManager {
           externalChatId: group.externalId,
           type: "group",
           title: group.name,
-          status: "new",
+          status: "open",
         },
       });
 

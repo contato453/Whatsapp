@@ -228,11 +228,10 @@ enum ConversationType {
 }
 
 enum ConversationStatus {
-  new
   open
-  waiting
+  waiting_client
+  waiting_internal
   resolved
-  archived
 }
 
 model Conversation {
@@ -243,7 +242,7 @@ model Conversation {
   type               ConversationType
   title              String
   profilePicture     String?
-  status             ConversationStatus @default(new)
+  status             ConversationStatus @default(open)
   assignedUserId     String?
   departmentId       String?
   unreadCount        Int                @default(0)

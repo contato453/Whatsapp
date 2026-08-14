@@ -118,7 +118,10 @@ export interface CallEvent {
   callId: string;
   externalChatId: string;
   fromExternalId: string | null;
+  /** Telefone de quem ligou (E.164 sem +), quando dá para extrair do JID */
+  fromPhone: string | null;
   isVideo: boolean;
+  isGroup: boolean;
   /** offer/ringing = tocando; accept = atendida; reject/timeout = não atendida */
   status: "ringing" | "accepted" | "rejected" | "missed";
   timestamp: Date;

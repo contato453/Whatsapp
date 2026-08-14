@@ -277,7 +277,6 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       data: {
         lastMessageAt: result.timestamp,
         lastMessagePreview: `📊 ${body.question}`.slice(0, 120),
-        ...(conversation.status === "new" ? { status: "open" as const } : {}),
       },
     });
     deps.audit.record({
@@ -505,7 +504,6 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       data: {
         lastMessageAt: result.timestamp,
         lastMessagePreview: buildPreview({ type: original.type, content: original.content }),
-        ...(target.status === "new" ? { status: "open" as const } : {}),
       },
     });
     deps.audit.record({
@@ -576,7 +574,6 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       data: {
         lastMessageAt: result.timestamp,
         lastMessagePreview: buildPreview({ type: "text", content }),
-        ...(conversation.status === "new" ? { status: "open" as const } : {}),
       },
     });
     deps.audit.record({
@@ -686,8 +683,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
         data: {
           lastMessageAt: result.timestamp,
           lastMessagePreview: buildPreview({ type: mediaType, content: caption ?? null }),
-          ...(conversation.status === "new" ? { status: "open" as const } : {}),
-        },
+          },
       });
       deps.audit.record({
         organizationId: request.user.organizationId,

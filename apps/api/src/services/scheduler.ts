@@ -116,7 +116,6 @@ export class ScheduledMessageWorker {
         data: {
           lastMessageAt: result.timestamp,
           lastMessagePreview: buildPreview({ type: "text", content: scheduled.content }),
-          ...(scheduled.conversation.status === "new" ? { status: "open" as const } : {}),
         },
       });
 

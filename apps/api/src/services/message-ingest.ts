@@ -122,8 +122,10 @@ export class MessageIngestService {
         ...(isInbound
           ? {
               unreadCount: { increment: 1 },
-              // Conversa resolvida que recebe mensagem nova volta para a fila.
-              ...(conversation.status === "resolved" || conversation.status === "archived"
+              // Mensagem do cliente devolve a conversa para a fila: concluída
+              // reabre, e "AG. Cliente" deixa de fazer sentido — a espera
+              // acabou no momento em que ele respondeu.
+              ...(conversation.status === "resolved" || conversation.status === "waiting_client"
                 ? { status: "open" as const }
                 : {}),
             }
@@ -142,7 +144,47 @@ export class MessageIngestService {
     return { conversationId: conversation.id, messageId: created.id, isNewMessage: true };
   }
 
-  private async upsertConversation(message: NormalizedMessage, organizationId: string) {
+  /**
+   * Garante a conversa de um contato que ainda não mandou mensagem —
+   * usado quando a primeira interação é uma ligação.
+   */
+  async ensureConversation(
+    input: {
+      instanceId: string;
+      externalChatId: string;
+      isGroup: boolean;
+      callerName: string | null;
+      callerPhone: string | null;
+    },
+    organizationId: string,
+  ) {
+    return this.upsertConversation(
+      {
+        instanceId: input.instanceId,
+        externalChatId: input.externalChatId,
+        chatType: input.isGroup ? "group" : "individual",
+        chatName: null,
+        direction: "inbound",
+        senderName: input.callerName,
+        senderPhone: input.callerPhone,
+      },
+      organizationId,
+    );
+  }
+
+  private async upsertConversation(
+    message: Pick<
+      NormalizedMessage,
+      | "instanceId"
+      | "externalChatId"
+      | "chatType"
+      | "chatName"
+      | "direction"
+      | "senderName"
+      | "senderPhone"
+    >,
+    organizationId: string,
+  ) {
     const fallbackTitle =
       message.chatName ??
       (message.chatType === "group"
@@ -181,7 +223,7 @@ export class MessageIngestService {
       externalChatId: message.externalChatId,
       type: message.chatType,
       title: fallbackTitle,
-      status: "new",
+      status: "open",
     };
     return this.prisma.conversation.create({ data });
   }

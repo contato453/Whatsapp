@@ -175,7 +175,8 @@ export interface DashboardStatsDto {
   instancesConnected: number;
   instancesDisconnected: number;
   conversationsOpen: number;
-  conversationsWaiting: number;
+  conversationsWaitingClient: number;
+  conversationsWaitingInternal: number;
   conversationsUnassigned: number;
   messagesReceivedToday: number;
   messagesSentToday: number;

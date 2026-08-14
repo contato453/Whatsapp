@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { CONVERSATION_STATUSES_ACTIVE } from "@azvchat/shared";
 import { accessibleInstanceIds, instanceIdScope, instanceScope } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
 import type { AppDeps } from "../../types.js";
@@ -21,7 +22,8 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
       instancesConnected,
       instancesDisconnected,
       conversationsOpen,
-      conversationsWaiting,
+      conversationsWaitingClient,
+      conversationsWaitingInternal,
       conversationsUnassigned,
       messagesReceivedToday,
       messagesSentToday,
@@ -34,17 +36,20 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
         where: { organizationId, ...instanceFilter, status: { not: "connected" } },
       }),
       deps.prisma.conversation.count({
-        where: { organizationId, ...conversationFilter, status: { in: ["new", "open"] } },
+        where: { organizationId, ...conversationFilter, status: "open" },
       }),
       deps.prisma.conversation.count({
-        where: { organizationId, ...conversationFilter, status: "waiting" },
+        where: { organizationId, ...conversationFilter, status: "waiting_client" },
+      }),
+      deps.prisma.conversation.count({
+        where: { organizationId, ...conversationFilter, status: "waiting_internal" },
       }),
       deps.prisma.conversation.count({
         where: {
           organizationId,
           ...conversationFilter,
           assignedUserId: null,
-          status: { in: ["new", "open", "waiting"] },
+          status: { in: [...CONVERSATION_STATUSES_ACTIVE] },
         },
       }),
       deps.prisma.message.count({
@@ -65,7 +70,11 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
       }),
       deps.prisma.conversation.groupBy({
         by: ["departmentId"],
-        where: { organizationId, ...conversationFilter, status: { in: ["new", "open", "waiting"] } },
+        where: {
+          organizationId,
+          ...conversationFilter,
+          status: { in: [...CONVERSATION_STATUSES_ACTIVE] },
+        },
         _count: { _all: true },
       }),
     ]);
@@ -80,7 +89,8 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
       instancesConnected,
       instancesDisconnected,
       conversationsOpen,
-      conversationsWaiting,
+      conversationsWaitingClient,
+      conversationsWaitingInternal,
       conversationsUnassigned,
       messagesReceivedToday,
       messagesSentToday,

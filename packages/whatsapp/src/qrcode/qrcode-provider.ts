@@ -230,7 +230,9 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
           callId: call.id,
           externalChatId: chatId,
           fromExternalId: call.from ?? null,
+          fromPhone: phoneFromJid(call.from) ?? jidToPhone(call.from),
           isVideo: call.isVideo ?? false,
+          isGroup: call.isGroup ?? isGroupJid(chatId),
           status,
           timestamp: call.date instanceof Date ? call.date : new Date(),
         });
