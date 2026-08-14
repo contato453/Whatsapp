@@ -233,25 +233,47 @@ export function directionFromKey(key: proto.IMessageKey | null | undefined): Mes
 }
 
 /**
+ * Campos que o Baileys acrescenta à chave da mensagem além do protobuf.
+ *
+ * Quando o chat usa endereçamento anônimo, o WhatsApp manda o telefone de
+ * verdade num atributo separado (`participant_pn` em grupos, `sender_pn`
+ * em conversas individuais). É a única fonte confiável do número nesses
+ * casos — os dígitos do "@lid" não são telefone.
+ */
+interface MessageKeyExtras {
+  participantPn?: string | null;
+  senderPn?: string | null;
+}
+
+/**
  * Identifica o remetente real da mensagem.
  * Em grupos o autor é `key.participant`; em conversas individuais é o
  * próprio chat (inbound) ou o número conectado (outbound).
+ *
+ * O identificador retornado é sempre o que o WhatsApp usa para endereçar
+ * (podendo ser um "@lid"), porque é por ele que participantes e reações
+ * são relacionados. O telefone é resolvido à parte.
  */
 export function extractSender(
   key: proto.IMessageKey | null | undefined,
   ownJid: string | null,
 ): { senderExternalId: string | null; senderPhone: string | null } {
-  // phoneFromJid retorna null para JIDs "@lid" — esses identificadores
-  // internos não são telefone e não podem ser exibidos como tal.
+  const extras = (key ?? {}) as MessageKeyExtras;
   const remoteJid = key?.remoteJid ?? null;
   if (key?.fromMe) {
     return { senderExternalId: ownJid, senderPhone: phoneFromJid(ownJid) };
   }
   if (isGroupJid(remoteJid)) {
     const participant = key?.participant ?? null;
-    return { senderExternalId: participant, senderPhone: phoneFromJid(participant) };
+    return {
+      senderExternalId: participant,
+      senderPhone: phoneFromJid(participant) ?? phoneFromJid(extras.participantPn),
+    };
   }
-  return { senderExternalId: remoteJid, senderPhone: phoneFromJid(remoteJid) };
+  return {
+    senderExternalId: remoteJid,
+    senderPhone: phoneFromJid(remoteJid) ?? phoneFromJid(extras.senderPn),
+  };
 }
 
 /** Tipo estrutural compatível com Long (protobuf) sem depender do pacote "long". */

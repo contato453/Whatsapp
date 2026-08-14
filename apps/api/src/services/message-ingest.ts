@@ -80,18 +80,27 @@ export class MessageIngestService {
     const isInbound = message.direction === "inbound";
     const preview = buildPreview(message);
 
-    // Em grupos que usam identificadores internos (@lid), o telefone não vem
-    // na mensagem — buscamos o que já conhecemos do participante.
+    // Em grupos que usam identificadores internos (@lid), o telefone pode
+    // não vir na mensagem — buscamos o que já conhecemos do participante.
+    // Quando vem, aproveitamos para gravá-lo: é assim que o cadastro de um
+    // grupo anônimo aprende os números, conforme as pessoas escrevem.
     let senderPhone = message.senderPhone;
-    if (!senderPhone && message.chatType === "group" && message.senderExternalId) {
+    if (message.chatType === "group" && message.senderExternalId) {
       const participant = await this.prisma.groupParticipant.findFirst({
         where: {
           externalContactId: message.senderExternalId,
           group: { whatsappInstanceId: message.instanceId, externalId: message.externalChatId },
         },
-        select: { phoneNumber: true },
+        select: { id: true, phoneNumber: true },
       });
-      senderPhone = participant?.phoneNumber || null;
+      if (!senderPhone) {
+        senderPhone = participant?.phoneNumber || null;
+      } else if (participant && participant.phoneNumber !== senderPhone) {
+        await this.prisma.groupParticipant.update({
+          where: { id: participant.id },
+          data: { phoneNumber: senderPhone },
+        });
+      }
     }
 
     const created = await this.prisma.message.create({
