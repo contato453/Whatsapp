@@ -5,7 +5,7 @@ import { SocketProvider } from "@/lib/socket-context";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ZapDesk — Atendimento WhatsApp",
+  title: "AZVCHAT — Atendimento WhatsApp",
   description: "Plataforma de atendimento por WhatsApp com foco em grupos",
 };
 

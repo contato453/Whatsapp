@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { MessageSquareText } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { Button, Card, Field, Input } from "@/components/ui";
+import { LogoMark, LogoWordmark } from "@/components/logo";
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -27,11 +27,15 @@ export default function LoginPage() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
       <Card className="w-full max-w-sm p-8">
-        <div className="mb-6 flex flex-col items-center gap-2 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-600 text-white">
-            <MessageSquareText className="h-6 w-6" />
-          </div>
-          <h1 className="text-xl font-bold text-slate-900">ZapDesk</h1>
+        <div className="mb-6 flex flex-col items-center gap-3 text-center">
+          {/* Card branco: marca na versão colorida. */}
+          <LogoMark className="h-12 w-12" />
+          <h1>
+            <LogoWordmark className="text-2xl" />
+          </h1>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+            Conecta · Atende · Resolve
+          </p>
           <p className="text-sm text-slate-500">Central de atendimento WhatsApp</p>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">

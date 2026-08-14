@@ -172,7 +172,7 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
       version,
       auth: authState,
       logger: this.logger.child({ instanceId, module: "baileys" }, { level: "warn" }),
-      browser: ["ZapDesk", "Chrome", "1.0.0"],
+      browser: ["AZVCHAT", "Chrome", "1.0.0"],
       agent: this.proxyAgent,
       syncFullHistory: false,
       markOnlineOnConnect: false,
