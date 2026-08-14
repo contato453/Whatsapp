@@ -1,8 +1,8 @@
 import "./lib/load-env.js";
 import { mkdir } from "node:fs/promises";
 import pino from "pino";
-import { getPrisma, disconnectPrisma } from "@zapdesk/database";
-import { QrCodeWhatsAppProvider } from "@zapdesk/whatsapp";
+import { getPrisma, disconnectPrisma } from "@azvchat/database";
+import { QrCodeWhatsAppProvider } from "@azvchat/whatsapp";
 import { loadConfig } from "./config.js";
 import { buildApp } from "./app.js";
 import { createRealtime } from "./realtime/socket.js";

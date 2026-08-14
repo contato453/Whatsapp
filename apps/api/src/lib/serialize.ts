@@ -5,7 +5,7 @@ import type {
   Tag,
   User,
   WhatsAppInstance,
-} from "@zapdesk/database";
+} from "@azvchat/database";
 
 /**
  * Serializadores de entidades para a API — controlam exatamente o que

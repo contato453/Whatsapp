@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PrismaClient } from "@zapdesk/database";
+import type { PrismaClient } from "@azvchat/database";
 import { accessibleInstanceIds, instanceIdScope, instanceScope } from "../src/lib/access.js";
 import type { AuthTokenPayload } from "../src/lib/auth.js";
 

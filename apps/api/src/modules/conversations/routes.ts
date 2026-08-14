@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import type { Prisma } from "@zapdesk/database";
+import type { Prisma } from "@azvchat/database";
 import { z } from "zod";
-import { RealtimeEvents } from "@zapdesk/shared";
+import { RealtimeEvents } from "@azvchat/shared";
 import { accessibleInstanceIds, instanceScope } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
 import { ForbiddenError, NotFoundError } from "../../lib/errors.js";

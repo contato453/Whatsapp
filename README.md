@@ -98,13 +98,13 @@ docker compose up -d --build
 
 - `whatsapp_sessions` e `media_store` são volumes nomeados — **preservam sessões e arquivos entre deploys**;
 - as migrations são aplicadas automaticamente no start da API;
-- rode o seed uma única vez: `docker compose exec api pnpm --filter @zapdesk/database seed`.
+- rode o seed uma única vez: `docker compose exec api pnpm --filter @azvchat/database seed`.
 
 Frontend e API podem rodar em servidores diferentes: o web só precisa de `NEXT_PUBLIC_API_URL` apontando para a API pública (e a API de `WEB_ORIGIN` para o CORS). O serviço que segura as sessões de WhatsApp é a API — escale o web à vontade; a API deve rodar em instância única (sessões são stateful) até existir um broker de sessões.
 
 ### Sem Docker
 
-`pnpm install && pnpm db:deploy && pnpm --filter @zapdesk/api start` atrás de um systemd/pm2, e `pnpm --filter @zapdesk/web build && start` para o web. Use um reverse proxy (Caddy/Nginx) com TLS na frente.
+`pnpm install && pnpm db:deploy && pnpm --filter @azvchat/api start` atrás de um systemd/pm2, e `pnpm --filter @azvchat/web build && start` para o web. Use um reverse proxy (Caddy/Nginx) com TLS na frente.
 
 ### Redes restritas
 

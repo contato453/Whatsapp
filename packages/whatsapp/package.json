@@ -1,5 +1,5 @@
 {
-  "name": "@zapdesk/whatsapp",
+  "name": "@azvchat/whatsapp",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,7 +16,7 @@
   "dependencies": {
     "@hapi/boom": "^10.0.1",
     "@whiskeysockets/baileys": "6.7.24",
-    "@zapdesk/shared": "workspace:*",
+    "@azvchat/shared": "workspace:*",
     "https-proxy-agent": "^7.0.6",
     "pino": "^9.5.0",
     "qrcode": "^1.5.4"

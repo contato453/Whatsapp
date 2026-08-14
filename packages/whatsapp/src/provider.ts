@@ -12,7 +12,7 @@ import type {
   QrCodeEvent,
   QuotedMessageRef,
   ReactionEvent,
-} from "@zapdesk/shared";
+} from "@azvchat/shared";
 
 /**
  * Eventos emitidos por qualquer implementação de WhatsAppProvider.
