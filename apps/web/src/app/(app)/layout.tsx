@@ -12,6 +12,7 @@ import {
   Tags,
   Users,
   Building2,
+  BarChart3,
   Zap,
   Lock,
 } from "lucide-react";
@@ -42,6 +43,8 @@ const NAV: Array<{
   { href: "/whatsapp", label: "WhatsApp", icon: Smartphone, minRole: "supervisor" },
   { href: "/users", label: "Usuários", icon: Users, minRole: "admin" },
   { href: "/departments", label: "Departamentos", icon: Building2, minRole: "supervisor" },
+  // Mesmo papel do requireRole("supervisor") em /reports/agents.
+  { href: "/reports", label: "Relatórios", icon: BarChart3, minRole: "supervisor" },
   { href: "/tags", label: "Etiquetas", icon: Tags, minRole: "supervisor" },
   { href: "/quick-replies", label: "Respostas rápidas", icon: Zap, minRole: "agent" },
   { href: "/settings", label: "Configurações", icon: Settings, minRole: "agent" },

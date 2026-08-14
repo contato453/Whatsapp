@@ -75,6 +75,7 @@ model User {
   scheduledMessages     ScheduledMessage[]
   whatsappAccess        UserWhatsAppInstance[]
   departmentAccess      UserDepartment[]
+  defaultForDepartments Department[]                    @relation("DepartmentDefaultAssignee")
 
   @@index([organizationId])
   @@map("users")
@@ -90,13 +91,17 @@ model Department {
   name           String
   description    String?
   color          String?
+  /// Responsável padrão: assume as conversas que entram neste departamento
+  /// sem ninguém atribuído. Precisa ter acesso ao próprio departamento.
+  defaultAssigneeId String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization  Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  conversations Conversation[]
-  userAccess    UserDepartment[]
-  instances     WhatsAppInstance[]
+  organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  defaultAssignee User?              @relation("DepartmentDefaultAssignee", fields: [defaultAssigneeId], references: [id], onDelete: SetNull)
+  conversations   Conversation[]
+  userAccess      UserDepartment[]
+  instances       WhatsAppInstance[]
 
   @@unique([organizationId, name])
   @@map("departments")

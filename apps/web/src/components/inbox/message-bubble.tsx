@@ -27,6 +27,7 @@ import { fetchMediaBlobUrl } from "@/lib/api";
 import { cn, formatPhone } from "@/lib/utils";
 import type { MessageDto } from "@/lib/types";
 import { AudioPlayer } from "./audio-player";
+import { FormattedText } from "./formatted-text";
 
 /** Emojis oferecidos no acesso rápido de reação. */
 export const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
@@ -309,12 +310,18 @@ export function MessageBubble({
             <MapPin className="h-4 w-4" /> {message.content ?? "Localização"}
           </p>
         ) : message.type === "text" ? (
-          <p className="whitespace-pre-wrap break-words text-sm">{message.content}</p>
+          <FormattedText
+            text={message.content ?? ""}
+            className="whitespace-pre-wrap break-words text-sm"
+          />
         ) : (
           <div className="space-y-1.5">
             <MediaContent message={message} outbound={outbound} />
             {message.content && (
-              <p className="whitespace-pre-wrap break-words text-sm">{message.content}</p>
+              <FormattedText
+                text={message.content}
+                className="whitespace-pre-wrap break-words text-sm"
+              />
             )}
           </div>
         )}

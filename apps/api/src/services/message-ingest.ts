@@ -1,5 +1,6 @@
 import type { PrismaClient, Prisma } from "@azvchat/database";
 import type { NormalizedMessage } from "@azvchat/shared";
+import { stripWhatsAppFormatting } from "@azvchat/shared";
 import type { Logger } from "pino";
 import type { MediaStorage } from "../lib/media-storage.js";
 import { extensionFromMime } from "../lib/media-storage.js";
@@ -10,9 +11,13 @@ export interface IngestResult {
   isNewMessage: boolean;
 }
 
-/** Gera o texto de preview exibido na lista de conversas. */
+/**
+ * Gera o texto de preview exibido na lista de conversas.
+ * Sem os marcadores de formatação: "*Fernanda:*" viraria ruído na prévia.
+ */
 export function buildPreview(message: Pick<NormalizedMessage, "type" | "content">): string {
-  if (message.type === "text") return (message.content ?? "").slice(0, 120);
+  const content = message.content ? stripWhatsAppFormatting(message.content) : null;
+  if (message.type === "text") return (content ?? "").slice(0, 120);
   const labels: Record<string, string> = {
     image: "📷 Imagem",
     audio: "🎤 Áudio",
@@ -24,7 +29,7 @@ export function buildPreview(message: Pick<NormalizedMessage, "type" | "content"
     other: "Mensagem",
   };
   const label = labels[message.type] ?? "Mensagem";
-  return message.content ? `${label} — ${message.content}`.slice(0, 120) : label;
+  return content ? `${label} — ${content}`.slice(0, 120) : label;
 }
 
 /**
@@ -44,6 +49,12 @@ export class MessageIngestService {
     context: { organizationId: string },
   ): Promise<IngestResult | null> {
     const conversation = await this.upsertConversation(message, context.organizationId);
+
+    // Mensagem recebida em conversa sem responsável cai para o responsável
+    // padrão do departamento, se houver.
+    if (message.direction === "inbound" && !conversation.assignedUserId) {
+      await this.applyDefaultAssignee(conversation, context.organizationId);
+    }
 
     // Deduplicação: eventos do WhatsApp podem chegar repetidos.
     const existing = await this.prisma.message.findUnique({
@@ -179,6 +190,58 @@ export class MessageIngestService {
       },
       organizationId,
     );
+  }
+
+  /**
+   * Atribui a conversa ao responsável padrão do departamento.
+   *
+   * Só age quando ninguém está responsável — nunca tira uma conversa de
+   * quem já assumiu. O registro no histórico fica sem "performedBy", que é
+   * o que distingue a atribuição automática da feita por uma pessoa.
+   */
+  private async applyDefaultAssignee(
+    conversation: { id: string; departmentId: string | null },
+    organizationId: string,
+  ): Promise<void> {
+    if (!conversation.departmentId) return;
+    try {
+      const department = await this.prisma.department.findUnique({
+        where: { id: conversation.departmentId },
+        select: { defaultAssigneeId: true },
+      });
+      const assigneeId = department?.defaultAssigneeId;
+      if (!assigneeId) return;
+
+      // Usuário desativado depois de configurado não recebe a conversa:
+      // ela ficaria parada numa caixa que ninguém abre.
+      const assignee = await this.prisma.user.findFirst({
+        where: { id: assigneeId, organizationId, status: "active" },
+        select: { id: true },
+      });
+      if (!assignee) return;
+
+      await this.prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { assignedUserId: assignee.id },
+      });
+      await this.prisma.conversationAssignmentHistory.create({
+        data: {
+          organizationId,
+          conversationId: conversation.id,
+          action: "assigned",
+          toUserId: assignee.id,
+          toDepartmentId: conversation.departmentId,
+          note: "Responsável padrão do departamento",
+        },
+      });
+    } catch (err) {
+      // Falhar aqui não pode impedir a mensagem de ser gravada.
+      this.logger.warn({
+        conversationId: conversation.id,
+        event: "default_assignee_failed",
+        error: String(err),
+      });
+    }
   }
 
   private async upsertConversation(
