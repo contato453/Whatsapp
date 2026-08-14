@@ -126,27 +126,54 @@ As migrations rodam sozinhas no start da API. As sessões do WhatsApp **não cae
 
 Só é necessário em instalações que subiram **antes** da renomeação do sistema para AZVCHAT. Instalação nova já nasce com os nomes corretos e pode pular esta seção.
 
-O Postgres só cria usuário e banco quando o volume está vazio. Num servidor que já rodou, o volume tem `zapdesk` gravado, e as variáveis novas do compose são ignoradas — então a API sobe apontando para um usuário que não existe e não conecta. O rename é feito uma vez, no banco:
+O Postgres só cria usuário e banco quando o volume está vazio. Num servidor que já rodou, o volume tem `zapdesk` gravado, e as variáveis novas do compose são ignoradas — então a API sobe apontando para um usuário que não existe e não conecta.
+
+O banco pode ser renomeado, mas o **usuário não**: `zapdesk` é o único superusuário do cluster, e o PostgreSQL recusa `ALTER ROLE ... RENAME` quando a role é a da própria sessão (`session user cannot be renamed`). A saída é criar a role nova e transferir a posse dos objetos. Rode o bloco abaixo inteiro — ele é idempotente e pode ser repetido:
 
 ```bash
+cd ~/Whatsapp
+PC="docker compose -f docker-compose.prod.yml exec -T postgres"
+
 # 1. Pare a API (o banco continua no ar)
 docker compose -f docker-compose.prod.yml stop api
 
-# 2. Renomeie banco e usuário. A senha vem do POSTGRES_PASSWORD do seu .env
-docker compose -f docker-compose.prod.yml exec postgres psql -U zapdesk -d postgres -c \
-  "ALTER DATABASE zapdesk RENAME TO azvchat;"
-docker compose -f docker-compose.prod.yml exec postgres psql -U zapdesk -d postgres -c \
-  "ALTER ROLE zapdesk RENAME TO azvchat;"
-docker compose -f docker-compose.prod.yml exec postgres psql -U azvchat -d postgres -c \
-  "ALTER ROLE azvchat WITH PASSWORD 'SUA_POSTGRES_PASSWORD';"
+# 2. Descubra qual superusuário existe no volume
+SU=""
+for c in zapdesk azvchat postgres; do
+  $PC psql -U "$c" -d postgres -tAc "select 1" >/dev/null 2>&1 && { SU="$c"; break; }
+done
+echo "superusuário = ${SU:?nenhum superusuário encontrado}"
 
-# 3. Suba tudo de novo
+# 3. Renomeie o banco, se ainda estiver com o nome antigo
+$PC psql -U "$SU" -d postgres -tAc "select 1 from pg_database where datname='zapdesk'" | grep -q 1 \
+  && $PC psql -U "$SU" -d postgres -c "ALTER DATABASE zapdesk RENAME TO azvchat;"
+
+# 4. Crie (ou ajuste) o usuário azvchat com uma senha nova só em hex
+NEWPW=$(openssl rand -hex 24)
+if $PC psql -U "$SU" -d postgres -tAc "select 1 from pg_roles where rolname='azvchat'" | grep -q 1; then
+  $PC psql -U "$SU" -d postgres -c "ALTER ROLE azvchat WITH LOGIN SUPERUSER PASSWORD '$NEWPW';"
+else
+  $PC psql -U "$SU" -d postgres -c "CREATE ROLE azvchat WITH LOGIN SUPERUSER PASSWORD '$NEWPW';"
+fi
+$PC psql -U "$SU" -d postgres -c "ALTER DATABASE azvchat OWNER TO azvchat;"
+[ "$SU" != "azvchat" ] && $PC psql -U azvchat -d azvchat -c "REASSIGN OWNED BY $SU TO azvchat;"
+
+# 5. Grave a senha nova no .env (o antigo fica em .env.bak)
+cp .env .env.bak
+sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$NEWPW|" .env
+
+# 6. Confirme a credencial pelo mesmo caminho que o Prisma usa (TCP + senha)
+$PC sh -c "PGPASSWORD='$NEWPW' psql -h 127.0.0.1 -U azvchat -d azvchat -tAc \"select current_user||' @ '||current_database()\""
+
+# 7. Suba tudo de novo
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-Sobre o passo 3 da senha: o Postgres 16 guarda a senha em scram-sha-256 e o rename a preserva, mas em cluster antigo migrado de md5 o rename limpa a senha. Rodar o `ALTER ROLE ... WITH PASSWORD` cobre os dois casos — use exatamente o valor de `POSTGRES_PASSWORD` que está no seu `.env`, senão a API não conecta.
+O passo 6 precisa imprimir `azvchat @ azvchat`. Se imprimir, a API conecta; se falhar ali, não adianta subir — o erro está no banco, não na aplicação.
 
-Nada de dados é perdido: renomear banco e usuário não toca nas tabelas. As sessões de WhatsApp ficam em volume separado e também não são afetadas — nenhum número precisa reconectar.
+Sobre a senha nova: gerar em hex evita que caracteres como `@`, `#`, `/` ou `:` quebrem a `DATABASE_URL` montada pelo compose. Reaproveitar a senha antiga também funciona, desde que ela seja alfanumérica e você aplique o mesmo valor no `ALTER ROLE` e no `.env` — mas o rename de role em cluster migrado de md5 apaga a senha, então reaplicá-la é obrigatório de qualquer forma.
+
+Nada de dados é perdido: renomear o banco e trocar o dono não toca nas tabelas. As sessões de WhatsApp ficam em volume separado e também não são afetadas — nenhum número precisa reconectar. Depois de confirmar que está tudo no ar, apague o backup do env: `rm .env.bak`.
 
 **Ver logs**:
 
