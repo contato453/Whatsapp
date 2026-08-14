@@ -21,6 +21,60 @@ const EMPTY_FORM: DepartmentForm = {
   defaultAssigneeId: "",
 };
 
+/**
+ * Quem atua no departamento. Supervisor em destaque: ele enxerga todas as
+ * conversas da área, enquanto o usuário comum só vê as dele e as sem dono.
+ */
+function DepartmentTeam({
+  members,
+}: {
+  members: NonNullable<DepartmentDto["members"]>;
+}) {
+  if (members.length === 0) {
+    return (
+      <p className="mt-2 text-xs text-amber-600">
+        Ninguém com acesso — as conversas deste departamento ficam sem quem as veja.
+      </p>
+    );
+  }
+  const supervisors = members.filter((member) => member.role === "supervisor");
+  const team = members.filter((member) => member.role !== "supervisor");
+  return (
+    <div className="mt-2 space-y-1.5">
+      {supervisors.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+            Supervisão
+          </span>
+          {supervisors.map((member) => (
+            <span
+              key={member.id}
+              className="rounded-full bg-brand-50 px-2 py-0.5 text-[11px] font-medium text-brand-700"
+            >
+              {member.name}
+            </span>
+          ))}
+        </div>
+      )}
+      {team.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+            Equipe
+          </span>
+          {team.map((member) => (
+            <span
+              key={member.id}
+              className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600"
+            >
+              {member.name}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function DepartmentsPage() {
   const { user: me } = useAuth();
   const [departments, setDepartments] = useState<DepartmentDto[] | null>(null);
@@ -212,11 +266,13 @@ export default function DepartmentsPage() {
                     {department.defaultAssigneeId ? (
                       <span className="truncate text-slate-600">
                         {userNames.get(department.defaultAssigneeId) ?? "Usuário removido"}
+                        <span className="ml-1 text-slate-400">· responsável</span>
                       </span>
                     ) : (
                       <span className="text-slate-400">Sem responsável padrão</span>
                     )}
                   </p>
+                  <DepartmentTeam members={department.members ?? []} />
                 </div>
               </div>
               <div className="flex shrink-0 gap-1">

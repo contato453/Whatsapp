@@ -61,6 +61,11 @@ export interface DepartmentDto {
   color: string | null;
   /** Responsável padrão: assume as conversas que entram sem ninguém */
   defaultAssigneeId: string | null;
+  /**
+   * Quem atua no departamento, supervisores primeiro. Só vem na listagem
+   * completa (/departments); em /departments/mine fica ausente.
+   */
+  members?: Array<{ id: string; name: string; role: UserRole }>;
 }
 
 export interface TagDto {

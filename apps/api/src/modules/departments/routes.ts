@@ -55,8 +55,26 @@ export async function departmentRoutes(app: FastifyInstance, deps: AppDeps): Pro
     const departments = await deps.prisma.department.findMany({
       where: { organizationId: request.user.organizationId },
       orderBy: { name: "asc" },
+      include: {
+        userAccess: {
+          where: { user: { status: "active" } },
+          select: { user: { select: { id: true, name: true, role: true } } },
+        },
+      },
     });
-    return { departments: departments.map(serializeDepartment) };
+    return {
+      departments: departments.map((department) => ({
+        ...serializeDepartment(department),
+        // Quem atua no departamento. Supervisores primeiro: é a informação
+        // que se procura primeiro ao olhar uma equipe.
+        members: department.userAccess
+          .map((link) => link.user)
+          .sort((a, b) => {
+            if (a.role !== b.role) return a.role === "supervisor" ? -1 : 1;
+            return a.name.localeCompare(b.name, "pt-BR");
+          }),
+      })),
+    };
   });
 
   /**
