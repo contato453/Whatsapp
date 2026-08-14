@@ -32,11 +32,15 @@ export const CONVERSATION_STATUS_LABELS: Record<ConversationStatus, string> = {
   resolved: "Concluído",
 };
 
+/**
+ * Cores do semáforo do atendimento: verde anda, amarelo espera o cliente,
+ * vermelho está travado internamente, azul terminou.
+ */
 export const CONVERSATION_STATUS_COLORS: Record<ConversationStatus, string> = {
   open: "#16a34a",
-  waiting_client: "#d97706",
-  waiting_internal: "#0891b2",
-  resolved: "#64748b",
+  waiting_client: "#eab308",
+  waiting_internal: "#dc2626",
+  resolved: "#2563eb",
 };
 
 /** Status em que a conversa ainda exige acompanhamento da equipe. */

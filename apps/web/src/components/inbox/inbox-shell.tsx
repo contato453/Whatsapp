@@ -42,6 +42,7 @@ import { AudioRecorder } from "./audio-recorder";
 import { ScheduleModal } from "./composer-modals";
 import { MessageBubble } from "./message-bubble";
 import { ContextPanel } from "./context-panel";
+import { StatusSelect } from "./status-select";
 
 /** Nota interna exibida dentro da conversa — nunca vai para o WhatsApp. */
 function InternalNoteItem({
@@ -855,7 +856,16 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   </p>
                 </div>
               </div>
-              <div className="flex shrink-0 items-center gap-1">
+              <div className="flex shrink-0 items-center gap-2">
+                {/* Status do atendimento, editável na própria barra */}
+                <StatusSelect
+                  status={conversation.status}
+                  onChange={async (status) => {
+                    await api.post(`/conversations/${conversation.id}/status`, { status });
+                    loadDetail();
+                    loadConversations();
+                  }}
+                />
                 <Button
                   size="sm"
                   variant="ghost"
