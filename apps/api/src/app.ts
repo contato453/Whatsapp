@@ -14,6 +14,7 @@ import { conversationRoutes } from "./modules/conversations/routes.js";
 import { messageRoutes } from "./modules/messages/routes.js";
 import { quickReplyRoutes } from "./modules/quick-replies/routes.js";
 import { scheduledMessageRoutes } from "./modules/scheduled-messages/routes.js";
+import { attendanceSettingsRoutes } from "./modules/attendance-settings/routes.js";
 import { dashboardRoutes } from "./modules/dashboard/routes.js";
 import { searchRoutes } from "./modules/search/routes.js";
 import { auditRoutes } from "./modules/audit/routes.js";
@@ -67,6 +68,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     await messageRoutes(instance, deps);
     await quickReplyRoutes(instance, deps);
     await scheduledMessageRoutes(instance, deps);
+    await attendanceSettingsRoutes(instance, deps);
     await dashboardRoutes(instance, deps);
     await searchRoutes(instance, deps);
     await reportRoutes(instance, deps);

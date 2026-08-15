@@ -30,6 +30,7 @@ model Organization {
   auditLogs           AuditLog[]
   quickReplies        QuickReply[]
   scheduledMessages   ScheduledMessage[]
+  attendanceSettings  AttendanceSettings?
 
   @@map("organizations")
 }
@@ -636,4 +637,53 @@ model AuditLog {
 
   @@index([organizationId, createdAt])
   @@map("audit_logs")
+}
+
+// ============================================================
+// Parâmetros de atendimento (SLA e expediente)
+// ============================================================
+
+/// Política de atendimento do escritório: em quanto tempo o cliente precisa
+/// ser respondido e em que horários esse tempo corre. Fica no banco, e não
+/// no código, porque muda sem deploy — e o dashboard lê a cada requisição.
+///
+/// Uma linha por organização hoje. A tabela filha aponta para esta, e não
+/// para a organização: no dia em que existir parâmetro por departamento,
+/// basta uma nova linha aqui. Nenhuma coluna de departamento agora.
+model AttendanceSettings {
+  id             String @id @default(uuid())
+  organizationId String @unique
+  /// Minutos sem resposta, contados só dentro do expediente, para o
+  /// atendimento entrar como atrasado.
+  responseLimitMinutes Int    @default(30)
+  /// Fuso do escritório. Todo corte de data do dashboard usa este fuso,
+  /// nunca o UTC do servidor.
+  timezone             String @default("America/Sao_Paulo")
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  organization  Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  businessHours AttendanceBusinessHours[]
+
+  @@map("attendance_settings")
+}
+
+/// Expediente de um dia da semana. Sete linhas por configuração — cada dia
+/// se liga e desliga sozinho, porque o escritório pode passar a atender
+/// sábado de manhã sem mexer nos outros dias.
+model AttendanceBusinessHours {
+  id         String @id @default(uuid())
+  settingsId String
+  /// 0 = domingo ... 6 = sábado, igual a `Date#getDay()` e a `EXTRACT(DOW)`.
+  weekday    Int
+  active     Boolean @default(true)
+  /// "HH:MM" no fuso da configuração. Texto, e não `time`, porque é
+  /// exatamente o formato que a tela envia e que o cálculo consome.
+  startTime  String  @default("08:00")
+  endTime    String  @default("18:00")
+
+  settings AttendanceSettings @relation(fields: [settingsId], references: [id], onDelete: Cascade)
+
+  @@unique([settingsId, weekday])
+  @@map("attendance_business_hours")
 }

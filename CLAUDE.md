@@ -135,6 +135,21 @@ snake_case e id `uuid`.
   (`assigned|transferred_user|transferred_department|unassigned|resolved|reopened`),
   `AuditLog`.
 
+**Parâmetros de atendimento**
+- `AttendanceSettings` — uma linha por organização (`organizationId` único):
+  `responseLimitMinutes` (padrão 30) e `timezone` (padrão `America/Sao_Paulo`). É a política
+  de SLA do escritório, lida **a cada requisição** do dashboard (nunca em cache).
+- `AttendanceBusinessHours` — sete linhas por configuração, únicas por
+  `(settingsId, weekday)`: `weekday` (0 = domingo ... 6 = sábado, igual a `Date#getDay()` e a
+  `EXTRACT(DOW)`), `active`, `startTime`/`endTime` no formato `"HH:MM"`. Cada dia liga e
+  desliga sozinho — o escritório pode passar a atender sábado de manhã.
+- A filha aponta para `AttendanceSettings`, e não para a organização: parâmetro por
+  departamento no futuro é só uma linha nova de settings. **Não há tabela de feriados** —
+  feriado conta como dia normal.
+- Padrões e rótulos em `packages/shared/src/attendance.ts` (`DEFAULT_ATTENDANCE_SETTINGS`,
+  `WEEKDAY_LABELS`, `DASHBOARD_PERIODS`). Eles semeiam a linha e servem de fallback quando
+  ela ainda não existe — **o que vale em runtime é sempre o banco**.
+
 **Regra de migration**: nunca editar migration já aplicada. Criar nova pasta
 `packages/database/prisma/migrations/<timestamp>_<nome>/migration.sql` seguindo o padrão
 das existentes (nome descritivo em snake_case, ex.: `20260814200000_custom_names`).
@@ -180,8 +195,8 @@ ações":
 | Ação | Papel mínimo |
 | --- | --- |
 | Criar/editar usuário; excluir número ou departamento | `admin` |
-| Criar/conectar número, criar departamento e etiqueta, ver auditoria, relatórios, editar nota de terceiro | `supervisor` |
-| Inbox, atribuição, notas próprias, respostas rápidas, próprio perfil e senha | `agent` |
+| Criar/conectar número, criar departamento e etiqueta, ver auditoria, relatórios, **gravar parâmetros de atendimento** (item "Parâmetros" do menu), editar nota de terceiro | `supervisor` |
+| Inbox, atribuição, notas próprias, respostas rápidas, próprio perfil e senha, **ler parâmetros de atendimento** | `agent` |
 
 A hierarquia vive em `packages/shared/src/enums.ts` (`hasRole`) e é a **mesma tabela** usada
 por `requireRole()` na API e pelo array `NAV` em `apps/web/src/app/(app)/layout.tsx`.
@@ -250,6 +265,9 @@ GET    /tags                POST /tags            PATCH|DELETE /tags/:id
 GET    /quick-replies       POST /quick-replies   PATCH|DELETE /quick-replies/:id
 GET    /conversations/:id/scheduled-messages   POST /conversations/:id/scheduled-messages
 DELETE /scheduled-messages/:id
+
+GET    /attendance-settings  (qualquer papel — o dashboard depende dela)
+PUT    /attendance-settings  (supervisor; grava SLA + expediente e vai para o AuditLog)
 
 GET    /search              GET /dashboard/stats  GET /reports/agents  GET /audit-logs
 ```

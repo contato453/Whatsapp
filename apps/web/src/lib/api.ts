@@ -1,6 +1,6 @@
 "use client";
 
-import type { ParticipantClientRole } from "@azvchat/shared";
+import type { AttendanceSettings, ParticipantClientRole } from "@azvchat/shared";
 import type { QuickReplyDto, TagDto } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
@@ -68,6 +68,8 @@ export const api = {
     request<T>(path, { method: "POST", body: form }),
   patch: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
+  put: <T>(path: string, body: unknown) =>
+    request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
 };
 
@@ -123,6 +125,22 @@ export const quickRepliesApi = {
       .patch<{ quickReply: QuickReplyDto }>(`/quick-replies/${id}`, input)
       .then((data) => data.quickReply),
   remove: (id: string) => api.delete<{ ok: boolean }>(`/quick-replies/${id}`),
+};
+
+/**
+ * Parâmetros de atendimento da organização. A leitura é liberada para todo
+ * mundo (o dashboard depende dela); a gravação exige supervisor e é barrada
+ * pela API mesmo que alguém chame direto.
+ */
+export const attendanceSettingsApi = {
+  get: () =>
+    api
+      .get<{ settings: AttendanceSettings }>("/attendance-settings")
+      .then((data) => data.settings),
+  save: (input: AttendanceSettings) =>
+    api
+      .put<{ settings: AttendanceSettings }>("/attendance-settings", input)
+      .then((data) => data.settings),
 };
 
 /** URL autenticável de mídia — o token vai por query não é aceito; usamos fetch+blob. */

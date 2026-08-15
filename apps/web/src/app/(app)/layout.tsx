@@ -10,6 +10,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
+  SlidersHorizontal,
   Smartphone,
   Tags,
   Users,
@@ -51,6 +52,10 @@ const NAV: Array<{
   { href: "/reports", label: "Relatórios", icon: BarChart3, minRole: "supervisor" },
   { href: "/tags", label: "Etiquetas", icon: Tags, minRole: "supervisor" },
   { href: "/quick-replies", label: "Respostas rápidas", icon: Zap, minRole: "agent" },
+  // Mesmo papel do requireRole("supervisor") em PUT /attendance-settings.
+  // Fica fora de Configurações de propósito: aquilo é escopo pessoal (perfil
+  // e senha) e isto é regra do escritório inteiro.
+  { href: "/attendance-settings", label: "Parâmetros", icon: SlidersHorizontal, minRole: "supervisor" },
   { href: "/settings", label: "Configurações", icon: Settings, minRole: "agent" },
 ];
 

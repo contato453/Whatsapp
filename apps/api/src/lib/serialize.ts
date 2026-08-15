@@ -8,7 +8,11 @@ import type {
   User,
   WhatsAppInstance,
 } from "@azvchat/database";
-import { formatPhone, PARTICIPANT_WITHOUT_NAME_LABEL } from "@azvchat/shared";
+import {
+  formatPhone,
+  PARTICIPANT_WITHOUT_NAME_LABEL,
+  type AttendanceSettings,
+} from "@azvchat/shared";
 
 /**
  * Serializadores de entidades para a API — controlam exatamente o que
@@ -135,6 +139,24 @@ export function serializeQuickReply(reply: QuickReply & { departments?: Departme
     isGeneral: reply.isGeneral,
     departments: serializeResourceDepartments(reply.departments),
     createdAt: reply.createdAt.toISOString(),
+  };
+}
+
+/**
+ * Parâmetros de atendimento no formato da tela: o expediente sai sempre com
+ * os sete dias em ordem, mesmo quando a organização ainda não tem linha no
+ * banco e o que sai são os padrões de `@azvchat/shared`.
+ */
+export function serializeAttendanceSettings(settings: AttendanceSettings) {
+  return {
+    responseLimitMinutes: settings.responseLimitMinutes,
+    timezone: settings.timezone,
+    businessHours: settings.businessHours.map((day) => ({
+      weekday: day.weekday,
+      active: day.active,
+      startTime: day.startTime,
+      endTime: day.endTime,
+    })),
   };
 }
 

@@ -48,6 +48,29 @@ async function main(): Promise<void> {
     });
   }
   console.log("Departamentos padrão garantidos.");
+
+  // Parâmetros de atendimento da organização. A migration semeia as
+  // organizações que já existiam; aqui garantimos a linha da organização que
+  // o próprio seed acabou de criar, para a tela de Parâmetros abrir com o
+  // padrão da casa em vez do fallback de `@azvchat/shared`.
+  const settings = await prisma.attendanceSettings.upsert({
+    where: { organizationId: org.id },
+    update: {},
+    create: { organizationId: org.id },
+  });
+  for (const weekday of [0, 1, 2, 3, 4, 5, 6]) {
+    await prisma.attendanceBusinessHours.upsert({
+      where: { settingsId_weekday: { settingsId: settings.id, weekday } },
+      update: {},
+      create: {
+        settingsId: settings.id,
+        weekday,
+        // Segunda a sexta ativos; sábado e domingo desligados.
+        active: weekday >= 1 && weekday <= 5,
+      },
+    });
+  }
+  console.log("Parâmetros de atendimento garantidos (30 min, seg-sex 08:00-18:00).");
 }
 
 main()
