@@ -28,6 +28,15 @@ import { api, quickRepliesApi } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { useAuth } from "@/lib/auth-context";
 import { pruneDrafts, readDraft, saveDraft, type DraftMode } from "@/lib/drafts";
+import {
+  EMPTY_INBOX_FILTERS,
+  conversationMatchesFilters,
+  hasActiveInboxFilters,
+  readInboxFilters,
+  saveInboxFilters,
+  type InboxFilters,
+  type QuickFilter,
+} from "@/lib/inbox-filters";
 import { cn, formatDateTime, formatDayLabel } from "@/lib/utils";
 import type {
   ConversationDetailDto,
@@ -43,6 +52,7 @@ import type {
 import { Avatar, Button, EmptyState, Input, Modal, Spinner, Textarea } from "@/components/ui";
 import { appliesToConversation } from "@/components/department-picker";
 import { ConversationListItem } from "./conversation-list";
+import { FilterBar } from "./filter-bar";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
 import { AudioRecorder } from "./audio-recorder";
 import { ScheduleModal } from "./composer-modals";
@@ -100,63 +110,6 @@ function InternalNoteItem({
     </div>
   );
 }
-type QuickFilter =
-  | "all"
-  | "mine"
-  | "unassigned"
-  | "groups"
-  | "individual"
-  | "unread"
-  | "open"
-  | "waiting_client"
-  | "waiting_internal"
-  | "resolved";
-
-/**
- * Os filtros rápidos em grupos, para caber num seletor só — mesmo formato
- * dos filtros de número, departamento e etiqueta. Como só um vale por vez,
- * a fileira de chips não representava melhor o comportamento e ainda
- * empurrava metade das opções para fora da tela.
- */
-const QUICK_FILTER_GROUPS: Array<{ label: string; options: Array<{ key: QuickFilter; label: string }> }> = [
-  {
-    label: "Atendimento",
-    options: [
-      { key: "mine", label: "Minhas" },
-      { key: "unassigned", label: "Sem responsável" },
-      { key: "unread", label: "Não lidas" },
-    ],
-  },
-  {
-    label: "Tipo",
-    options: [
-      { key: "groups", label: "Grupos" },
-      { key: "individual", label: "Individuais" },
-    ],
-  },
-  {
-    label: "Status",
-    options: [
-      { key: "open", label: "Aberto" },
-      { key: "waiting_client", label: "AG. Cliente" },
-      { key: "waiting_internal", label: "AG. Operacional" },
-      { key: "resolved", label: "Concluído" },
-    ],
-  },
-];
-
-/**
- * Estilo dos seletores de filtro. Com valor escolhido o campo fica marcado,
- * para a pessoa perceber de relance que a lista está filtrada — sem isso, um
- * filtro esquecido parece inbox vazia.
- */
-function filterSelectClass(ativo: boolean): string {
-  return cn(
-    "rounded-lg border px-1.5 py-1 text-[11px]",
-    ativo ? "border-brand-500 font-medium text-brand-700" : "border-slate-200 text-slate-600",
-  );
-}
-
 /** Status que a Inbox aceita receber pela URL — os mesmos do atendimento. */
 const STATUS_QUICK_FILTERS: QuickFilter[] = [
   "open",
@@ -176,11 +129,40 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const { user: me } = useAuth();
 
   const [conversations, setConversations] = useState<ConversationDto[] | null>(null);
-  const [filter, setFilter] = useState<QuickFilter>("all");
-  const [departmentFilter, setDepartmentFilter] = useState("");
-  const [instanceFilter, setInstanceFilter] = useState("");
-  const [tagFilter, setTagFilter] = useState("");
-  const [searchTerm, setSearchTerm] = useState("");
+  /**
+   * Filtros da lista, num objeto só, reidratados do navegador já na
+   * montagem. Este componente vive no layout da rota (`inbox/layout.tsx`)
+   * porque, quando era renderizado pelas páginas, cada clique numa conversa
+   * trocava de página e o remontava — e a remontagem zerava estes estados,
+   * que era o bug do "filtro que some no primeiro atendimento".
+   *
+   * A leitura do storage pode ser síncrona aqui: o layout do app só
+   * renderiza a Inbox depois da sessão carregar, então este componente
+   * nunca entra no HTML do servidor e não há hidratação para divergir.
+   */
+  const [filters, setFilters] = useState<InboxFilters>(() => {
+    if (!me) return EMPTY_INBOX_FILTERS;
+    const stored = readInboxFilters(me.id);
+    if (me.role === "admin" || me.role === "supervisor") return stored;
+    // O usuário comum não tem os seletores de número e departamento:
+    // reidratar esses dois seria filtro invisível, lista curta sem
+    // explicação — mesma regra dos parâmetros vindos da URL.
+    return { ...stored, instanceId: "", departmentId: "" };
+  });
+
+  /** Toda mudança de filtro passa por aqui — a persistência vem no efeito. */
+  const applyFilters = useCallback((patch: Partial<InboxFilters>) => {
+    setFilters((current) => ({ ...current, ...patch }));
+  }, []);
+
+  const meId = me?.id ?? null;
+
+  // Grava toda mudança (mão, URL do dashboard, poda de id extinto): o F5
+  // com uma conversa aberta volta exatamente ao que estava na tela. Sem
+  // nenhum filtro ativo a entrada é apagada do storage.
+  useEffect(() => {
+    if (meId) saveInboxFilters(meId, filters);
+  }, [meId, filters]);
 
   const [detail, setDetail] = useState<ConversationDetailDto | null>(null);
   const [messages, setMessages] = useState<MessageDto[] | null>(null);
@@ -247,54 +229,96 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const instanceParam = searchParams.get("instanceId");
 
   useEffect(() => {
-    if (isStatusQuickFilter(statusParam)) setFilter(statusParam);
+    if (isStatusQuickFilter(statusParam)) {
+      setFilters((current) => ({ ...current, quick: statusParam }));
+    }
   }, [statusParam]);
 
   useEffect(() => {
     if (!canFilterScope) return;
-    if (departmentParam) setDepartmentFilter(departmentParam);
-    if (instanceParam) setInstanceFilter(instanceParam);
+    if (!departmentParam && !instanceParam) return;
+    setFilters((current) => ({
+      ...current,
+      ...(departmentParam ? { departmentId: departmentParam } : {}),
+      ...(instanceParam ? { instanceId: instanceParam } : {}),
+    }));
   }, [canFilterScope, departmentParam, instanceParam]);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // ---------- Carregamento de dados auxiliares ----------
+  // Quando cada lista chega, o filtro reidratado que aponta para um id que
+  // não existe mais (departamento excluído, etiqueta apagada, número
+  // removido — ou fora do acesso de quem entrou nesta máquina) é descartado
+  // em silêncio: aquele campo volta para "todos", em vez de deixar a lista
+  // vazia sem explicação.
   useEffect(() => {
     api.get<{ users: UserDirectoryDto[] }>("/users").then((data) => setUsers(data.users)).catch(() => undefined);
-    api.get<{ departments: DepartmentDto[] }>("/departments").then((data) => setDepartments(data.departments)).catch(() => undefined);
-    api.get<{ tags: TagDto[] }>("/tags").then((data) => setTags(data.tags)).catch(() => undefined);
-    api.get<{ instances: InstanceDto[] }>("/whatsapp-instances").then((data) => setInstances(data.instances)).catch(() => undefined);
+    api
+      .get<{ departments: DepartmentDto[] }>("/departments")
+      .then((data) => {
+        setDepartments(data.departments);
+        setFilters((current) =>
+          current.departmentId && !data.departments.some((department) => department.id === current.departmentId)
+            ? { ...current, departmentId: "" }
+            : current,
+        );
+      })
+      .catch(() => undefined);
+    api
+      .get<{ tags: TagDto[] }>("/tags")
+      .then((data) => {
+        setTags(data.tags);
+        setFilters((current) =>
+          current.tagId && !data.tags.some((tag) => tag.id === current.tagId)
+            ? { ...current, tagId: "" }
+            : current,
+        );
+      })
+      .catch(() => undefined);
+    api
+      .get<{ instances: InstanceDto[] }>("/whatsapp-instances")
+      .then((data) => {
+        setInstances(data.instances);
+        setFilters((current) =>
+          current.instanceId && !data.instances.some((instance) => instance.id === current.instanceId)
+            ? { ...current, instanceId: "" }
+            : current,
+        );
+      })
+      .catch(() => undefined);
     quickRepliesApi.list().then(setQuickReplies).catch(() => undefined);
   }, []);
 
   // ---------- Lista de conversas ----------
   const loadConversations = useCallback(() => {
     const params = new URLSearchParams();
-    if (filter === "mine") params.set("assigned", "me");
-    if (filter === "unassigned") params.set("assigned", "none");
-    if (filter === "groups") params.set("type", "group");
-    if (filter === "individual") params.set("type", "individual");
-    if (filter === "unread") params.set("unread", "true");
-    if (filter === "open") params.set("status", "open");
-    if (filter === "waiting_client") params.set("status", "waiting_client");
-    if (filter === "waiting_internal") params.set("status", "waiting_internal");
-    if (filter === "resolved") params.set("status", "resolved");
-    if (departmentFilter) params.set("departmentId", departmentFilter);
-    if (instanceFilter) params.set("instanceId", instanceFilter);
-    if (tagFilter) params.set("tagId", tagFilter);
-    if (searchTerm.trim().length >= 2) params.set("q", searchTerm.trim());
+    const quick = filters.quick;
+    if (quick === "mine") params.set("assigned", "me");
+    if (quick === "unassigned") params.set("assigned", "none");
+    if (quick === "groups") params.set("type", "group");
+    if (quick === "individual") params.set("type", "individual");
+    if (quick === "unread") params.set("unread", "true");
+    if (quick === "open") params.set("status", "open");
+    if (quick === "waiting_client") params.set("status", "waiting_client");
+    if (quick === "waiting_internal") params.set("status", "waiting_internal");
+    if (quick === "resolved") params.set("status", "resolved");
+    if (filters.departmentId) params.set("departmentId", filters.departmentId);
+    if (filters.instanceId) params.set("instanceId", filters.instanceId);
+    if (filters.tagId) params.set("tagId", filters.tagId);
+    if (filters.search.trim().length >= 2) params.set("q", filters.search.trim());
     params.set("limit", "80");
     api
       .get<{ conversations: ConversationDto[] }>(`/conversations?${params.toString()}`)
       .then((data) => setConversations(data.conversations))
       .catch(() => undefined);
-  }, [filter, departmentFilter, instanceFilter, tagFilter, searchTerm]);
+  }, [filters]);
 
   useEffect(() => {
-    const timer = setTimeout(loadConversations, searchTerm ? 300 : 0);
+    const timer = setTimeout(loadConversations, filters.search ? 300 : 0);
     return () => clearTimeout(timer);
-  }, [loadConversations, searchTerm]);
+  }, [loadConversations, filters.search]);
 
   // ---------- Conversa selecionada ----------
   const loadDetail = useCallback(() => {
@@ -408,6 +432,12 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       setConversations((current) => {
         if (!current) return current;
         const rest = current.filter((conversation) => conversation.id !== payload.conversation.id);
+        // O tempo real respeita o filtro ativo: conversa fora do recorte não
+        // é forçada para dentro da lista, e a que deixou de casar sai — mas
+        // a aberta continua aberta no chat, filtro nunca fecha conversa.
+        if (!conversationMatchesFilters(payload.conversation, filters, meId)) {
+          return rest.length === current.length ? current : rest;
+        }
         return [payload.conversation, ...rest];
       });
       if (payload.message.conversationId === conversationId) {
@@ -420,9 +450,17 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       }
     };
     const onConversationUpdated = (payload: ConversationDto) => {
-      setConversations((current) =>
-        current?.map((conversation) => (conversation.id === payload.id ? payload : conversation)) ?? null,
-      );
+      setConversations((current) => {
+        if (!current) return current;
+        if (!current.some((conversation) => conversation.id === payload.id)) return current;
+        // Atribuição, status, departamento ou etiqueta mudou e a linha
+        // deixou de casar com o filtro ativo: sai da lista sem recarregar
+        // tudo. A conversa aberta no chat não é fechada por isso.
+        if (!conversationMatchesFilters(payload, filters, meId)) {
+          return current.filter((conversation) => conversation.id !== payload.id);
+        }
+        return current.map((conversation) => (conversation.id === payload.id ? payload : conversation));
+      });
       if (payload.id === conversationId) {
         setDetail((current) =>
           current
@@ -523,7 +561,10 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       socket.off(RealtimeEvents.InternalNote, onNote);
       socket.off(RealtimeEvents.ScheduledPending, onScheduledPending);
     };
-  }, [socket, conversationId, loadDetail]);
+    // `filters`/`meId` entram nas dependências porque os handlers casam a
+    // conversa com o filtro ativo — reassinar os listeners é barato e a
+    // lista de dependências continua honesta.
+  }, [socket, conversationId, loadDetail, filters, meId]);
 
   /**
    * Toda escrita no composer passa por aqui, e grava na hora.
@@ -952,78 +993,16 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     <div className="flex h-full">
       {/* Coluna esquerda: lista */}
       <div className="flex w-80 shrink-0 flex-col border-r border-slate-200 bg-white xl:w-96">
-        <div className="space-y-2 border-b border-slate-200 p-3">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" />
-            <Input
-              className="pl-8"
-              placeholder="Buscar conversa, grupo, cliente..."
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-            />
-          </div>
-          {/* Os quatro filtros no mesmo formato. Número e departamento só
-              aparecem para quem enxerga mais de um recorte: para o usuário
-              comum a lista já vem restrita, e os dois seletores ocupariam
-              espaço sem mudar nada. */}
-          <div className="grid grid-cols-2 gap-1.5">
-            <select
-              className={filterSelectClass(filter !== "all")}
-              value={filter}
-              onChange={(event) => setFilter(event.target.value as QuickFilter)}
-            >
-              <option value="all">Todas</option>
-              {QUICK_FILTER_GROUPS.map((group) => (
-                <optgroup key={group.label} label={group.label}>
-                  {group.options.map((option) => (
-                    <option key={option.key} value={option.key}>
-                      {option.label}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-            {canFilterScope && (
-              <>
-                <select
-                  className={filterSelectClass(instanceFilter !== "")}
-                  value={instanceFilter}
-                  onChange={(event) => setInstanceFilter(event.target.value)}
-                >
-                  <option value="">WhatsApp</option>
-                  {instances.map((instance) => (
-                    <option key={instance.id} value={instance.id}>
-                      {instance.name}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  className={filterSelectClass(departmentFilter !== "")}
-                  value={departmentFilter}
-                  onChange={(event) => setDepartmentFilter(event.target.value)}
-                >
-                  <option value="">Depto</option>
-                  {departments.map((department) => (
-                    <option key={department.id} value={department.id}>
-                      {department.name}
-                    </option>
-                  ))}
-                </select>
-              </>
-            )}
-            <select
-              className={filterSelectClass(tagFilter !== "")}
-              value={tagFilter}
-              onChange={(event) => setTagFilter(event.target.value)}
-            >
-              <option value="">Etiqueta</option>
-              {tags.map((tag) => (
-                <option key={tag.id} value={tag.id}>
-                  {tag.name}
-                </option>
-              ))}
-            </select>
-          </div>
+        <div className="border-b border-slate-200 p-3">
+          <FilterBar
+            filters={filters}
+            onChange={applyFilters}
+            onClear={() => setFilters(EMPTY_INBOX_FILTERS)}
+            canFilterScope={canFilterScope}
+            instances={instances}
+            departments={departments}
+            tags={tags}
+          />
         </div>
         <div className="thin-scroll flex-1 overflow-y-auto">
           {!conversations ? (
@@ -1034,7 +1013,11 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
             <EmptyState
               icon={<InboxIcon className="h-10 w-10" />}
               title="Nenhuma conversa encontrada"
-              description="Conecte um WhatsApp e as conversas aparecerão aqui automaticamente."
+              description={
+                hasActiveInboxFilters(filters)
+                  ? "Nenhuma conversa casa com os filtros ativos. Limpe os filtros para ver tudo."
+                  : "Conecte um WhatsApp e as conversas aparecerão aqui automaticamente."
+              }
             />
           ) : (
             conversations.map((entry) => (
