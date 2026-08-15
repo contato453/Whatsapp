@@ -4,6 +4,12 @@ name: Deploy
 # então commit quebrado nunca chega em produção. Também dá para rodar na mão
 # pela aba Actions (Run workflow), útil para repetir um deploy que falhou no
 # meio sem precisar de um commit novo.
+#
+# Este caminho é OPCIONAL: exige guardar a chave privada da VPS como segredo.
+# A alternativa, sem segredo nenhum, é a VPS se atualizar sozinha —
+# `deploy/instalar-atualizacao-automatica.sh`, descrito no DEPLOY.md. Quando os
+# segredos não estão configurados, o job avisa e sai sem falhar, para não
+# pintar de vermelho todo merge de quem usa a atualização automática.
 on:
   workflow_run:
     workflows: ["CI"]
@@ -37,6 +43,7 @@ jobs:
 
     steps:
       - name: Conferir se os segredos estão configurados
+        id: segredos
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -47,11 +54,16 @@ jobs:
           [ -z "$VPS_USER" ] && faltando="$faltando VPS_USER"
           [ -z "$VPS_SSH_KEY" ] && faltando="$faltando VPS_SSH_KEY"
           if [ -n "$faltando" ]; then
-            echo "::error::Segredos faltando:$faltando — veja a seção de deploy automático no DEPLOY.md"
-            exit 1
+            # Sem segredo não dá para entrar na VPS — mas isso é o esperado
+            # em quem usa a atualização automática. Avisa e encerra em verde.
+            echo "::warning::Deploy por SSH não configurado (faltando:$faltando). Pulando — se a VPS usa a atualização automática, ela se vira sozinha; se quiser o SSH, veja o DEPLOY.md."
+            echo "configurado=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configurado=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Preparar a chave SSH
+        if: steps.segredos.outputs.configurado == 'true'
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
@@ -74,6 +86,7 @@ jobs:
           chmod 600 ~/.ssh/known_hosts
 
       - name: Atualizar e subir os containers
+        if: steps.segredos.outputs.configurado == 'true'
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -112,6 +125,7 @@ jobs:
           REMOTO
 
       - name: Confirmar que a API subiu
+        if: steps.segredos.outputs.configurado == 'true'
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}

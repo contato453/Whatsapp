@@ -124,10 +124,48 @@ docker compose -f docker-compose.prod.yml up -d --build
 
 As migrations rodam sozinhas no start da API. As sessões do WhatsApp **não caem** — nada de QR de novo.
 
-### Deploy automático (opcional)
+### Atualização automática, sem segredo nenhum (recomendado)
 
-Com isto ligado, todo merge na branch padrão que passar no CI sobe sozinho na VPS —
-o passo a passo manual acima deixa de ser necessário no dia a dia.
+O jeito mais simples de nunca mais atualizar na mão: em vez de o GitHub entrar na VPS, a
+**VPS busca o código novo sozinha**. Não existe chave privada guardada no GitHub, nem porta
+nova aberta — a VPS só faz uma saída HTTPS para o GitHub, como o `git pull` que você já faz.
+
+Rode **uma vez**, dentro do clone, como root:
+
+```bash
+cd ~/Whatsapp
+git pull
+sudo bash deploy/instalar-atualizacao-automatica.sh
+```
+
+Pronto. A cada 2 minutos a VPS verifica se a branch padrão andou: se andou, atualiza e sobe
+os containers; se não, sai em silêncio e não mexe em nada. Como o CI roda antes do merge,
+só chega aqui o que já fechou verde.
+
+| Para... | Comando |
+| --- | --- |
+| ver quando roda de novo | `systemctl list-timers azvchat-atualizar.timer` |
+| acompanhar ao vivo | `journalctl -u azvchat-atualizar -f` |
+| atualizar agora | `systemctl start azvchat-atualizar.service` |
+| desligar | `systemctl disable --now azvchat-atualizar.timer` |
+| mudar o intervalo | `INTERVALO=10min sudo -E bash deploy/instalar-atualizacao-automatica.sh` |
+
+O mesmo script também serve solto, quando você quiser atualizar na hora sem esperar o
+timer: `bash deploy/atualizar.sh` (ou `bash deploy/atualizar.sh --force` para subir os
+containers mesmo sem commit novo, útil depois de mexer no `.env`).
+
+Se alguém editar um arquivo versionado direto na VPS, a atualização **para e avisa** em vez
+de sobrescrever em silêncio (é um `git merge --ff-only`). Arquivos não versionados (`.env`,
+`data/`) nunca são tocados.
+
+### Deploy por SSH pelo GitHub Actions (opcional)
+
+Alternativa à seção acima, para quem prefere que o disparo saia do GitHub: todo merge na
+branch padrão que passar no CI sobe sozinho na VPS. Exige guardar a chave privada de acesso
+à VPS como segredo — se isso te incomoda, fique com a atualização automática.
+
+Enquanto os segredos não estiverem configurados, o workflow apenas avisa e encerra em verde,
+sem falhar.
 
 O workflow é `.github/workflows/deploy.yml`. Ele só roda **depois que o CI fecha verde**,
 então commit quebrado não chega em produção. Também dá para disparar na mão em

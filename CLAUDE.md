@@ -372,10 +372,15 @@ Rotas em `apps/web/src/app/(app)/`: `dashboard`, `inbox` (+ `inbox/[conversation
   nomeados `whatsapp_sessions` e `media_store` preservam sessões e arquivos entre deploys;
   migrations rodam no start da API. Passo a passo completo em `DEPLOY.md`.
 - **CI** (`.github/workflows/ci.yml`): typecheck → lint → testes → build, em PR e push.
-- **Deploy** (`.github/workflows/deploy.yml`): dispara por SSH quando o CI da branch padrão
-  fecha verde; um deploy por vez, nunca cancelado no meio. O job roda no environment
-  `production` — `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY` (e os opcionais `VPS_PORT`,
-  `VPS_KNOWN_HOSTS`, `VPS_PATH`) são **environment secrets**, não secrets de repositório.
+- **Deploy — caminho principal**: a VPS se atualiza sozinha. `deploy/atualizar.sh` faz
+  `fetch` + `merge --ff-only` da branch padrão e `docker compose up -d --build` só quando há
+  commit novo; `deploy/instalar-atualizacao-automatica.sh` instala o timer do systemd que o
+  chama a cada 2 minutos. Nenhum segredo no GitHub, nenhuma porta a mais na VPS.
+- **Deploy por SSH** (`.github/workflows/deploy.yml`, opcional): dispara quando o CI da
+  branch padrão fecha verde; um deploy por vez, nunca cancelado no meio. O job roda no
+  environment `production` — `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY` (e os opcionais
+  `VPS_PORT`, `VPS_KNOWN_HOSTS`, `VPS_PATH`) são **environment secrets**. Sem eles o job
+  avisa e sai em verde, em vez de falhar.
 
 ---
 
