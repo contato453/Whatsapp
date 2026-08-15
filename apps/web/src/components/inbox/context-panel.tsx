@@ -516,7 +516,7 @@ export function ContextPanel({
             onClick={() => {
               if (
                 !window.confirm(
-                  "Arquivar esta conversa? Ela some da Inbox e deixa de contar nos números do sistema. Nada é apagado, e dá para desarquivar quando quiser.",
+                  "Arquivar esta conversa? Ela some da lista de conversas e deixa de contar nos números do sistema. Nada é apagado, e dá para desarquivar quando quiser.",
                 )
               ) {
                 return;

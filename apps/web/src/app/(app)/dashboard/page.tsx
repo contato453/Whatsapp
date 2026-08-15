@@ -721,7 +721,7 @@ export default function DashboardPage() {
         ))}
       </div>
       <p className="mt-1.5 text-[11px] text-slate-400">
-        Clique em um status para abrir a Inbox filtrada. Lá a lista não usa o período, então
+        Clique em um status para abrir Conversas já filtradas. Lá a lista não usa o período, então
         ela pode vir maior que o número do card
         {carriesPartialScope ? ", e o filtro de responsável não é levado" : ""}.
       </p>
