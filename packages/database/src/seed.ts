@@ -70,6 +70,20 @@ async function main(): Promise<void> {
       },
     });
   }
+  // Janela de login da mesma organização. Fica gravada mesmo com a restrição
+  // desligada, para a tela abrir com faixa razoável em vez de campo vazio no
+  // dia em que a supervisão resolver ligar.
+  for (const weekday of [0, 1, 2, 3, 4, 5, 6]) {
+    await prisma.attendanceLoginHours.upsert({
+      where: { settingsId_weekday: { settingsId: settings.id, weekday } },
+      update: {},
+      create: {
+        settingsId: settings.id,
+        weekday,
+        active: weekday >= 1 && weekday <= 5,
+      },
+    });
+  }
   console.log("Parâmetros de atendimento garantidos (30 min, seg-sex 08:00-18:00).");
 }
 

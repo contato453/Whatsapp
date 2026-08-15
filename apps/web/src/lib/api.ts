@@ -11,6 +11,12 @@ export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000
 
 const TOKEN_KEY = "zapdesk.token";
 
+/**
+ * Marca na URL do login que a pessoa caiu por fim do horário de uso, e não
+ * por token vencido. É só isso: o motivo real quem decide é a API.
+ */
+export const LOGIN_REASON_SCHEDULE = "horario";
+
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
   return window.localStorage.getItem(TOKEN_KEY);
@@ -48,11 +54,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   if (response.status === 401) {
+    // O motivo importa: sessão encerrada pelo fim do horário de uso não é
+    // token vencido, e mandar a pessoa para o login sem explicar faria ela
+    // tentar entrar de novo achando que foi falha do sistema.
+    const body = (await response.json().catch(() => null)) as {
+      error?: string;
+      message?: string;
+    } | null;
+    const outsideSchedule = body?.error === "session_outside_schedule";
     setToken(null);
     if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
-      window.location.href = "/login";
+      window.location.href = outsideSchedule ? `/login?motivo=${LOGIN_REASON_SCHEDULE}` : "/login";
     }
-    throw new ApiError("Sessão expirada", 401);
+    throw new ApiError(
+      outsideSchedule ? (body?.message ?? "Horário encerrado") : "Sessão expirada",
+      401,
+      body?.error,
+    );
   }
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as {

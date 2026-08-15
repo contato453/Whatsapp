@@ -16,7 +16,7 @@ import { authenticate, requireRole } from "../../lib/auth.js";
 import { serializeAttendanceSettings } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
 
-const businessHourSchema = z.object({
+const dayScheduleSchema = z.object({
   weekday: z.number().int().min(0).max(6),
   active: z.boolean(),
   startTime: z.string().regex(TIME_OF_DAY_PATTERN, "Hora deve estar no formato HH:MM"),
@@ -24,24 +24,15 @@ const businessHourSchema = z.object({
 });
 
 /**
- * Gravação dos parâmetros: a tela manda a semana inteira de uma vez, então a
- * validação também olha a semana inteira.
+ * A semana inteira, com os sete dias exatamente uma vez.
  *
- * O fuso é conferido contra a lista do runtime porque texto livre aqui
- * silenciaria todo corte de data do dashboard, que passaria a usar o UTC do
- * servidor sem ninguém perceber.
+ * Vale igual para o expediente e para a janela de login: as duas faixas são
+ * a mesma forma e precisam da mesma checagem, e duplicar a validação faria
+ * uma das duas ficar para trás na primeira mudança de regra.
  */
-export const attendanceSettingsSchema = z.object({
-  responseLimitMinutes: z
-    .number()
-    .int()
-    .min(RESPONSE_LIMIT_MIN_MINUTES)
-    .max(RESPONSE_LIMIT_MAX_MINUTES),
-  timezone: z.string().min(1).max(64).refine(isValidTimezone, {
-    message: "Fuso horário inválido",
-  }),
-  businessHours: z
-    .array(businessHourSchema)
+function weekScheduleSchema() {
+  return z
+    .array(dayScheduleSchema)
     .length(7)
     .superRefine((days, ctx) => {
       const seen = new Set<number>();
@@ -54,8 +45,8 @@ export const attendanceSettingsSchema = z.object({
           });
         }
         seen.add(day.weekday);
-        // Dia desligado não acumula tempo nenhum, então horário invertido
-        // ali é inofensivo — só o dia ativo precisa fechar.
+        // Dia desligado não acumula tempo nenhum (e não libera login nenhum),
+        // então horário invertido ali é inofensivo — só o dia ativo precisa fechar.
         if (day.active && minutesOfDay(day.endTime) <= minutesOfDay(day.startTime)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
@@ -71,7 +62,30 @@ export const attendanceSettingsSchema = z.object({
           message: "É preciso enviar os sete dias da semana",
         });
       }
-    }),
+    });
+}
+
+/**
+ * Gravação dos parâmetros: a tela manda a semana inteira de uma vez, então a
+ * validação também olha a semana inteira.
+ *
+ * O fuso é conferido contra a lista do runtime porque texto livre aqui
+ * silenciaria todo corte de data do dashboard, que passaria a usar o UTC do
+ * servidor sem ninguém perceber. Ele vale para as duas faixas: o horário de
+ * login é lido no relógio do escritório, nunca no UTC do container.
+ */
+export const attendanceSettingsSchema = z.object({
+  responseLimitMinutes: z
+    .number()
+    .int()
+    .min(RESPONSE_LIMIT_MIN_MINUTES)
+    .max(RESPONSE_LIMIT_MAX_MINUTES),
+  timezone: z.string().min(1).max(64).refine(isValidTimezone, {
+    message: "Fuso horário inválido",
+  }),
+  businessHours: weekScheduleSchema(),
+  loginRestrictionEnabled: z.boolean(),
+  loginHours: weekScheduleSchema(),
 });
 
 export type AttendanceSettingsInput = z.infer<typeof attendanceSettingsSchema>;
@@ -117,10 +131,12 @@ export async function attendanceSettingsRoutes(
             organizationId,
             responseLimitMinutes: input.responseLimitMinutes,
             timezone: input.timezone,
+            loginRestrictionEnabled: input.loginRestrictionEnabled,
           },
           update: {
             responseLimitMinutes: input.responseLimitMinutes,
             timezone: input.timezone,
+            loginRestrictionEnabled: input.loginRestrictionEnabled,
           },
         });
         // A semana chega inteira e substitui a inteira: é mais simples de
@@ -128,6 +144,18 @@ export async function attendanceSettingsRoutes(
         await tx.attendanceBusinessHours.deleteMany({ where: { settingsId: settings.id } });
         await tx.attendanceBusinessHours.createMany({
           data: input.businessHours.map((day) => ({
+            settingsId: settings.id,
+            weekday: day.weekday,
+            active: day.active,
+            startTime: day.startTime,
+            endTime: day.endTime,
+          })),
+        });
+        // Mesma troca para a janela de login, na mesma transação: meia
+        // semana gravada decidiria quem entra no sistema.
+        await tx.attendanceLoginHours.deleteMany({ where: { settingsId: settings.id } });
+        await tx.attendanceLoginHours.createMany({
+          data: input.loginHours.map((day) => ({
             settingsId: settings.id,
             weekday: day.weekday,
             active: day.active,
@@ -150,6 +178,14 @@ export async function attendanceSettingsRoutes(
           responseLimitMinutes: { before: before.responseLimitMinutes, after: after.responseLimitMinutes },
           timezone: { before: before.timezone, after: after.timezone },
           businessHours: { before: before.businessHours, after: after.businessHours },
+          // Quem trancou (ou destrancou) a entrada da equipe, e com qual
+          // faixa, é exatamente o tipo de mudança que alguém vai querer
+          // reconstituir depois.
+          loginRestrictionEnabled: {
+            before: before.loginRestrictionEnabled,
+            after: after.loginRestrictionEnabled,
+          },
+          loginHours: { before: before.loginHours, after: after.loginHours },
         },
         ip: request.ip,
       });

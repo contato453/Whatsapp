@@ -26,8 +26,13 @@ export class ForbiddenError extends AppError {
 }
 
 export class UnauthorizedError extends AppError {
-  constructor(message = "Não autenticado") {
-    super(message, 401, "unauthorized");
+  /**
+   * O `code` distingue o motivo para o cliente: sessão encerrada pelo fim do
+   * horário de uso não é token vencido, e a tela precisa dizer isso em vez
+   * de "sessão expirada", que faria a pessoa tentar entrar de novo à toa.
+   */
+  constructor(message = "Não autenticado", code = "unauthorized") {
+    super(message, 401, code);
   }
 }
 
