@@ -5,6 +5,7 @@ import type {
   MessageDirection,
   MessageStatus,
   MessageType,
+  ParticipantClientRole,
   UserRole,
 } from "@azvchat/shared";
 
@@ -172,11 +173,22 @@ export interface GroupDetailDto {
     id: string;
     externalContactId: string;
     phoneNumber: string;
-    /** Nome efetivo: o próprio, quando existe; senão o do WhatsApp. */
-    name: string | null;
+    /**
+     * Nome já decidido pela API — nunca nulo. A cadeia (customName, agenda
+     * do número, pushName, telefone, rótulo neutro) é resolvida no
+     * serializer; a tela só exibe.
+     */
+    name: string;
+    /** O nome exibido é o próprio telefone: não repetir na segunda linha. */
+    nameIsPhone: boolean;
+    /** Existe algum nome de verdade (não é telefone nem rótulo neutro). */
+    hasKnownName: boolean;
     customName: string | null;
     whatsappName: string | null;
+    /** Administrador do GRUPO no WhatsApp — vem do sync, ninguém edita. */
     isAdmin: boolean;
+    /** Papel da pessoa dentro do cliente, marcado pela equipe. */
+    clientRole: ParticipantClientRole | null;
     hasAvatar: boolean;
   }>;
 }

@@ -65,14 +65,7 @@ export function initials(name: string): string {
     .join("");
 }
 
-export function formatPhone(phone: string | null): string {
-  if (!phone) return "";
-  // 5511999998888 -> +55 11 99999-8888 (heurística BR simples)
-  if (phone.length >= 12 && phone.startsWith("55")) {
-    const ddd = phone.slice(2, 4);
-    const rest = phone.slice(4);
-    const split = rest.length - 4;
-    return `+55 ${ddd} ${rest.slice(0, split)}-${rest.slice(split)}`;
-  }
-  return `+${phone}`;
-}
+// A formatação vive em `@azvchat/shared` porque o backend também decide nome
+// de participante com ela. Reexportada aqui para as telas continuarem
+// importando de "@/lib/utils", como sempre fizeram.
+export { formatPhone } from "@azvchat/shared";

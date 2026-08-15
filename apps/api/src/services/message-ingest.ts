@@ -106,14 +106,32 @@ export class MessageIngestService {
           externalContactId: message.senderExternalId,
           group: { whatsappInstanceId: message.instanceId, externalId: message.externalChatId },
         },
-        select: { id: true, phoneNumber: true },
+        select: { id: true, phoneNumber: true, name: true },
       });
+
+      const updates: { phoneNumber?: string; name?: string } = {};
       if (!senderPhone) {
         senderPhone = participant?.phoneNumber || null;
       } else if (participant && participant.phoneNumber !== senderPhone) {
+        updates.phoneNumber = senderPhone;
+      }
+
+      // O metadado do grupo quase nunca traz o nome de quem participa — o
+      // pushName da mensagem costuma ser a única fonte. Gravando aqui, o
+      // painel passa a mostrar o nome de quem já escreveu mesmo depois,
+      // sem depender de a pessoa escrever de novo enquanto a tela está
+      // aberta. Só entra na mensagem recebida: no que sai, o remetente é a
+      // própria conexão, não o participante.
+      //
+      // Nunca toca em `customName` — o nome da equipe continua soberano.
+      if (isInbound && participant && message.senderName && participant.name !== message.senderName) {
+        updates.name = message.senderName;
+      }
+
+      if (participant && Object.keys(updates).length > 0) {
         await this.prisma.groupParticipant.update({
           where: { id: participant.id },
-          data: { phoneNumber: senderPhone },
+          data: updates,
         });
       }
     }

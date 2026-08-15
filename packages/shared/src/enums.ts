@@ -105,6 +105,39 @@ export function hasRole(userRole: UserRole, minimumRole: UserRole): boolean {
 export const USER_STATUSES = ["active", "inactive"] as const;
 export type UserStatus = (typeof USER_STATUSES)[number];
 
+/**
+ * Papel da pessoa dentro do cliente, marcado pela equipe no painel do grupo.
+ *
+ * Nada a ver com `isAdmin` do participante, que é administrador do GRUPO no
+ * WhatsApp e vem do sync. Aqui é cadastro: quem decide (sócio) e quem
+ * resolve o dia a dia (administrativo). Ausência de marcação = null.
+ */
+export const PARTICIPANT_CLIENT_ROLES = ["partner", "administrative"] as const;
+export type ParticipantClientRole = (typeof PARTICIPANT_CLIENT_ROLES)[number];
+
+export const PARTICIPANT_CLIENT_ROLE_LABELS: Record<ParticipantClientRole, string> = {
+  partner: "Sócio",
+  administrative: "ADM",
+};
+
+/**
+ * Cores propositalmente distantes do âmbar do selo "admin" do WhatsApp: a
+ * equipe precisa distinguir de relance papel no cliente de administrador do
+ * grupo. Roxo para sócio (decisão), azul para administrativo (operação).
+ */
+export const PARTICIPANT_CLIENT_ROLE_COLORS: Record<ParticipantClientRole, string> = {
+  partner: "#7c3aed",
+  administrative: "#0284c7",
+};
+
+/**
+ * Último degrau da cadeia de nomes do participante: nem nome nem telefone
+ * conhecidos, o que acontece em grupo com endereçamento "@lid" de gente que
+ * nunca escreveu. Um rótulo neutro é a única saída honesta — o LID é
+ * identificador interno e exibi-lo faria a equipe achar que é telefone.
+ */
+export const PARTICIPANT_WITHOUT_NAME_LABEL = "Participante sem nome";
+
 export const ASSIGNMENT_ACTIONS = [
   "assigned",
   "transferred_user",

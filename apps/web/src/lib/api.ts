@@ -1,5 +1,6 @@
 "use client";
 
+import type { ParticipantClientRole } from "@azvchat/shared";
 import type { QuickReplyDto, TagDto } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
@@ -90,6 +91,20 @@ export const tagsApi = {
   update: (id: string, input: Partial<TagInput>) =>
     api.patch<{ tag: TagDto }>(`/tags/${id}`, input).then((data) => data.tag),
   remove: (id: string) => api.delete<{ ok: boolean }>(`/tags/${id}`),
+};
+
+/**
+ * Cadastro do participante de grupo feito pela equipe. Os dois campos são
+ * opcionais: enviar só `clientRole` não mexe no nome, e vice-versa.
+ */
+export interface GroupParticipantInput {
+  customName: string | null;
+  clientRole: ParticipantClientRole | null;
+}
+
+export const groupParticipantsApi = {
+  update: (id: string, input: Partial<GroupParticipantInput>) =>
+    api.patch<{ ok: boolean }>(`/group-participants/${id}`, input),
 };
 
 export interface QuickReplyInput extends DepartmentTargetInput {
