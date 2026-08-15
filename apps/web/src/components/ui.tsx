@@ -197,6 +197,42 @@ export function Modal({
   );
 }
 
+// ---------- Tooltip ----------
+
+/**
+ * Dica de texto só com CSS — nada de biblioteca nova para isso.
+ *
+ * Aparece no hover e também no `focus-within`: item alcançado por Tab
+ * precisa dizer o nome, senão a barra lateral recolhida vira uma coluna
+ * de ícones mudos para quem navega por teclado.
+ *
+ * O conteúdo fica sempre no DOM (`aria-hidden` de fora não serve aqui):
+ * quem usa leitor de tela lê o nome acessível do próprio gatilho, então
+ * a dica é reforço visual e não pode duplicar leitura — por isso o
+ * `role="tooltip"` sem `aria-describedby`.
+ */
+export function Tooltip({
+  label,
+  children,
+  className,
+}: {
+  label: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <span className={cn("group/tooltip relative flex", className)}>
+      {children}
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute left-full top-1/2 z-50 ml-2 -translate-y-1/2 whitespace-nowrap rounded-md bg-slate-800 px-2 py-1 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 group-focus-within/tooltip:opacity-100 group-hover/tooltip:opacity-100 motion-reduce:transition-none"
+      >
+        {label}
+      </span>
+    </span>
+  );
+}
+
 // ---------- Spinner ----------
 
 export function Spinner({ className }: { className?: string }) {
