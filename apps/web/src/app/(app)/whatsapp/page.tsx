@@ -1,12 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Plug, PlugZap, Plus, QrCode, Smartphone, Trash2, Unplug } from "lucide-react";
+import { Plug, PlugZap, Plus, QrCode, Smartphone, Trash2, Unplug, UserCheck } from "lucide-react";
 import { RealtimeEvents, type ConnectionStatus } from "@azvchat/shared";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { formatDateTime, formatPhone } from "@/lib/utils";
-import type { DepartmentDto, InstanceDto } from "@/lib/types";
+import type { DepartmentDto, InstanceDto, UserDirectoryDto } from "@/lib/types";
 import { Badge, Button, Card, Field, Input, Modal, Spinner, EmptyState } from "@/components/ui";
 
 const STATUS_LABEL: Record<ConnectionStatus, { label: string; color: string }> = {
@@ -27,9 +27,23 @@ export default function WhatsAppPage() {
   const [departments, setDepartments] = useState<DepartmentDto[]>([]);
   const [qrModal, setQrModal] = useState<{ instanceId: string; qrDataUrl: string | null } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  /** Quem pode ser responsável padrão, por número. */
+  const [assignees, setAssignees] = useState<Record<string, UserDirectoryDto[]>>({});
+  const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
 
   const load = useCallback(() => {
-    api.get<{ instances: InstanceDto[] }>("/whatsapp-instances").then((data) => setInstances(data.instances));
+    api.get<{ instances: InstanceDto[] }>("/whatsapp-instances").then((data) => {
+      setInstances(data.instances);
+      // Cada número tem sua própria lista: só quem o enxerga pode recebê-lo.
+      for (const instance of data.instances) {
+        api
+          .get<{ users: UserDirectoryDto[] }>(`/whatsapp-instances/${instance.id}/assignees`)
+          .then((result) =>
+            setAssignees((current) => ({ ...current, [instance.id]: result.users })),
+          )
+          .catch(() => undefined);
+      }
+    });
   }, []);
 
   useEffect(load, [load]);
@@ -114,6 +128,63 @@ export default function WhatsAppPage() {
     }
   }
 
+  async function changeDefaultAssignee(instance: InstanceDto, userId: string) {
+    setBusy(instance.id);
+    setNotice(null);
+    try {
+      await api.patch(`/whatsapp-instances/${instance.id}`, {
+        defaultAssigneeId: userId || null,
+      });
+      load();
+    } catch (err) {
+      setNotice({
+        tone: "error",
+        text: err instanceof ApiError ? err.message : "Não foi possível salvar o responsável",
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
+   * O responsável padrão só age na mensagem que chega. As conversas que já
+   * estão paradas sem dono precisam deste empurrão explícito.
+   */
+  async function applyDefaultAssignee(instance: InstanceDto) {
+    const assignee = (assignees[instance.id] ?? []).find(
+      (user) => user.id === instance.defaultAssigneeId,
+    );
+    const name = assignee?.name ?? "o responsável padrão";
+    if (
+      !window.confirm(
+        `Atribuir a ${name} todas as conversas sem responsável de "${instance.name}"?`,
+      )
+    ) {
+      return;
+    }
+    setBusy(instance.id);
+    setNotice(null);
+    try {
+      const result = await api.post<{ assigned: number }>(
+        `/whatsapp-instances/${instance.id}/apply-default-assignee`,
+      );
+      setNotice({
+        tone: "ok",
+        text:
+          result.assigned === 0
+            ? `Nenhuma conversa sem responsável em "${instance.name}".`
+            : `${result.assigned} ${result.assigned === 1 ? "conversa atribuída" : "conversas atribuídas"} a ${name}.`,
+      });
+    } catch (err) {
+      setNotice({
+        tone: "error",
+        text: err instanceof ApiError ? err.message : "Não foi possível atribuir as conversas",
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function disconnect(instance: InstanceDto) {
     setBusy(instance.id);
     try {
@@ -144,6 +215,14 @@ export default function WhatsAppPage() {
         </Button>
       </div>
 
+      {notice && (
+        <p
+          className={`mb-4 text-sm ${notice.tone === "ok" ? "text-emerald-600" : "text-red-600"}`}
+        >
+          {notice.text}
+        </p>
+      )}
+
       {!instances ? (
         <div className="flex justify-center py-16">
           <Spinner className="h-8 w-8" />
@@ -160,6 +239,7 @@ export default function WhatsAppPage() {
             <span className="min-w-0 flex-1">Instância</span>
             <span className="w-44 shrink-0">Número</span>
             <span className="w-44 shrink-0">Departamento</span>
+            <span className="w-52 shrink-0">Responsável padrão</span>
             <span className="w-36 shrink-0">Status</span>
             <span className="w-44 shrink-0">Última conexão</span>
             <span className="w-56 shrink-0 text-right">Ações</span>
@@ -202,6 +282,34 @@ export default function WhatsAppPage() {
                         </option>
                       ))}
                     </select>
+                  </div>
+
+                  <div className="flex w-52 shrink-0 items-center gap-1">
+                    <select
+                      className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                      value={instance.defaultAssigneeId ?? ""}
+                      disabled={busy === instance.id}
+                      onChange={(event) => void changeDefaultAssignee(instance, event.target.value)}
+                      title="Quem assume as conversas deste número que chegam sem responsável"
+                    >
+                      <option value="">Sem responsável padrão</option>
+                      {(assignees[instance.id] ?? []).map((user) => (
+                        <option key={user.id} value={user.id}>
+                          {user.name}
+                        </option>
+                      ))}
+                    </select>
+                    {instance.defaultAssigneeId && (
+                      <button
+                        type="button"
+                        className="shrink-0 rounded-lg border border-slate-200 p-1.5 text-slate-500 transition-colors hover:bg-slate-100 disabled:opacity-50"
+                        disabled={busy === instance.id}
+                        onClick={() => void applyDefaultAssignee(instance)}
+                        title="Atribuir também as conversas que já estão sem responsável"
+                      >
+                        <UserCheck className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </div>
 
                   <div className="w-36 shrink-0">

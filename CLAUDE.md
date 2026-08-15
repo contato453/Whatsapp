@@ -106,7 +106,8 @@ snake_case e id `uuid`.
 
 **WhatsApp**
 - `WhatsAppInstance` — `status` (`disconnected|connecting|qr_required|connected|reconnecting|error`),
-  `sessionId`, `departmentId` (departamento padrão das conversas que chegam), `provider`.
+  `sessionId`, `departmentId` (departamento padrão das conversas que chegam),
+  `defaultAssigneeId` (responsável padrão do número), `provider`.
 - `Contact`, `WhatsAppGroup` (com `participantCount`, `conversationId`), `GroupParticipant`
   (`name` do WhatsApp vs `customName` da equipe, `isAdmin`, `avatarUrl`, `avatarCheckedAt`).
 
@@ -215,6 +216,8 @@ GET    /whatsapp-instances                POST /whatsapp-instances
 PATCH  /whatsapp-instances/:id            DELETE /whatsapp-instances/:id
 POST   /whatsapp-instances/:id/connect    POST /whatsapp-instances/:id/disconnect
 POST   /whatsapp-instances/:id/logout     GET  /whatsapp-instances/:id/qr
+GET    /whatsapp-instances/:id/assignees  (quem pode ser responsável padrão do número)
+POST   /whatsapp-instances/:id/apply-default-assignee  (aplica às conversas já sem responsável)
 
 GET    /conversations                     GET /conversations/:id
 PATCH  /conversations/:id                 PATCH /conversations/:id/reference
@@ -404,6 +407,13 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
 - `departmentId = null` significa **"geral"** em `Tag`/`QuickReply` (visível a todos, só
   admin escreve) e **"sem departamento"** em `Conversation` (visível a quem tem o número).
   Semânticas diferentes, mesmo `null`.
+- **Responsável padrão tem cascata**: o do departamento vence, o do número cobre o resto
+  (inclusive a conversa sem departamento). Quem recebe precisa **enxergar** a conversa —
+  `lib/default-assignee.ts` (`eligibleAssigneeWhere`) é a fonte única dessa checagem, usada
+  pela ingestão e pela aplicação em lote. Atribuir a quem não tem o número (ou o
+  departamento) some com a conversa da fila sem ninguém ver.
+- O padrão só age na **mensagem que chega**. Conversa parada continua órfã até alguém
+  escrever — por isso existe `POST /whatsapp-instances/:id/apply-default-assignee`.
 - Atalho de resposta rápida e nome de etiqueta são **únicos na organização inteira**, não
   por departamento.
 - Ingestão é idempotente por `(conversationId, externalMessageId)` — não crie caminho
