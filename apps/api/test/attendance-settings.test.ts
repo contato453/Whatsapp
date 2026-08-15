@@ -31,7 +31,9 @@ interface StoredSettings {
   id: string;
   responseLimitMinutes: number;
   timezone: string;
+  loginRestrictionEnabled: boolean;
   businessHours: Array<{ weekday: number; active: boolean; startTime: string; endTime: string }>;
+  loginHours: Array<{ weekday: number; active: boolean; startTime: string; endTime: string }>;
 }
 
 let stored: StoredSettings | null = null;
@@ -44,19 +46,22 @@ function fakePrisma(): PrismaClient {
       create,
       update,
     }: {
-      create: { responseLimitMinutes?: number; timezone?: string };
-      update: { responseLimitMinutes: number; timezone: string };
+      create: { responseLimitMinutes?: number; timezone?: string; loginRestrictionEnabled?: boolean };
+      update: { responseLimitMinutes: number; timezone: string; loginRestrictionEnabled: boolean };
     }) => {
       if (!stored) {
         stored = {
           id: "settings-1",
           responseLimitMinutes: create.responseLimitMinutes ?? 30,
           timezone: create.timezone ?? "America/Sao_Paulo",
+          loginRestrictionEnabled: create.loginRestrictionEnabled ?? false,
           businessHours: [],
+          loginHours: [],
         };
       } else {
         stored.responseLimitMinutes = update.responseLimitMinutes;
         stored.timezone = update.timezone;
+        stored.loginRestrictionEnabled = update.loginRestrictionEnabled;
       }
       return { ...stored, organizationId: ORG };
     },
@@ -71,11 +76,22 @@ function fakePrisma(): PrismaClient {
       return { count: data.length };
     },
   };
+  const attendanceLoginHours = {
+    deleteMany: async () => {
+      if (stored) stored.loginHours = [];
+      return { count: 0 };
+    },
+    createMany: async ({ data }: { data: StoredSettings["loginHours"] }) => {
+      if (stored) stored.loginHours = data;
+      return { count: data.length };
+    },
+  };
   return {
     attendanceSettings,
     attendanceBusinessHours,
+    attendanceLoginHours,
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
-      fn({ attendanceSettings, attendanceBusinessHours }),
+      fn({ attendanceSettings, attendanceBusinessHours, attendanceLoginHours }),
   } as unknown as PrismaClient;
 }
 
@@ -116,6 +132,8 @@ const VALID_BODY = {
   responseLimitMinutes: 45,
   timezone: "America/Sao_Paulo",
   businessHours: DEFAULT_ATTENDANCE_SETTINGS.businessHours,
+  loginRestrictionEnabled: false,
+  loginHours: DEFAULT_ATTENDANCE_SETTINGS.loginHours,
 };
 
 describe("rotas de parâmetros de atendimento", () => {
@@ -149,6 +167,10 @@ describe("rotas de parâmetros de atendimento", () => {
       responseLimitMinutes: DEFAULT_ATTENDANCE_SETTINGS.responseLimitMinutes,
       timezone: DEFAULT_ATTENDANCE_SETTINGS.timezone,
       businessHours: DEFAULT_ATTENDANCE_SETTINGS.businessHours,
+      // A restrição de login nasce desligada: organização sem configuração
+      // nenhuma não pode trancar a equipe do lado de fora.
+      loginRestrictionEnabled: false,
+      loginHours: DEFAULT_ATTENDANCE_SETTINGS.loginHours,
     });
     await app.close();
   });
@@ -225,6 +247,50 @@ describe("rotas de parâmetros de atendimento", () => {
     expect(stored).toBeNull();
     await app.close();
   });
+
+  it("supervisor liga a restrição de login e grava a semana inteira", async () => {
+    const app = await buildTestApp();
+    const response = await app.inject({
+      method: "PUT",
+      url: "/attendance-settings",
+      headers: { authorization: `Bearer ${tokenFor(app, "supervisor")}` },
+      payload: {
+        ...VALID_BODY,
+        loginRestrictionEnabled: true,
+        loginHours: VALID_BODY.loginHours.map((day) =>
+          day.weekday === 6 ? { ...day, active: true, startTime: "08:00", endTime: "12:00" } : day,
+        ),
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().settings.loginRestrictionEnabled).toBe(true);
+    expect(stored?.loginRestrictionEnabled).toBe(true);
+    expect(stored?.loginHours).toHaveLength(7);
+    expect(stored?.loginHours.find((day) => day.weekday === 6)).toMatchObject({
+      active: true,
+      startTime: "08:00",
+      endTime: "12:00",
+    });
+    await app.close();
+  });
+
+  it("semana de login inválida não grava nem o expediente", async () => {
+    const app = await buildTestApp();
+    const response = await app.inject({
+      method: "PUT",
+      url: "/attendance-settings",
+      headers: { authorization: `Bearer ${tokenFor(app, "supervisor")}` },
+      payload: {
+        ...VALID_BODY,
+        loginHours: VALID_BODY.loginHours.map((day) =>
+          day.weekday === 3 ? { ...day, startTime: "19:00", endTime: "07:00" } : day,
+        ),
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(stored).toBeNull();
+    await app.close();
+  });
 });
 
 describe("validação dos parâmetros (Zod)", () => {
@@ -268,6 +334,23 @@ describe("validação dos parâmetros (Zod)", () => {
       ),
     });
     expect(result.success).toBe(false);
+  });
+
+  it("exige a semana de login com a mesma régua do expediente", () => {
+    for (const loginHours of [
+      VALID_BODY.loginHours.slice(1),
+      VALID_BODY.loginHours.map((day) => (day.weekday === 6 ? { ...day, weekday: 5 } : day)),
+      VALID_BODY.loginHours.map((day) =>
+        day.weekday === 1 ? { ...day, startTime: "19:00", endTime: "07:00" } : day,
+      ),
+    ]) {
+      expect(attendanceSettingsSchema.safeParse({ ...VALID_BODY, loginHours }).success).toBe(false);
+    }
+  });
+
+  it("exige a flag da restrição de login — omitir não é o mesmo que desligar", () => {
+    const { loginRestrictionEnabled: _ignored, ...semFlag } = VALID_BODY;
+    expect(attendanceSettingsSchema.safeParse(semFlag).success).toBe(false);
   });
 
   it("deixa passar horário invertido em dia desligado — ele não acumula tempo", () => {

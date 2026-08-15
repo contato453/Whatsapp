@@ -72,11 +72,66 @@ export interface BusinessHours {
   endTime: string;
 }
 
+/**
+ * Janela em que a equipe pode **entrar** no sistema. Mesma forma do
+ * expediente, entidade separada de propósito: o escritório atende das 08:00
+ * às 18:00, mas quem começa mais cedo precisa entrar antes disso. Amarrar as
+ * duas coisas obrigaria a mentir no expediente para liberar o login, e o
+ * expediente é o que mede o atraso do dashboard.
+ */
+export interface LoginHours {
+  weekday: Weekday;
+  active: boolean;
+  /** "HH:MM" no fuso configurado. */
+  startTime: string;
+  /** "HH:MM" no fuso configurado, sempre maior que `startTime` quando ativo. */
+  endTime: string;
+}
+
+/**
+ * Segunda a sexta das 07:00 às 19:00 — uma hora de folga de cada lado do
+ * expediente padrão, porque a pessoa entra no sistema antes de começar a
+ * atender e sai depois de fechar o último atendimento.
+ */
+export function defaultLoginHoursFor(weekday: Weekday): LoginHours {
+  return {
+    weekday,
+    active: weekday >= 1 && weekday <= 5,
+    startTime: "07:00",
+    endTime: "19:00",
+  };
+}
+
+export const DEFAULT_LOGIN_HOURS: LoginHours[] = WEEKDAYS.map(defaultLoginHoursFor);
+
+/**
+ * A restrição nasce desligada. Ligada por padrão, a primeira atualização do
+ * sistema trancaria do lado de fora quem estivesse trabalhando fora da faixa
+ * — a supervisão liga quando decidir a política, não por efeito colateral de
+ * deploy.
+ */
+export const DEFAULT_LOGIN_RESTRICTION_ENABLED = false;
+
+/**
+ * O que a pessoa lê na tela de login quando tenta entrar fora da janela.
+ * Mora aqui porque a API devolve e a tela mostra: texto duplicado sairia do
+ * ar em um dos dois lados na primeira mudança de redação.
+ *
+ * A autorização é justamente a tela de Parâmetros: o supervisor abre o dia
+ * ou o horário, e a pessoa entra na tentativa seguinte.
+ */
+export const LOGIN_OUTSIDE_SCHEDULE_MESSAGE =
+  "Login fora do horário permitido. Peça autorização ao supervisor.";
+
 export interface AttendanceSettings {
   responseLimitMinutes: number;
   timezone: string;
   /** Sempre os sete dias, do domingo ao sábado, em ordem. */
   businessHours: BusinessHours[];
+  /** Restrição de horário de login, aplicada só a quem não é supervisor. */
+  loginRestrictionEnabled: boolean;
+  /** Sempre os sete dias, do domingo ao sábado, em ordem. */
+  loginHours: LoginHours[];
 }
 
 /** Segunda a sexta das 08:00 às 18:00; sábado e domingo desligados. */
@@ -97,6 +152,8 @@ export const DEFAULT_ATTENDANCE_SETTINGS: AttendanceSettings = {
   responseLimitMinutes: DEFAULT_RESPONSE_LIMIT_MINUTES,
   timezone: DEFAULT_TIMEZONE,
   businessHours: DEFAULT_BUSINESS_HOURS,
+  loginRestrictionEnabled: DEFAULT_LOGIN_RESTRICTION_ENABLED,
+  loginHours: DEFAULT_LOGIN_HOURS,
 };
 
 /**

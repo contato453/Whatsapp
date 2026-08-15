@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { Clock } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { ApiError } from "@/lib/api";
 import { Button, Card, Field, Input } from "@/components/ui";
 import { LogoMark, LogoWordmark } from "@/components/logo";
 
@@ -10,15 +12,21 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Horário de login não é erro de credencial: a senha estava certa, a porta
+  // é que está fechada. Sai em aviso, e não em vermelho de falha, para a
+  // pessoa não ficar tentando de novo achando que digitou errado.
+  const [outsideSchedule, setOutsideSchedule] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    setOutsideSchedule(false);
     setSubmitting(true);
     try {
       await login(email, password);
     } catch (err) {
+      setOutsideSchedule(err instanceof ApiError && err.code === "login_outside_schedule");
       setError(err instanceof Error ? err.message : "Falha no login");
       setSubmitting(false);
     }
@@ -59,7 +67,15 @@ export default function LoginPage() {
               required
             />
           </Field>
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error &&
+            (outsideSchedule ? (
+              <p className="flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                <Clock className="mt-0.5 h-4 w-4 shrink-0" />
+                {error}
+              </p>
+            ) : (
+              <p className="text-sm text-red-600">{error}</p>
+            ))}
           <Button type="submit" className="w-full" disabled={submitting}>
             {submitting ? "Entrando..." : "Entrar"}
           </Button>

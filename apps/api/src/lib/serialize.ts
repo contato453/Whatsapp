@@ -166,6 +166,13 @@ export function serializeAttendanceSettings(settings: AttendanceSettings) {
       startTime: day.startTime,
       endTime: day.endTime,
     })),
+    loginRestrictionEnabled: settings.loginRestrictionEnabled,
+    loginHours: settings.loginHours.map((day) => ({
+      weekday: day.weekday,
+      active: day.active,
+      startTime: day.startTime,
+      endTime: day.endTime,
+    })),
   };
 }
 

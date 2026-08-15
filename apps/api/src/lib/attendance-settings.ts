@@ -2,9 +2,11 @@ import type { PrismaClient } from "@azvchat/database";
 import {
   DEFAULT_ATTENDANCE_SETTINGS,
   defaultBusinessHoursFor,
+  defaultLoginHoursFor,
   WEEKDAYS,
   type AttendanceSettings,
   type BusinessHours,
+  type LoginHours,
 } from "@azvchat/shared";
 
 /**
@@ -25,13 +27,15 @@ export async function loadAttendanceSettings(
 ): Promise<AttendanceSettings> {
   const row = await prisma.attendanceSettings.findUnique({
     where: { organizationId },
-    include: { businessHours: true },
+    include: { businessHours: true, loginHours: true },
   });
   if (!row) return DEFAULT_ATTENDANCE_SETTINGS;
   return {
     responseLimitMinutes: row.responseLimitMinutes,
     timezone: row.timezone,
     businessHours: normalizeBusinessHours(row.businessHours),
+    loginRestrictionEnabled: row.loginRestrictionEnabled,
+    loginHours: normalizeLoginHours(row.loginHours),
   };
 }
 
@@ -50,6 +54,28 @@ export function normalizeBusinessHours(
   return WEEKDAYS.map((weekday) => {
     const row = byWeekday.get(weekday);
     if (!row) return defaultBusinessHoursFor(weekday);
+    return {
+      weekday,
+      active: row.active,
+      startTime: row.startTime,
+      endTime: row.endTime,
+    };
+  });
+}
+
+/**
+ * Mesma garantia da semana do expediente, para a janela de login: sempre os
+ * sete dias, em ordem. Dia faltando entra com o padrão em vez de sumir — e
+ * aqui o buraco seria pior que na tela, porque dia ausente decidiria quem
+ * consegue entrar no sistema.
+ */
+export function normalizeLoginHours(
+  rows: Array<{ weekday: number; active: boolean; startTime: string; endTime: string }>,
+): LoginHours[] {
+  const byWeekday = new Map(rows.map((row) => [row.weekday, row]));
+  return WEEKDAYS.map((weekday) => {
+    const row = byWeekday.get(weekday);
+    if (!row) return defaultLoginHoursFor(weekday);
     return {
       weekday,
       active: row.active,

@@ -683,11 +683,15 @@ model AttendanceSettings {
   /// Fuso do escritório. Todo corte de data do dashboard usa este fuso,
   /// nunca o UTC do servidor.
   timezone             String   @default("America/Sao_Paulo")
+  /// Liga a restrição de horário de login. Desligada por padrão: ligada de
+  /// saída, um deploy trancaria do lado de fora quem já estava trabalhando.
+  loginRestrictionEnabled Boolean @default(false)
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
   organization  Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   businessHours AttendanceBusinessHours[]
+  loginHours    AttendanceLoginHours[]
 
   @@map("attendance_settings")
 }
@@ -710,4 +714,25 @@ model AttendanceBusinessHours {
 
   @@unique([settingsId, weekday])
   @@map("attendance_business_hours")
+}
+
+/// Janela de login de um dia da semana, aplicada só a quem não é supervisor.
+/// Tabela separada do expediente porque as duas faixas não são a mesma coisa:
+/// o expediente mede o atraso do dashboard, esta aqui diz quem consegue
+/// entrar. Sete linhas por configuração, cada dia ligando sozinho.
+model AttendanceLoginHours {
+  id         String  @id @default(uuid())
+  settingsId String
+  /// 0 = domingo ... 6 = sábado, igual a `Date#getDay()` e a `EXTRACT(DOW)`.
+  weekday    Int
+  /// Dia desligado é dia sem login nenhum para quem não é supervisor.
+  active     Boolean @default(true)
+  /// "HH:MM" no fuso da configuração, mesmo formato do expediente.
+  startTime  String  @default("07:00")
+  endTime    String  @default("19:00")
+
+  settings AttendanceSettings @relation(fields: [settingsId], references: [id], onDelete: Cascade)
+
+  @@unique([settingsId, weekday])
+  @@map("attendance_login_hours")
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Clock, Save, SlidersHorizontal, TriangleAlert } from "lucide-react";
+import { Clock, LogIn, Save, SlidersHorizontal, TriangleAlert } from "lucide-react";
 import {
   DEFAULT_ATTENDANCE_SETTINGS,
   RESPONSE_LIMIT_MAX_MINUTES,
@@ -12,6 +12,7 @@ import {
   WEEKDAY_LABELS,
   type AttendanceSettings,
   type BusinessHours,
+  type LoginHours,
   type Weekday,
 } from "@azvchat/shared";
 import { ApiError, attendanceSettingsApi } from "@/lib/api";
@@ -54,36 +55,56 @@ function minutesOfDay(time: string): number {
   return Number(hours) * 60 + Number(minutes);
 }
 
+/** Erro por dia da semana, indexado pelo próprio dia. */
+type WeekErrors = Partial<Record<Weekday, string>>;
+
 interface FieldErrors {
   responseLimitMinutes?: string;
-  /** Erro por dia da semana, indexado pelo próprio dia. */
-  businessHours: Partial<Record<Weekday, string>>;
+  businessHours: WeekErrors;
+  loginHours: WeekErrors;
 }
 
-const NO_ERRORS: FieldErrors = { businessHours: {} };
+const NO_ERRORS: FieldErrors = { businessHours: {}, loginHours: {} };
+
+/**
+ * Uma semana vale quando todo dia ativo fecha. Serve para o expediente e
+ * para a janela de login: a checagem é a mesma, e ter duas cópias faria uma
+ * delas ficar para trás.
+ */
+function validateWeek(days: Array<BusinessHours | LoginHours>): WeekErrors {
+  const errors: WeekErrors = {};
+  for (const day of days) {
+    if (!TIME_OF_DAY_PATTERN.test(day.startTime) || !TIME_OF_DAY_PATTERN.test(day.endTime)) {
+      errors[day.weekday] = "Horário inválido — use o formato HH:MM.";
+      continue;
+    }
+    // Dia desligado não acumula tempo nenhum (nem libera login): horário
+    // invertido ali é inofensivo e não vale travar a gravação da semana.
+    if (day.active && minutesOfDay(day.endTime) <= minutesOfDay(day.startTime)) {
+      errors[day.weekday] = "A hora de fim precisa ser maior que a de início.";
+    }
+  }
+  return errors;
+}
 
 /**
  * Confere o que a API confere, para o erro aparecer no campo em vez de
  * voltar como mensagem genérica de 400.
  */
-function validate(limitInput: string, businessHours: BusinessHours[]): FieldErrors {
-  const errors: FieldErrors = { businessHours: {} };
+function validate(
+  limitInput: string,
+  businessHours: BusinessHours[],
+  loginHours: LoginHours[],
+): FieldErrors {
+  const errors: FieldErrors = {
+    businessHours: validateWeek(businessHours),
+    loginHours: validateWeek(loginHours),
+  };
   const limit = Number(limitInput);
   if (!Number.isInteger(limit)) {
     errors.responseLimitMinutes = "Informe um número inteiro de minutos.";
   } else if (limit < RESPONSE_LIMIT_MIN_MINUTES || limit > RESPONSE_LIMIT_MAX_MINUTES) {
     errors.responseLimitMinutes = `O limite precisa ficar entre ${RESPONSE_LIMIT_MIN_MINUTES} e ${RESPONSE_LIMIT_MAX_MINUTES} minutos.`;
-  }
-  for (const day of businessHours) {
-    if (!TIME_OF_DAY_PATTERN.test(day.startTime) || !TIME_OF_DAY_PATTERN.test(day.endTime)) {
-      errors.businessHours[day.weekday] = "Horário inválido — use o formato HH:MM.";
-      continue;
-    }
-    // Dia desligado não acumula tempo nenhum: horário invertido ali é
-    // inofensivo e não vale travar a gravação da semana inteira por causa dele.
-    if (day.active && minutesOfDay(day.endTime) <= minutesOfDay(day.startTime)) {
-      errors.businessHours[day.weekday] = "A hora de fim precisa ser maior que a de início.";
-    }
   }
   return errors;
 }
@@ -91,7 +112,83 @@ function validate(limitInput: string, businessHours: BusinessHours[]): FieldErro
 function hasErrors(errors: FieldErrors): boolean {
   return (
     errors.responseLimitMinutes !== undefined ||
-    Object.keys(errors.businessHours).length > 0
+    Object.keys(errors.businessHours).length > 0 ||
+    Object.keys(errors.loginHours).length > 0
+  );
+}
+
+interface WeekScheduleProps {
+  days: Array<BusinessHours | LoginHours>;
+  errors: WeekErrors;
+  /** Rótulo do dia desligado — muda de sentido entre expediente e login. */
+  inactiveLabel: string;
+  /**
+   * Prefixo do rótulo acessível. Sem ele as duas semanas da tela teriam
+   * campos com o mesmo nome ("Segunda-feira: início") e quem navega por
+   * leitor de tela não saberia qual está editando.
+   */
+  fieldPrefix: string;
+  onChange: (weekday: Weekday, patch: Partial<BusinessHours>) => void;
+}
+
+/** A semana editável, usada pelo expediente e pela janela de login. */
+function WeekSchedule({
+  days,
+  errors,
+  inactiveLabel,
+  fieldPrefix,
+  onChange,
+}: WeekScheduleProps) {
+  return (
+    <div className="divide-y divide-slate-100 border-t border-slate-100">
+      {days.map((day) => {
+        const error = errors[day.weekday];
+        return (
+          <div key={day.weekday} className="py-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex w-44 shrink-0 items-center gap-2.5 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={day.active}
+                  onChange={(event) => onChange(day.weekday, { active: event.target.checked })}
+                  className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500/30"
+                />
+                <span className={day.active ? "font-medium text-slate-900" : ""}>
+                  {WEEKDAY_LABELS[day.weekday]}
+                </span>
+              </label>
+              {day.active ? (
+                <div className="flex items-center gap-2">
+                  <Clock className="h-3.5 w-3.5 text-slate-400" />
+                  <Input
+                    type="time"
+                    aria-label={`${fieldPrefix} ${WEEKDAY_LABELS[day.weekday]}: início`}
+                    value={day.startTime}
+                    aria-invalid={error !== undefined}
+                    onChange={(event) => onChange(day.weekday, { startTime: event.target.value })}
+                    className="w-32"
+                  />
+                  <span className="text-xs text-slate-400">até</span>
+                  <Input
+                    type="time"
+                    aria-label={`${fieldPrefix} ${WEEKDAY_LABELS[day.weekday]}: fim`}
+                    value={day.endTime}
+                    aria-invalid={error !== undefined}
+                    onChange={(event) => onChange(day.weekday, { endTime: event.target.value })}
+                    className="w-32"
+                  />
+                </div>
+              ) : (
+                // Dia desligado esconde os horários: campo visível mas sem
+                // efeito só confunde quem está configurando.
+                <span className="text-xs text-slate-400">{inactiveLabel}</span>
+              )}
+            </div>
+            {error && <p className="mt-1.5 text-xs text-red-600">{error}</p>}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -112,6 +209,12 @@ export default function AttendanceSettingsPage() {
   const [businessHours, setBusinessHours] = useState<BusinessHours[]>(
     DEFAULT_ATTENDANCE_SETTINGS.businessHours,
   );
+  const [loginRestrictionEnabled, setLoginRestrictionEnabled] = useState(
+    DEFAULT_ATTENDANCE_SETTINGS.loginRestrictionEnabled,
+  );
+  const [loginHours, setLoginHours] = useState<LoginHours[]>(
+    DEFAULT_ATTENDANCE_SETTINGS.loginHours,
+  );
 
   const timezones = useMemo(listTimezones, []);
 
@@ -122,6 +225,8 @@ export default function AttendanceSettingsPage() {
         setLimitInput(String(settings.responseLimitMinutes));
         setTimezone(settings.timezone);
         setBusinessHours(settings.businessHours);
+        setLoginRestrictionEnabled(settings.loginRestrictionEnabled);
+        setLoginHours(settings.loginHours);
       })
       .catch((err) =>
         setLoadError(err instanceof Error ? err.message : "Falha ao carregar os parâmetros"),
@@ -143,10 +248,17 @@ export default function AttendanceSettingsPage() {
     );
   }
 
+  function updateLoginDay(weekday: Weekday, patch: Partial<LoginHours>): void {
+    setSaved(false);
+    setLoginHours((current) =>
+      current.map((day) => (day.weekday === weekday ? { ...day, ...patch } : day)),
+    );
+  }
+
   async function handleSave(): Promise<void> {
     // Nada de salvar a cada tecla: a validação e a gravação acontecem aqui,
     // no botão, porque isto é regra do escritório e não preferência pessoal.
-    const found = validate(limitInput, businessHours);
+    const found = validate(limitInput, businessHours, loginHours);
     setErrors(found);
     setSaveError(null);
     setSaved(false);
@@ -156,6 +268,8 @@ export default function AttendanceSettingsPage() {
       responseLimitMinutes: Number(limitInput),
       timezone,
       businessHours,
+      loginRestrictionEnabled,
+      loginHours,
     };
     setSaving(true);
     try {
@@ -163,6 +277,8 @@ export default function AttendanceSettingsPage() {
       setLimitInput(String(settings.responseLimitMinutes));
       setTimezone(settings.timezone);
       setBusinessHours(settings.businessHours);
+      setLoginRestrictionEnabled(settings.loginRestrictionEnabled);
+      setLoginHours(settings.loginHours);
       setSaved(true);
     } catch (err) {
       setSaveError(
@@ -269,61 +385,63 @@ export default function AttendanceSettingsPage() {
             </Field>
           </div>
 
-          <div className="divide-y divide-slate-100 border-t border-slate-100">
-            {businessHours.map((day) => {
-              const error = errors.businessHours[day.weekday];
-              return (
-                <div key={day.weekday} className="py-3">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <label className="flex w-44 shrink-0 items-center gap-2.5 text-sm text-slate-700">
-                      <input
-                        type="checkbox"
-                        checked={day.active}
-                        onChange={(event) =>
-                          updateDay(day.weekday, { active: event.target.checked })
-                        }
-                        className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500/30"
-                      />
-                      <span className={day.active ? "font-medium text-slate-900" : ""}>
-                        {WEEKDAY_LABELS[day.weekday]}
-                      </span>
-                    </label>
-                    {day.active ? (
-                      <div className="flex items-center gap-2">
-                        <Clock className="h-3.5 w-3.5 text-slate-400" />
-                        <Input
-                          type="time"
-                          aria-label={`${WEEKDAY_LABELS[day.weekday]}: início`}
-                          value={day.startTime}
-                          aria-invalid={error !== undefined}
-                          onChange={(event) =>
-                            updateDay(day.weekday, { startTime: event.target.value })
-                          }
-                          className="w-32"
-                        />
-                        <span className="text-xs text-slate-400">até</span>
-                        <Input
-                          type="time"
-                          aria-label={`${WEEKDAY_LABELS[day.weekday]}: fim`}
-                          value={day.endTime}
-                          aria-invalid={error !== undefined}
-                          onChange={(event) =>
-                            updateDay(day.weekday, { endTime: event.target.value })
-                          }
-                          className="w-32"
-                        />
-                      </div>
-                    ) : (
-                      // Dia desligado esconde os horários: campo visível mas
-                      // sem efeito só confunde quem está configurando.
-                      <span className="text-xs text-slate-400">Sem atendimento</span>
-                    )}
-                  </div>
-                  {error && <p className="mt-1.5 text-xs text-red-600">{error}</p>}
-                </div>
-              );
-            })}
-          </div>
+          <WeekSchedule
+            days={businessHours}
+            errors={errors.businessHours}
+            inactiveLabel="Sem atendimento"
+            fieldPrefix="Expediente"
+            onChange={updateDay}
+          />
+        </Card>
+
+        <Card className="p-6">
+          <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
+            <LogIn className="h-4 w-4 text-slate-400" />
+            Horário de login
+          </h2>
+          <p className="mb-4 text-sm text-slate-500">
+            Limita os dias e horários em que a equipe consegue entrar no sistema. Vale só para
+            quem tem papel de <strong className="font-medium">Usuário</strong> — supervisores e
+            administradores entram sempre, senão um dia desligado por engano trancaria o
+            escritório inteiro do lado de fora. O fuso é o mesmo escolhido acima.
+          </p>
+
+          <label className="mb-4 flex items-start gap-2.5 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={loginRestrictionEnabled}
+              onChange={(event) => {
+                setLoginRestrictionEnabled(event.target.checked);
+                setSaved(false);
+              }}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500/30"
+            />
+            <span>
+              <span className="font-medium text-slate-900">Restringir o horário de login</span>
+              <span className="block text-xs text-slate-500">
+                Desligado, todo mundo entra a qualquer hora e os horários abaixo ficam só
+                guardados.
+              </span>
+            </span>
+          </label>
+
+          {loginRestrictionEnabled && (
+            <p className="mb-4 flex items-start gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+              <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              Fora desta faixa, quem é Usuário vê &ldquo;Login fora do horário permitido. Peça
+              autorização ao supervisor.&rdquo; e não entra. A autorização é feita aqui: abrir o
+              dia ou esticar o horário libera a entrada na tentativa seguinte. Quem já está com
+              a sessão aberta continua trabalhando até sair.
+            </p>
+          )}
+
+          <WeekSchedule
+            days={loginHours}
+            errors={errors.loginHours}
+            inactiveLabel="Sem login"
+            fieldPrefix="Login"
+            onChange={updateLoginDay}
+          />
         </Card>
 
         <div className="flex items-center gap-3 pb-4">

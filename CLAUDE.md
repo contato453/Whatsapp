@@ -152,11 +152,19 @@ snake_case e id `uuid`.
   `(settingsId, weekday)`: `weekday` (0 = domingo ... 6 = sábado, igual a `Date#getDay()` e a
   `EXTRACT(DOW)`), `active`, `startTime`/`endTime` no formato `"HH:MM"`. Cada dia liga e
   desliga sozinho — o escritório pode passar a atender sábado de manhã.
+- `AttendanceSettings.loginRestrictionEnabled` (padrão `false`) + `AttendanceLoginHours` — a
+  **janela de login**: em quais dias e horas quem **não é supervisor** consegue entrar no
+  sistema. Mesma forma do expediente (sete linhas, únicas por `(settingsId, weekday)`,
+  padrão seg-sex 07:00–19:00), tabela separada de propósito: o expediente mede o atraso do
+  dashboard, e amarrar as duas faixas obrigaria a esticar o expediente só para liberar quem
+  chega mais cedo — o número de atraso passaria a mentir junto. Nasce desligada: ligada de
+  saída, o deploy trancaria do lado de fora quem estivesse trabalhando.
 - A filha aponta para `AttendanceSettings`, e não para a organização: parâmetro por
   departamento no futuro é só uma linha nova de settings. **Não há tabela de feriados** —
   feriado conta como dia normal.
 - Padrões e rótulos em `packages/shared/src/attendance.ts` (`DEFAULT_ATTENDANCE_SETTINGS`,
-  `WEEKDAY_LABELS`, `DASHBOARD_PERIODS`). Eles semeiam a linha e servem de fallback quando
+  `WEEKDAY_LABELS`, `DASHBOARD_PERIODS`, `DEFAULT_LOGIN_HOURS`,
+  `LOGIN_OUTSIDE_SCHEDULE_MESSAGE`). Eles semeiam a linha e servem de fallback quando
   ela ainda não existe — **o que vale em runtime é sempre o banco**.
 
 **Regra de migration**: nunca editar migration já aplicada. Criar nova pasta
@@ -214,6 +222,14 @@ Mudou uma, muda a outra.
 Outras invariantes de segurança:
 - **JWT é foto do passado, quem manda é o banco**: `createSessionVerifier` relê papel,
   status e nome a cada requisição autenticada. Desativar ou rebaixar vale na hora.
+- **Horário permitido de login** (`lib/login-schedule.ts`, fonte única da regra): com a
+  restrição ligada, quem é `agent` só entra dentro da janela do dia, lida no fuso do
+  escritório. Supervisor e admin entram sempre — são eles que destrancam a porta na tela de
+  Parâmetros, e um sábado desligado por engano deixaria a casa inteira do lado de fora.
+  A checagem vem **depois** da senha (antes dela, a mensagem de horário revelaria quais
+  e-mails existem) e devolve 403 `login_outside_schedule` com
+  `LOGIN_OUTSIDE_SCHEDULE_MESSAGE`. Vale na **entrada**: sessão já aberta continua
+  trabalhando até sair, porque expulsar no minuto do fechamento cortaria atendimento no meio.
 - O handshake do socket revalida a sessão; mudança de papel/status/recorte **derruba as
   conexões abertas** daquele usuário (`disconnectUser`).
 - A organização **nunca fica sem admin ativo** — rebaixar/desativar o último é recusado
@@ -276,7 +292,8 @@ GET    /conversations/:id/scheduled-messages   POST /conversations/:id/scheduled
 DELETE /scheduled-messages/:id
 
 GET    /attendance-settings  (qualquer papel — o dashboard depende dela)
-PUT    /attendance-settings  (supervisor; grava SLA + expediente e vai para o AuditLog)
+PUT    /attendance-settings  (supervisor; grava SLA + expediente + janela de login,
+       a semana inteira de uma vez, e vai para o AuditLog)
 
 GET    /search              GET /reports/agents   GET /audit-logs
 GET    /dashboard/stats?period=today|7d|15d|30d|custom[&from=&to=]
@@ -545,6 +562,12 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   devolve zero em vez de procurar um próximo horário útil que não existe. Feriado não é
   tratado e conta como dia normal. Nota interna não é `Message`, então nunca conta como
   resposta ao cliente; mensagem apagada e saída ainda `pending` também não contam.
+- **A janela de login também é lida no fuso do escritório, nunca no do container.** O
+  container roda em UTC: às 22:00 de Brasília lá já é o dia seguinte, e a faixa de segunda
+  liberaria o domingo à noite. Fuso inválido no banco cai no padrão em vez de trancar
+  ninguém, e dia ausente na configuração fecha — mas a leitura normaliza a semana antes,
+  então o dia volta com o padrão. Tentativa barrada entra no `AuditLog` como
+  `auth.login_outside_schedule`, com a faixa do dia, e **não** atualiza `lastLoginAt`.
 - **Nenhum corte de data do dashboard usa o fuso do servidor** — "hoje" é o dia civil do
   escritório, não o dia UTC do container. O `custom` pega os dois dias das pontas inteiros;
   os atalhos **não** têm corte superior, de propósito: o relógio do WhatsApp pode vir à
@@ -581,7 +604,8 @@ enquetes; mensagens agendadas com retentativa; notas internas; etiquetas; atribu
 histórico completo; quatro status de atendimento; busca na conversa e busca global;
 respostas rápidas com `/`; dashboard; relatório por atendente; auditoria consultável;
 perfil e troca de senha pelo próprio usuário; aviso de chamada recebida; som de
-notificação de mensagem recebida, com som e volume escolhidos por cada usuário.
+notificação de mensagem recebida, com som e volume escolhidos por cada usuário; horário
+permitido de login por dia da semana, aplicado a quem não é supervisor.
 
 **Falta** (ordem sugerida): validar o pareamento QR em rede aberta (o ambiente de
 desenvolvimento bloqueia `web.whatsapp.com`); votos de enquete agregados na Inbox;
