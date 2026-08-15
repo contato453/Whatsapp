@@ -4,6 +4,7 @@ import { stripWhatsAppFormatting } from "@azvchat/shared";
 import type { Logger } from "pino";
 import type { MediaStorage } from "../lib/media-storage.js";
 import { extensionFromMime } from "../lib/media-storage.js";
+import { eligibleAssigneeWhere } from "../lib/default-assignee.js";
 
 export interface IngestResult {
   conversationId: string;
@@ -50,12 +51,13 @@ export class MessageIngestService {
   ): Promise<IngestResult | null> {
     const conversation = await this.upsertConversation(message, context.organizationId);
 
-    // Conversa sem responsável cai para o responsável padrão do
-    // departamento, tanto na mensagem que o cliente manda quanto na que a
-    // equipe manda primeiro — conversa iniciada por nós também precisa de
-    // dono, senão nasce órfã na lista.
+    // Conversa sem responsável cai para o responsável padrão — do
+    // departamento, ou do número quando não há departamento. Vale tanto na
+    // mensagem que o cliente manda quanto na que a equipe manda primeiro:
+    // conversa iniciada por nós também precisa de dono, senão nasce órfã
+    // na lista.
     if (!conversation.assignedUserId) {
-      await this.applyDefaultAssignee(conversation, context.organizationId);
+      await this.applyDefaultAssignee(conversation, message.instanceId, context.organizationId);
     }
 
     // Deduplicação: eventos do WhatsApp podem chegar repetidos.
@@ -195,7 +197,11 @@ export class MessageIngestService {
   }
 
   /**
-   * Atribui a conversa ao responsável padrão do departamento.
+   * Atribui a conversa ao responsável padrão configurado.
+   *
+   * O do departamento vem primeiro, porque é o mais específico; o do número
+   * cobre o resto — inclusive a conversa sem departamento, que antes nunca
+   * encontrava dono e ficava "Sem responsável" para sempre.
    *
    * Só age quando ninguém está responsável — nunca tira uma conversa de
    * quem já assumiu. O registro no histórico fica sem "performedBy", que é
@@ -203,21 +209,39 @@ export class MessageIngestService {
    */
   private async applyDefaultAssignee(
     conversation: { id: string; departmentId: string | null },
+    whatsappInstanceId: string,
     organizationId: string,
   ): Promise<void> {
-    if (!conversation.departmentId) return;
     try {
-      const department = await this.prisma.department.findUnique({
-        where: { id: conversation.departmentId },
-        select: { defaultAssigneeId: true },
-      });
-      const assigneeId = department?.defaultAssigneeId;
+      const [department, instance] = await Promise.all([
+        conversation.departmentId
+          ? this.prisma.department.findUnique({
+              where: { id: conversation.departmentId },
+              select: { defaultAssigneeId: true },
+            })
+          : Promise.resolve(null),
+        this.prisma.whatsAppInstance.findUnique({
+          where: { id: whatsappInstanceId },
+          select: { defaultAssigneeId: true },
+        }),
+      ]);
+      const fromDepartment = department?.defaultAssigneeId ?? null;
+      const assigneeId = fromDepartment ?? instance?.defaultAssigneeId ?? null;
       if (!assigneeId) return;
 
-      // Usuário desativado depois de configurado não recebe a conversa:
-      // ela ficaria parada numa caixa que ninguém abre.
+      /**
+       * Quem foi desativado, perdeu o número ou saiu do departamento depois
+       * de configurado não recebe a conversa: ela ficaria parada numa caixa
+       * que ninguém abre, e pior que "sem responsável" é a conversa
+       * atribuída a quem não consegue enxergá-la.
+       */
       const assignee = await this.prisma.user.findFirst({
-        where: { id: assigneeId, organizationId, status: "active" },
+        where: eligibleAssigneeWhere({
+          userId: assigneeId,
+          organizationId,
+          whatsappInstanceId,
+          departmentId: conversation.departmentId,
+        }),
         select: { id: true },
       });
       if (!assignee) return;
@@ -233,7 +257,9 @@ export class MessageIngestService {
           action: "assigned",
           toUserId: assignee.id,
           toDepartmentId: conversation.departmentId,
-          note: "Responsável padrão do departamento",
+          note: fromDepartment
+            ? "Responsável padrão do departamento"
+            : "Responsável padrão do número",
         },
       });
     } catch (err) {
