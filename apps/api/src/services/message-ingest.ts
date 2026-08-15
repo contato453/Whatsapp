@@ -56,7 +56,11 @@ export class MessageIngestService {
     // mensagem que o cliente manda quanto na que a equipe manda primeiro:
     // conversa iniciada por nós também precisa de dono, senão nasce órfã
     // na lista.
-    if (!conversation.assignedUserId) {
+    //
+    // Arquivada fica de fora: ela não está em fila nenhuma, e o número de
+    // backup (onde toda conversa nasce arquivada) geraria histórico de
+    // atribuição em massa para alguém que nunca vai atender ali.
+    if (!conversation.assignedUserId && !conversation.archivedAt) {
       await this.applyDefaultAssignee(conversation, message.instanceId, context.organizationId);
     }
 
@@ -156,12 +160,22 @@ export class MessageIngestService {
       },
     });
 
+    /**
+     * Conversa arquivada CONTINUA ARQUIVADA quando chega mensagem — de
+     * propósito, e diferente do WhatsApp do celular: o chip de backup recebe
+     * as mesmas conversas o tempo todo, e desarquivar sozinho encheria a
+     * Inbox de novo todo dia. A mensagem é gravada normalmente (o histórico
+     * fica completo, legível pela busca), mas a conversa não incrementa o
+     * não lido nem muda de status — o status congela junto com o
+     * arquivamento e volta a reagir quando alguém desarquivar.
+     */
+    const isArchived = conversation.archivedAt != null;
     await this.prisma.conversation.update({
       where: { id: conversation.id },
       data: {
         lastMessageAt: message.timestamp,
         lastMessagePreview: preview,
-        ...(isInbound
+        ...(isInbound && !isArchived
           ? {
               unreadCount: { increment: 1 },
               // Mensagem do cliente devolve a conversa para a fila: concluída

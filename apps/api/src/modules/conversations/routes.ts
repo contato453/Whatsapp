@@ -39,6 +39,13 @@ const listQuerySchema = z.object({
   instanceId: z.string().uuid().optional(),
   tagId: z.string().uuid().optional(),
   unread: z.coerce.boolean().optional(),
+  /**
+   * `false` (padrão) lista só as não arquivadas; `true`, só as arquivadas.
+   * Não existe "todas misturadas" de propósito: a lista da Inbox e a visão
+   * de arquivadas são recortes disjuntos, e misturar traria a conversa
+   * arquivada de volta pela porta dos fundos.
+   */
+  archived: z.coerce.boolean().default(false),
   q: z.string().max(120).optional(),
   limit: z.coerce.number().min(1).max(100).default(50),
   offset: z.coerce.number().min(0).default(0),
@@ -78,6 +85,9 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       ...(query.departmentId ? { departmentId: query.departmentId } : {}),
       ...(query.instanceId ? { whatsappInstanceId: query.instanceId } : {}),
       ...(query.unread ? { unreadCount: { gt: 0 } } : {}),
+      // Arquivamento é um filtro POR CIMA do escopo de acesso, nunca no
+      // lugar dele: `conversationScope` continua valendo inteiro acima.
+      archivedAt: query.archived ? { not: null } : null,
       ...(query.tagId ? { tags: { some: { tagId: query.tagId } } } : {}),
       // Busca pelo nome ou pelo código do cadastro ("EMPRESA 001")
       ...(query.q
@@ -438,6 +448,62 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
         },
       }),
     ]);
+    await emitConversationUpdated(id, request.user.organizationId);
+    return { ok: true };
+  });
+
+  /**
+   * Arquivar: a conversa some da Inbox e deixa de contar em todos os números
+   * do sistema, sem apagar nada — mensagens, notas, etiquetas e histórico
+   * ficam intactos. É ORTOGONAL ao status (não é um quinto status): o status
+   * congela como está e volta a valer no desarquivamento. Papel mínimo:
+   * agent, o mesmo que já muda status e atribui — quem enxerga, arquiva.
+   */
+  app.post("/conversations/:id/archive", { preHandler: authenticate }, async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const conversation = await findConversationOr404(id, request.user);
+    // Já arquivada: não regrava data nem autor, senão o registro de quem
+    // arquivou primeiro seria sobrescrito por um clique repetido.
+    if (conversation.archivedAt) return { ok: true };
+
+    await deps.prisma.conversation.update({
+      where: { id },
+      data: {
+        archivedAt: new Date(),
+        archivedByUserId: request.user.sub,
+        // Arquivada não deve pesar em contador nenhum — inclusive o badge
+        // de não lidas da linha, que voltaria junto no desarquivamento.
+        unreadCount: 0,
+      },
+    });
+    deps.audit.record({
+      organizationId: request.user.organizationId,
+      userId: request.user.sub,
+      action: "conversation.archived",
+      entityType: "Conversation",
+      entityId: id,
+    });
+    await emitConversationUpdated(id, request.user.organizationId);
+    return { ok: true };
+  });
+
+  /** Desarquivar: volta com o status que tinha e volta a contar em tudo. */
+  app.post("/conversations/:id/unarchive", { preHandler: authenticate }, async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const conversation = await findConversationOr404(id, request.user);
+    if (!conversation.archivedAt) return { ok: true };
+
+    await deps.prisma.conversation.update({
+      where: { id },
+      data: { archivedAt: null, archivedByUserId: null },
+    });
+    deps.audit.record({
+      organizationId: request.user.organizationId,
+      userId: request.user.sub,
+      action: "conversation.unarchived",
+      entityType: "Conversation",
+      entityId: id,
+    });
     await emitConversationUpdated(id, request.user.organizationId);
     return { ok: true };
   });

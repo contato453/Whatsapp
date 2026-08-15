@@ -282,8 +282,10 @@ export class InstanceManager {
             lastMessageAt: event.timestamp,
             lastMessagePreview: label,
             // Chamada recebida é contato do cliente: devolve para a fila,
-            // igual a uma mensagem nova.
-            ...(conversation.status === "resolved" || conversation.status === "waiting_client"
+            // igual a uma mensagem nova. Arquivada não volta — mesma regra
+            // da mensagem: o chip de backup também recebe chamadas.
+            ...((conversation.status === "resolved" || conversation.status === "waiting_client") &&
+            !conversation.archivedAt
               ? { status: "open" as const }
               : {}),
           },

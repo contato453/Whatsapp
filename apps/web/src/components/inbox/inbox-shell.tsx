@@ -42,6 +42,7 @@ import type {
 } from "@/lib/types";
 import { Avatar, Button, EmptyState, Input, Modal, Spinner, Textarea } from "@/components/ui";
 import { appliesToConversation } from "@/components/department-picker";
+import { ArchivedBanner } from "./archived-banner";
 import { ConversationListItem } from "./conversation-list";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
 import { AudioRecorder } from "./audio-recorder";
@@ -107,6 +108,7 @@ type QuickFilter =
   | "groups"
   | "individual"
   | "unread"
+  | "archived"
   | "open"
   | "waiting_client"
   | "waiting_internal"
@@ -125,6 +127,8 @@ const QUICK_FILTER_GROUPS: Array<{ label: string; options: Array<{ key: QuickFil
       { key: "mine", label: "Minhas" },
       { key: "unassigned", label: "Sem responsável" },
       { key: "unread", label: "Não lidas" },
+      // Visão à parte, nunca misturada: o padrão da lista é sem arquivadas.
+      { key: "archived", label: "Arquivadas" },
     ],
   },
   {
@@ -245,10 +249,16 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const statusParam = searchParams.get("status");
   const departmentParam = searchParams.get("departmentId");
   const instanceParam = searchParams.get("instanceId");
+  // É assim que o card de arquivadas do dashboard abre a visão certa.
+  const archivedParam = searchParams.get("archived");
 
   useEffect(() => {
     if (isStatusQuickFilter(statusParam)) setFilter(statusParam);
   }, [statusParam]);
+
+  useEffect(() => {
+    if (archivedParam === "true" || archivedParam === "1") setFilter("archived");
+  }, [archivedParam]);
 
   useEffect(() => {
     if (!canFilterScope) return;
@@ -276,6 +286,8 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     if (filter === "groups") params.set("type", "group");
     if (filter === "individual") params.set("type", "individual");
     if (filter === "unread") params.set("unread", "true");
+    // Sem o parâmetro a API já exclui arquivadas; com ele, lista só elas.
+    if (filter === "archived") params.set("archived", "true");
     if (filter === "open") params.set("status", "open");
     if (filter === "waiting_client") params.set("status", "waiting_client");
     if (filter === "waiting_internal") params.set("status", "waiting_internal");
@@ -404,10 +416,21 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   // ---------- Tempo real ----------
   useEffect(() => {
     if (!socket) return;
+    /**
+     * A lista atual e o evento precisam concordar sobre arquivamento: a
+     * visão padrão só tem não arquivadas e a "Arquivadas", só arquivadas.
+     * Sem esta régua, a mensagem nova numa conversa arquivada (o chip de
+     * backup recebe o dia inteiro) a traria de volta para a Inbox de quem
+     * está com a tela aberta — exatamente o que o arquivamento veio impedir.
+     */
+    const belongsToList = (conversation: ConversationDto) =>
+      (conversation.archivedAt != null) === (filter === "archived");
     const onMessageNew = (payload: { conversation: ConversationDto; message: MessageDto }) => {
       setConversations((current) => {
         if (!current) return current;
         const rest = current.filter((conversation) => conversation.id !== payload.conversation.id);
+        // Conversa da outra visão não sobe para o topo — no máximo sai daqui.
+        if (!belongsToList(payload.conversation)) return rest;
         return [payload.conversation, ...rest];
       });
       if (payload.message.conversationId === conversationId) {
@@ -420,9 +443,17 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       }
     };
     const onConversationUpdated = (payload: ConversationDto) => {
-      setConversations((current) =>
-        current?.map((conversation) => (conversation.id === payload.id ? payload : conversation)) ?? null,
-      );
+      // Arquivada (ou desarquivada) em outra sessão sai da lista desta na
+      // hora, sem reload — e sem tocar no rascunho de quem está digitando.
+      setConversations((current) => {
+        if (!current) return current;
+        if (!belongsToList(payload)) {
+          return current.filter((conversation) => conversation.id !== payload.id);
+        }
+        return current.map((conversation) =>
+          conversation.id === payload.id ? payload : conversation,
+        );
+      });
       if (payload.id === conversationId) {
         setDetail((current) =>
           current
@@ -523,7 +554,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       socket.off(RealtimeEvents.InternalNote, onNote);
       socket.off(RealtimeEvents.ScheduledPending, onScheduledPending);
     };
-  }, [socket, conversationId, loadDetail]);
+  }, [socket, conversationId, loadDetail, filter]);
 
   /**
    * Toda escrita no composer passa por aqui, e grava na hora.
@@ -1117,6 +1148,15 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                 </Button>
               </div>
             </header>
+
+            {/* Conversa arquivada avisa no topo e oferece o desarquivar. */}
+            <ArchivedBanner
+              conversation={conversation}
+              onUnarchived={() => {
+                loadDetail();
+                loadConversations();
+              }}
+            />
 
             {/* Busca dentro da conversa */}
             {chatSearchOpen && (

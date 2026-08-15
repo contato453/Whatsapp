@@ -12,7 +12,7 @@ import {
   resumeNotificationAudio,
   unlockNotificationAudio,
 } from "@/lib/notification-sound";
-import type { MessageDto } from "@/lib/types";
+import type { ConversationDto, MessageDto } from "@/lib/types";
 import { Button } from "@/components/ui";
 
 /**
@@ -94,10 +94,13 @@ export function MessageSound() {
 
   useEffect(() => {
     if (!socket || !enabled) return undefined;
-    const onMessageNew = (payload: { message: MessageDto }) => {
+    const onMessageNew = (payload: { conversation?: ConversationDto; message: MessageDto }) => {
       // O gatilho é a direção, não o tipo: mídia sem texto e aviso de
       // chamada tocam igual. O que a equipe envia nunca toca.
       if (payload.message.direction !== "inbound") return;
+      // Conversa arquivada não toca: o chip de backup recebe mensagem o dia
+      // inteiro, e cada uma viraria um aviso de algo que ninguém vai atender.
+      if (payload.conversation?.archivedAt) return;
       // Aba em foco E conversa aberta: a pessoa está olhando para a mensagem.
       if (
         document.hasFocus() &&

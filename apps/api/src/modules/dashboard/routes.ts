@@ -109,10 +109,16 @@ interface LastMessageRow {
  * junto com `conversationScope`, então pedir um número que o usuário não
  * enxerga devolve vazio em vez de vazar. Os seletores da tela já só oferecem
  * o que ele enxerga; isto é a garantia do lado do servidor.
+ *
+ * O recorte de arquivamento entra aqui, POR CIMA do escopo de acesso e para
+ * a tela inteira de uma vez: toda contagem nova que nascer deste filtro já
+ * exclui (ou isola) as arquivadas sem depender de ninguém lembrar. `active`
+ * é o dashboard normal; `archived` existe só para o card de arquivadas.
  */
 function scopedConversationWhere(
   access: Parameters<typeof conversationScope>[0],
   query: StatsQuery,
+  archive: "active" | "archived",
 ): Prisma.ConversationWhereInput {
   const scope = conversationScope(access);
   const conditions = [
@@ -120,8 +126,9 @@ function scopedConversationWhere(
     // com um objeto vazio dentro, que não filtra nada e só polui a consulta.
     ...(Object.keys(scope).length > 0 ? [scope] : []),
     ...dashboardFilterConditions(query),
+    { archivedAt: archive === "active" ? null : { not: null } },
   ];
-  return conditions.length > 0 ? { AND: conditions } : {};
+  return { AND: conditions };
 }
 
 function dashboardFilterConditions(query: StatsQuery): Prisma.ConversationWhereInput[] {
@@ -167,14 +174,21 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
     const instanceFilter = query.instanceId
       ? { id: query.instanceId, ...instanceIdScope(access.instanceIds) }
       : instanceIdScope(access.instanceIds);
-    const conversationFilter = scopedConversationWhere(access, query);
+    const conversationFilter = scopedConversationWhere(access, query, "active");
     const messageFilter = { conversation: conversationFilter };
 
     // Números de desempenho da equipe são de supervisor para cima, igual ao
     // relatório por atendente. Para quem não é, o bloco nem é consultado.
     const canSeeTeam = hasRole(request.user.role, "supervisor");
 
-    const [statusBuckets, instanceBuckets, messagesReceived, messagesSent, topConversations] =
+    const [
+      statusBuckets,
+      archivedConversations,
+      instanceBuckets,
+      messagesReceived,
+      messagesSent,
+      topConversations,
+    ] =
       await Promise.all([
         /**
          * A regra central da tela: o **período filtra por atividade** e o
@@ -191,6 +205,15 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
           by: ["status"],
           where: { organizationId, ...conversationFilter, lastMessageAt: withinPeriod },
           _count: { _all: true },
+        }),
+        /**
+         * Card de conversas arquivadas: estado de agora, sem o corte de
+         * período — arquivar é ação deliberada, não atividade. Os filtros de
+         * número, departamento e responsável continuam valendo, como no
+         * resto da tela.
+         */
+        deps.prisma.conversation.count({
+          where: { organizationId, ...scopedConversationWhere(access, query, "archived") },
         }),
         deps.prisma.whatsAppInstance.groupBy({
           by: ["status"],
@@ -438,6 +461,7 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
         assignedUserId: query.assignedUserId ?? null,
       },
       conversationsByStatus,
+      archivedConversations,
       instancesByStatus,
       messagesReceived,
       messagesSent,

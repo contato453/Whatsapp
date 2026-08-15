@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { RealtimeEvents } from "@azvchat/shared";
 import { useAuth } from "@/lib/auth-context";
 import { useSocket } from "@/lib/socket-context";
-import type { MessageDto } from "@/lib/types";
+import type { ConversationDto, MessageDto } from "@/lib/types";
 
 /**
  * Ritmo do piscar. Um segundo e pouco é o suficiente para o olho pegar o
@@ -76,10 +76,13 @@ export function UnreadTitle() {
 
   useEffect(() => {
     if (!socket || !user) return undefined;
-    const onMessageNew = (payload: { message: MessageDto }) => {
+    const onMessageNew = (payload: { conversation?: ConversationDto; message: MessageDto }) => {
       // Mesmo gatilho do som: só o que chegou de fora, e só dentro do
       // recorte de acesso que o socket já entrega a esta pessoa.
       if (payload.message.direction !== "inbound") return;
+      // Arquivada não acumula: ela não volta para a Inbox, então o título
+      // prometeria uma conversa que a lista não vai mostrar.
+      if (payload.conversation?.archivedAt) return;
       // Olhando a Inbox agora não acumula: a conversa sobe na lista com o
       // badge de não lidas na frente da pessoa, o título seria redundante.
       if (isWatchingInbox()) return;

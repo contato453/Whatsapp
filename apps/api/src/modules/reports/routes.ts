@@ -39,7 +39,9 @@ export async function reportRoutes(app: FastifyInstance, deps: AppDeps): Promise
     const organizationId = request.user.organizationId;
 
     const access = await loadConversationAccess(deps.prisma, request.user);
-    const scope = conversationScope(access);
+    // Arquivada não conta como trabalho de ninguém: o filtro entra POR CIMA
+    // do escopo de acesso, em todas as consultas do relatório de uma vez.
+    const scope = { ...conversationScope(access), archivedAt: null };
 
     const [users, messages, resolvedEntries, openConversations, receivedCount] = await Promise.all([
       deps.prisma.user.findMany({

@@ -227,6 +227,8 @@ export interface DashboardStatsInput {
     assignedUserId: string | null;
   };
   conversationsByStatus: Record<ConversationStatus, number>;
+  /** Total de arquivadas no recorte — estado de agora, ignora o período. */
+  archivedConversations: number;
   instancesByStatus: Record<ConnectionStatus, number>;
   messagesReceived: number;
   messagesSent: number;
@@ -264,6 +266,8 @@ export function serializeDashboardStats(input: DashboardStatsInput) {
     conversations: {
       active: Object.values(byStatus).reduce((total, count) => total + count, 0),
       byStatus,
+      // Fora da soma de ativas de propósito: arquivada não é atendimento.
+      archived: input.archivedConversations,
     },
     overdue: {
       count: input.overdue.count,
@@ -293,6 +297,7 @@ type ConversationWithRelations = Conversation & {
   department?: Department | null;
   tags?: Array<{ tag: Tag }>;
   instance?: WhatsAppInstance | null;
+  archivedBy?: User | null;
 };
 
 export function serializeConversation(conversation: ConversationWithRelations) {
@@ -322,6 +327,11 @@ export function serializeConversation(conversation: ConversationWithRelations) {
     department: conversation.department ? serializeDepartment(conversation.department) : null,
     tags: conversation.tags?.map((entry) => serializeTag(entry.tag)) ?? [],
     unreadCount: conversation.unreadCount,
+    // Nulo = não arquivada. Vai na lista e no evento de conversa: é como o
+    // frontend sabe tirar (ou manter) a linha da visão certa sem reload.
+    archivedAt: conversation.archivedAt?.toISOString() ?? null,
+    // Nulo também no arquivamento automático do número de backup.
+    archivedBy: conversation.archivedBy ? serializeUserDirectory(conversation.archivedBy) : null,
     lastMessageAt: conversation.lastMessageAt?.toISOString() ?? null,
     lastMessagePreview: conversation.lastMessagePreview,
     externalReference: conversation.externalReference,

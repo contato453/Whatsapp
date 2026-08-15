@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
+  Archive,
   ArrowDownLeft,
   ArrowUpRight,
   CheckCircle2,
@@ -153,6 +154,16 @@ function fullDateOf(date: Date): string {
  */
 function inboxHref(status: ConversationStatus, filters: DashboardFilters): string {
   const params = new URLSearchParams({ status });
+  if (filters.instanceId) params.set("instanceId", filters.instanceId);
+  if (filters.departmentId && filters.departmentId !== FILTER_NONE) {
+    params.set("departmentId", filters.departmentId);
+  }
+  return `/inbox?${params.toString()}`;
+}
+
+/** O card de arquivadas abre a Inbox direto na visão de arquivadas. */
+function archivedInboxHref(filters: DashboardFilters): string {
+  const params = new URLSearchParams({ archived: "true" });
   if (filters.instanceId) params.set("instanceId", filters.instanceId);
   if (filters.departmentId && filters.departmentId !== FILTER_NONE) {
     params.set("departmentId", filters.departmentId);
@@ -714,6 +725,21 @@ export default function DashboardPage() {
         ela pode vir maior que o número do card
         {carriesPartialScope ? ", e o filtro de responsável não é levado" : ""}.
       </p>
+
+      {/* Separado dos quatro status de propósito: arquivada não é
+          atendimento, e ninguém deve somá-la ao total de ativas. Visual
+          neutro — arquivar é ação deliberada, não problema. */}
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          label="Conversas arquivadas"
+          value={stats?.conversations.archived ?? 0}
+          icon={<Archive className="h-4 w-4" />}
+          accent="#64748b"
+          hint="Estado agora, sem filtro de período. Fora de todos os demais números."
+          pending={pending && !stats}
+          href={archivedInboxHref(filters)}
+        />
+      </div>
 
       <SectionTitle note="Quantidade não significa qualidade.">Mensagens</SectionTitle>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

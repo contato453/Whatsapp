@@ -89,6 +89,7 @@ model User {
 
   organization          Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   assignedConversations Conversation[]                  @relation("AssignedConversations")
+  archivedConversations Conversation[]                  @relation("ArchivedConversations")
   sentMessages          Message[]
   internalNotes         InternalNote[]
   performedAssignments  ConversationAssignmentHistory[] @relation("PerformedAssignments")
@@ -156,6 +157,10 @@ model WhatsAppInstance {
   /// ninguém atribuído e que o departamento não resolveu. É o caso do
   /// número dedicado a uma pessoa, que não passa por departamento.
   defaultAssigneeId   String?
+  /// Número de backup: existe só para o caso de o principal ser banido.
+  /// Ligado, toda conversa nova deste número já nasce arquivada — sem isso o
+  /// chip reserva duplicaria a Inbox e todos os números do dashboard.
+  isBackup            Boolean        @default(false)
   status              InstanceStatus @default(disconnected)
   provider            String         @default("qrcode")
   sessionId           String         @unique @default(uuid())
@@ -330,6 +335,12 @@ model Conversation {
   assignedUserId     String?
   departmentId       String?
   unreadCount        Int                @default(0)
+  /// Arquivamento: a data responde "está arquivada?" (nulo = não). É
+  /// ORTOGONAL ao status — não existe quinto status, e ao desarquivar a
+  /// conversa volta com o status que tinha. Mensagem nova NÃO desarquiva.
+  archivedAt         DateTime?
+  /// Quem arquivou; nulo no arquivamento automático do número de backup.
+  archivedByUserId   String?
   lastMessageAt      DateTime?
   lastMessagePreview String?
   // Integrações futuras (CRM, processos, contratos...) — sem dependência específica
@@ -341,6 +352,7 @@ model Conversation {
   organization      Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   instance          WhatsAppInstance                @relation(fields: [whatsappInstanceId], references: [id], onDelete: Cascade)
   assignedUser      User?                           @relation("AssignedConversations", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  archivedBy        User?                           @relation("ArchivedConversations", fields: [archivedByUserId], references: [id], onDelete: SetNull)
   department        Department?                     @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   messages          Message[]
   group             WhatsAppGroup?
@@ -355,6 +367,9 @@ model Conversation {
   /// Dashboard: conversas com atividade no período agrupadas por status, e as
   /// candidatas a atraso (não resolvidas, paradas há mais que o limite).
   @@index([organizationId, status, lastMessageAt])
+  /// Inbox: não arquivadas de um recorte ordenadas por última mensagem —
+  /// o archivedAt vem antes para o filtro "IS NULL" usar o mesmo índice.
+  @@index([organizationId, archivedAt, lastMessageAt])
   @@map("conversations")
 }
 

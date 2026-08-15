@@ -15,6 +15,9 @@ export const conversationInclude = {
   department: true,
   instance: true,
   tags: { include: { tag: true } },
+  // A visão de arquivadas mostra quem arquivou; sem o include o DTO sairia
+  // sempre com archivedBy nulo.
+  archivedBy: true,
 } satisfies Prisma.ConversationInclude;
 
 /**

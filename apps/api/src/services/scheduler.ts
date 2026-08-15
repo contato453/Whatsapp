@@ -83,6 +83,11 @@ export class ScheduledMessageWorker {
     };
   }): Promise<void> {
     try {
+      // Mensagem agendada em conversa que foi arquivada AINDA É ENVIADA:
+      // o agendamento é um compromisso assumido com o cliente, e arquivar a
+      // conversa não o cancela. A conversa continua arquivada — o envio não
+      // a traz de volta para a Inbox (nada aqui toca em archivedAt).
+      //
       // A assinatura é lida na hora do envio, e não no agendamento: vale a
       // configuração que estiver valendo quando a mensagem de fato sair.
       const sender = scheduled.createdById

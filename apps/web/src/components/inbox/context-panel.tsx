@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Archive,
+  ArchiveRestore,
   Check,
   FileText,
   MessageSquare,
@@ -22,6 +24,7 @@ import {
 } from "@azvchat/shared";
 import {
   api,
+  conversationArchiveApi,
   fetchMediaBlobUrl,
   groupParticipantsApi,
   invalidateConversationAvatar,
@@ -492,6 +495,38 @@ export function ContextPanel({
         {/* Sem botões de "Assumir" e "Concluir": o responsável é trocado no
             seletor logo acima e o status, na barra da conversa. Dois caminhos
             para a mesma ação só criam dúvida sobre qual usar. */}
+        {/* Arquivar mora junto de status e responsável: é o mesmo tipo de
+            decisão sobre o atendimento. Papel mínimo é o mesmo dos dois. */}
+        {conversation.archivedAt ? (
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-full"
+            disabled={busy}
+            onClick={() => void run(() => conversationArchiveApi.unarchive(conversation.id))}
+          >
+            <ArchiveRestore className="h-3.5 w-3.5" /> Desarquivar conversa
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-full"
+            disabled={busy}
+            onClick={() => {
+              if (
+                !window.confirm(
+                  "Arquivar esta conversa? Ela some da Inbox e deixa de contar nos números do sistema. Nada é apagado, e dá para desarquivar quando quiser.",
+                )
+              ) {
+                return;
+              }
+              void run(() => conversationArchiveApi.archive(conversation.id));
+            }}
+          >
+            <Archive className="h-3.5 w-3.5" /> Arquivar conversa
+          </Button>
+        )}
       </section>
 
       {/* Etiquetas */}

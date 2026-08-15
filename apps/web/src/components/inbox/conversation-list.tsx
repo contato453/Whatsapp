@@ -1,13 +1,13 @@
 "use client";
 
-import { Users2, User, UserRound } from "lucide-react";
+import { Archive, Users2, User, UserRound } from "lucide-react";
 import {
   CONNECTION_STATUS_COLORS,
   CONNECTION_STATUS_LABELS,
   CONVERSATION_STATUS_COLORS,
   CONVERSATION_STATUS_LABELS,
 } from "@azvchat/shared";
-import { cn, formatTime } from "@/lib/utils";
+import { cn, formatDateTime, formatTime } from "@/lib/utils";
 import type { ConversationDto } from "@/lib/types";
 import { Badge } from "@/components/ui";
 import { ConversationAvatar } from "./conversation-avatar";
@@ -98,6 +98,18 @@ export function ConversationListItem({
 
           {/* Responsável sempre visível — inclusive quando ninguém assumiu.
               O cadastro da empresa divide a linha, alinhado à direita. */}
+          {/* Só existe na visão de arquivadas — a lista padrão nunca as traz.
+              Sem autor foi o arquivamento automático do número de backup. */}
+          {conversation.archivedAt && (
+            <p className="mt-1 flex items-center gap-1 text-[11px] text-slate-500">
+              <Archive className="h-3 w-3 shrink-0 text-slate-400" />
+              <span className="truncate">
+                Arquivada {conversation.archivedBy ? `por ${conversation.archivedBy.name} ` : "automaticamente "}
+                em {formatDateTime(conversation.archivedAt)}
+              </span>
+            </p>
+          )}
+
           <p className="mt-1 flex items-center gap-1 text-[11px]">
             <UserRound className="h-3 w-3 shrink-0 text-slate-400" />
             {conversation.assignedUser ? (

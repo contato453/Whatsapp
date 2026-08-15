@@ -165,6 +165,17 @@ export const quickRepliesApi = {
 
 
 /**
+ * Arquivamento de conversa: some da Inbox e deixa de contar nos números do
+ * sistema, sem apagar nada. Responder não desarquiva — só o botão.
+ */
+export const conversationArchiveApi = {
+  archive: (conversationId: string) =>
+    api.post<{ ok: boolean }>(`/conversations/${conversationId}/archive`),
+  unarchive: (conversationId: string) =>
+    api.post<{ ok: boolean }>(`/conversations/${conversationId}/unarchive`),
+};
+
+/**
  * Filtros do dashboard. Valem para a tela inteira: os cards, o ranking e o
  * top de usuários respondem todos ao mesmo recorte.
  *

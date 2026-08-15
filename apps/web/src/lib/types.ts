@@ -122,6 +122,10 @@ export interface ConversationDto {
   department: DepartmentDto | null;
   tags: TagDto[];
   unreadCount: number;
+  /** Nulo = não arquivada. Arquivada não conta em número nenhum do sistema. */
+  archivedAt: string | null;
+  /** Quem arquivou; nulo no arquivamento automático do número de backup. */
+  archivedBy: UserDirectoryDto | null;
   lastMessageAt: string | null;
   lastMessagePreview: string | null;
   /** Código do cadastro no escritório ("EMPRESA 001", "GRUPO 040") */
@@ -358,6 +362,8 @@ export interface DashboardStatsDto {
     /** Soma exata dos quatro status abaixo — vem do mesmo agrupamento. */
     active: number;
     byStatus: Record<ConversationStatus, number>;
+    /** Arquivadas no recorte — estado de agora, fora da soma de ativas. */
+    archived: number;
   };
   /** Estado agora, sem relação com o período escolhido. */
   overdue: {

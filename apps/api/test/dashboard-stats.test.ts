@@ -27,6 +27,7 @@ interface Recorded {
   rawQueries: string[];
   conversationGroupBy: Prisma.ConversationGroupByArgs[];
   conversationFindMany: Array<Record<string, unknown>>;
+  conversationCount: Array<Record<string, unknown>>;
   messageCount: Array<Record<string, unknown>>;
   messageGroupBy: Array<{ by: string[]; where?: Record<string, unknown> }>;
   instanceGroupBy: Array<Record<string, unknown>>;
@@ -53,6 +54,11 @@ function fakePrisma(): PrismaClient {
       groupBy: async (args: Prisma.ConversationGroupByArgs) => {
         recorded.conversationGroupBy.push(args);
         return STATUS_BUCKETS;
+      },
+      // O card de conversas arquivadas é a única contagem direta da rota.
+      count: async (args: Record<string, unknown>) => {
+        recorded.conversationCount.push(args);
+        return 4;
       },
       findMany: async (args: Record<string, unknown>) => {
         recorded.conversationFindMany.push(args);
@@ -195,6 +201,7 @@ describe("GET /dashboard/stats", () => {
       rawQueries: [],
       conversationGroupBy: [],
       conversationFindMany: [],
+      conversationCount: [],
       messageCount: [],
       messageGroupBy: [],
       instanceGroupBy: [],
@@ -262,8 +269,48 @@ describe("GET /dashboard/stats", () => {
     await stats(app, "admin");
     const where = recorded.conversationGroupBy[0]?.where as Record<string, unknown>;
     expect(where.organizationId).toBe("org-1");
-    expect(conditionsOf(where)).toHaveLength(0);
+    // Única condição para o admin: excluir arquivadas — não é recorte de
+    // acesso, é a regra da tela inteira.
+    expect(conditionsOf(where)).toEqual([{ archivedAt: null }]);
     expect(recorded.instanceGroupBy[0]?.where).not.toHaveProperty("id");
+    await app.close();
+  });
+
+  it("arquivada não conta em bloco nenhum: todo filtro de conversa a exclui", async () => {
+    const app = await buildTestApp();
+    await stats(app, "supervisor");
+    // O groupBy dos cards de status, as buscas por atividade (série, mapa,
+    // atraso) e as contagens de mensagem carregam todos o mesmo recorte.
+    expect(conditionsOf(recorded.conversationGroupBy[0]?.where as Record<string, unknown>))
+      .toContainEqual({ archivedAt: null });
+    // A busca do ranking por ids fica de fora: os ids já saíram de uma
+    // consulta escopada, e ali não há filtro para inspecionar.
+    const scopedSearches = recorded.conversationFindMany.filter(
+      (args) => !("id" in ((args.where ?? {}) as Record<string, unknown>)),
+    );
+    expect(scopedSearches.length).toBeGreaterThan(0);
+    for (const args of scopedSearches) {
+      expect(conditionsOf(args.where as Record<string, unknown>)).toContainEqual({
+        archivedAt: null,
+      });
+    }
+    for (const args of recorded.messageCount) {
+      const where = args.where as { conversation?: Record<string, unknown> };
+      expect(conditionsOf(where.conversation ?? {})).toContainEqual({ archivedAt: null });
+    }
+    await app.close();
+  });
+
+  it("o card de arquivadas conta só arquivadas e ignora o período", async () => {
+    const app = await buildTestApp();
+    const body = (await stats(app, "admin", "?period=7d")).json();
+    expect(body.conversations.archived).toBe(4);
+    // Fora da soma de ativas: arquivada não é atendimento.
+    expect(body.conversations.active).toBe(17);
+    const where = recorded.conversationCount[0]?.where as Record<string, unknown>;
+    expect(conditionsOf(where)).toContainEqual({ archivedAt: { not: null } });
+    // Estado de agora: nada de lastMessageAt no filtro do card.
+    expect(JSON.stringify(where)).not.toContain("lastMessageAt");
     await app.close();
   });
 

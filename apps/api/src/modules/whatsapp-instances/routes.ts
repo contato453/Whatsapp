@@ -249,12 +249,14 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
       }
 
       // Só as que essa pessoa enxerga: conversa de departamento em que ela
-      // não atua sairia da fila e sumiria da tela de todo mundo.
+      // não atua sairia da fila e sumiria da tela de todo mundo. Arquivada
+      // também fica de fora — ela não está em fila nenhuma para ter dono.
       const targets = await deps.prisma.conversation.findMany({
         where: {
           organizationId: request.user.organizationId,
           whatsappInstanceId: id,
           assignedUserId: null,
+          archivedAt: null,
           ...reachableConversationFilter(reach),
         },
         select: { id: true, departmentId: true },
