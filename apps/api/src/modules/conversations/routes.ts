@@ -10,6 +10,10 @@ import {
 import { authenticate } from "../../lib/auth.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import { serializeConversation, serializeUserDirectory } from "../../lib/serialize.js";
+import {
+  conversationInclude,
+  emitConversationUpdated as publishConversationUpdated,
+} from "../../lib/conversation-events.js";
 import { resolveContacts, type SenderInfo } from "../../lib/sender-directory.js";
 import { conversationAudience } from "../../realtime/socket.js";
 import type { AppDeps } from "../../types.js";
@@ -27,13 +31,6 @@ const listQuerySchema = z.object({
   offset: z.coerce.number().min(0).default(0),
 });
 
-const conversationInclude = {
-  assignedUser: true,
-  department: true,
-  instance: true,
-  tags: { include: { tag: true } },
-} satisfies Prisma.ConversationInclude;
-
 export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
   /**
    * Além da organização, respeita as conexões liberadas para o usuário:
@@ -50,15 +47,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
   }
 
   async function emitConversationUpdated(id: string, organizationId: string): Promise<void> {
-    const conversation = await deps.prisma.conversation.findUnique({
-      where: { id },
-      include: conversationInclude,
-    });
-    if (conversation) {
-      deps.io
-        .to(conversationAudience(organizationId, conversation))
-        .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation));
-    }
+    await publishConversationUpdated(deps.prisma, deps.io, id, organizationId);
   }
 
   app.get("/conversations", { preHandler: authenticate }, async (request) => {

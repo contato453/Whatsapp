@@ -133,6 +133,17 @@ só quem atua naquele departamento passa a enxergá-la. Número sem departamento
 conversa sem departamento, visível para quem tem o número — para não existir mensagem de
 cliente que ninguém vê.
 
+Cada número tem também um **responsável padrão**, que assume as conversas que chegam sem
+ninguém atribuído. Ele existe porque o responsável padrão do departamento não alcança o
+número dedicado a uma pessoa: sem departamento, a conversa nascia órfã e ficava "Sem
+responsável" para sempre. A ordem é a do mais específico para o mais geral — o do
+departamento primeiro, o do número em seguida. Em qualquer um dos dois, quem recebe
+precisa **enxergar** a conversa (ter o número e, quando há departamento, atuar nele), senão
+a atribuição existiria só no banco e a conversa sumiria da fila.
+
+O padrão vale para o que chega dali em diante. As conversas que já estão paradas sem dono
+são atribuídas de uma vez pelo botão ao lado do responsável, na tela de números.
+
 ### O que cada papel pode fazer
 
 Visibilidade responde "quais conversas"; papel responde "quais ações". A hierarquia

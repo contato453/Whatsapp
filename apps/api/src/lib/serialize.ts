@@ -69,6 +69,8 @@ export function serializeInstance(instance: WhatsAppInstance) {
     name: instance.name,
     phoneNumber: instance.phoneNumber,
     departmentId: instance.departmentId,
+    // Só o id: o nome é resolvido no frontend, que já carrega os usuários.
+    defaultAssigneeId: instance.defaultAssigneeId,
     status: instance.status,
     provider: instance.provider,
     lastConnectionAt: instance.lastConnectionAt?.toISOString() ?? null,

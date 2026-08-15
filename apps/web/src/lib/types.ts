@@ -48,6 +48,7 @@ export interface InstanceDto {
   name: string;
   phoneNumber: string | null;
   departmentId: string | null;
+  defaultAssigneeId: string | null;
   status: ConnectionStatus;
   provider: string;
   lastConnectionAt: string | null;
