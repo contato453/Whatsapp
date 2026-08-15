@@ -123,6 +123,25 @@ export const DEFAULT_LOGIN_RESTRICTION_ENABLED = false;
 export const LOGIN_OUTSIDE_SCHEDULE_MESSAGE =
   "Login fora do horário permitido. Peça autorização ao supervisor.";
 
+/**
+ * Quantos minutos antes do fechamento a equipe é avisada.
+ *
+ * Cinco minutos é o menor tempo que ainda dá para terminar a frase, mandar e
+ * fechar a conversa. Ser expulso no meio de uma resposta ao cliente sem
+ * aviso nenhum é pior que a restrição inteira.
+ */
+export const LOGIN_SCHEDULE_WARNING_MINUTES = 5;
+
+/** O texto do aviso, com o plural certo. */
+export function loginScheduleWarning(minutesLeft: number): string {
+  if (minutesLeft <= 1) return "O sistema fechará em menos de 1 minuto.";
+  return `O sistema fechará em ${minutesLeft} minutos.`;
+}
+
+/** O que a pessoa lê quando a sessão é encerrada pelo fim do horário. */
+export const SESSION_CLOSED_MESSAGE =
+  "O horário de uso do sistema terminou. Peça autorização ao supervisor para continuar.";
+
 export interface AttendanceSettings {
   responseLimitMinutes: number;
   timezone: string;

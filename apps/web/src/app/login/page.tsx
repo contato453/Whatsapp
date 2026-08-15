@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Clock } from "lucide-react";
+import { SESSION_CLOSED_MESSAGE } from "@azvchat/shared";
 import { useAuth } from "@/lib/auth-context";
-import { ApiError } from "@/lib/api";
+import { ApiError, LOGIN_REASON_SCHEDULE } from "@/lib/api";
 import { Button, Card, Field, Input } from "@/components/ui";
 import { LogoMark, LogoWordmark } from "@/components/logo";
 
@@ -17,6 +18,19 @@ export default function LoginPage() {
   // pessoa não ficar tentando de novo achando que digitou errado.
   const [outsideSchedule, setOutsideSchedule] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  /**
+   * Quem foi encerrado pelo fim do horário chega aqui com `?motivo=horario`.
+   * Lido de `window.location` e não de `useSearchParams` porque esta página
+   * é estática: o hook obrigaria a embrulhar a tela inteira em Suspense só
+   * para ler um parâmetro opcional.
+   */
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("motivo") !== LOGIN_REASON_SCHEDULE) return;
+    setOutsideSchedule(true);
+    setError(params.get("aviso") ?? SESSION_CLOSED_MESSAGE);
+  }, []);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();

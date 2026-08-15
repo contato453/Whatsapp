@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Clock, LogIn, Save, SlidersHorizontal, TriangleAlert } from "lucide-react";
 import {
   DEFAULT_ATTENDANCE_SETTINGS,
+  LOGIN_SCHEDULE_WARNING_MINUTES,
   RESPONSE_LIMIT_MAX_MINUTES,
   RESPONSE_LIMIT_MIN_MINUTES,
   RESPONSE_LIMIT_USUAL_MAX_MINUTES,
@@ -428,10 +429,10 @@ export default function AttendanceSettingsPage() {
           {loginRestrictionEnabled && (
             <p className="mb-4 flex items-start gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
               <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              Fora desta faixa, quem é Usuário vê &ldquo;Login fora do horário permitido. Peça
-              autorização ao supervisor.&rdquo; e não entra. A autorização é feita aqui: abrir o
-              dia ou esticar o horário libera a entrada na tentativa seguinte. Quem já está com
-              a sessão aberta continua trabalhando até sair.
+              Fora desta faixa, quem é Usuário não entra — e quem já está dentro é avisado{" "}
+              {LOGIN_SCHEDULE_WARNING_MINUTES} minutos antes e tem a sessão encerrada no
+              fechamento. A autorização é feita aqui: abrir o dia ou esticar o horário libera na
+              hora, sem reiniciar nada.
             </p>
           )}
 

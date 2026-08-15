@@ -27,6 +27,7 @@ import { Spinner, Tooltip } from "@/components/ui";
 import { UserAvatar } from "@/components/user-avatar";
 import { CallAlerts } from "@/components/call-alerts";
 import { MessageSound } from "@/components/message-sound";
+import { SessionSchedule } from "@/components/session-schedule";
 import { Logo, LogoMark } from "@/components/logo";
 
 /**
@@ -330,6 +331,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       <CallAlerts />
       {/* Som de mensagem recebida: vale em qualquer tela, não só na Inbox. */}
       <MessageSound />
+      {/* Aviso de fechamento do horário de uso, e saída quando ele chega. */}
+      <SessionSchedule />
     </div>
   );
 }

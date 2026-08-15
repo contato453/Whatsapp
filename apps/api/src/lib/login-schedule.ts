@@ -1,30 +1,47 @@
 import {
   DEFAULT_TIMEZONE,
   hasRole,
-  type AttendanceSettings,
   type LoginHours,
   type UserRole,
   type Weekday,
 } from "@azvchat/shared";
 
 /**
- * Horário permitido de login — quem pode **entrar** no sistema agora.
+ * Horário permitido de login — quem pode **entrar** e quem pode **continuar**
+ * no sistema agora.
  *
- * Fonte única da regra: a rota de login pergunta aqui, e qualquer outro
- * caminho de entrada que exista no futuro (SSO, app) pergunta no mesmo lugar.
- * Regra de acesso espalhada é como se abre buraco sem ninguém perceber.
+ * Fonte única da regra: a rota de login pergunta aqui, o verificador de
+ * sessão pergunta aqui a cada requisição, e o vigia do tempo real pergunta
+ * aqui a cada minuto. Regra de acesso espalhada é como se abre buraco sem
+ * ninguém perceber.
  *
  * Duas isenções, ambas de propósito:
  *
- * 1. **supervisor para cima entra sempre.** É quem destranca a porta na tela
- *    de Parâmetros; se a janela pudesse trancá-lo, um sábado desligado por
- *    engano deixaria o escritório inteiro fora do sistema até segunda.
+ * 1. **supervisor para cima nunca é barrado.** É quem destranca a porta na
+ *    tela de Parâmetros; se a janela pudesse trancá-lo, um sábado desligado
+ *    por engano deixaria o escritório inteiro fora do sistema até segunda.
  * 2. **restrição desligada libera todo mundo**, que é o estado inicial.
  */
-export interface LoginScheduleCheck {
+
+/** O que a regra precisa saber dos parâmetros — nada além disto. */
+export interface LoginScheduleSettings {
+  timezone: string;
+  loginRestrictionEnabled: boolean;
+  loginHours: LoginHours[];
+}
+
+export interface LoginScheduleStatus {
+  /** A restrição vale para esta pessoa agora? `false` = liberada de tudo. */
+  enforced: boolean;
   allowed: boolean;
-  /** A faixa do dia, quando existe — vai para a auditoria da tentativa. */
+  /** A faixa do dia, quando existe — vai para a auditoria e para o aviso. */
   window: LoginHours | null;
+  /**
+   * Minutos até o fechamento da faixa de hoje. `null` quando a pessoa não
+   * está dentro de faixa nenhuma (não há o que avisar: ou está liberada, ou
+   * já está do lado de fora).
+   */
+  minutesUntilClose: number | null;
 }
 
 /**
@@ -75,22 +92,37 @@ function safeTimeZone(timezone: string): string {
   }
 }
 
+const FREE: LoginScheduleStatus = {
+  enforced: false,
+  allowed: true,
+  window: null,
+  minutesUntilClose: null,
+};
+
 export function checkLoginSchedule(
-  settings: AttendanceSettings,
+  settings: LoginScheduleSettings,
   role: UserRole,
   at: Date,
-): LoginScheduleCheck {
-  if (!settings.loginRestrictionEnabled) return { allowed: true, window: null };
-  if (hasRole(role, "supervisor")) return { allowed: true, window: null };
+): LoginScheduleStatus {
+  if (!settings.loginRestrictionEnabled) return FREE;
+  if (hasRole(role, "supervisor")) return FREE;
 
   const { weekday, minutes } = officeClock(safeTimeZone(settings.timezone), at);
   const day = settings.loginHours.find((entry) => entry.weekday === weekday) ?? null;
-  if (!day || !day.active) return { allowed: false, window: day };
+  if (!day || !day.active) {
+    return { enforced: true, allowed: false, window: day, minutesUntilClose: null };
+  }
 
-  // Faixa fechada no início e aberta no fim: entrar exatamente no minuto de
+  // Faixa fechada no início e aberta no fim: estar exatamente no minuto de
   // abertura vale, e no minuto de fechamento não — é o mesmo corte que a
   // pessoa lê na tela ("das 07:00 às 19:00" termina quando dá 19:00).
   const start = minutesOfDay(day.startTime);
   const end = minutesOfDay(day.endTime);
-  return { allowed: minutes >= start && minutes < end, window: day };
+  const allowed = minutes >= start && minutes < end;
+  return {
+    enforced: true,
+    allowed,
+    window: day,
+    minutesUntilClose: allowed ? end - minutes : null,
+  };
 }

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_ATTENDANCE_SETTINGS,
   LOGIN_OUTSIDE_SCHEDULE_MESSAGE,
+  LOGIN_SCHEDULE_WARNING_MINUTES,
+  loginScheduleWarning,
   type AttendanceSettings,
   type LoginHours,
 } from "@azvchat/shared";
@@ -126,6 +128,48 @@ describe("checkLoginSchedule (horário permitido de login)", () => {
 
   it("a mensagem manda pedir autorização ao supervisor", () => {
     expect(LOGIN_OUTSIDE_SCHEDULE_MESSAGE).toContain("supervisor");
+  });
+});
+
+describe("contagem para o fechamento (o aviso de 5 minutos)", () => {
+  it("conta os minutos que faltam para fechar", () => {
+    // Sexta, 18:57 em São Paulo; a faixa padrão fecha às 19:00.
+    const status = checkLoginSchedule(settingsWith(), "agent", utc("2026-08-14T21:57:00Z"));
+    expect(status.enforced).toBe(true);
+    expect(status.allowed).toBe(true);
+    expect(status.minutesUntilClose).toBe(3);
+    expect(status.window?.endTime).toBe("19:00");
+  });
+
+  it("no meio do dia a contagem passa longe do limite do aviso", () => {
+    const status = checkLoginSchedule(settingsWith(), "agent", utc("2026-08-14T15:00:00Z"));
+    expect(status.minutesUntilClose).toBeGreaterThan(LOGIN_SCHEDULE_WARNING_MINUTES);
+  });
+
+  it("quem não é alcançado pela restrição não tem contagem — nem aviso", () => {
+    const supervisor = checkLoginSchedule(settingsWith(), "supervisor", utc("2026-08-14T21:57:00Z"));
+    expect(supervisor.enforced).toBe(false);
+    expect(supervisor.minutesUntilClose).toBeNull();
+
+    const desligada = checkLoginSchedule(
+      settingsWith({ loginRestrictionEnabled: false }),
+      "agent",
+      utc("2026-08-14T21:57:00Z"),
+    );
+    expect(desligada.enforced).toBe(false);
+    expect(desligada.minutesUntilClose).toBeNull();
+  });
+
+  it("já fora da faixa não conta nada — não há o que avisar", () => {
+    const status = checkLoginSchedule(settingsWith(), "agent", utc("2026-08-14T23:00:00Z"));
+    expect(status.allowed).toBe(false);
+    expect(status.minutesUntilClose).toBeNull();
+  });
+
+  it("o texto do aviso acerta o plural e o último minuto", () => {
+    expect(loginScheduleWarning(5)).toContain("5 minutos");
+    expect(loginScheduleWarning(1)).toContain("menos de 1 minuto");
+    expect(loginScheduleWarning(0)).toContain("menos de 1 minuto");
   });
 });
 

@@ -228,8 +228,15 @@ Outras invariantes de segurança:
   Parâmetros, e um sábado desligado por engano deixaria a casa inteira do lado de fora.
   A checagem vem **depois** da senha (antes dela, a mensagem de horário revelaria quais
   e-mails existem) e devolve 403 `login_outside_schedule` com
-  `LOGIN_OUTSIDE_SCHEDULE_MESSAGE`. Vale na **entrada**: sessão já aberta continua
-  trabalhando até sair, porque expulsar no minuto do fechamento cortaria atendimento no meio.
+  `LOGIN_OUTSIDE_SCHEDULE_MESSAGE`.
+- **A sessão aberta obedece ao mesmo horário.** `createSessionVerifier` confere a janela a
+  cada requisição autenticada (a configuração vem no mesmo `include` do usuário, sem
+  segunda consulta) e devolve 401 `session_outside_schedule`. Barrar só o login deixaria a
+  aba de quem entrou de manhã trabalhando a madrugada inteira. Como aba parada não faz
+  requisição, `services/session-schedule-watcher.ts` varre os sockets a cada minuto:
+  `session:closing` a partir de `LOGIN_SCHEDULE_WARNING_MINUTES` (5) minutos do fechamento,
+  reenviado a cada volta para o aviso contar para trás sozinho, e `session:closed` +
+  desconexão quando fecha. No frontend quem escuta é `components/session-schedule.tsx`.
 - O handshake do socket revalida a sessão; mudança de papel/status/recorte **derruba as
   conexões abertas** daquele usuário (`disconnectUser`).
 - A organização **nunca fica sem admin ativo** — rebaixar/desativar o último é recusado
@@ -314,7 +321,11 @@ sempre `RealtimeEvents.X`:
 
 `message:new`, `message:status`, `message:reaction`, `message:updated`, `call:incoming`,
 `conversation:updated`, `group:participants`, `note:new`, `instance:status`, `instance:qr`,
-`scheduled:pending`.
+`scheduled:pending`, `session:closing`, `session:closed`.
+
+`session:closing` e `session:closed` são os únicos eventos que vão para **um socket**, e
+não para uma audiência: quem decide é o horário de uso da pessoa, não o acesso à conversa.
+Quem emite é o vigia (`services/session-schedule-watcher.ts`), a cada minuto.
 
 `scheduled:pending` (`{ conversationId, pending }`) carrega quantas mensagens agendadas
 ainda vão sair da conversa — é o badge no ícone de agendar do composer. Sai de
@@ -605,7 +616,8 @@ histórico completo; quatro status de atendimento; busca na conversa e busca glo
 respostas rápidas com `/`; dashboard; relatório por atendente; auditoria consultável;
 perfil e troca de senha pelo próprio usuário; aviso de chamada recebida; som de
 notificação de mensagem recebida, com som e volume escolhidos por cada usuário; horário
-permitido de login por dia da semana, aplicado a quem não é supervisor.
+permitido de login por dia da semana, aplicado a quem não é supervisor, com aviso 5 minutos
+antes e encerramento da sessão no fechamento.
 
 **Falta** (ordem sugerida): validar o pareamento QR em rede aberta (o ambiente de
 desenvolvimento bloqueia `web.whatsapp.com`); votos de enquete agregados na Inbox;
