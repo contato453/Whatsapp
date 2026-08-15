@@ -564,6 +564,13 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   `none` para "sem departamento" / "sem responsável". Os filtros valem para a **tela
   inteira** — inclusive o card de atraso e o de infraestrutura, que continuam ignorando só o
   período.
+- **Os cards de status do dashboard abrem a Inbox pela URL** (`/inbox?status=...`), levando
+  também `departmentId`/`instanceId` quando são ids de verdade. Quem semeia o filtro é a
+  própria Inbox (`inbox-shell.tsx`), e só em estado que a tela mostra: os seletores de
+  número e departamento existem apenas para supervisor e admin, então parâmetro forjado na
+  URL por um `agent` é ignorado — filtro invisível deixaria a lista curta sem explicação. O
+  período **não** vai junto (a Inbox lista por status, não por atividade), e a tela avisa
+  que a lista pode vir maior que o card.
 - **`topUsers` é de supervisor para cima**, igual ao relatório por atendente: para o `agent`
   a rota nem consulta e devolve `null`, e a tela não desenha o bloco. `sent` sai de
   `Message.sentByUserId` (envio sem autor é do scheduler e não conta como trabalho de

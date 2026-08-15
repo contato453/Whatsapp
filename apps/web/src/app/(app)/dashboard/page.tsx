@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
@@ -137,6 +138,26 @@ function fullDateOf(date: Date): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+/**
+ * Endereço da Inbox já recortada, para o card de status virar atalho.
+ *
+ * Vai só o que a Inbox sabe aplicar e mostrar: o status e, quando são ids de
+ * verdade, o número e o departamento. "Sem departamento", "sem responsável" e
+ * o filtro de responsável não têm controle equivalente lá, e mandar
+ * parâmetro que ela ignoraria em silêncio seria pior do que não mandar.
+ *
+ * O período também não vai: a Inbox lista por status, não por atividade num
+ * intervalo. Por isso a tela avisa que a lista pode vir maior que o card.
+ */
+function inboxHref(status: ConversationStatus, filters: DashboardFilters): string {
+  const params = new URLSearchParams({ status });
+  if (filters.instanceId) params.set("instanceId", filters.instanceId);
+  if (filters.departmentId && filters.departmentId !== FILTER_NONE) {
+    params.set("departmentId", filters.departmentId);
+  }
+  return `/inbox?${params.toString()}`;
+}
+
 /** Espera em tempo de expediente, do jeito que se fala: "2h14", "45min". */
 function formatWaiting(minutes: number): string {
   if (minutes < 60) return `${minutes}min`;
@@ -179,6 +200,7 @@ function StatCard({
   hint,
   pending,
   alert,
+  href,
 }: {
   label: string;
   value: number;
@@ -187,14 +209,18 @@ function StatCard({
   hint?: ReactNode;
   pending: boolean;
   alert?: boolean;
+  /** Quando presente, o card vira link para a Inbox já filtrada. */
+  href?: string;
 }) {
   const color = accent ?? "#475569";
-  return (
+  const card = (
     <Card
       className={cn(
-        "flex flex-col gap-2 p-4",
+        "flex h-full flex-col gap-2 p-4",
         // Alerta só quando existe o que alertar: zero atrasado não é vermelho.
         alert && "border-red-300 bg-red-50/60",
+        href &&
+          "transition-colors hover:border-slate-300 hover:bg-slate-50 motion-reduce:transition-none",
       )}
     >
       <div className="flex items-center justify-between gap-2">
@@ -216,6 +242,17 @@ function StatCard({
       )}
       {hint && <div className="text-[11px] leading-tight text-slate-500">{hint}</div>}
     </Card>
+  );
+  if (!href) return card;
+  // Link de verdade, e não `onClick`: abrir em outra aba e o botão do meio
+  // continuam funcionando, que é o que se espera de um atalho de navegação.
+  return (
+    <Link
+      href={href}
+      className="block rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40"
+    >
+      {card}
+    </Link>
   );
 }
 
@@ -427,6 +464,11 @@ export default function DashboardPage() {
   const hasScopeFilter = Boolean(
     filters.instanceId || filters.departmentId || filters.assignedUserId,
   );
+  // Recortes que a Inbox não sabe reproduzir: o aviso abaixo dos cards de
+  // status só aparece quando o clique realmente vai levar menos filtro.
+  const carriesPartialScope = Boolean(
+    filters.assignedUserId || filters.departmentId === FILTER_NONE,
+  );
   // O bloco de equipe é de supervisor para cima, igual ao requireRole que a
   // API aplica — sem isso o atendente veria um card vazio sem saber por quê.
   const canSeeTeam = user ? hasRole(user.role, "supervisor") : false;
@@ -613,8 +655,6 @@ export default function DashboardPage() {
 
       <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {CONVERSATION_STATUSES.map((status: ConversationStatus) => (
-          /* Sem link para a Inbox: hoje ela não aceita status pela URL, e
-             inventar parâmetro aqui seria criar contrato novo por conta. */
           <StatCard
             key={status}
             label={CONVERSATION_STATUS_LABELS[status]}
@@ -630,9 +670,15 @@ export default function DashboardPage() {
             }
             accent={CONVERSATION_STATUS_COLORS[status]}
             pending={pending && !stats}
+            href={inboxHref(status, filters)}
           />
         ))}
       </div>
+      <p className="mt-1.5 text-[11px] text-slate-400">
+        Clique em um status para abrir a Inbox filtrada. Lá a lista não usa o período, então
+        ela pode vir maior que o número do card
+        {carriesPartialScope ? ", e o filtro de responsável não é levado" : ""}.
+      </p>
 
       <SectionTitle note="Quantidade não significa qualidade.">Mensagens</SectionTitle>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

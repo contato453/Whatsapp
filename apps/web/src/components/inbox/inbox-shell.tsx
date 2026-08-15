@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   CalendarClock,
   CornerUpLeft,
@@ -152,8 +152,21 @@ function filterSelectClass(ativo: boolean): string {
   );
 }
 
+/** Status que a Inbox aceita receber pela URL — os mesmos do atendimento. */
+const STATUS_QUICK_FILTERS: QuickFilter[] = [
+  "open",
+  "waiting_client",
+  "waiting_internal",
+  "resolved",
+];
+
+function isStatusQuickFilter(value: string | null): value is QuickFilter {
+  return value !== null && (STATUS_QUICK_FILTERS as string[]).includes(value);
+}
+
 export function InboxShell({ conversationId }: { conversationId?: string }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const socket = useSocket();
   const { user: me } = useAuth();
 
@@ -199,6 +212,32 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
 
   /** Supervisor e admin enxergam vários números/departamentos; usuário, não. */
   const canFilterScope = me?.role === "admin" || me?.role === "supervisor";
+
+  /**
+   * Filtro vindo da URL — é assim que os cards do dashboard abrem a Inbox já
+   * recortada. Só entra em estado que a tela mostra: o seletor de status é
+   * visível para todo mundo, mas os de número e departamento só aparecem
+   * para supervisor e admin, e aplicar filtro que a pessoa não enxerga
+   * deixaria a lista curta sem explicação nenhuma.
+   *
+   * O efeito depende dos valores crus da URL, e não do estado: enquanto a
+   * pessoa navega dentro da Inbox os parâmetros não mudam, então trocar o
+   * filtro na mão continua valendo. Vindo outro card, o valor muda e o
+   * recorte novo entra sem precisar recarregar a página.
+   */
+  const statusParam = searchParams.get("status");
+  const departmentParam = searchParams.get("departmentId");
+  const instanceParam = searchParams.get("instanceId");
+
+  useEffect(() => {
+    if (isStatusQuickFilter(statusParam)) setFilter(statusParam);
+  }, [statusParam]);
+
+  useEffect(() => {
+    if (!canFilterScope) return;
+    if (departmentParam) setDepartmentFilter(departmentParam);
+    if (instanceParam) setInstanceFilter(instanceParam);
+  }, [canFilterScope, departmentParam, instanceParam]);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
