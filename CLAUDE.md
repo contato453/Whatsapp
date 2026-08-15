@@ -373,7 +373,9 @@ Rotas em `apps/web/src/app/(app)/`: `dashboard`, `inbox` (+ `inbox/[conversation
   migrations rodam no start da API. Passo a passo completo em `DEPLOY.md`.
 - **CI** (`.github/workflows/ci.yml`): typecheck → lint → testes → build, em PR e push.
 - **Deploy** (`.github/workflows/deploy.yml`): dispara por SSH quando o CI da branch padrão
-  fecha verde; um deploy por vez, nunca cancelado no meio.
+  fecha verde; um deploy por vez, nunca cancelado no meio. O job roda no environment
+  `production` — `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY` (e os opcionais `VPS_PORT`,
+  `VPS_KNOWN_HOSTS`, `VPS_PATH`) são **environment secrets**, não secrets de repositório.
 
 ---
 
