@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { departmentResourceAppliesTo } from "@azvchat/shared";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui";
 import type { DepartmentDto, ResourceDepartmentDto } from "@/lib/types";
@@ -48,20 +49,19 @@ export function canManageScopedItem(
 }
 
 /**
- * A etiqueta ou resposta rápida vale para esta conversa?
- *
- * Espelha a regra da API: geral vale sempre; restrita, só se o departamento
- * da conversa estiver entre os dela. Conversa sem departamento aceita
- * qualquer item visível — é o comportamento que já existia, e ela aparece
- * quando o número não tem departamento padrão.
+ * A etiqueta ou resposta rápida vale para esta conversa? A decisão em si
+ * mora no shared (`departmentResourceAppliesTo`) — é a mesma que a API usa
+ * para validar o envio; aqui só se adapta o formato do DTO.
  */
 export function appliesToConversation(
   item: DepartmentScopedItem,
   conversationDepartmentId: string | null,
 ): boolean {
-  if (item.isGeneral) return true;
-  if (conversationDepartmentId === null) return true;
-  return item.departments.some((department) => department.id === conversationDepartmentId);
+  return departmentResourceAppliesTo(
+    item.isGeneral,
+    item.departments.map((department) => department.id),
+    conversationDepartmentId,
+  );
 }
 
 /**

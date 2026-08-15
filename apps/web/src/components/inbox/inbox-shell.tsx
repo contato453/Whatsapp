@@ -24,7 +24,7 @@ import {
   RealtimeEvents,
   type ScheduledPendingPayload,
 } from "@azvchat/shared";
-import { api, fetchQuickReplyMediaFile, quickRepliesApi } from "@/lib/api";
+import { api, quickRepliesApi } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { useAuth } from "@/lib/auth-context";
 import { cn, formatDateTime, formatDayLabel } from "@/lib/utils";
@@ -549,45 +549,53 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       return;
     }
 
-    // Resposta rápida com mídia: sai pelo mesmo fluxo de mídia do clipe.
-    // Imagem e vídeo levam o texto como legenda; áudio não tem legenda no
-    // WhatsApp, então o texto sai como mensagem separada logo em seguida —
-    // gravar a legenda no áudio mostraria na Inbox um texto que o cliente
-    // nunca recebeu.
+    // Resposta rápida com mídia: a API envia direto do storage dela — daqui
+    // sai só um JSON, nada de baixar o binário para subir de volta (era isso
+    // que fazia vídeo grande parecer travado). O chip fica visível com
+    // "Enviando..." até a confirmação. Imagem e vídeo levam o texto como
+    // legenda; áudio não tem legenda no WhatsApp, então o texto sai como
+    // mensagem separada logo em seguida.
     if (pendingMedia?.media) {
-      setQuickReplyMedia(null);
       setReplyTo(null);
+      const isAudio = pendingMedia.media.type === "audio";
       try {
-        const file = await fetchQuickReplyMediaFile(pendingMedia);
-        const form = new FormData();
-        form.append("file", file);
-        const isAudio = pendingMedia.media.type === "audio";
-        if (!isAudio && content) form.append("caption", content);
-        const result = await api.postForm<{ message: MessageDto }>(
-          `/conversations/${conversationId}/messages/media`,
-          form,
+        const result = await api.post<{ message: MessageDto }>(
+          `/conversations/${conversationId}/quick-reply-media`,
+          {
+            quickReplyId: pendingMedia.id,
+            ...(!isAudio && content ? { caption: content } : {}),
+          },
         );
         appendMessage(result.message);
-        if (isAudio && content) {
+        // A rota já marcou o lastUsedAt — não precisa da segunda chamada.
+        setQuickReplyMedia(null);
+        setAppliedQuickReplyId(null);
+      } catch (err) {
+        // Nada saiu: devolve texto e mantém o anexo para tentar de novo.
+        setDraft(content);
+        window.alert(err instanceof Error ? err.message : "Falha ao enviar a mídia");
+        setSending(false);
+        return;
+      }
+      if (isAudio && content) {
+        try {
           const textResult = await api.post<{ message: MessageDto }>(
             `/conversations/${conversationId}/messages`,
             { content },
           );
           appendMessage(textResult.message);
+        } catch (err) {
+          // O áudio saiu; só o texto falhou. Devolver o rascunho sem o
+          // anexo evita reenviar o áudio em duplicidade no retry.
+          setDraft(content);
+          window.alert(
+            err instanceof Error
+              ? `O áudio foi enviado, mas o texto falhou: ${err.message}`
+              : "O áudio foi enviado, mas o texto falhou — envie o texto de novo",
+          );
         }
-        if (usedQuickReplyId) {
-          setAppliedQuickReplyId(null);
-          void quickRepliesApi.markUsed(usedQuickReplyId);
-        }
-      } catch (err) {
-        // Nada saiu (ou saiu pela metade): devolve texto e anexo para a
-        // pessoa tentar de novo sem redigitar.
-        setDraft(content);
-        setQuickReplyMedia(pendingMedia);
-        window.alert(err instanceof Error ? err.message : "Falha ao enviar a mídia");
-      } finally {
-        setSending(false);
       }
+      setSending(false);
       return;
     }
 
@@ -1244,26 +1252,35 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   </button>
                 </div>
               )}
-              {/* Mídia da resposta rápida aguardando envio */}
+              {/* Mídia da resposta rápida aguardando envio. Durante o envio o
+                  chip vira o indicador de progresso: vídeo grande demora e,
+                  sem isso, a espera parecia defeito. */}
               {quickReplyMedia?.media && composerMode === "message" && (
                 <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-500 bg-slate-50 px-2.5 py-1.5">
-                  <Paperclip className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-600" />
+                  {sending ? (
+                    <Spinner className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-600" />
+                  ) : (
+                    <Paperclip className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-600" />
+                  )}
                   <div className="min-w-0 flex-1">
                     <p className="text-[11px] font-semibold text-slate-700">
-                      {QUICK_REPLY_MEDIA_TYPE_LABELS[quickReplyMedia.media.type]} da resposta /
-                      {quickReplyMedia.shortcut}
+                      {sending
+                        ? `Enviando ${QUICK_REPLY_MEDIA_TYPE_LABELS[quickReplyMedia.media.type].toLowerCase()}... aguarde`
+                        : `${QUICK_REPLY_MEDIA_TYPE_LABELS[quickReplyMedia.media.type]} da resposta /${quickReplyMedia.shortcut}`}
                     </p>
                     <p className="truncate text-xs text-slate-500">
                       {quickReplyMedia.media.filename ?? "Sai junto com a mensagem"}
                     </p>
                   </div>
-                  <button
-                    onClick={() => setQuickReplyMedia(null)}
-                    className="rounded p-0.5 text-slate-400 hover:text-slate-600"
-                    aria-label="Remover mídia anexada"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
+                  {!sending && (
+                    <button
+                      onClick={() => setQuickReplyMedia(null)}
+                      className="rounded p-0.5 text-slate-400 hover:text-slate-600"
+                      aria-label="Remover mídia anexada"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </div>
               )}
               {quickReplyOpen && (

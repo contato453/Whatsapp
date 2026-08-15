@@ -1,10 +1,19 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { MediaPayload, QuotedMessageRef } from "@azvchat/shared";
-import { RealtimeEvents } from "@azvchat/shared";
-import { conversationScope, loadConversationAccess } from "../../lib/access.js";
+import {
+  departmentResourceAppliesTo,
+  quickReplyMediaTypeFromMime,
+  RealtimeEvents,
+} from "@azvchat/shared";
+import {
+  accessibleDepartmentIds,
+  conversationScope,
+  departmentResourceScope,
+  loadConversationAccess,
+} from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
-import { AppError, NotFoundError } from "../../lib/errors.js";
+import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import { extensionFromMime } from "../../lib/media-storage.js";
 import { transcodeToOpusOgg } from "../../lib/audio-transcode.js";
 import { convertToSticker } from "../../lib/sticker-convert.js";
@@ -709,6 +718,112 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
         entityType: "Conversation",
         entityId: id,
         metadata: { mediaType },
+      });
+      await afterOutboundPersist(id, request.user.organizationId, message.id);
+      return reply.status(201).send({ message: serializeMessage(message) });
+    },
+  );
+
+  /**
+   * Envia a mídia de uma resposta rápida SEM passar pelo navegador.
+   *
+   * O arquivo já mora no storage da API: baixar o binário na tela para subir
+   * de volta dobrava a transferência e fazia vídeo grande parecer travado no
+   * composer. Aqui a única coisa que trafega do navegador é um JSON, e a
+   * mensagem gravada reutiliza a própria chave do storage — nenhum byte é
+   * copiado (o arquivo nunca é apagado do storage, então a chave não fica
+   * órfã nem quando a mídia da resposta é trocada ou removida).
+   */
+  app.post(
+    "/conversations/:id/quick-reply-media",
+    { preHandler: authenticate },
+    async (request, reply) => {
+      const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+      const body = z
+        .object({ quickReplyId: z.string().uuid(), caption: z.string().max(4000).optional() })
+        .parse(request.body);
+      const conversation = await findConversationOr404(id, request.user);
+
+      // Recorte de leitura: usar a resposta não exige poder gerenciá-la.
+      const departmentIds = await accessibleDepartmentIds(deps.prisma, request.user);
+      const quickReply = await deps.prisma.quickReply.findFirst({
+        where: {
+          id: body.quickReplyId,
+          organizationId: request.user.organizationId,
+          ...departmentResourceScope(departmentIds),
+        },
+        include: { departments: true },
+      });
+      const mediaType = quickReplyMediaTypeFromMime(quickReply?.mediaMimeType);
+      if (!quickReply?.mediaUrl || !mediaType) throw new NotFoundError("Mídia");
+      if (
+        !departmentResourceAppliesTo(
+          quickReply.isGeneral,
+          quickReply.departments.map((link) => link.departmentId),
+          conversation.departmentId,
+        )
+      ) {
+        throw new ForbiddenError("Esta resposta não vale para o departamento desta conversa");
+      }
+
+      const buffer = await deps.storage.read(quickReply.mediaUrl);
+      const mimeType = quickReply.mediaMimeType ?? "application/octet-stream";
+      // Áudio não tem legenda no WhatsApp — a tela envia o texto como
+      // mensagem separada; gravar legenda aqui mostraria na Inbox um texto
+      // que o cliente nunca recebeu.
+      const rawCaption = mediaType === "audio" ? null : body.caption || null;
+      const caption =
+        applySignature(rawCaption, await currentSigner(request.user.sub)) ?? undefined;
+
+      const result = await deps.provider.sendMedia(
+        conversation.whatsappInstanceId,
+        conversation.externalChatId,
+        {
+          data: buffer,
+          mimeType,
+          filename: quickReply.mediaFilename ?? undefined,
+          caption,
+          type: mediaType,
+        },
+      );
+
+      const message = await deps.prisma.message.create({
+        data: {
+          organizationId: request.user.organizationId,
+          conversationId: id,
+          externalMessageId: result.externalMessageId,
+          direction: "outbound",
+          type: mediaType,
+          content: caption ?? null,
+          mediaUrl: quickReply.mediaUrl,
+          mimeType,
+          filename: quickReply.mediaFilename,
+          senderName: request.user.name,
+          timestamp: result.timestamp,
+          status: "sent",
+          sentByUserId: request.user.sub,
+        },
+      });
+      await deps.prisma.conversation.update({
+        where: { id },
+        data: {
+          lastMessageAt: result.timestamp,
+          lastMessagePreview: buildPreview({ type: mediaType, content: caption ?? null }),
+        },
+      });
+      // O uso é o envio, e ele acabou de acontecer aqui — a tela não
+      // precisa da segunda chamada a /quick-replies/:id/used.
+      await deps.prisma.quickReply.update({
+        where: { id: quickReply.id },
+        data: { lastUsedAt: new Date() },
+      });
+      deps.audit.record({
+        organizationId: request.user.organizationId,
+        userId: request.user.sub,
+        action: "message.media_sent",
+        entityType: "Conversation",
+        entityId: id,
+        metadata: { mediaType, quickReplyId: quickReply.id },
       });
       await afterOutboundPersist(id, request.user.organizationId, message.id);
       return reply.status(201).send({ message: serializeMessage(message) });

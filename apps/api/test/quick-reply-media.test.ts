@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { quickReplyMediaTypeFromMime } from "@azvchat/shared";
+import { departmentResourceAppliesTo, quickReplyMediaTypeFromMime } from "@azvchat/shared";
 import type { QuickReply } from "@azvchat/database";
 import { serializeQuickReply } from "../src/lib/serialize.js";
 
@@ -85,6 +85,31 @@ describe("serializeQuickReply — bloco de mídia", () => {
       buildReply({ mediaUrl: "chave", mediaMimeType: "application/pdf" }),
     );
     expect(serialized.media).toBeNull();
+  });
+});
+
+/**
+ * A regra que decide se o recurso vale para uma conversa é a mesma nas duas
+ * pontas: a tela oferece e a API valida o envio direto da mídia
+ * (POST /conversations/:id/quick-reply-media) com ela.
+ */
+describe("departmentResourceAppliesTo", () => {
+  it("geral vale para qualquer conversa", () => {
+    expect(departmentResourceAppliesTo(true, [], "dept-1")).toBe(true);
+    expect(departmentResourceAppliesTo(true, [], null)).toBe(true);
+  });
+
+  it("conversa sem departamento aceita qualquer item visível", () => {
+    expect(departmentResourceAppliesTo(false, ["dept-1"], null)).toBe(true);
+  });
+
+  it("restrito exige o departamento da conversa na lista", () => {
+    expect(departmentResourceAppliesTo(false, ["dept-1", "dept-2"], "dept-2")).toBe(true);
+    expect(departmentResourceAppliesTo(false, ["dept-1"], "dept-3")).toBe(false);
+  });
+
+  it("órfão (restrito sem departamento) não vale para conversa com departamento", () => {
+    expect(departmentResourceAppliesTo(false, [], "dept-1")).toBe(false);
   });
 });
 

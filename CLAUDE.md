@@ -266,6 +266,9 @@ POST   /conversations/:id/notes           PATCH|DELETE /conversations/:id/notes/
 
 GET    /conversations/:id/messages        GET /conversations/:id/messages/search
 GET    /conversations/:id/messages/around POST /conversations/:id/messages
+POST   /conversations/:id/quick-reply-media
+       (envia a mídia da resposta rápida direto do storage da API — do navegador
+        sai só JSON; valida com `departmentResourceAppliesTo` e marca `lastUsedAt`)
 POST   /conversations/:id/polls           POST /messages/:id/reactions
 PATCH  /messages/:id                      DELETE /messages/:id
 POST   /messages/:id/forward              GET  /messages/:id/media
@@ -564,10 +567,16 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   `quick-replies-<organizationId>`, sem vínculo com número) e **nunca sai da API** — o
   binário vem por `GET /quick-replies/:id/media`, autenticado. Só imagem, áudio e vídeo
   (`quickReplyMediaTypeFromMime`, no shared, é a fonte única — API e tela recusam com a
-  mesma regra; documento fica de fora de propósito). No envio pelo composer a mídia sai
-  pelo fluxo normal de `/messages/media`: imagem e vídeo levam o texto como **legenda**;
-  áudio não tem legenda no WhatsApp, então o texto sai como **mensagem separada** logo em
-  seguida — legenda em áudio mostraria na Inbox um texto que o cliente nunca recebeu.
+  mesma regra; documento fica de fora de propósito). **O envio pelo composer é
+  servidor-a-servidor**: `POST /conversations/:id/quick-reply-media` manda o arquivo direto
+  do storage da API (do navegador sai só JSON) — baixar o binário na tela para subir de
+  volta dobrava a transferência e fazia vídeo grande parecer travado; o chip do composer
+  vira "Enviando..." com spinner durante a espera. A mensagem gravada **reutiliza a chave
+  do storage** (o arquivo nunca é apagado, então a chave não fica órfã), a rota valida com
+  `departmentResourceAppliesTo` (shared, a mesma régua da tela) e marca `lastUsedAt` ali
+  mesmo. Imagem e vídeo levam o texto como **legenda**; áudio não tem legenda no WhatsApp,
+  então o texto sai como **mensagem separada** logo em seguida — legenda em áudio mostraria
+  na Inbox um texto que o cliente nunca recebeu.
 - **Dashboard: o período filtra por atividade e o status agrupa.** Cada card conta conversa
   que teve **ao menos uma mensagem no período**, pelo status **atual** dela — nunca por data
   de criação nem por data de mudança de status. Como `lastMessageAt` é sempre o timestamp da

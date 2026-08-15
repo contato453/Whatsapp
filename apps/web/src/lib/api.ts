@@ -145,22 +145,6 @@ export const quickRepliesApi = {
     api.post<{ ok: boolean }>(`/quick-replies/${id}/used`).catch(() => undefined),
 };
 
-/**
- * Mídia da resposta rápida como File: o composer reenvia pelo mesmo fluxo
- * de mídia do clipe, então o backend não precisa de caminho novo de envio.
- */
-export async function fetchQuickReplyMediaFile(reply: QuickReplyDto): Promise<File> {
-  const token = getToken();
-  const response = await fetch(`${API_URL}/quick-replies/${reply.id}/media`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
-  if (!response.ok) {
-    throw new ApiError("Falha ao carregar a mídia da resposta rápida", response.status);
-  }
-  const blob = await response.blob();
-  const filename = reply.media?.filename ?? `resposta-${reply.shortcut}`;
-  return new File([blob], filename, { type: reply.media?.mimeType ?? blob.type });
-}
 
 /**
  * Filtros do dashboard. Valem para a tela inteira: os cards, o ranking e o
