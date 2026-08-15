@@ -16,7 +16,21 @@ export const RealtimeEvents = {
   InternalNote: "note:new",
   InstanceStatus: "instance:status",
   InstanceQr: "instance:qr",
+  /** Quantos agendamentos pendentes a conversa tem agora. */
+  ScheduledPending: "scheduled:pending",
 } as const;
+
+/**
+ * Contador de mensagens agendadas ainda por sair de uma conversa.
+ *
+ * `pending` é o único status que entra: `sent`, `failed` e `canceled` já
+ * saíram da fila. Tentativa que falhou e será repetida continua `pending`
+ * (só sobe `attempts`), então o número não muda por causa de retentativa.
+ */
+export interface ScheduledPendingPayload {
+  conversationId: string;
+  pending: number;
+}
 
 export interface InstanceStatusPayload {
   instanceId: string;

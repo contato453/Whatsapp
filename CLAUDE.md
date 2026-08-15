@@ -241,6 +241,7 @@ POST   /messages/:id/forward              GET  /messages/:id/media
 
 GET    /tags                POST /tags            PATCH|DELETE /tags/:id
 GET    /quick-replies       POST /quick-replies   PATCH|DELETE /quick-replies/:id
+GET    /conversations/:id/scheduled-messages   POST /conversations/:id/scheduled-messages
 DELETE /scheduled-messages/:id
 
 GET    /search              GET /dashboard/stats  GET /reports/agents  GET /audit-logs
@@ -257,7 +258,14 @@ Contratos em `packages/shared/src/realtime.ts` — **nomes de evento nunca são 
 sempre `RealtimeEvents.X`:
 
 `message:new`, `message:status`, `message:reaction`, `message:updated`, `call:incoming`,
-`conversation:updated`, `group:participants`, `note:new`, `instance:status`, `instance:qr`.
+`conversation:updated`, `group:participants`, `note:new`, `instance:status`, `instance:qr`,
+`scheduled:pending`.
+
+`scheduled:pending` (`{ conversationId, pending }`) carrega quantas mensagens agendadas
+ainda vão sair da conversa — é o badge no ícone de agendar do composer. Sai de
+`lib/scheduled-pending.ts` (`emitScheduledPending`) em quatro momentos: agendamento criado,
+cancelado, enviado pelo scheduler e marcado como `failed`. Retentativa **não** emite: sobe
+`attempts` e o status segue `pending`, então o número não muda.
 
 Salas (`apps/api/src/realtime/socket.ts`):
 
@@ -332,7 +340,10 @@ Rotas em `apps/web/src/app/(app)/`: `dashboard`, `inbox` (+ `inbox/[conversation
    Rótulo/cor de UI → `shared`. Duplicar qualquer um desses é bug.
 2. **Zod em toda entrada**, inclusive `params` (`z.string().uuid()`).
 3. **Serialização por função dedicada** (`lib/serialize.ts`, `serializeUserDirectory`,
-   `serializeInstance`) — nunca devolver a entidade do Prisma crua.
+   `serializeInstance`) — nunca devolver a entidade do Prisma crua. Campo que só a conversa
+   aberta precisa entra em `serializeConversationDetail` (hoje o `scheduledPendingCount`,
+   usado por `GET /conversations/:id`), e não em `serializeConversation`: a lista renderiza
+   dezenas de linhas por carga e não paga consulta por linha.
 4. **Auditoria** (`deps.audit.record`) em ação relevante: login, conexão/desconexão de
    número, atribuição, envio, etiqueta, mudança de cadastro.
 5. **Logs estruturados** (pino) com `instanceId`, `conversationId`, `messageId`, `event` —

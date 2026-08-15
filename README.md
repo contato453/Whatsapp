@@ -240,13 +240,14 @@ Para produção séria, considere ainda: tokens httpOnly + refresh (hoje o token
 - enquetes (pergunta + opções, resposta única ou múltipla), exibidas na conversa;
 - figurinhas: qualquer imagem é convertida para WebP 512x512 no envio (fallback: imagem comum);
 - mensagens agendadas por conversa, com lista, cancelamento e retentativas automáticas quando a instância está momentaneamente desconectada;
+- contador de agendamentos pendentes no ícone de agendar do composer (badge vermelho, "9+" acima de nove): valor inicial em `scheduledPendingCount` no detalhe da conversa (`GET /conversations/:id`, fora do serializer da lista) e atualização em tempo real pelo evento `scheduled:pending` (`RealtimeEvents.ScheduledPending`) ao criar, cancelar, enviar ou marcar como falho;
 - Inbox de 3 colunas: lista com filtros (minhas, sem responsável, grupos, individuais, não lidas, status, departamento, número, etiqueta) e busca; chat central; painel de contexto (participantes, responsável, departamento, etiquetas, notas internas, histórico de atribuições);
 - assumir/transferir/liberar/finalizar/reabrir atendimento com histórico completo (`ConversationAssignmentHistory`);
 - notas internas (nunca vão para o WhatsApp) visualmente distintas;
 - busca global (conversas, mensagens, documentos, participantes) via `/search`;
 - dashboard com contadores operacionais;
 - auditoria consultável (`GET /audit-logs`);
-- Docker Compose com volumes persistentes; lint + typecheck + 32 testes verdes.
+- Docker Compose com volumes persistentes; lint + typecheck + 139 testes verdes.
 
 ## O que ainda falta (próximos passos sugeridos)
 

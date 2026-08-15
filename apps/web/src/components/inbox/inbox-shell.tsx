@@ -19,7 +19,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { RealtimeEvents } from "@azvchat/shared";
+import { RealtimeEvents, type ScheduledPendingPayload } from "@azvchat/shared";
 import { api, quickRepliesApi } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { useAuth } from "@/lib/auth-context";
@@ -177,6 +177,12 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const [forwarding, setForwarding] = useState<MessageDto | null>(null);
   const [forwardSearch, setForwardSearch] = useState("");
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  /**
+   * Agendamentos ainda por sair da conversa aberta (badge no ícone de
+   * agendar). Fica fora de `detail` porque o evento de conversa não carrega
+   * esse número e sobrescreveria o valor; aqui ele é sempre da conversa atual.
+   */
+  const [scheduledPending, setScheduledPending] = useState(0);
   // Busca dentro da conversa aberta
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
   const [chatSearch, setChatSearch] = useState("");
@@ -239,7 +245,10 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     if (!conversationId) return;
     api
       .get<ConversationDetailDto>(`/conversations/${conversationId}`)
-      .then(setDetail)
+      .then((data) => {
+        setDetail(data);
+        setScheduledPending(data.conversation.scheduledPendingCount);
+      })
       .catch(() => setDetail(null));
   }, [conversationId]);
 
@@ -248,6 +257,9 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     setMessages(null);
     setReplyTo(null);
     setComposerMode("message");
+    // Zera antes de carregar: o contador da conversa anterior não pode
+    // aparecer por um instante na conversa recém-aberta.
+    setScheduledPending(0);
     if (!conversationId) return;
     loadDetail();
     api
@@ -343,8 +355,25 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         current?.map((conversation) => (conversation.id === payload.id ? payload : conversation)) ?? null,
       );
       if (payload.id === conversationId) {
-        setDetail((current) => (current ? { ...current, conversation: payload } : current));
+        setDetail((current) =>
+          current
+            ? {
+                ...current,
+                // O evento de conversa não carrega o contador de
+                // agendamentos; preserva o que o detalhe já trouxe.
+                conversation: {
+                  ...payload,
+                  scheduledPendingCount: current.conversation.scheduledPendingCount,
+                },
+              }
+            : current,
+        );
       }
+    };
+    // Agendamento criado, cancelado, enviado ou marcado como falho.
+    const onScheduledPending = (payload: ScheduledPendingPayload) => {
+      if (payload.conversationId !== conversationId) return;
+      setScheduledPending(payload.pending);
     };
     const onMessageStatus = (payload: { conversationId: string; messageId: string; status: MessageDto["status"] }) => {
       if (payload.conversationId !== conversationId) return;
@@ -413,6 +442,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     socket.on(RealtimeEvents.MessageReaction, onReaction);
     socket.on(RealtimeEvents.MessageUpdated, onMessageUpdated);
     socket.on(RealtimeEvents.InternalNote, onNote);
+    socket.on(RealtimeEvents.ScheduledPending, onScheduledPending);
     return () => {
       socket.off(RealtimeEvents.MessageNew, onMessageNew);
       socket.off(RealtimeEvents.ConversationUpdated, onConversationUpdated);
@@ -422,6 +452,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       socket.off(RealtimeEvents.MessageReaction, onReaction);
       socket.off(RealtimeEvents.MessageUpdated, onMessageUpdated);
       socket.off(RealtimeEvents.InternalNote, onNote);
+      socket.off(RealtimeEvents.ScheduledPending, onScheduledPending);
     };
   }, [socket, conversationId, loadDetail]);
 
@@ -1193,15 +1224,38 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                         <Paperclip className="h-4 w-4" />
                       </Button>
                       <AudioRecorder disabled={sending} onSend={sendVoiceNote} />
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        title="Agendar mensagem"
-                        disabled={sending}
-                        onClick={() => setScheduleOpen(true)}
-                      >
-                        <CalendarClock className="h-4 w-4" />
-                      </Button>
+                      {/*
+                        O badge é sobreposto ao ícone, então o botão precisa
+                        ser a referência de posicionamento. Zero não renderiza
+                        nada: o ícone fica exatamente como sempre foi.
+                      */}
+                      <span className="relative inline-flex">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          title="Agendar mensagem"
+                          disabled={sending}
+                          onClick={() => setScheduleOpen(true)}
+                        >
+                          <CalendarClock className="h-4 w-4" />
+                        </Button>
+                        {scheduledPending > 0 && (
+                          <span
+                            role="status"
+                            aria-label={
+                              scheduledPending === 1
+                                ? "1 mensagem agendada nesta conversa"
+                                : `${scheduledPending} mensagens agendadas nesta conversa`
+                            }
+                            // `pointer-events-none` para o clique no canto do
+                            // ícone continuar abrindo o modal de agendamento.
+                            className="pointer-events-none absolute -right-0.5 -top-0.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-semibold leading-none text-white ring-2 ring-white"
+                          >
+                            {/* Acima de 9 o número não cabe no círculo. */}
+                            {scheduledPending > 9 ? "9+" : scheduledPending}
+                          </span>
+                        )}
+                      </span>
                     </>
                   )}
                   <span className="ml-auto hidden truncate whitespace-nowrap pr-1 text-[11px] text-slate-400 xl:block">

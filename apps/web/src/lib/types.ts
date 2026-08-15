@@ -207,8 +207,17 @@ export interface AssignmentHistoryDto {
   createdAt: string;
 }
 
+/**
+ * Conversa aberta: o DTO da lista mais o que só o detalhe carrega.
+ * `scheduledPendingCount` não existe na lista de propósito (um count por
+ * linha sairia caro na tela mais usada).
+ */
+export interface ConversationDetailConversationDto extends ConversationDto {
+  scheduledPendingCount: number;
+}
+
 export interface ConversationDetailDto {
-  conversation: ConversationDto;
+  conversation: ConversationDetailConversationDto;
   group: GroupDetailDto | null;
   assignmentHistory: AssignmentHistoryDto[];
   notes: NoteDto[];

@@ -12,7 +12,12 @@ import {
 import { authenticate } from "../../lib/auth.js";
 import { canApplyToConversation } from "../../lib/department-resource.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
-import { serializeConversation, serializeUserDirectory } from "../../lib/serialize.js";
+import {
+  serializeConversation,
+  serializeConversationDetail,
+  serializeUserDirectory,
+} from "../../lib/serialize.js";
+import { countPendingScheduled } from "../../lib/scheduled-pending.js";
 import {
   conversationInclude,
   emitConversationUpdated as publishConversationUpdated,
@@ -106,7 +111,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     const conversation = await findConversationOr404(id, request.user);
 
     // Painel de contexto: grupo + participantes + histórico de atribuição
-    const [group, history, notes] = await Promise.all([
+    const [group, history, notes, scheduledPendingCount] = await Promise.all([
       conversation.type === "group"
         ? deps.prisma.whatsAppGroup.findFirst({
             where: {
@@ -128,6 +133,9 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
         take: 50,
         include: { user: true },
       }),
+      // Valor inicial do contador de agendamentos do composer. Vem junto da
+      // conversa para o badge já aparecer certo na abertura, sem consulta extra.
+      countPendingScheduled(deps.prisma, id),
     ]);
 
     // Busca as fotos dos participantes em segundo plano; o frontend é
@@ -164,7 +172,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     );
 
     return {
-      conversation: serializeConversation(conversation),
+      conversation: serializeConversationDetail(conversation, scheduledPendingCount),
       group: group
         ? {
             id: group.id,
