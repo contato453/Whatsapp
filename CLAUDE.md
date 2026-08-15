@@ -83,7 +83,7 @@ Scripts raiz: `pnpm dev` (api 4000 + web 3000), `pnpm lint`, `pnpm typecheck`,
 | **Responsável** | `Conversation.assignedUserId` — quem assumiu o atendimento. |
 | **Nota interna** | `InternalNote` — texto que aparece intercalado no chat, **nunca vai para o WhatsApp**. |
 | **Etiqueta** | `Tag` — rótulo da conversa. Vale para todos (`isGeneral`) ou para vários departamentos (N:N). |
-| **Resposta rápida** | `QuickReply` — texto disparado por `/atalho` no composer. |
+| **Resposta rápida** | `QuickReply` — texto disparado por `/atalho` no composer, com mídia opcional (imagem, áudio ou vídeo) que sai junto. |
 | **Participante** | `GroupParticipant` — quem está no grupo, com nome, telefone, foto e flag de admin. |
 | **`externalId` / `externalChatId` / JID** | Identificador do WhatsApp (ex.: `5511999@s.whatsapp.net`, `...@g.us`, `...@lid`). |
 | **LID** | Identificador anônimo novo do WhatsApp. `packages/whatsapp/src/qrcode/normalize.ts` cuida disso; número de LID **não** é telefone e não deve ser exibido como tal. |
@@ -296,6 +296,10 @@ POST   /messages/:id/forward              GET  /messages/:id/media
 
 GET    /tags                POST /tags            PATCH|DELETE /tags/:id
 GET    /quick-replies       POST /quick-replies   PATCH|DELETE /quick-replies/:id
+POST   /quick-replies/:id/media   DELETE /quick-replies/:id/media   GET /quick-replies/:id/media
+       (anexo da resposta rápida — só imagem, áudio ou vídeo, decidido por
+        `quickReplyMediaTypeFromMime` no shared; upload/remoção exigem poder
+        gerenciar a resposta, o download segue o recorte de leitura)
 GET    /conversations/:id/scheduled-messages   POST /conversations/:id/scheduled-messages
 DELETE /scheduled-messages/:id
 
@@ -307,7 +311,9 @@ GET    /search              GET /reports/agents   GET /audit-logs
 GET    /dashboard/stats?period=today|7d|15d|30d|custom[&from=&to=]
        [&instanceId=][&departmentId=<uuid|none>][&assignedUserId=<uuid|none>]
        (tudo validado por Zod; `custom` exige as duas datas AAAA-MM-DD, teto de 366 dias;
-        o bloco `topUsers` só vem para supervisor, senão é `null`)
+        o bloco `topUsers` só vem para supervisor, senão é `null`; `timeline` traz um ponto
+        por dia civil do período e `hourly` as células dia da semana × hora, esta sempre
+        numa janela fixa de 30 dias)
 ```
 
 Mídia é servida **somente autenticada**, escopada por organização, com proteção contra
@@ -404,6 +410,10 @@ Rotas em `apps/web/src/app/(app)/`: `dashboard`, `inbox` (+ `inbox/[conversation
   teclado) expande **sobrepondo** a página, para a Inbox não remontar a cada passada de
   mouse. A escolha é preferência de navegador em `localStorage` (`zapdesk.sidebar-collapsed`)
   — nada de coluna em `User` nem rota na API para isso.
+- Gráficos do dashboard em `src/components/dashboard/`: `chart-card.tsx` (moldura, legenda
+  e o alternador gráfico/tabela), `messages-timeline.tsx` (barras divergentes por dia) e
+  `hours-heatmap.tsx` (mapa dia da semana × hora). **Sem biblioteca de gráfico**: tudo é SVG
+  inline, CSS e Tailwind, respeitando `prefers-reduced-motion`.
 - Inbox de 3 colunas em `src/components/inbox/`: `inbox-shell.tsx` (o maior arquivo do
   projeto, ~1300 linhas — orquestra lista, chat e composer), `conversation-list.tsx`,
   `message-bubble.tsx`, `context-panel.tsx` (participantes, responsável, departamento,
@@ -521,6 +531,15 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   metralhadora (a mensagem suprimida não fica em fila). Com duas abas abertas as duas
   tocam: não há sincronização entre abas, e isso está registrado em comentário no
   componente.
+- **O título da aba conta conversas, não mensagens, e não é o `unreadCount` do banco.**
+  `UnreadTitle` (`apps/web/src/components/unread-title.tsx`) acumula as conversas que
+  receberam mensagem `inbound` **enquanto a aba esteve fora de foco** e pisca
+  `(n) <título>` a cada 1,2s, alternando com o título original. Voltar o foco zera —
+  quem voltou tem a lista da Inbox com a contagem de verdade, e o piscar já cumpriu o
+  papel de trazer a pessoa. Ler o não lido real exigiria consulta nova a cada
+  carregamento, que é justamente o que este aviso não precisa. Nenhuma rota define
+  `metadata` própria, então o título base é capturado uma vez na montagem; se um dia
+  alguma tela definir o seu, esse pressuposto cai.
 - `title` vs `customTitle` e `name` vs `customName`: o **sync do WhatsApp sobrescreve o
   primeiro e nunca toca no segundo**. Exibição prefere o custom.
 - **Nome do participante é decidido no backend**, em `serializeGroupParticipant`
@@ -568,6 +587,14 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   escrever — por isso existe `POST /whatsapp-instances/:id/apply-default-assignee`.
 - Atalho de resposta rápida e nome de etiqueta são **únicos na organização inteira**, não
   por departamento.
+- **Mídia de resposta rápida**: `QuickReply.mediaUrl` é chave do `MediaStorage` (diretório
+  `quick-replies-<organizationId>`, sem vínculo com número) e **nunca sai da API** — o
+  binário vem por `GET /quick-replies/:id/media`, autenticado. Só imagem, áudio e vídeo
+  (`quickReplyMediaTypeFromMime`, no shared, é a fonte única — API e tela recusam com a
+  mesma regra; documento fica de fora de propósito). No envio pelo composer a mídia sai
+  pelo fluxo normal de `/messages/media`: imagem e vídeo levam o texto como **legenda**;
+  áudio não tem legenda no WhatsApp, então o texto sai como **mensagem separada** logo em
+  seguida — legenda em áudio mostraria na Inbox um texto que o cliente nunca recebeu.
 - **Dashboard: o período filtra por atividade e o status agrupa.** Cada card conta conversa
   que teve **ao menos uma mensagem no período**, pelo status **atual** dela — nunca por data
   de criação nem por data de mudança de status. Como `lastMessageAt` é sempre o timestamp da
@@ -600,6 +627,30 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   `none` para "sem departamento" / "sem responsável". Os filtros valem para a **tela
   inteira** — inclusive o card de atraso e o de infraestrutura, que continuam ignorando só o
   período.
+- **Os cards de status do dashboard abrem a Inbox pela URL** (`/inbox?status=...`), levando
+  também `departmentId`/`instanceId` quando são ids de verdade. Quem semeia o filtro é a
+  própria Inbox (`inbox-shell.tsx`), e só em estado que a tela mostra: os seletores de
+  número e departamento existem apenas para supervisor e admin, então parâmetro forjado na
+  URL por um `agent` é ignorado — filtro invisível deixaria a lista curta sem explicação. O
+  período **não** vai junto (a Inbox lista por status, não por atividade), e a tela avisa
+  que a lista pode vir maior que o card.
+- **Todo gráfico tem gêmeo em tabela** (o botão na moldura do card). Cor sozinha não é canal
+  acessível, e o valor exato de um dia não pode depender de acertar o mouse na barra. As
+  cores saem do validador de paleta, não do olho: o par recebidas/enviadas é o mesmo dos
+  cards (ΔE 16,1 sob deuteranopia) e o mapa de calor usa **uma** rampa de um tom só
+  (indigo 400→800), porque magnitude não se pinta com arco-íris.
+- **O mapa dia × hora é o único bloco que ignora o período**: ele usa sempre os últimos
+  `DASHBOARD_HEATMAP_DAYS` (30) dias, porque padrão de horário só aparece com repetição e
+  "hoje" mostraria um dia em vez do hábito do cliente. Os filtros de número, departamento e
+  responsável continuam valendo nele, o rótulo do card diz a janela, e com o período já em
+  30 dias a rota reaproveita a mesma consulta em vez de repetir.
+- **A série por dia e o mapa de hora são agregados no banco** (`loadActivityBuckets`), num
+  SQL cru que corta com `AT TIME ZONE` no fuso configurado. Trinta dias viram no máximo
+  30 × 24 × 2 linhas em vez de dezenas de milhares de mensagens no Node. O escopo continua
+  vindo de `access.ts`: os ids das conversas saem de uma busca já filtrada, e o SQL só olha
+  as mensagens deles — mesmo padrão do card de atraso. Os descartes são os mesmos dos cards
+  (apagada e saída `pending` não contam), senão o gráfico contaria uma história e os cards
+  outra; há teste fixando que a soma da série bate com o card.
 - **`topUsers` é de supervisor para cima**, igual ao relatório por atendente: para o `agent`
   a rota nem consulta e devolve `null`, e a tela não desenha o bloco. `sent` sai de
   `Message.sentByUserId` (envio sem autor é do scheduler e não conta como trabalho de
@@ -624,11 +675,13 @@ envio de texto, imagem, áudio, vídeo, documento, figurinha, localização, con
 responder citando; encaminhar; apagar e editar; gravação de áudio (ffmpeg, com fallback);
 enquetes; mensagens agendadas com retentativa; notas internas; etiquetas; atribuição com
 histórico completo; quatro status de atendimento; busca na conversa e busca global;
-respostas rápidas com `/`; dashboard; relatório por atendente; auditoria consultável;
+respostas rápidas com `/`, inclusive com mídia anexada (imagem, áudio ou vídeo) que sai
+junto com o texto; dashboard; relatório por atendente; auditoria consultável;
 perfil e troca de senha pelo próprio usuário; aviso de chamada recebida; som de
-notificação de mensagem recebida, com som e volume escolhidos por cada usuário; horário
-permitido de login por dia da semana, aplicado a quem não é supervisor, com aviso 5 minutos
-antes e encerramento da sessão no fechamento.
+notificação de mensagem recebida, com som e volume escolhidos por cada usuário; título da
+aba piscando com as conversas que receberam mensagem enquanto a aba esteve fora de foco;
+horário permitido de login por dia da semana, aplicado a quem não é supervisor, com aviso
+5 minutos antes e encerramento da sessão no fechamento.
 
 **Falta** (ordem sugerida): validar o pareamento QR em rede aberta (o ambiente de
 desenvolvimento bloqueia `web.whatsapp.com`); votos de enquete agregados na Inbox;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
@@ -46,6 +47,8 @@ import type {
 import { cn } from "@/lib/utils";
 import { Card, EmptyState } from "@/components/ui";
 import { UserAvatar } from "@/components/user-avatar";
+import { MessagesTimeline } from "@/components/dashboard/messages-timeline";
+import { HoursHeatmap } from "@/components/dashboard/hours-heatmap";
 
 /**
  * Filtros da tela guardados por navegador, igual à barra lateral: mesmo
@@ -137,6 +140,26 @@ function fullDateOf(date: Date): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+/**
+ * Endereço da Inbox já recortada, para o card de status virar atalho.
+ *
+ * Vai só o que a Inbox sabe aplicar e mostrar: o status e, quando são ids de
+ * verdade, o número e o departamento. "Sem departamento", "sem responsável" e
+ * o filtro de responsável não têm controle equivalente lá, e mandar
+ * parâmetro que ela ignoraria em silêncio seria pior do que não mandar.
+ *
+ * O período também não vai: a Inbox lista por status, não por atividade num
+ * intervalo. Por isso a tela avisa que a lista pode vir maior que o card.
+ */
+function inboxHref(status: ConversationStatus, filters: DashboardFilters): string {
+  const params = new URLSearchParams({ status });
+  if (filters.instanceId) params.set("instanceId", filters.instanceId);
+  if (filters.departmentId && filters.departmentId !== FILTER_NONE) {
+    params.set("departmentId", filters.departmentId);
+  }
+  return `/inbox?${params.toString()}`;
+}
+
 /** Espera em tempo de expediente, do jeito que se fala: "2h14", "45min". */
 function formatWaiting(minutes: number): string {
   if (minutes < 60) return `${minutes}min`;
@@ -179,6 +202,7 @@ function StatCard({
   hint,
   pending,
   alert,
+  href,
 }: {
   label: string;
   value: number;
@@ -187,14 +211,18 @@ function StatCard({
   hint?: ReactNode;
   pending: boolean;
   alert?: boolean;
+  /** Quando presente, o card vira link para a Inbox já filtrada. */
+  href?: string;
 }) {
   const color = accent ?? "#475569";
-  return (
+  const card = (
     <Card
       className={cn(
-        "flex flex-col gap-2 p-4",
+        "flex h-full flex-col gap-2 p-4",
         // Alerta só quando existe o que alertar: zero atrasado não é vermelho.
         alert && "border-red-300 bg-red-50/60",
+        href &&
+          "transition-colors hover:border-slate-300 hover:bg-slate-50 motion-reduce:transition-none",
       )}
     >
       <div className="flex items-center justify-between gap-2">
@@ -217,6 +245,17 @@ function StatCard({
       {hint && <div className="text-[11px] leading-tight text-slate-500">{hint}</div>}
     </Card>
   );
+  if (!href) return card;
+  // Link de verdade, e não `onClick`: abrir em outra aba e o botão do meio
+  // continuam funcionando, que é o que se espera de um atalho de navegação.
+  return (
+    <Link
+      href={href}
+      className="block rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40"
+    >
+      {card}
+    </Link>
+  );
 }
 
 /** Barra proporcional ao primeiro colocado: dá a escala sem gráfico. */
@@ -231,12 +270,23 @@ function ShareBar({ share }: { share: number }) {
   );
 }
 
+/** Posição na lista. Fonte tabular para os dois dígitos não desalinharem. */
+function RankPosition({ position }: { position: number }) {
+  return (
+    <span className="w-4 shrink-0 text-right text-xs font-semibold tabular-nums text-slate-400">
+      {position}
+    </span>
+  );
+}
+
 function RankingRow({
   row,
+  position,
   leader,
   onOpen,
 }: {
   row: DashboardRankingRowDto;
+  position: number;
   leader: number;
   onOpen: () => void;
 }) {
@@ -248,6 +298,7 @@ function RankingRow({
       className="block w-full px-4 py-2.5 text-left transition-colors hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-50 motion-reduce:transition-none"
     >
       <div className="flex items-center gap-3">
+        <RankPosition position={position} />
         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-500">
           {row.type === "group" ? (
             <Users2 className="h-3.5 w-3.5" />
@@ -257,9 +308,21 @@ function RankingRow({
         </span>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-slate-900">{row.title}</p>
-          <p className="truncate text-[11px] text-slate-500">
-            {row.type === "group" ? "Grupo" : "Individual"}
-            {row.instanceName ? ` · ${row.instanceName}` : ""}
+          <p className="flex items-center gap-1 truncate text-[11px] text-slate-500">
+            <span className="shrink-0">
+              {row.type === "group" ? "Grupo" : "Individual"}
+              {row.instanceName ? ` · ${row.instanceName}` : ""}
+            </span>
+            <span className="shrink-0 text-slate-300">·</span>
+            <UserRound className="h-3 w-3 shrink-0 text-slate-400" />
+            {/* Mesmo tratamento da lista da Inbox: nome em cinza, e o âmbar
+                reservado para a conversa que ninguém assumiu — ativa e sem
+                dono é o caso que pede ação. */}
+            {row.assignee ? (
+              <span className="truncate text-slate-600">{row.assignee.name}</span>
+            ) : (
+              <span className="truncate font-medium text-amber-600">Sem responsável</span>
+            )}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-3 text-xs tabular-nums text-slate-500">
@@ -279,11 +342,20 @@ function RankingRow({
   );
 }
 
-function TopUserRow({ row, leader }: { row: DashboardTopUserDto; leader: number }) {
+function TopUserRow({
+  row,
+  position,
+  leader,
+}: {
+  row: DashboardTopUserDto;
+  position: number;
+  leader: number;
+}) {
   const share = leader > 0 ? Math.round((row.total / leader) * 100) : 0;
   return (
     <div className="px-4 py-2.5">
       <div className="flex items-center gap-3">
+        <RankPosition position={position} />
         <UserAvatar userId={row.userId} name={row.name} hasAvatar={row.hasAvatar} size="sm" />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-slate-900">{row.name}</p>
@@ -426,6 +498,11 @@ export default function DashboardPage() {
   const noAccess = stats !== null && stats.instances.connected + offline === 0;
   const hasScopeFilter = Boolean(
     filters.instanceId || filters.departmentId || filters.assignedUserId,
+  );
+  // Recortes que a Inbox não sabe reproduzir: o aviso abaixo dos cards de
+  // status só aparece quando o clique realmente vai levar menos filtro.
+  const carriesPartialScope = Boolean(
+    filters.assignedUserId || filters.departmentId === FILTER_NONE,
   );
   // O bloco de equipe é de supervisor para cima, igual ao requireRole que a
   // API aplica — sem isso o atendente veria um card vazio sem saber por quê.
@@ -613,8 +690,6 @@ export default function DashboardPage() {
 
       <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {CONVERSATION_STATUSES.map((status: ConversationStatus) => (
-          /* Sem link para a Inbox: hoje ela não aceita status pela URL, e
-             inventar parâmetro aqui seria criar contrato novo por conta. */
           <StatCard
             key={status}
             label={CONVERSATION_STATUS_LABELS[status]}
@@ -630,9 +705,15 @@ export default function DashboardPage() {
             }
             accent={CONVERSATION_STATUS_COLORS[status]}
             pending={pending && !stats}
+            href={inboxHref(status, filters)}
           />
         ))}
       </div>
+      <p className="mt-1.5 text-[11px] text-slate-400">
+        Clique em um status para abrir a Inbox filtrada. Lá a lista não usa o período, então
+        ela pode vir maior que o número do card
+        {carriesPartialScope ? ", e o filtro de responsável não é levado" : ""}.
+      </p>
 
       <SectionTitle note="Quantidade não significa qualidade.">Mensagens</SectionTitle>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -650,6 +731,30 @@ export default function DashboardPage() {
           accent="#0891b2"
           pending={pending && !stats}
         />
+      </div>
+
+      {/* Os gráficos ficam sob os cards de mensagens: os cards dão o total do
+          período, e estes mostram como esse total se distribuiu. */}
+      <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-2">
+        {pending && !stats ? (
+          <>
+            <div
+              aria-hidden
+              className="h-56 animate-pulse rounded-xl border border-slate-200 bg-slate-50 motion-reduce:animate-none"
+            />
+            <div
+              aria-hidden
+              className="h-56 animate-pulse rounded-xl border border-slate-200 bg-slate-50 motion-reduce:animate-none"
+            />
+          </>
+        ) : (
+          stats && (
+            <>
+              <MessagesTimeline points={stats.timeline} periodLabel={phrase} />
+              <HoursHeatmap cells={stats.hourly} />
+            </>
+          )
+        )}
       </div>
 
       <SectionTitle>Infraestrutura</SectionTitle>
@@ -721,10 +826,11 @@ export default function DashboardPage() {
                 description={`Não houve mensagens ${phrase}.`}
               />
             ) : (
-              stats?.ranking.map((row) => (
+              stats?.ranking.map((row, index) => (
                 <RankingRow
                   key={row.conversationId}
                   row={row}
+                  position={index + 1}
                   leader={leader}
                   onOpen={() => router.push(`/inbox/${row.conversationId}`)}
                 />
@@ -750,8 +856,13 @@ export default function DashboardPage() {
                   ))}
                 </div>
               ) : topUsers && topUsers.length > 0 ? (
-                topUsers.map((row) => (
-                  <TopUserRow key={row.userId} row={row} leader={topUserLeader} />
+                topUsers.map((row, index) => (
+                  <TopUserRow
+                    key={row.userId}
+                    row={row}
+                    position={index + 1}
+                    leader={topUserLeader}
+                  />
                 ))
               ) : (
                 <EmptyState

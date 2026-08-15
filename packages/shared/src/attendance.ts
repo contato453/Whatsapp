@@ -215,6 +215,16 @@ export const DASHBOARD_PERIOD_DAYS: Record<DashboardFixedPeriod, number> = {
   "30d": 30,
 };
 
+/**
+ * Janela fixa do mapa de calor de dia × hora.
+ *
+ * Padrão de horário só aparece com repetição: um dia mostra um dia, e não o
+ * hábito do cliente. Por isso este bloco é o único da tela que **não** segue
+ * o período escolhido — os filtros de número, departamento e responsável
+ * continuam valendo nele.
+ */
+export const DASHBOARD_HEATMAP_DAYS = 30;
+
 /** Data civil "AAAA-MM-DD" — o intervalo personalizado é escolhido em dias. */
 export const DATE_ONLY_PATTERN = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 

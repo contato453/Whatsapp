@@ -11,6 +11,7 @@ import type {
 import {
   formatPhone,
   PARTICIPANT_WITHOUT_NAME_LABEL,
+  quickReplyMediaTypeFromMime,
   type AttendanceSettings,
   type ConnectionStatus,
   type ConversationStatus,
@@ -140,6 +141,8 @@ export function serializeTag(tag: Tag & { departments?: DepartmentLink[] }) {
 }
 
 export function serializeQuickReply(reply: QuickReply & { departments?: DepartmentLink[] }) {
+  // O tipo sai derivado do mime, nunca gravado: uma fonte só de decisão.
+  const mediaType = quickReplyMediaTypeFromMime(reply.mediaMimeType);
   return {
     id: reply.id,
     shortcut: reply.shortcut,
@@ -147,6 +150,12 @@ export function serializeQuickReply(reply: QuickReply & { departments?: Departme
     content: reply.content,
     isGeneral: reply.isGeneral,
     departments: serializeResourceDepartments(reply.departments),
+    // A chave do arquivo nunca sai da API; o binário vem por
+    // GET /quick-replies/:id/media, autenticado e escopado.
+    media:
+      reply.mediaUrl && mediaType
+        ? { type: mediaType, mimeType: reply.mediaMimeType, filename: reply.mediaFilename }
+        : null,
     createdAt: reply.createdAt.toISOString(),
   };
 }
@@ -182,6 +191,8 @@ export interface DashboardRankingRow {
   title: string;
   type: ConversationType;
   instanceName: string | null;
+  /** Responsável pelo atendimento; `null` quando a conversa está sem dono. */
+  assignee: { userId: string; name: string; hasAvatar: boolean } | null;
   received: number;
   sent: number;
   total: number;
@@ -222,6 +233,10 @@ export interface DashboardStatsInput {
   ranking: DashboardRankingRow[];
   /** `null` para quem não é supervisor: o bloco nem aparece na tela dele. */
   topUsers: DashboardTopUserRow[] | null;
+  /** Um ponto por dia civil do período, inclusive os dias zerados. */
+  timeline: Array<{ date: string; received: number; sent: number }>;
+  /** Só as células com movimento; a tela desenha a grade vazia sozinha. */
+  hourly: Array<{ weekday: number; hour: number; received: number; sent: number }>;
 }
 
 /**
@@ -267,6 +282,8 @@ export function serializeDashboardStats(input: DashboardStatsInput) {
     },
     ranking: input.ranking,
     topUsers: input.topUsers,
+    timeline: input.timeline,
+    hourly: input.hourly,
   };
 }
 

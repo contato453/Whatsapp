@@ -18,7 +18,13 @@ import type { AppDeps } from "../src/types.js";
  * 3. **a soma dos quatro status fecha** com o card de conversas ativas.
  */
 
+/** Dia de hoje no fuso padrão, para a série bater com o período "today". */
+const TODAY = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/Sao_Paulo",
+}).format(new Date());
+
 interface Recorded {
+  rawQueries: string[];
   conversationGroupBy: Prisma.ConversationGroupByArgs[];
   conversationFindMany: Array<Record<string, unknown>>;
   messageCount: Array<Record<string, unknown>>;
@@ -55,6 +61,12 @@ function fakePrisma(): PrismaClient {
         if (select && "assignedUserId" in select) {
           return [{ id: "conv-1", assignedUserId: "user-1" }];
         }
+        // Só o id, sem `status` no filtro: é a janela fixa do mapa de calor.
+        // A das candidatas a atraso pede o mesmo id, mas filtra por status.
+        const where = (args.where ?? {}) as { status?: unknown };
+        if (select && "id" in select && !("title" in select) && where.status === undefined) {
+          return [{ id: "conv-1" }];
+        }
         // A busca do ranking pede título; a das candidatas a atraso, só o id.
         if (select && "title" in select) {
           return [
@@ -64,6 +76,7 @@ function fakePrisma(): PrismaClient {
               customTitle: "Nome dado pela equipe",
               type: "group",
               instance: { name: "Comercial" },
+              assignedUser: { id: "user-1", name: "Maria Supervisora", avatarUrl: null },
             },
           ];
         }
@@ -114,7 +127,20 @@ function fakePrisma(): PrismaClient {
         { id: "user-2", name: "João Atendente", role: "agent", avatarUrl: "avatar.jpg" },
       ],
     },
-    $queryRaw: async () => [],
+    $queryRaw: async (query: { text?: string; sql?: string }) => {
+      // Duas consultas cruas na rota: a da última mensagem (atraso) e a da
+      // agregação por dia/hora. O texto distingue sem precisar de ordem.
+      const text = String(query.sql ?? query.text ?? "");
+      recorded.rawQueries.push(text);
+      if (text.includes("EXTRACT")) {
+        return [
+          { day: TODAY, weekday: 5, hour: 9, direction: "inbound", total: 7 },
+          { day: TODAY, weekday: 5, hour: 9, direction: "outbound", total: 3 },
+          { day: TODAY, weekday: 5, hour: 15, direction: "inbound", total: 2 },
+        ];
+      }
+      return [];
+    },
   } as unknown as PrismaClient;
 }
 
@@ -166,6 +192,7 @@ function conditionsOf(where: Record<string, unknown>): Array<Record<string, unkn
 describe("GET /dashboard/stats", () => {
   beforeEach(() => {
     recorded = {
+      rawQueries: [],
       conversationGroupBy: [],
       conversationFindMany: [],
       messageCount: [],
@@ -309,11 +336,26 @@ describe("GET /dashboard/stats", () => {
         title: "Nome dado pela equipe",
         type: "group",
         instanceName: "Comercial",
+        assignee: { userId: "user-1", name: "Maria Supervisora", hasAvatar: false },
         received: 7,
         sent: 5,
         total: 12,
       },
     ]);
+    await app.close();
+  });
+
+  it("ranking traz o responsável, e `null` quando a conversa está sem dono", async () => {
+    const app = await buildTestApp();
+    const comDono = (await stats(app, "admin")).json();
+    expect(comDono.ranking[0].assignee).toEqual({
+      userId: "user-1",
+      name: "Maria Supervisora",
+      hasAvatar: false,
+    });
+    // Só o mínimo para desenhar a linha: nada de e-mail nem papel do usuário
+    // viajando dentro do trabalho de outro.
+    expect(Object.keys(comDono.ranking[0].assignee)).toEqual(["userId", "name", "hasAvatar"]);
     await app.close();
   });
 
@@ -487,6 +529,86 @@ describe("GET /dashboard/stats", () => {
     // Envio sem autor é da automação e não entra como trabalho de ninguém.
     const enviadas = recorded.messageGroupBy.find((args) => args.by[0] === "sentByUserId");
     expect(enviadas?.where).toMatchObject({ sentByUserId: { not: null } });
+    await app.close();
+  });
+
+  it("série por dia traz todos os dias do período, com o que veio do banco", async () => {
+    const app = await buildTestApp();
+    const hoje = (await stats(app, "admin", "?period=today")).json();
+    expect(hoje.timeline).toEqual([{ date: TODAY, received: 9, sent: 3 }]);
+
+    const semana = (await stats(app, "admin", "?period=7d")).json();
+    // Sete pontos, um por dia civil — inclusive os seis sem mensagem nenhuma.
+    expect(semana.timeline).toHaveLength(7);
+    expect(semana.timeline.filter((p: { received: number }) => p.received === 0)).toHaveLength(6);
+    await app.close();
+  });
+
+  it("mapa dia × hora soma as células e sai ordenado", async () => {
+    const app = await buildTestApp();
+    const body = (await stats(app, "admin")).json();
+    expect(body.hourly).toEqual([
+      { weekday: 5, hour: 9, received: 7, sent: 3 },
+      { weekday: 5, hour: 15, received: 2, sent: 0 },
+    ]);
+    await app.close();
+  });
+
+  it("o mapa dia × hora usa sempre 30 dias, mesmo com o período em hoje", async () => {
+    const app = await buildTestApp();
+    await stats(app, "admin", "?period=today");
+    // Duas buscas de conversa por atividade: a do período (hoje) e a da
+    // janela fixa do mapa. A do mapa começa bem antes.
+    const janelas = recorded.conversationFindMany
+      .map((args) => (args.where as { lastMessageAt?: { gte?: Date } }).lastMessageAt?.gte)
+      .filter((value): value is Date => value instanceof Date)
+      .map((value) => value.getTime());
+    expect(janelas.length).toBeGreaterThanOrEqual(2);
+    const maisAntiga = Math.min(...janelas);
+    const maisRecente = Math.max(...janelas);
+    const diasDeDiferenca = (maisRecente - maisAntiga) / 86_400_000;
+    // Hoje contra 30 dias: a diferença fica em torno de 29 dias civis.
+    expect(diasDeDiferenca).toBeGreaterThan(28);
+    await app.close();
+  });
+
+  it("com o período já em 30 dias, não repete a consulta do mapa", async () => {
+    const app = await buildTestApp();
+    await stats(app, "admin", "?period=30d");
+    // A janela é a mesma: uma agregação crua basta para os dois blocos.
+    const agregacoes = recorded.rawQueries.filter((text) => text.includes("EXTRACT"));
+    expect(agregacoes).toHaveLength(1);
+    await app.close();
+  });
+
+  it("os filtros da tela continuam valendo no mapa de 30 dias", async () => {
+    const app = await buildTestApp();
+    const departmentId = "22222222-2222-4222-8222-222222222222";
+    await stats(app, "admin", `?period=today&departmentId=${departmentId}`);
+    // Toda busca por atividade — a do período e a do mapa — carrega o filtro.
+    const porAtividade = recorded.conversationFindMany.filter(
+      (args) => (args.where as { lastMessageAt?: unknown }).lastMessageAt !== undefined,
+    );
+    expect(porAtividade.length).toBeGreaterThanOrEqual(2);
+    for (const args of porAtividade) {
+      expect(conditionsOf(args.where as Record<string, unknown>)).toContainEqual({
+        departmentId,
+      });
+    }
+    await app.close();
+  });
+
+  it("a agregação por dia e hora corta no fuso configurado, não em UTC", async () => {
+    const app = await buildTestApp();
+    await stats(app, "admin");
+    const agregacao = recorded.rawQueries.find((text) => text.includes("EXTRACT"));
+    expect(agregacao).toBeDefined();
+    // O corte usa AT TIME ZONE com o fuso dos parâmetros; sem isso "hoje"
+    // seria o dia UTC do container.
+    expect(agregacao).toContain("AT TIME ZONE");
+    // Os mesmos descartes dos cards, senão o gráfico conta outra história.
+    expect(agregacao).toContain('"deletedAt" IS NULL');
+    expect(agregacao).toContain("'pending'");
     await app.close();
   });
 

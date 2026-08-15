@@ -17,7 +17,16 @@ import { loadAttendanceSettings } from "../../lib/attendance-settings.js";
 import { authenticate } from "../../lib/auth.js";
 import { serializeDashboardStats, type DashboardTopUserRow } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
-import { computeOverdue, periodRange, type WaitingConversation } from "./metrics.js";
+import {
+  civilDaysOfRange,
+  computeOverdue,
+  foldHourly,
+  foldTimeline,
+  periodRange,
+  safeTimeZone,
+  type ActivityBucket,
+  type WaitingConversation,
+} from "./metrics.js";
 
 /** Filtro que aceita um id ou a ausência dele ("sem departamento", "sem responsável"). */
 const idOrNone = z.union([z.string().uuid(), z.literal(FILTER_NONE)]);
@@ -80,11 +89,11 @@ const COUNTABLE_MESSAGE = {
 };
 
 /**
- * Teto de conversas lidas para montar o ranking de usuários. Acima disso o
- * número sairia incompleto, então em vez de cortar em silêncio a rota loga o
- * estouro — o mesmo espírito do teto do relatório por atendente.
+ * Teto de conversas lidas por requisição. Acima disso a série por dia e o
+ * total por usuário sairiam incompletos, então em vez de cortar em silêncio a
+ * rota loga o estouro — o mesmo espírito do teto do relatório por atendente.
  */
-const MAX_CONVERSATIONS_FOR_TEAM_RANKING = 20_000;
+const MAX_CONVERSATIONS_SCANNED = 20_000;
 
 /** Última mensagem de cada conversa candidata a atraso. */
 interface LastMessageRow {
@@ -224,7 +233,7 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
 
     const rankingIds = topConversations.map((row) => row.conversationId);
 
-    const [rankingSplit, rankingConversations, overdueCandidates, assignedConversations, sentByUser] =
+    const [rankingSplit, rankingConversations, overdueCandidates, activeConversations, sentByUser] =
       await Promise.all([
         // Depois a quebra entrada/saída, só das dez — de novo agregado no banco.
         rankingIds.length > 0
@@ -247,6 +256,10 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
                 customTitle: true,
                 type: true,
                 instance: { select: { name: true } },
+                // Quem está com o atendimento na mão. A lista mostra isso
+                // porque "conversa mais ativa" sem dono é justamente a que
+                // precisa de alguém, e não só de atenção.
+                assignedUser: { select: { id: true, name: true, avatarUrl: true } },
               },
             })
           : Promise.resolve([]),
@@ -281,18 +294,18 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
          * É em duas etapas porque o Prisma não agrupa por campo de relação —
          * não dá para pedir `groupBy(conversation.assignedUserId)`.
          */
-        canSeeTeam
-          ? deps.prisma.conversation.findMany({
-              where: {
-                organizationId,
-                ...conversationFilter,
-                assignedUserId: { not: null },
-                lastMessageAt: withinPeriod,
-              },
-              select: { id: true, assignedUserId: true },
-              take: MAX_CONVERSATIONS_FOR_TEAM_RANKING,
-            })
-          : Promise.resolve([]),
+        /**
+         * Conversas com movimento no período. Servem para dois blocos: a
+         * série por dia/hora e, para supervisor, o total por responsável.
+         *
+         * Uma busca só para os dois: é a mesma pergunta ("o que se mexeu no
+         * período, dentro do recorte"), e ela já passa por `access.ts`.
+         */
+        deps.prisma.conversation.findMany({
+          where: { organizationId, ...conversationFilter, lastMessageAt: withinPeriod },
+          select: { id: true, assignedUserId: true },
+          take: MAX_CONVERSATIONS_SCANNED,
+        }),
         canSeeTeam
           ? deps.prisma.message.groupBy({
               by: ["sentByUserId"],
@@ -311,14 +324,42 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
           : Promise.resolve([]),
       ]);
 
-    const waiting = await loadWaitingConversations(
-      deps,
-      overdueCandidates.map((row) => row.id),
-    );
+    const [waiting, activityBuckets] = await Promise.all([
+      loadWaitingConversations(
+        deps,
+        overdueCandidates.map((row) => row.id),
+      ),
+      loadActivityBuckets(
+        deps,
+        activeConversations.map((row) => row.id),
+        settings.timezone,
+        start,
+        end,
+      ),
+    ]);
     const overdue = computeOverdue(waiting, settings, now);
+    const timeline = foldTimeline(
+      activityBuckets,
+      civilDaysOfRange({ start, end }, now, settings.timezone),
+    );
+
+    /**
+     * O mapa de dia × hora tem janela fixa de 30 dias, e é o único bloco da
+     * tela que ignora o período: padrão de horário só aparece com repetição,
+     * e "hoje" mostraria um dia em vez do hábito do cliente. Os demais
+     * filtros continuam valendo — é a mesma pergunta, recorte diferente.
+     *
+     * Com o período já em 30 dias a janela é a mesma, então reaproveita o que
+     * já foi buscado em vez de repetir duas consultas por nada.
+     */
+    const hourlyBuckets =
+      query.period === "30d"
+        ? activityBuckets
+        : await loadHeatmapBuckets(deps, organizationId, conversationFilter, settings.timezone, now);
+    const hourly = foldHourly(hourlyBuckets);
 
     const topUsers = canSeeTeam
-      ? await buildTopUsers(deps, organizationId, assignedConversations, sentByUser, withinPeriod)
+      ? await buildTopUsers(deps, organizationId, activeConversations, sentByUser, withinPeriod)
       : null;
 
     const conversationsByStatus = emptyCounts(CONVERSATION_STATUSES);
@@ -349,6 +390,15 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
           title: conversation.customTitle ?? conversation.title,
           type: conversation.type,
           instanceName: conversation.instance?.name ?? null,
+          // Só o mínimo para desenhar a linha — nada de dado de cadastro do
+          // usuário viajando dentro do trabalho de outro.
+          assignee: conversation.assignedUser
+            ? {
+                userId: conversation.assignedUser.id,
+                name: conversation.assignedUser.name,
+                hasAvatar: conversation.assignedUser.avatarUrl != null,
+              }
+            : null,
           received: receivedByConversation.get(row.conversationId) ?? 0,
           sent: sentByConversation.get(row.conversationId) ?? 0,
           total: row._count._all,
@@ -356,12 +406,12 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
       ];
     });
 
-    if (assignedConversations.length >= MAX_CONVERSATIONS_FOR_TEAM_RANKING) {
+    if (activeConversations.length >= MAX_CONVERSATIONS_SCANNED) {
       // Nada de corte em silêncio: se o teto foi atingido, o número por
       // usuário está incompleto e isso precisa aparecer em algum lugar.
       request.log.warn(
-        { event: "dashboard_team_ranking_truncated", limit: MAX_CONVERSATIONS_FOR_TEAM_RANKING },
-        "dashboard_team_ranking_truncated",
+        { event: "dashboard_scan_truncated", limit: MAX_CONVERSATIONS_SCANNED },
+        "dashboard_scan_truncated",
       );
     }
 
@@ -394,6 +444,8 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
       overdue,
       ranking,
       topUsers,
+      timeline,
+      hourly,
     });
   });
 
@@ -408,7 +460,7 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
   async function buildTopUsers(
     { prisma }: AppDeps,
     organizationId: string,
-    assignedConversations: Array<{ id: string; assignedUserId: string | null }>,
+    activeConversations: Array<{ id: string; assignedUserId: string | null }>,
     sentByUser: Array<{ sentByUserId: string | null; _count: { _all: number } }>,
     withinPeriod: { gte: Date; lte?: Date },
   ): Promise<DashboardTopUserRow[]> {
@@ -424,7 +476,7 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
     }
 
     const ownerByConversation = new Map<string, string>();
-    for (const row of assignedConversations) {
+    for (const row of activeConversations) {
       if (row.assignedUserId) ownerByConversation.set(row.id, row.assignedUserId);
     }
     if (ownerByConversation.size > 0) {
@@ -474,6 +526,77 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
         },
       ];
     });
+  }
+
+  /**
+   * Movimento dos últimos 30 dias para o mapa de dia × hora.
+   *
+   * Mesmo caminho do resto: as conversas saem de uma busca já escopada por
+   * `access.ts` e pelos filtros da tela, e o SQL só agrega as mensagens
+   * delas. O que muda aqui é só a janela de tempo, que é fixa.
+   */
+  async function loadHeatmapBuckets(
+    { prisma }: AppDeps,
+    organizationId: string,
+    conversationFilter: Prisma.ConversationWhereInput,
+    timezone: string,
+    now: Date,
+  ): Promise<ActivityBucket[]> {
+    const window = periodRange("30d", now, timezone);
+    const conversations = await prisma.conversation.findMany({
+      where: { organizationId, ...conversationFilter, lastMessageAt: { gte: window.start } },
+      select: { id: true },
+      take: MAX_CONVERSATIONS_SCANNED,
+    });
+    return loadActivityBuckets(
+      deps,
+      conversations.map((row) => row.id),
+      timezone,
+      window.start,
+      window.end,
+    );
+  }
+
+  /**
+   * Mensagens do período agrupadas por dia, dia da semana, hora e direção.
+   *
+   * A conta é feita **no banco**: 30 dias viram no máximo 30 × 24 × 2 linhas,
+   * contra dezenas de milhares de mensagens que não precisam trafegar. O
+   * agrupamento por dia/hora exige SQL porque o Prisma não agrupa por
+   * expressão — e o `AT TIME ZONE` faz o corte no fuso do escritório, não no
+   * UTC do container, igual ao resto da tela.
+   *
+   * O escopo de acesso continua valendo: os ids vêm de uma busca que já passou
+   * por `conversationScope` e pelos filtros da tela, e esta consulta só olha as
+   * mensagens deles. Os mesmos descartes dos cards valem aqui (apagada não
+   * conta, saída ainda `pending` não conta), senão o gráfico contaria uma
+   * história e os cards outra.
+   */
+  async function loadActivityBuckets(
+    { prisma }: AppDeps,
+    conversationIds: string[],
+    timezone: string,
+    start: Date,
+    end: Date | null,
+  ): Promise<ActivityBucket[]> {
+    if (conversationIds.length === 0) return [];
+    const timeZone = safeTimeZone(timezone);
+    const upperBound = end ? Prisma.sql`AND "timestamp" <= ${end}` : Prisma.empty;
+    return prisma.$queryRaw<ActivityBucket[]>(Prisma.sql`
+      SELECT
+        to_char(("timestamp" AT TIME ZONE 'UTC') AT TIME ZONE ${timeZone}, 'YYYY-MM-DD') AS "day",
+        EXTRACT(DOW FROM ("timestamp" AT TIME ZONE 'UTC') AT TIME ZONE ${timeZone})::int AS "weekday",
+        EXTRACT(HOUR FROM ("timestamp" AT TIME ZONE 'UTC') AT TIME ZONE ${timeZone})::int AS "hour",
+        "direction"::text AS "direction",
+        COUNT(*)::int AS "total"
+      FROM "messages"
+      WHERE "conversationId" IN (${Prisma.join(conversationIds)})
+        AND "timestamp" >= ${start}
+        ${upperBound}
+        AND "deletedAt" IS NULL
+        AND NOT ("direction" = 'outbound' AND "status" = 'pending')
+      GROUP BY 1, 2, 3, 4
+    `);
   }
 
   /**

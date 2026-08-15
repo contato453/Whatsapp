@@ -1,7 +1,23 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { ChevronRight, Pencil, Plus, Trash2, Zap } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  ChevronRight,
+  Image as ImageIcon,
+  Mic,
+  Paperclip,
+  Pencil,
+  Plus,
+  Trash2,
+  Video,
+  X,
+  Zap,
+} from "lucide-react";
+import {
+  QUICK_REPLY_MEDIA_TYPE_LABELS,
+  quickReplyMediaTypeFromMime,
+  type QuickReplyMediaType,
+} from "@azvchat/shared";
 import { quickRepliesApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
@@ -22,12 +38,34 @@ const EMPTY_FORM = {
   departmentIds: [] as string[],
 };
 
+const MEDIA_ICONS: Record<QuickReplyMediaType, typeof ImageIcon> = {
+  image: ImageIcon,
+  audio: Mic,
+  video: Video,
+};
+
+/** Selo compacto do anexo — a lista precisa mostrar de relance que a resposta carrega mídia. */
+function MediaBadge({ type }: { type: QuickReplyMediaType }) {
+  const Icon = MEDIA_ICONS[type];
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+      <Icon className="h-3 w-3" />
+      {QUICK_REPLY_MEDIA_TYPE_LABELS[type]}
+    </span>
+  );
+}
+
 export default function QuickRepliesPage() {
   const { user: me } = useAuth();
   const departments = useMyDepartments();
   const [replies, setReplies] = useState<QuickReplyDto[] | null>(null);
   const [editing, setEditing] = useState<QuickReplyDto | "new" | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
+  // Anexo fora do `form`: File não sobrevive a JSON e o upload é uma
+  // chamada separada, depois que o texto foi salvo.
+  const [mediaFile, setMediaFile] = useState<File | null>(null);
+  const [mediaRemoved, setMediaRemoved] = useState(false);
+  const mediaInputRef = useRef<HTMLInputElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // A lista nasce recolhida: com mensagem inteira aberta cabiam três respostas
@@ -49,6 +87,8 @@ export default function QuickRepliesPage() {
       ...EMPTY_FORM,
       departmentIds: isAdmin ? [] : departments[0] ? [departments[0].id] : [],
     });
+    setMediaFile(null);
+    setMediaRemoved(false);
     setError(null);
     setEditing("new");
   }
@@ -61,8 +101,22 @@ export default function QuickRepliesPage() {
       isGeneral: reply.isGeneral,
       departmentIds: reply.departments.map((department) => department.id),
     });
+    setMediaFile(null);
+    setMediaRemoved(false);
     setError(null);
     setEditing(reply);
+  }
+
+  /** Barra o arquivo errado antes do upload — a API recusaria do mesmo jeito. */
+  function pickMedia(file: File | null) {
+    if (!file) return;
+    if (!quickReplyMediaTypeFromMime(file.type)) {
+      setError("Anexe uma imagem, um áudio ou um vídeo");
+      return;
+    }
+    setError(null);
+    setMediaFile(file);
+    setMediaRemoved(false);
   }
 
   /**
@@ -84,10 +138,31 @@ export default function QuickRepliesPage() {
       departmentIds: form.isGeneral ? [] : form.departmentIds,
     };
     try {
-      if (editing === "new") {
-        await quickRepliesApi.create(payload);
-      } else if (editing) {
-        await quickRepliesApi.update(editing.id, payload);
+      const saved =
+        editing === "new"
+          ? await quickRepliesApi.create(payload)
+          : editing
+            ? await quickRepliesApi.update(editing.id, payload)
+            : null;
+      if (saved) {
+        try {
+          if (mediaFile) {
+            await quickRepliesApi.uploadMedia(saved.id, mediaFile);
+          } else if (mediaRemoved && saved.media) {
+            await quickRepliesApi.removeMedia(saved.id);
+          }
+        } catch (err) {
+          // O texto já foi salvo: o modal vira edição da resposta criada,
+          // para o "Salvar" de novo tentar só a mídia — sem duplicar atalho.
+          setEditing(saved);
+          setError(
+            err instanceof Error
+              ? `Resposta salva, mas a mídia falhou: ${err.message}`
+              : "Resposta salva, mas a mídia falhou",
+          );
+          load();
+          return;
+        }
       }
       setEditing(null);
       load();
@@ -174,6 +249,7 @@ export default function QuickRepliesPage() {
                       <span className="text-sm font-semibold text-brand-700">/{reply.shortcut}</span>
                       {reply.title && <span className="text-sm text-slate-500">{reply.title}</span>}
                       <DepartmentBadges item={reply} />
+                      {reply.media && <MediaBadge type={reply.media.type} />}
                     </span>
                     {/* Recolhida mostra só a primeira linha: dá para varrer a
                         lista inteira sem perder a noção do que a resposta diz. */}
@@ -266,6 +342,74 @@ export default function QuickRepliesPage() {
               placeholder="Texto completo que será inserido na conversa"
             />
           </Field>
+          <Field label="Mídia (opcional — imagem, áudio ou vídeo)">
+            {(() => {
+              // Ordem de exibição: arquivo recém-escolhido vence a mídia já
+              // salva; removida, volta o botão de anexar.
+              const existingMedia =
+                editing !== "new" && !mediaRemoved ? editing?.media ?? null : null;
+              if (mediaFile) {
+                const pickedType = quickReplyMediaTypeFromMime(mediaFile.type);
+                return (
+                  <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                    {pickedType && <MediaBadge type={pickedType} />}
+                    <span className="min-w-0 flex-1 truncate text-sm text-slate-700">
+                      {mediaFile.name}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setMediaFile(null)}
+                      className="rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-600"
+                      title="Descartar arquivo"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                );
+              }
+              if (existingMedia) {
+                return (
+                  <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                    <MediaBadge type={existingMedia.type} />
+                    <span className="min-w-0 flex-1 truncate text-sm text-slate-700">
+                      {existingMedia.filename ?? "Arquivo anexado"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setMediaRemoved(true)}
+                      className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                      title="Remover mídia"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                );
+              }
+              return (
+                <button
+                  type="button"
+                  onClick={() => mediaInputRef.current?.click()}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 px-3 py-2.5 text-sm text-slate-500 hover:border-brand-400 hover:text-brand-600"
+                >
+                  <Paperclip className="h-4 w-4" /> Anexar mídia
+                </button>
+              );
+            })()}
+            <input
+              ref={mediaInputRef}
+              type="file"
+              accept="image/*,audio/*,video/*"
+              className="hidden"
+              onChange={(event) => {
+                pickMedia(event.target.files?.[0] ?? null);
+                event.target.value = "";
+              }}
+            />
+          </Field>
+          <p className="text-xs text-slate-400">
+            A mídia sai junto com o texto ao usar o atalho na Inbox. Em imagem e vídeo o texto
+            vira a legenda; em áudio, ele é enviado como mensagem logo em seguida.
+          </p>
           {error && <p className="text-sm text-red-600">{error}</p>}
           <Button
             className="w-full"

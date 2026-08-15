@@ -578,6 +578,12 @@ model QuickReply {
   /// ligada não existe vínculo em `departments`; desligada, precisa de pelo
   /// menos um.
   isGeneral      Boolean  @default(false)
+  /// Mídia opcional (imagem, áudio ou vídeo) que sai junto com o texto.
+  /// `mediaUrl` é a chave no MediaStorage — mesmo esquema da Message; a
+  /// imagem nunca sai por URL pública, só por rota autenticada.
+  mediaUrl       String?
+  mediaMimeType  String?
+  mediaFilename  String?
   createdById    String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   CalendarClock,
   CornerUpLeft,
@@ -19,8 +19,12 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { RealtimeEvents, type ScheduledPendingPayload } from "@azvchat/shared";
-import { api, quickRepliesApi } from "@/lib/api";
+import {
+  QUICK_REPLY_MEDIA_TYPE_LABELS,
+  RealtimeEvents,
+  type ScheduledPendingPayload,
+} from "@azvchat/shared";
+import { api, fetchQuickReplyMediaFile, quickRepliesApi } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { useAuth } from "@/lib/auth-context";
 import { pruneDrafts, readDraft, saveDraft, type DraftMode } from "@/lib/drafts";
@@ -153,8 +157,21 @@ function filterSelectClass(ativo: boolean): string {
   );
 }
 
+/** Status que a Inbox aceita receber pela URL — os mesmos do atendimento. */
+const STATUS_QUICK_FILTERS: QuickFilter[] = [
+  "open",
+  "waiting_client",
+  "waiting_internal",
+  "resolved",
+];
+
+function isStatusQuickFilter(value: string | null): value is QuickFilter {
+  return value !== null && (STATUS_QUICK_FILTERS as string[]).includes(value);
+}
+
 export function InboxShell({ conversationId }: { conversationId?: string }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const socket = useSocket();
   const { user: me } = useAuth();
 
@@ -197,9 +214,41 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const [quickReplies, setQuickReplies] = useState<QuickReplyDto[]>([]);
   const [quickReplyIndex, setQuickReplyIndex] = useState(0);
   const [quickReplyDismissed, setQuickReplyDismissed] = useState(false);
+  /**
+   * Resposta rápida com mídia escolhida no "/": fica como anexo pendente no
+   * composer — a pessoa confere (e pode remover) antes de enviar. O binário
+   * só é baixado na hora do envio.
+   */
+  const [quickReplyMedia, setQuickReplyMedia] = useState<QuickReplyDto | null>(null);
 
   /** Supervisor e admin enxergam vários números/departamentos; usuário, não. */
   const canFilterScope = me?.role === "admin" || me?.role === "supervisor";
+
+  /**
+   * Filtro vindo da URL — é assim que os cards do dashboard abrem a Inbox já
+   * recortada. Só entra em estado que a tela mostra: o seletor de status é
+   * visível para todo mundo, mas os de número e departamento só aparecem
+   * para supervisor e admin, e aplicar filtro que a pessoa não enxerga
+   * deixaria a lista curta sem explicação nenhuma.
+   *
+   * O efeito depende dos valores crus da URL, e não do estado: enquanto a
+   * pessoa navega dentro da Inbox os parâmetros não mudam, então trocar o
+   * filtro na mão continua valendo. Vindo outro card, o valor muda e o
+   * recorte novo entra sem precisar recarregar a página.
+   */
+  const statusParam = searchParams.get("status");
+  const departmentParam = searchParams.get("departmentId");
+  const instanceParam = searchParams.get("instanceId");
+
+  useEffect(() => {
+    if (isStatusQuickFilter(statusParam)) setFilter(statusParam);
+  }, [statusParam]);
+
+  useEffect(() => {
+    if (!canFilterScope) return;
+    if (departmentParam) setDepartmentFilter(departmentParam);
+    if (instanceParam) setInstanceFilter(instanceParam);
+  }, [canFilterScope, departmentParam, instanceParam]);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -257,6 +306,10 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     setDetail(null);
     setMessages(null);
     setReplyTo(null);
+    // A mídia pendente não é rascunho: ela vive na resposta rápida que a
+    // pessoa acabou de escolher, e seguir para outra conversa com o anexo
+    // colado mandaria arquivo para o cliente errado.
+    setQuickReplyMedia(null);
     // Rascunho é por conversa, e volta com o modo em que foi escrito: nota
     // interna restaurada em modo mensagem mandaria para o cliente um texto
     // escrito para a equipe ler. Sem isso, o texto de um cliente também
@@ -489,8 +542,21 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   }, []);
 
   // ---------- Envio ----------
+  /** Acrescenta sem duplicar: a mesma mensagem também chega pelo socket. */
+  function appendMessage(message: MessageDto) {
+    setMessages((current) => {
+      if (!current) return [message];
+      if (current.some((entry) => entry.id === message.id)) return current;
+      return [...current, message];
+    });
+  }
+
   async function sendText() {
-    if (!conversationId || draft.trim().length === 0 || sending) return;
+    // Com mídia de resposta rápida anexada, texto vazio ainda envia: a
+    // mídia sozinha é uma mensagem completa (um áudio de orientação, p.ex.).
+    const pendingMedia = composerMode === "message" ? quickReplyMedia : null;
+    if (!conversationId || sending) return;
+    if (draft.trim().length === 0 && !pendingMedia?.media) return;
     setSending(true);
     const content = draft.trim();
     // Some do composer e do armazenamento juntos: rascunho já enviado que
@@ -511,6 +577,45 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       return;
     }
 
+    // Resposta rápida com mídia: sai pelo mesmo fluxo de mídia do clipe.
+    // Imagem e vídeo levam o texto como legenda; áudio não tem legenda no
+    // WhatsApp, então o texto sai como mensagem separada logo em seguida —
+    // gravar a legenda no áudio mostraria na Inbox um texto que o cliente
+    // nunca recebeu.
+    if (pendingMedia?.media) {
+      setQuickReplyMedia(null);
+      setReplyTo(null);
+      try {
+        const file = await fetchQuickReplyMediaFile(pendingMedia);
+        const form = new FormData();
+        form.append("file", file);
+        const isAudio = pendingMedia.media.type === "audio";
+        if (!isAudio && content) form.append("caption", content);
+        const result = await api.postForm<{ message: MessageDto }>(
+          `/conversations/${conversationId}/messages/media`,
+          form,
+        );
+        appendMessage(result.message);
+        if (isAudio && content) {
+          const textResult = await api.post<{ message: MessageDto }>(
+            `/conversations/${conversationId}/messages`,
+            { content },
+          );
+          appendMessage(textResult.message);
+        }
+      } catch (err) {
+        // Nada saiu (ou saiu pela metade): devolve texto e anexo para a
+        // pessoa tentar de novo sem redigitar. Pelo `updateDraft`, para o
+        // texto devolvido também voltar a ser gravado como rascunho.
+        updateDraft(content, "message");
+        setQuickReplyMedia(pendingMedia);
+        window.alert(err instanceof Error ? err.message : "Falha ao enviar a mídia");
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+
     const replyId = replyTo?.id;
     setReplyTo(null);
     try {
@@ -518,11 +623,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         `/conversations/${conversationId}/messages`,
         { content, ...(replyId ? { replyToMessageId: replyId } : {}) },
       );
-      setMessages((current) => {
-        if (!current) return [result.message];
-        if (current.some((message) => message.id === result.message.id)) return current;
-        return [...current, result.message];
-      });
+      appendMessage(result.message);
     } catch (err) {
       updateDraft(content, "message");
       window.alert(err instanceof Error ? err.message : "Falha ao enviar mensagem");
@@ -759,6 +860,9 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
 
   function applyQuickReply(reply: QuickReplyDto) {
     updateDraft(reply.content);
+    // A mídia não sai na hora: vira anexo pendente ao lado do texto, para a
+    // pessoa revisar antes do Enter final.
+    setQuickReplyMedia(reply.media ? reply : null);
     setQuickReplyDismissed(true);
   }
 
@@ -1160,6 +1264,28 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   </button>
                 </div>
               )}
+              {/* Mídia da resposta rápida aguardando envio */}
+              {quickReplyMedia?.media && composerMode === "message" && (
+                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-500 bg-slate-50 px-2.5 py-1.5">
+                  <Paperclip className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-600" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[11px] font-semibold text-slate-700">
+                      {QUICK_REPLY_MEDIA_TYPE_LABELS[quickReplyMedia.media.type]} da resposta /
+                      {quickReplyMedia.shortcut}
+                    </p>
+                    <p className="truncate text-xs text-slate-500">
+                      {quickReplyMedia.media.filename ?? "Sai junto com a mensagem"}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setQuickReplyMedia(null)}
+                    className="rounded p-0.5 text-slate-400 hover:text-slate-600"
+                    aria-label="Remover mídia anexada"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )}
               {quickReplyOpen && (
                 <div className="absolute bottom-full left-3 right-3 z-20 mb-1 max-h-72 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
                   <p className="flex items-center gap-1.5 border-b border-slate-100 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
@@ -1180,6 +1306,15 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                     >
                       <p className="text-xs font-semibold text-brand-700">
                         /{reply.shortcut}
+                        {reply.media && (
+                          <span
+                            className="ml-1.5 inline-flex items-center gap-0.5 font-normal text-slate-400"
+                            title={`Envia ${QUICK_REPLY_MEDIA_TYPE_LABELS[reply.media.type].toLowerCase()} junto`}
+                          >
+                            <Paperclip className="h-3 w-3" />
+                            {QUICK_REPLY_MEDIA_TYPE_LABELS[reply.media.type]}
+                          </span>
+                        )}
                         {reply.title && (
                           <span className="ml-2 font-normal text-slate-500">{reply.title}</span>
                         )}
@@ -1297,7 +1432,11 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   </span>
                   <Button
                     variant={composerMode === "note" ? "secondary" : "primary"}
-                    disabled={sending || draft.trim().length === 0}
+                    disabled={
+                      sending ||
+                      (draft.trim().length === 0 &&
+                        !(composerMode === "message" && quickReplyMedia?.media))
+                    }
                     onClick={() => void sendText()}
                   >
                     {composerMode === "note" ? (

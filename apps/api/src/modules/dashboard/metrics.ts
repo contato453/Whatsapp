@@ -253,6 +253,102 @@ export function businessMinutesBetween(
   return total;
 }
 
+/** Uma linha da agregação por dia/hora que o banco devolve. */
+export interface ActivityBucket {
+  /** Dia civil "AAAA-MM-DD" no fuso do escritório. */
+  day: string;
+  /** 0 = domingo ... 6 = sábado, no fuso do escritório. */
+  weekday: number;
+  /** 0 a 23, no fuso do escritório. */
+  hour: number;
+  direction: string;
+  total: number;
+}
+
+export interface TimelinePoint {
+  date: string;
+  received: number;
+  sent: number;
+}
+
+export interface HourlyCell {
+  weekday: Weekday;
+  hour: number;
+  received: number;
+  sent: number;
+}
+
+/** Dias civis do intervalo, do primeiro ao último, no fuso do escritório. */
+export function civilDaysOfRange(range: PeriodRange, now: Date, timezone: string): string[] {
+  const timeZone = safeTimeZone(timezone);
+  const last = civilDateIn(timeZone, range.end ?? now);
+  let cursor = civilDateIn(timeZone, range.start);
+  const days: string[] = [];
+  // O teto é o mesmo do cálculo de expediente: intervalo maior que isso não
+  // chega aqui (o Zod barra em 366 dias), e o limite evita laço solto.
+  for (let scanned = 0; scanned < MAX_BUSINESS_DAYS_SCANNED; scanned += 1) {
+    days.push(formatCivilDate(cursor));
+    if (cursor.year === last.year && cursor.month === last.month && cursor.day === last.day) break;
+    cursor = addCivilDays(cursor, 1);
+  }
+  return days;
+}
+
+function formatCivilDate(date: CivilDate): string {
+  const month = String(date.month).padStart(2, "0");
+  const day = String(date.day).padStart(2, "0");
+  return `${date.year}-${month}-${day}`;
+}
+
+/**
+ * Série por dia, com **todos** os dias do período — inclusive os zerados.
+ *
+ * Dia sem movimento precisa aparecer como zero, e não sumir: um gráfico que
+ * pula o domingo faz a semana parecer contínua e esconde justamente o dia em
+ * que ninguém atendeu.
+ */
+export function foldTimeline(buckets: ActivityBucket[], days: string[]): TimelinePoint[] {
+  const byDay = new Map<string, TimelinePoint>(
+    days.map((date) => [date, { date, received: 0, sent: 0 }]),
+  );
+  for (const bucket of buckets) {
+    const point = byDay.get(bucket.day);
+    // Mensagem fora da lista de dias só acontece com fuso trocado no meio do
+    // caminho; ignorar é melhor do que inventar um dia que a tela não desenha.
+    if (!point) continue;
+    if (bucket.direction === "inbound") point.received += bucket.total;
+    else point.sent += bucket.total;
+  }
+  return days.map((date) => byDay.get(date) ?? { date, received: 0, sent: 0 });
+}
+
+/**
+ * Mapa dia da semana × hora, somando todos os dias do período.
+ *
+ * Devolve só as células com movimento: a grade cheia são 168 posições, e a
+ * tela sabe desenhar o vazio sozinha. Menos dado no fio, mesma figura.
+ */
+export function foldHourly(buckets: ActivityBucket[]): HourlyCell[] {
+  const cells = new Map<string, HourlyCell>();
+  for (const bucket of buckets) {
+    if (bucket.weekday < 0 || bucket.weekday > 6) continue;
+    if (bucket.hour < 0 || bucket.hour > 23) continue;
+    const key = `${bucket.weekday}:${bucket.hour}`;
+    const cell = cells.get(key) ?? {
+      weekday: bucket.weekday as Weekday,
+      hour: bucket.hour,
+      received: 0,
+      sent: 0,
+    };
+    if (bucket.direction === "inbound") cell.received += bucket.total;
+    else cell.sent += bucket.total;
+    cells.set(key, cell);
+  }
+  return [...cells.values()].sort(
+    (a, b) => a.weekday - b.weekday || a.hour - b.hour,
+  );
+}
+
 /** Conversa candidata a atraso: a última mensagem dela é do cliente. */
 export interface WaitingConversation {
   conversationId: string;

@@ -9,6 +9,7 @@ import type {
   NotificationSound,
   NotificationVolume,
   ParticipantClientRole,
+  QuickReplyMediaType,
   UserRole,
 } from "@azvchat/shared";
 
@@ -253,6 +254,13 @@ export interface ScheduledMessageDto {
   createdAt: string;
 }
 
+/** Mídia anexada à resposta — o binário vem por /quick-replies/:id/media. */
+export interface QuickReplyMediaDto {
+  type: QuickReplyMediaType;
+  mimeType: string;
+  filename: string | null;
+}
+
 export interface QuickReplyDto {
   id: string;
   shortcut: string;
@@ -262,6 +270,7 @@ export interface QuickReplyDto {
   isGeneral: boolean;
   /** Lista completa — ver a observação em TagDto. */
   departments: ResourceDepartmentDto[];
+  media: QuickReplyMediaDto | null;
   createdAt: string;
 }
 
@@ -307,6 +316,8 @@ export interface DashboardRankingRowDto {
   title: string;
   type: ConversationType;
   instanceName: string | null;
+  /** Responsável pelo atendimento; `null` quando a conversa está sem dono. */
+  assignee: { userId: string; name: string; hasAvatar: boolean } | null;
   received: number;
   sent: number;
   total: number;
@@ -364,4 +375,26 @@ export interface DashboardStatsDto {
   ranking: DashboardRankingRowDto[];
   /** `null` para quem não é supervisor — o bloco não aparece na tela dele. */
   topUsers: DashboardTopUserDto[] | null;
+  /** Um ponto por dia civil do período, inclusive os zerados. */
+  timeline: DashboardTimelinePointDto[];
+  /** Só as células com movimento; a grade vazia é desenhada pela tela. */
+  hourly: DashboardHourlyCellDto[];
+}
+
+/** Mensagens de um dia do período, no fuso do escritório. */
+export interface DashboardTimelinePointDto {
+  /** "AAAA-MM-DD" no fuso configurado. */
+  date: string;
+  received: number;
+  sent: number;
+}
+
+/** Uma célula do mapa dia da semana × hora, somando os dias do período. */
+export interface DashboardHourlyCellDto {
+  /** 0 = domingo ... 6 = sábado. */
+  weekday: number;
+  /** 0 a 23. */
+  hour: number;
+  received: number;
+  sent: number;
 }
