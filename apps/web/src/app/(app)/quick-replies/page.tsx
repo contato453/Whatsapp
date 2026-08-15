@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Pencil, Plus, Trash2, Zap } from "lucide-react";
+import { ChevronRight, Pencil, Plus, Trash2, Zap } from "lucide-react";
 import { quickRepliesApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { cn } from "@/lib/utils";
 import type { QuickReplyDto } from "@/lib/types";
 import { Button, Card, EmptyState, Field, Input, Modal, Spinner, Textarea } from "@/components/ui";
 import {
@@ -29,6 +30,9 @@ export default function QuickRepliesPage() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // A lista nasce recolhida: com mensagem inteira aberta cabiam três respostas
+  // na tela, e o atalho — que é o que se procura aqui — ficava perdido.
+  const [expandedIds, setExpandedIds] = useState<string[]>([]);
 
   const load = useCallback(() => {
     quickRepliesApi.list().then(setReplies);
@@ -36,6 +40,7 @@ export default function QuickRepliesPage() {
   useEffect(load, [load]);
 
   const isAdmin = me?.role === "admin";
+  const allExpanded = !!replies && replies.length > 0 && expandedIds.length === replies.length;
 
   function openNew() {
     // Sem "vale para todos" para quem não é admin: já entra no primeiro
@@ -93,6 +98,12 @@ export default function QuickRepliesPage() {
     }
   }
 
+  function toggleExpanded(id: string) {
+    setExpandedIds((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
+    );
+  }
+
   async function remove(reply: QuickReplyDto) {
     if (!window.confirm(`Excluir a resposta /${reply.shortcut}?`)) return;
     try {
@@ -111,10 +122,24 @@ export default function QuickRepliesPage() {
           <Plus className="h-4 w-4" /> Nova resposta
         </Button>
       </div>
-      <p className="mb-6 text-sm text-slate-500">
-        Na Inbox, digite <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs">/</span>{" "}
-        na caixa de mensagem para inserir uma resposta com uma tecla.
-      </p>
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-slate-500">
+          Na Inbox, digite{" "}
+          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs">/</span> na caixa de
+          mensagem para inserir uma resposta com uma tecla.
+        </p>
+        {replies && replies.length > 0 && (
+          <button
+            type="button"
+            onClick={() =>
+              setExpandedIds(allExpanded ? [] : replies.map((reply) => reply.id))
+            }
+            className="text-sm font-medium text-brand-600 hover:underline"
+          >
+            {allExpanded ? "Recolher todas" : "Expandir todas"}
+          </button>
+        )}
+      </div>
 
       {!replies ? (
         <div className="flex justify-center py-16">
@@ -128,40 +153,61 @@ export default function QuickRepliesPage() {
         />
       ) : (
         <Card className="divide-y divide-slate-100">
-          {replies.map((reply) => (
-            <div key={reply.id} className="flex items-start gap-3 px-5 py-3.5">
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-brand-700">
-                  /{reply.shortcut}
-                  {reply.title && (
-                    <span className="ml-2 font-normal text-slate-500">{reply.title}</span>
-                  )}
-                </p>
-                <p className="mt-0.5 whitespace-pre-wrap text-sm text-slate-600">{reply.content}</p>
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  <DepartmentBadges item={reply} />
-                </div>
+          {replies.map((reply) => {
+            const expanded = expandedIds.includes(reply.id);
+            return (
+              <div key={reply.id} className="flex items-start gap-2 px-2 py-1">
+                <button
+                  type="button"
+                  onClick={() => toggleExpanded(reply.id)}
+                  aria-expanded={expanded}
+                  className="flex min-w-0 flex-1 items-start gap-2 rounded-lg px-3 py-2.5 text-left hover:bg-slate-50"
+                >
+                  <ChevronRight
+                    className={cn(
+                      "mt-0.5 h-4 w-4 shrink-0 text-slate-400 transition-transform",
+                      expanded && "rotate-90",
+                    )}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="text-sm font-semibold text-brand-700">/{reply.shortcut}</span>
+                      {reply.title && <span className="text-sm text-slate-500">{reply.title}</span>}
+                      <DepartmentBadges item={reply} />
+                    </span>
+                    {/* Recolhida mostra só a primeira linha: dá para varrer a
+                        lista inteira sem perder a noção do que a resposta diz. */}
+                    <span
+                      className={cn(
+                        "mt-0.5 block text-sm text-slate-600",
+                        expanded ? "whitespace-pre-wrap" : "truncate",
+                      )}
+                    >
+                      {expanded ? reply.content : reply.content.replace(/\s+/g, " ").trim()}
+                    </span>
+                  </span>
+                </button>
+                {canManageScopedItem(reply, !!isAdmin, departments) && (
+                  <div className="flex shrink-0 gap-1 py-2.5 pr-2">
+                    <button
+                      onClick={() => openEdit(reply)}
+                      className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                      title="Editar"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => void remove(reply)}
+                      className="rounded-lg p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-600"
+                      title="Excluir"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
               </div>
-              {canManageScopedItem(reply, !!isAdmin, departments) && (
-                <div className="flex shrink-0 gap-1">
-                  <button
-                    onClick={() => openEdit(reply)}
-                    className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-                    title="Editar"
-                  >
-                    <Pencil className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={() => void remove(reply)}
-                    className="rounded-lg p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-600"
-                    title="Excluir"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </Card>
       )}
 
