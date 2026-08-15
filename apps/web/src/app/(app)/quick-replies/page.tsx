@@ -221,7 +221,7 @@ export default function QuickRepliesPage() {
       </div>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-slate-500">
-          Na Inbox, digite{" "}
+          Na tela de Conversas, digite{" "}
           <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs">/</span> na caixa de
           mensagem para inserir uma resposta com uma tecla.
         </p>
@@ -273,7 +273,7 @@ export default function QuickRepliesPage() {
         <EmptyState
           icon={<Zap className="h-12 w-12" />}
           title="Nenhuma resposta rápida cadastrada"
-          description='Crie atalhos como /bomdia ou /boleto e use-os na Inbox digitando "/".'
+          description='Crie atalhos como /bomdia ou /boleto e use-os na tela de Conversas digitando "/".'
         />
       ) : visibleReplies.length === 0 ? (
         // Há respostas, só não neste recorte: mensagem curta em vez do
@@ -307,7 +307,7 @@ export default function QuickRepliesPage() {
                       {reply.media && <MediaBadge type={reply.media.type} />}
                       <span
                         className="ml-auto inline-flex items-center gap-1 whitespace-nowrap text-[11px] text-slate-400"
-                        title="Última vez que o atalho foi enviado na Inbox"
+                        title="Última vez que o atalho foi enviado em uma conversa"
                       >
                         <Clock className="h-3 w-3" />
                         {reply.lastUsedAt
@@ -471,7 +471,7 @@ export default function QuickRepliesPage() {
             />
           </Field>
           <p className="text-xs text-slate-400">
-            A mídia sai junto com o texto ao usar o atalho na Inbox. Em imagem e vídeo o texto
+            A mídia sai junto com o texto ao usar o atalho na conversa. Em imagem e vídeo o texto
             vira a legenda; em áudio, ele é enviado como mensagem logo em seguida.
           </p>
           {error && <p className="text-sm text-red-600">{error}</p>}

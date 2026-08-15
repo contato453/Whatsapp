@@ -202,7 +202,7 @@ export default function WhatsAppPage() {
     if (
       enabling &&
       !window.confirm(
-        `Marcar "${instance.name}" como número de backup? Toda conversa NOVA nele já nasce arquivada (fora da Inbox e dos números). As conversas que já existem não mudam — use "Arquivar todas" se quiser arquivá-las também.`,
+        `Marcar "${instance.name}" como número de backup? Toda conversa NOVA nele já nasce arquivada (fora da lista de conversas e dos números). As conversas que já existem não mudam — use "Arquivar todas" se quiser arquivá-las também.`,
       )
     ) {
       return;
@@ -234,7 +234,7 @@ export default function WhatsAppPage() {
       }
       if (
         !window.confirm(
-          `Arquivar ${count} ${count === 1 ? "conversa" : "conversas"} de "${instance.name}"? Elas somem da Inbox e deixam de contar nos números do sistema. Nada é apagado.`,
+          `Arquivar ${count} ${count === 1 ? "conversa" : "conversas"} de "${instance.name}"? Elas somem da lista de conversas e deixam de contar nos números do sistema. Nada é apagado.`,
         )
       ) {
         return;

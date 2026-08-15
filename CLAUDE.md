@@ -408,7 +408,11 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
 
 Rotas em `apps/web/src/app/(app)/`: `dashboard`, `inbox` (+ `inbox/[conversationId]`),
 `whatsapp`, `users` (+ `new`, `[id]`), `departments`, `reports`, `tags`, `quick-replies`,
-`settings`. Fora do grupo: `login`.
+`settings`. Fora do grupo: `login`. **Os rótulos do menu não seguem os nomes das rotas**:
+`/inbox` aparece como "Conversas" e `/whatsapp` como "Conexões" — as rotas ficaram como
+estão para não quebrar favoritos nem os links dos cards do dashboard. Nos textos da
+interface, a tela se chama "Conversas" (ou "lista de conversas"); "Inbox" segue sendo o
+nome técnico no código e neste documento.
 
 - `src/lib/api.ts` — client HTTP único (`api.*`). Token em `localStorage` (`zapdesk.token`);
   401 limpa token e manda para `/login`. **Não faça `fetch` solto em componente**: adicione

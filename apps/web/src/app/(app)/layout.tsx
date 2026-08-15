@@ -47,8 +47,11 @@ const NAV: Array<{
   minRole: UserRole;
 }> = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, minRole: "agent" },
-  { href: "/inbox", label: "Inbox", icon: Inbox, minRole: "agent" },
-  { href: "/whatsapp", label: "WhatsApp", icon: Smartphone, minRole: "supervisor" },
+  // Os rótulos falam a língua da equipe; as rotas continuam /inbox e
+  // /whatsapp — mudá-las quebraria favoritos e os links dos cards do
+  // dashboard sem ganho nenhum.
+  { href: "/inbox", label: "Conversas", icon: Inbox, minRole: "agent" },
+  { href: "/whatsapp", label: "Conexões", icon: Smartphone, minRole: "supervisor" },
   { href: "/users", label: "Usuários", icon: Users, minRole: "admin" },
   { href: "/departments", label: "Departamentos", icon: Building2, minRole: "supervisor" },
   // Mesmo papel do requireRole("supervisor") em /reports/agents.

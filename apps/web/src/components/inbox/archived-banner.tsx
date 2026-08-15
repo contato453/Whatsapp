@@ -43,7 +43,7 @@ export function ArchivedBanner({
       <p className="min-w-0 flex-1 text-xs text-slate-600">
         Conversa arquivada
         {conversation.archivedBy ? ` por ${conversation.archivedBy.name}` : " automaticamente"} em{" "}
-        {formatDateTime(conversation.archivedAt)}. Ela não aparece na Inbox nem conta nos números
+        {formatDateTime(conversation.archivedAt)}. Ela não aparece na lista de conversas nem conta nos números
         do sistema; dá para ler e responder, e responder não desarquiva.
       </p>
       <Button size="sm" variant="outline" disabled={busy} onClick={() => void unarchive()}>
