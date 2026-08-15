@@ -106,18 +106,50 @@ type QuickFilter =
   | "waiting_internal"
   | "resolved";
 
-const QUICK_FILTERS: Array<{ key: QuickFilter; label: string }> = [
-  { key: "all", label: "Todas" },
-  { key: "mine", label: "Minhas" },
-  { key: "unassigned", label: "Sem responsável" },
-  { key: "groups", label: "Grupos" },
-  { key: "individual", label: "Individuais" },
-  { key: "unread", label: "Não lidas" },
-  { key: "open", label: "Aberto" },
-  { key: "waiting_client", label: "AG. Cliente" },
-  { key: "waiting_internal", label: "AG. Operacional" },
-  { key: "resolved", label: "Concluído" },
+/**
+ * Os filtros rápidos em grupos, para caber num seletor só — mesmo formato
+ * dos filtros de número, departamento e etiqueta. Como só um vale por vez,
+ * a fileira de chips não representava melhor o comportamento e ainda
+ * empurrava metade das opções para fora da tela.
+ */
+const QUICK_FILTER_GROUPS: Array<{ label: string; options: Array<{ key: QuickFilter; label: string }> }> = [
+  {
+    label: "Atendimento",
+    options: [
+      { key: "mine", label: "Minhas" },
+      { key: "unassigned", label: "Sem responsável" },
+      { key: "unread", label: "Não lidas" },
+    ],
+  },
+  {
+    label: "Tipo",
+    options: [
+      { key: "groups", label: "Grupos" },
+      { key: "individual", label: "Individuais" },
+    ],
+  },
+  {
+    label: "Status",
+    options: [
+      { key: "open", label: "Aberto" },
+      { key: "waiting_client", label: "AG. Cliente" },
+      { key: "waiting_internal", label: "AG. Operacional" },
+      { key: "resolved", label: "Concluído" },
+    ],
+  },
 ];
+
+/**
+ * Estilo dos seletores de filtro. Com valor escolhido o campo fica marcado,
+ * para a pessoa perceber de relance que a lista está filtrada — sem isso, um
+ * filtro esquecido parece inbox vazia.
+ */
+function filterSelectClass(ativo: boolean): string {
+  return cn(
+    "rounded-lg border px-1.5 py-1 text-[11px]",
+    ativo ? "border-brand-500 font-medium text-brand-700" : "border-slate-200 text-slate-600",
+  );
+}
 
 export function InboxShell({ conversationId }: { conversationId?: string }) {
   const router = useRouter();
@@ -728,30 +760,31 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
               onChange={(event) => setSearchTerm(event.target.value)}
             />
           </div>
-          <div className="thin-scroll flex gap-1 overflow-x-auto pb-1">
-            {QUICK_FILTERS.map((entry) => (
-              <button
-                key={entry.key}
-                onClick={() => setFilter(entry.key)}
-                className={cn(
-                  "shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
-                  filter === entry.key
-                    ? "bg-brand-600 text-white"
-                    : "bg-slate-100 text-slate-600 hover:bg-slate-200",
-                )}
-              >
-                {entry.label}
-              </button>
-            ))}
-          </div>
-          {/* Número e departamento só filtram para quem enxerga mais de um
-              recorte. Para o usuário comum a lista já vem restrita, e os dois
-              seletores só ocupariam espaço sem mudar nada. */}
-          <div className={cn("grid gap-1.5", canFilterScope ? "grid-cols-3" : "grid-cols-1")}>
+          {/* Os quatro filtros no mesmo formato. Número e departamento só
+              aparecem para quem enxerga mais de um recorte: para o usuário
+              comum a lista já vem restrita, e os dois seletores ocupariam
+              espaço sem mudar nada. */}
+          <div className="grid grid-cols-2 gap-1.5">
+            <select
+              className={filterSelectClass(filter !== "all")}
+              value={filter}
+              onChange={(event) => setFilter(event.target.value as QuickFilter)}
+            >
+              <option value="all">Todas</option>
+              {QUICK_FILTER_GROUPS.map((group) => (
+                <optgroup key={group.label} label={group.label}>
+                  {group.options.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
             {canFilterScope && (
               <>
                 <select
-                  className="rounded-lg border border-slate-200 px-1.5 py-1 text-[11px] text-slate-600"
+                  className={filterSelectClass(instanceFilter !== "")}
                   value={instanceFilter}
                   onChange={(event) => setInstanceFilter(event.target.value)}
                 >
@@ -763,7 +796,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   ))}
                 </select>
                 <select
-                  className="rounded-lg border border-slate-200 px-1.5 py-1 text-[11px] text-slate-600"
+                  className={filterSelectClass(departmentFilter !== "")}
                   value={departmentFilter}
                   onChange={(event) => setDepartmentFilter(event.target.value)}
                 >
@@ -777,7 +810,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
               </>
             )}
             <select
-              className="rounded-lg border border-slate-200 px-1.5 py-1 text-[11px] text-slate-600"
+              className={filterSelectClass(tagFilter !== "")}
               value={tagFilter}
               onChange={(event) => setTagFilter(event.target.value)}
             >
