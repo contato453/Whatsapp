@@ -27,6 +27,7 @@ import { Spinner, Tooltip } from "@/components/ui";
 import { UserAvatar } from "@/components/user-avatar";
 import { CallAlerts } from "@/components/call-alerts";
 import { MessageSound } from "@/components/message-sound";
+import { UnreadTitle } from "@/components/unread-title";
 import { Logo, LogoMark } from "@/components/logo";
 
 /**
@@ -330,6 +331,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       <CallAlerts />
       {/* Som de mensagem recebida: vale em qualquer tela, não só na Inbox. */}
       <MessageSound />
+      {/* Título da aba piscando: alcança quem está com o som desligado. */}
+      <UnreadTitle />
     </div>
   );
 }

@@ -482,6 +482,15 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   metralhadora (a mensagem suprimida não fica em fila). Com duas abas abertas as duas
   tocam: não há sincronização entre abas, e isso está registrado em comentário no
   componente.
+- **O título da aba conta conversas, não mensagens, e não é o `unreadCount` do banco.**
+  `UnreadTitle` (`apps/web/src/components/unread-title.tsx`) acumula as conversas que
+  receberam mensagem `inbound` **enquanto a aba esteve fora de foco** e pisca
+  `(n) <título>` a cada 1,2s, alternando com o título original. Voltar o foco zera —
+  quem voltou tem a lista da Inbox com a contagem de verdade, e o piscar já cumpriu o
+  papel de trazer a pessoa. Ler o não lido real exigiria consulta nova a cada
+  carregamento, que é justamente o que este aviso não precisa. Nenhuma rota define
+  `metadata` própria, então o título base é capturado uma vez na montagem; se um dia
+  alguma tela definir o seu, esse pressuposto cai.
 - `title` vs `customTitle` e `name` vs `customName`: o **sync do WhatsApp sobrescreve o
   primeiro e nunca toca no segundo**. Exibição prefere o custom.
 - **Nome do participante é decidido no backend**, em `serializeGroupParticipant`
@@ -581,7 +590,8 @@ enquetes; mensagens agendadas com retentativa; notas internas; etiquetas; atribu
 histórico completo; quatro status de atendimento; busca na conversa e busca global;
 respostas rápidas com `/`; dashboard; relatório por atendente; auditoria consultável;
 perfil e troca de senha pelo próprio usuário; aviso de chamada recebida; som de
-notificação de mensagem recebida, com som e volume escolhidos por cada usuário.
+notificação de mensagem recebida, com som e volume escolhidos por cada usuário; título da
+aba piscando com as conversas que receberam mensagem enquanto a aba esteve fora de foco.
 
 **Falta** (ordem sugerida): validar o pareamento QR em rede aberta (o ambiente de
 desenvolvimento bloqueia `web.whatsapp.com`); votos de enquete agregados na Inbox;
