@@ -1,6 +1,7 @@
 import type {
   Conversation,
   Department,
+  GroupParticipant,
   Message,
   QuickReply,
   Tag,
@@ -193,6 +194,48 @@ export function serializeConversationDetail(
   return {
     ...serializeConversation(conversation),
     scheduledPendingCount,
+  };
+}
+
+/**
+ * Fontes externas ao registro do participante que ajudam a descobrir nome e
+ * telefone: o cadastro de contatos do número conectado e o `pushName` que o
+ * WhatsApp envia junto das mensagens.
+ */
+export interface ParticipantNameSources {
+  /** Contato salvo na agenda do número conectado, quando casa o identificador. */
+  contact?: { phoneNumber: string | null; name: string | null } | null;
+  /** Nome que a própria pessoa configurou, visto na última mensagem dela. */
+  pushName?: string | null;
+}
+
+/**
+ * Participante de grupo para o painel de contexto.
+ *
+ * A tela recebe o nome JÁ DECIDIDO (`name`) e também os campos crus, que a
+ * edição precisa — nenhum componente refaz essa escolha.
+ */
+export function serializeGroupParticipant(
+  participant: GroupParticipant,
+  sources: ParticipantNameSources = {},
+) {
+  const phoneNumber = participant.phoneNumber || sources.contact?.phoneNumber || "";
+  const whatsappName = participant.name || sources.contact?.name || sources.pushName || null;
+  return {
+    id: participant.id,
+    // Permite ligar o remetente de cada mensagem ao participante
+    // (e, com isso, exibir a foto dele no chat).
+    externalContactId: participant.externalContactId,
+    phoneNumber,
+    name: participant.customName || whatsappName,
+    customName: participant.customName,
+    /// Nome de origem, exibido como referência quando há nome próprio.
+    whatsappName,
+    isAdmin: participant.isAdmin || participant.isSuperAdmin,
+    // Papel no cliente, marcado pela equipe. Distinto de `isAdmin`, que é
+    // administrador do grupo no WhatsApp.
+    clientRole: participant.clientRole,
+    hasAvatar: participant.avatarUrl != null,
   };
 }
 

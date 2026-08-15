@@ -237,6 +237,15 @@ model WhatsAppGroup {
   @@map("whatsapp_groups")
 }
 
+/// Papel da pessoa dentro do cliente, marcado pela equipe.
+///
+/// Não confundir com `isAdmin`: aquele é administrador do GRUPO no WhatsApp e
+/// vem do sync; este é atributo de cadastro e só muda por ação de gente.
+enum ParticipantClientRole {
+  partner
+  administrative
+}
+
 model GroupParticipant {
   id                String    @id @default(uuid())
   groupId           String
@@ -246,6 +255,10 @@ model GroupParticipant {
   name              String?
   /// Nome definido pela equipe — ganha do `name` na exibição.
   customName        String?
+  /// Sócio ou contato administrativo do cliente; null = sem marcação.
+  /// Independente de `Conversation.partnerName`: um é pessoa do grupo, o
+  /// outro é texto livre do cadastro da conversa.
+  clientRole        ParticipantClientRole?
   isAdmin           Boolean   @default(false)
   isSuperAdmin      Boolean   @default(false)
   /// Chave do arquivo da foto no storage (null = sem foto conhecida)

@@ -2,9 +2,30 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, FileText, MessageSquare, Pencil, RefreshCw, StickyNote, X } from "lucide-react";
-import { CONVERSATION_STATUSES, CONVERSATION_STATUS_LABELS } from "@azvchat/shared";
-import { api, fetchMediaBlobUrl, invalidateConversationAvatar } from "@/lib/api";
+import {
+  Check,
+  FileText,
+  MessageSquare,
+  Pencil,
+  RefreshCw,
+  StickyNote,
+  UserCog,
+  X,
+} from "lucide-react";
+import {
+  CONVERSATION_STATUSES,
+  CONVERSATION_STATUS_LABELS,
+  PARTICIPANT_CLIENT_ROLES,
+  PARTICIPANT_CLIENT_ROLE_COLORS,
+  PARTICIPANT_CLIENT_ROLE_LABELS,
+  type ParticipantClientRole,
+} from "@azvchat/shared";
+import {
+  api,
+  fetchMediaBlobUrl,
+  groupParticipantsApi,
+  invalidateConversationAvatar,
+} from "@/lib/api";
 import { cn, formatDateTime, formatPhone } from "@/lib/utils";
 import type {
   ConversationDetailDto,
@@ -192,10 +213,22 @@ export function ContextPanel({
     setRenamingParticipant(null);
     const limpo = valor.trim();
     await run(() =>
-      api.patch(`/group-participants/${participantId}`, {
+      groupParticipantsApi.update(participantId, {
         customName: limpo.length > 0 ? limpo : null,
       }),
     );
+  }
+
+  // Seletor de papel no cliente, aberto uma linha por vez. Fica em fluxo,
+  // abaixo do participante, porque a lista rola: um popover flutuante seria
+  // cortado pelo recorte da rolagem.
+  const [rolePickerFor, setRolePickerFor] = useState<string | null>(null);
+  async function salvarPapelParticipante(
+    participantId: string,
+    clientRole: ParticipantClientRole | null,
+  ) {
+    setRolePickerFor(null);
+    await run(() => groupParticipantsApi.update(participantId, { clientRole }));
   }
 
   // Arquivos da conversa, carregados sob demanda ao abrir a seção.
@@ -550,60 +583,133 @@ export function ContextPanel({
             Participantes ({detail.group.participantCount})
           </h3>
           <div className="thin-scroll max-h-48 space-y-1.5 overflow-y-auto">
-            {detail.group.participants.map((participant) => (
-              <div key={participant.id} className="flex items-center gap-2 text-xs">
-                <ParticipantAvatar
-                  participantId={participant.id}
-                  name={participant.name ?? participant.phoneNumber}
-                  hasAvatar={participant.hasAvatar}
-                  className="h-7 w-7 text-[9px]"
-                />
-                <div className="min-w-0 flex-1">
-                  {/* Nome quando conhecido; o telefone aparece logo abaixo */}
-                  {renamingParticipant === participant.id ? (
-                    <input
-                      autoFocus
-                      className="w-full rounded-lg border border-slate-300 px-2 py-0.5 text-xs text-slate-700 focus:border-brand-500 focus:outline-none"
-                      defaultValue={participant.customName ?? ""}
-                      placeholder={participant.whatsappName ?? "Nome do participante"}
-                      onBlur={(event) => void salvarParticipante(participant.id, event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") event.currentTarget.blur();
-                        if (event.key === "Escape") setRenamingParticipant(null);
-                      }}
+            {detail.group.participants.map((participant) => {
+              const nomeExibido =
+                participant.name || formatPhone(participant.phoneNumber) || "Participante";
+              // Quando o nome exibido já é o telefone, a segunda linha
+              // repetiria a mesma informação — some com ela.
+              const telefone = formatPhone(participant.phoneNumber);
+              const mostrarTelefone = !!telefone && telefone !== nomeExibido;
+              return (
+                <div key={participant.id} className="text-xs">
+                  <div className="flex items-center gap-1.5">
+                    <ParticipantAvatar
+                      participantId={participant.id}
+                      name={participant.name ?? participant.phoneNumber}
+                      hasAvatar={participant.hasAvatar}
+                      className="h-7 w-7 shrink-0 text-[9px]"
                     />
-                  ) : (
-                    <p className="truncate text-slate-700">
-                      {participant.name || formatPhone(participant.phoneNumber) || "Participante"}
-                    </p>
-                  )}
-                  {participant.phoneNumber && (
-                    <p className="truncate text-[11px] text-slate-400">
-                      {formatPhone(participant.phoneNumber)}
-                    </p>
+                    <div className="min-w-0 flex-1">
+                      {/* Nome quando conhecido; o telefone aparece logo abaixo */}
+                      {renamingParticipant === participant.id ? (
+                        <input
+                          autoFocus
+                          className="w-full rounded-lg border border-slate-300 px-2 py-0.5 text-xs text-slate-700 focus:border-brand-500 focus:outline-none"
+                          defaultValue={participant.customName ?? ""}
+                          placeholder={participant.whatsappName ?? "Nome do participante"}
+                          onBlur={(event) =>
+                            void salvarParticipante(participant.id, event.target.value)
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") event.currentTarget.blur();
+                            if (event.key === "Escape") setRenamingParticipant(null);
+                          }}
+                        />
+                      ) : (
+                        <p className="truncate text-slate-700">{nomeExibido}</p>
+                      )}
+                      {mostrarTelefone && (
+                        <p className="truncate text-[11px] text-slate-400">{telefone}</p>
+                      )}
+                    </div>
+                    {/*
+                      Papel no cliente: chip retangular e de cor própria, para
+                      não se confundir com o selo "admin" (pílula âmbar), que é
+                      administrador do grupo no WhatsApp e vem do sync.
+                    */}
+                    {participant.clientRole && (
+                      <span
+                        className="shrink-0 rounded-[3px] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white"
+                        style={{
+                          backgroundColor: PARTICIPANT_CLIENT_ROLE_COLORS[participant.clientRole],
+                        }}
+                      >
+                        {PARTICIPANT_CLIENT_ROLE_LABELS[participant.clientRole]}
+                      </span>
+                    )}
+                    {participant.isAdmin && (
+                      <Badge className="shrink-0 bg-amber-50 text-amber-700">admin</Badge>
+                    )}
+                    <button
+                      title={participant.name ? "Editar nome" : "Dar um nome a este participante"}
+                      aria-label={
+                        participant.name ? "Editar nome" : "Dar um nome a este participante"
+                      }
+                      className="shrink-0 rounded-lg p-1 text-slate-300 hover:bg-slate-100 hover:text-slate-600"
+                      onClick={() => setRenamingParticipant(participant.id)}
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                    <button
+                      title="Marcar como sócio ou administrativo do cliente"
+                      aria-label="Marcar como sócio ou administrativo do cliente"
+                      aria-expanded={rolePickerFor === participant.id}
+                      className="shrink-0 rounded-lg p-1 text-slate-300 hover:bg-slate-100 hover:text-slate-600"
+                      onClick={() =>
+                        setRolePickerFor((atual) =>
+                          atual === participant.id ? null : participant.id,
+                        )
+                      }
+                    >
+                      <UserCog className="h-3 w-3" />
+                    </button>
+                    {/* Sem telefone conhecido não há para onde abrir a conversa */}
+                    {participant.phoneNumber && (
+                      <button
+                        title={`Abrir conversa individual com ${nomeExibido}`}
+                        aria-label={`Abrir conversa individual com ${nomeExibido}`}
+                        disabled={busy}
+                        onClick={() => void openDirect(participant.id)}
+                        className="shrink-0 rounded-lg border border-slate-200 p-1 text-slate-600 hover:bg-slate-50 hover:text-brand-700 disabled:opacity-50"
+                      >
+                        <MessageSquare className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
+                  {rolePickerFor === participant.id && (
+                    <div className="ml-8 mt-1 flex flex-wrap items-center gap-1">
+                      {PARTICIPANT_CLIENT_ROLES.map((papel) => (
+                        <button
+                          key={papel}
+                          disabled={busy}
+                          onClick={() => void salvarPapelParticipante(participant.id, papel)}
+                          className={cn(
+                            "rounded-[3px] border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide disabled:opacity-50",
+                            participant.clientRole === papel
+                              ? "border-transparent text-white"
+                              : "border-slate-200 text-slate-600 hover:bg-slate-50",
+                          )}
+                          style={
+                            participant.clientRole === papel
+                              ? { backgroundColor: PARTICIPANT_CLIENT_ROLE_COLORS[papel] }
+                              : undefined
+                          }
+                        >
+                          {PARTICIPANT_CLIENT_ROLE_LABELS[papel]}
+                        </button>
+                      ))}
+                      <button
+                        disabled={busy}
+                        onClick={() => void salvarPapelParticipante(participant.id, null)}
+                        className="rounded-[3px] border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        Sem marcação
+                      </button>
+                    </div>
                   )}
                 </div>
-                <button
-                  title={participant.name ? "Editar nome" : "Dar um nome a este participante"}
-                  className="shrink-0 rounded-lg p-1 text-slate-300 hover:bg-slate-100 hover:text-slate-600"
-                  onClick={() => setRenamingParticipant(participant.id)}
-                >
-                  <Pencil className="h-3 w-3" />
-                </button>
-                {participant.isAdmin && <Badge className="bg-amber-50 text-amber-700">admin</Badge>}
-                {/* Sem telefone conhecido não há para onde abrir a conversa */}
-                {participant.phoneNumber && (
-                  <button
-                    title={`Conversar no privado com ${participant.name || formatPhone(participant.phoneNumber)}`}
-                    disabled={busy}
-                    onClick={() => void openDirect(participant.id)}
-                    className="flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 px-1.5 py-1 text-[11px] text-slate-600 hover:bg-slate-50 hover:text-brand-700 disabled:opacity-50"
-                  >
-                    <MessageSquare className="h-3 w-3" /> Conversar
-                  </button>
-                )}
-              </div>
-            ))}
+              );
+            })}
             {detail.group.participants.length === 0 && (
               <p className="text-xs text-slate-400">Participantes ainda não sincronizados.</p>
             )}

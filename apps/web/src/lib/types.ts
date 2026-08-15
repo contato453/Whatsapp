@@ -5,6 +5,7 @@ import type {
   MessageDirection,
   MessageStatus,
   MessageType,
+  ParticipantClientRole,
   UserRole,
 } from "@azvchat/shared";
 
@@ -176,7 +177,10 @@ export interface GroupDetailDto {
     name: string | null;
     customName: string | null;
     whatsappName: string | null;
+    /** Administrador do GRUPO no WhatsApp — vem do sync, ninguém edita. */
     isAdmin: boolean;
+    /** Papel da pessoa dentro do cliente, marcado pela equipe. */
+    clientRole: ParticipantClientRole | null;
     hasAvatar: boolean;
   }>;
 }

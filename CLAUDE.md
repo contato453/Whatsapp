@@ -109,7 +109,14 @@ snake_case e id `uuid`.
   `sessionId`, `departmentId` (departamento padrão das conversas que chegam),
   `defaultAssigneeId` (responsável padrão do número), `provider`.
 - `Contact`, `WhatsAppGroup` (com `participantCount`, `conversationId`), `GroupParticipant`
-  (`name` do WhatsApp vs `customName` da equipe, `isAdmin`, `avatarUrl`, `avatarCheckedAt`).
+  (`name` do WhatsApp vs `customName` da equipe, `isAdmin`, `avatarUrl`, `avatarCheckedAt`,
+  `clientRole`).
+- `GroupParticipant.clientRole` (`ParticipantClientRole`: `partner` | `administrative` |
+  `null`) — papel da pessoa **dentro do cliente**, marcado pela equipe. Coluna única, então
+  a seleção é única por construção. **Não confundir com `isAdmin`**, que é administrador do
+  grupo no WhatsApp e vem do sync; e **não alimenta** `Conversation.partnerName`, que segue
+  independente. Rótulos e cores em `PARTICIPANT_CLIENT_ROLE_LABELS` /
+  `PARTICIPANT_CLIENT_ROLE_COLORS` (`@azvchat/shared`).
 
 **Atendimento**
 - `Conversation` — `type` (`individual|group`), `title` (vem do WhatsApp, o sync sobrescreve)
@@ -430,6 +437,13 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
 
 - `title` vs `customTitle` e `name` vs `customName`: o **sync do WhatsApp sobrescreve o
   primeiro e nunca toca no segundo**. Exibição prefere o custom.
+- **Nome do participante é decidido no backend**, em `serializeGroupParticipant`
+  (`lib/serialize.ts`), nunca no componente. A cadeia é `customName` → nome do `Contact`
+  do número conectado → `name` (pushName do participante) → telefone formatado. `customName`
+  vence porque é a única fonte que a equipe controla e que o sync não sobrescreve. As fontes
+  extras (`Contact` e pushName da última mensagem) são resolvidas **em lote**, dois SELECT
+  para o grupo inteiro — grupo grande não pode virar consulta por participante. Quando o nome
+  exibido já é o telefone, a segunda linha do painel não o repete.
 - Relação opcional no Prisma exige `is:` (`conversation: { is: ... }`) — sem isso o filtro
   vazio do admin não casa nada. Já documentado em `groupScope`.
 - Em `Tag`/`QuickReply`, **"geral" é a flag `isGeneral`, nunca a lista vazia de

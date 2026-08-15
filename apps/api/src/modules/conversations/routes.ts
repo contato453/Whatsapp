@@ -1,7 +1,11 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Prisma } from "@azvchat/database";
 import { z } from "zod";
-import { CONVERSATION_STATUSES, RealtimeEvents } from "@azvchat/shared";
+import {
+  CONVERSATION_STATUSES,
+  PARTICIPANT_CLIENT_ROLES,
+  RealtimeEvents,
+} from "@azvchat/shared";
 import {
   accessibleDepartmentIds,
   conversationScope,
@@ -15,6 +19,7 @@ import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import {
   serializeConversation,
   serializeConversationDetail,
+  serializeGroupParticipant,
   serializeUserDirectory,
 } from "../../lib/serialize.js";
 import { countPendingScheduled } from "../../lib/scheduled-pending.js";
@@ -179,31 +184,14 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
             name: group.name,
             description: group.description,
             participantCount: group.participantCount,
-            participants: group.participants.map((participant) => {
-              const known = participantContacts.get(participant.externalContactId);
-              return {
-                id: participant.id,
-                // Permite ligar o remetente de cada mensagem ao participante
-                // (e, com isso, exibir a foto dele no chat).
-                externalContactId: participant.externalContactId,
-                phoneNumber: participant.phoneNumber || known?.phoneNumber || "",
-                name:
-                  participant.customName ||
-                  participant.name ||
-                  known?.name ||
-                  pushNames.get(participant.externalContactId) ||
-                  null,
-                customName: participant.customName,
-                /// Nome de origem, exibido como referência quando há nome próprio.
-                whatsappName:
-                  participant.name ||
-                  known?.name ||
-                  pushNames.get(participant.externalContactId) ||
-                  null,
-                isAdmin: participant.isAdmin || participant.isSuperAdmin,
-                hasAvatar: participant.avatarUrl != null,
-              };
-            }),
+            // As duas fontes extras são resolvidas em lote (dois SELECT para
+            // o grupo inteiro) — grupo grande não vira consulta por pessoa.
+            participants: group.participants.map((participant) =>
+              serializeGroupParticipant(participant, {
+                contact: participantContacts.get(participant.externalContactId) ?? null,
+                pushName: pushNames.get(participant.externalContactId) ?? null,
+              }),
+            ),
           }
         : null,
       assignmentHistory: history.map((entry) => ({
@@ -615,11 +603,23 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     return { ok: true };
   });
 
-  /** Nome próprio de um participante de grupo. */
+  /**
+   * Cadastro do participante feito pela equipe: nome próprio e papel dentro
+   * do cliente. Os dois campos são opcionais e independentes — quem só quer
+   * marcar o sócio não precisa reenviar o nome.
+   *
+   * Papel mínimo continua sendo `agent`: quem atende o grupo é quem sabe
+   * quem é quem nele.
+   */
   app.patch("/group-participants/:id", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const { customName } = z
-      .object({ customName: z.string().trim().max(120).nullable() })
+    const body = z
+      .object({
+        customName: z.string().trim().max(120).nullable().optional(),
+        // Coluna única, então a seleção é única por construção: sócio,
+        // administrativo ou null (nenhuma marcação). Nunca as duas.
+        clientRole: z.enum(PARTICIPANT_CLIENT_ROLES).nullable().optional(),
+      })
       .parse(request.body);
     const access = await loadConversationAccess(deps.prisma, request.user);
     const participant = await deps.prisma.groupParticipant.findFirst({
@@ -627,23 +627,74 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
         id,
         group: { organizationId: request.user.organizationId, ...groupScope(access) },
       },
-      select: { id: true, group: { select: { conversationId: true } } },
+      select: {
+        id: true,
+        clientRole: true,
+        group: {
+          select: {
+            conversationId: true,
+            whatsappInstanceId: true,
+            conversation: {
+              select: { departmentId: true, assignedUserId: true, whatsappInstanceId: true },
+            },
+          },
+        },
+      },
     });
     if (!participant) throw new NotFoundError("Participante");
 
-    const valor = customName && customName.length > 0 ? customName : null;
+    const valor =
+      body.customName !== undefined && body.customName && body.customName.length > 0
+        ? body.customName
+        : null;
     await deps.prisma.groupParticipant.update({
       where: { id },
-      data: { customName: valor },
+      data: {
+        ...(body.customName !== undefined ? { customName: valor } : {}),
+        ...(body.clientRole !== undefined ? { clientRole: body.clientRole } : {}),
+      },
     });
-    deps.audit.record({
-      organizationId: request.user.organizationId,
-      userId: request.user.sub,
-      action: "group_participant.renamed",
-      entityType: "GroupParticipant",
-      entityId: id,
-      metadata: { customName: valor },
-    });
+    if (body.customName !== undefined) {
+      deps.audit.record({
+        organizationId: request.user.organizationId,
+        userId: request.user.sub,
+        action: "group_participant.renamed",
+        entityType: "GroupParticipant",
+        entityId: id,
+        metadata: { customName: valor },
+      });
+    }
+    // Marcação de papel é alteração de cadastro feita por pessoa: entra na
+    // auditoria com o valor anterior, para dar para reconstruir a mudança.
+    if (body.clientRole !== undefined) {
+      deps.audit.record({
+        organizationId: request.user.organizationId,
+        userId: request.user.sub,
+        action: "group_participant.client_role_changed",
+        entityType: "GroupParticipant",
+        entityId: id,
+        metadata: { from: participant.clientRole, to: body.clientRole },
+      });
+    }
+
+    // Quem está com a mesma conversa aberta precisa ver a mudança sem
+    // reload. O evento já existe e o frontend recarrega o painel com ele,
+    // então não há payload novo a inventar.
+    const conversationId = participant.group.conversationId;
+    if (conversationId) {
+      deps.io
+        .to(
+          conversationAudience(
+            request.user.organizationId,
+            participant.group.conversation ?? {
+              whatsappInstanceId: participant.group.whatsappInstanceId,
+              departmentId: null,
+              assignedUserId: null,
+            },
+          ),
+        )
+        .emit(RealtimeEvents.GroupParticipants, { conversationId });
+    }
     return { ok: true };
   });
 
