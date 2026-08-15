@@ -225,6 +225,7 @@ export interface DashboardStatsInput {
   settings: AttendanceSettings;
   filters: {
     instanceId: string | null;
+    status: ConversationStatus | null;
     departmentId: string | null;
     assignedUserId: string | null;
   };
