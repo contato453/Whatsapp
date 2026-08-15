@@ -64,6 +64,7 @@ function fakePrisma(): PrismaClient {
               customTitle: "Nome dado pela equipe",
               type: "group",
               instance: { name: "Comercial" },
+              assignedUser: { id: "user-1", name: "Maria Supervisora", avatarUrl: null },
             },
           ];
         }
@@ -309,11 +310,26 @@ describe("GET /dashboard/stats", () => {
         title: "Nome dado pela equipe",
         type: "group",
         instanceName: "Comercial",
+        assignee: { userId: "user-1", name: "Maria Supervisora", hasAvatar: false },
         received: 7,
         sent: 5,
         total: 12,
       },
     ]);
+    await app.close();
+  });
+
+  it("ranking traz o responsável, e `null` quando a conversa está sem dono", async () => {
+    const app = await buildTestApp();
+    const comDono = (await stats(app, "admin")).json();
+    expect(comDono.ranking[0].assignee).toEqual({
+      userId: "user-1",
+      name: "Maria Supervisora",
+      hasAvatar: false,
+    });
+    // Só o mínimo para desenhar a linha: nada de e-mail nem papel do usuário
+    // viajando dentro do trabalho de outro.
+    expect(Object.keys(comDono.ranking[0].assignee)).toEqual(["userId", "name", "hasAvatar"]);
     await app.close();
   });
 

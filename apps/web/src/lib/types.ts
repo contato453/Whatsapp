@@ -307,6 +307,8 @@ export interface DashboardRankingRowDto {
   title: string;
   type: ConversationType;
   instanceName: string | null;
+  /** Responsável pelo atendimento; `null` quando a conversa está sem dono. */
+  assignee: { userId: string; name: string; hasAvatar: boolean } | null;
   received: number;
   sent: number;
   total: number;

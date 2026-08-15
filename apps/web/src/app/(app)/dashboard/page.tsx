@@ -268,12 +268,23 @@ function ShareBar({ share }: { share: number }) {
   );
 }
 
+/** Posição na lista. Fonte tabular para os dois dígitos não desalinharem. */
+function RankPosition({ position }: { position: number }) {
+  return (
+    <span className="w-4 shrink-0 text-right text-xs font-semibold tabular-nums text-slate-400">
+      {position}
+    </span>
+  );
+}
+
 function RankingRow({
   row,
+  position,
   leader,
   onOpen,
 }: {
   row: DashboardRankingRowDto;
+  position: number;
   leader: number;
   onOpen: () => void;
 }) {
@@ -285,6 +296,7 @@ function RankingRow({
       className="block w-full px-4 py-2.5 text-left transition-colors hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-50 motion-reduce:transition-none"
     >
       <div className="flex items-center gap-3">
+        <RankPosition position={position} />
         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-500">
           {row.type === "group" ? (
             <Users2 className="h-3.5 w-3.5" />
@@ -294,9 +306,21 @@ function RankingRow({
         </span>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-slate-900">{row.title}</p>
-          <p className="truncate text-[11px] text-slate-500">
-            {row.type === "group" ? "Grupo" : "Individual"}
-            {row.instanceName ? ` · ${row.instanceName}` : ""}
+          <p className="flex items-center gap-1 truncate text-[11px] text-slate-500">
+            <span className="shrink-0">
+              {row.type === "group" ? "Grupo" : "Individual"}
+              {row.instanceName ? ` · ${row.instanceName}` : ""}
+            </span>
+            <span className="shrink-0 text-slate-300">·</span>
+            <UserRound className="h-3 w-3 shrink-0 text-slate-400" />
+            {/* Mesmo tratamento da lista da Inbox: nome em cinza, e o âmbar
+                reservado para a conversa que ninguém assumiu — ativa e sem
+                dono é o caso que pede ação. */}
+            {row.assignee ? (
+              <span className="truncate text-slate-600">{row.assignee.name}</span>
+            ) : (
+              <span className="truncate font-medium text-amber-600">Sem responsável</span>
+            )}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-3 text-xs tabular-nums text-slate-500">
@@ -316,11 +340,20 @@ function RankingRow({
   );
 }
 
-function TopUserRow({ row, leader }: { row: DashboardTopUserDto; leader: number }) {
+function TopUserRow({
+  row,
+  position,
+  leader,
+}: {
+  row: DashboardTopUserDto;
+  position: number;
+  leader: number;
+}) {
   const share = leader > 0 ? Math.round((row.total / leader) * 100) : 0;
   return (
     <div className="px-4 py-2.5">
       <div className="flex items-center gap-3">
+        <RankPosition position={position} />
         <UserAvatar userId={row.userId} name={row.name} hasAvatar={row.hasAvatar} size="sm" />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-slate-900">{row.name}</p>
@@ -767,10 +800,11 @@ export default function DashboardPage() {
                 description={`Não houve mensagens ${phrase}.`}
               />
             ) : (
-              stats?.ranking.map((row) => (
+              stats?.ranking.map((row, index) => (
                 <RankingRow
                   key={row.conversationId}
                   row={row}
+                  position={index + 1}
                   leader={leader}
                   onOpen={() => router.push(`/inbox/${row.conversationId}`)}
                 />
@@ -796,8 +830,13 @@ export default function DashboardPage() {
                   ))}
                 </div>
               ) : topUsers && topUsers.length > 0 ? (
-                topUsers.map((row) => (
-                  <TopUserRow key={row.userId} row={row} leader={topUserLeader} />
+                topUsers.map((row, index) => (
+                  <TopUserRow
+                    key={row.userId}
+                    row={row}
+                    position={index + 1}
+                    leader={topUserLeader}
+                  />
                 ))
               ) : (
                 <EmptyState

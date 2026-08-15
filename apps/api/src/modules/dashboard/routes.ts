@@ -247,6 +247,10 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
                 customTitle: true,
                 type: true,
                 instance: { select: { name: true } },
+                // Quem está com o atendimento na mão. A lista mostra isso
+                // porque "conversa mais ativa" sem dono é justamente a que
+                // precisa de alguém, e não só de atenção.
+                assignedUser: { select: { id: true, name: true, avatarUrl: true } },
               },
             })
           : Promise.resolve([]),
@@ -349,6 +353,15 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
           title: conversation.customTitle ?? conversation.title,
           type: conversation.type,
           instanceName: conversation.instance?.name ?? null,
+          // Só o mínimo para desenhar a linha — nada de dado de cadastro do
+          // usuário viajando dentro do trabalho de outro.
+          assignee: conversation.assignedUser
+            ? {
+                userId: conversation.assignedUser.id,
+                name: conversation.assignedUser.name,
+                hasAvatar: conversation.assignedUser.avatarUrl != null,
+              }
+            : null,
           received: receivedByConversation.get(row.conversationId) ?? 0,
           sent: sentByConversation.get(row.conversationId) ?? 0,
           total: row._count._all,
