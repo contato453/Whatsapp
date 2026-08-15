@@ -24,6 +24,11 @@ jobs:
   deploy:
     name: Atualizar a VPS
     runs-on: ubuntu-latest
+    # Os segredos do deploy (VPS_HOST, VPS_USER, VPS_SSH_KEY e os opcionais
+    # VPS_PORT/VPS_KNOWN_HOSTS) ficam no environment `production`. Segredo de
+    # environment só existe para o job que o declara: sem esta linha, todos
+    # chegam vazios e o deploy morre na conferência logo abaixo.
+    environment: production
     # No workflow_dispatch não existe workflow_run, e aí a condição do CI verde
     # não se aplica — quem clicou assumiu a responsabilidade.
     if: >-

@@ -154,8 +154,10 @@ ssh-copy-id -i ~/.ssh/azvchat_deploy.pub root@IP_DA_VPS
 ssh-keyscan -H IP_DA_VPS
 ```
 
-**4. Cadastrar os segredos** no GitHub, em **Settings → Secrets and variables → Actions →
-New repository secret**:
+**4. Cadastrar os segredos** no GitHub, em **Settings → Environments → `production` →
+Environment secrets** (o job do deploy declara `environment: production`, e segredo de
+environment só chega ao job que o declara — cadastrar em outro lugar faz o deploy parar na
+conferência dizendo que os segredos estão faltando):
 
 | Segredo | Obrigatório | Valor |
 | --- | --- | --- |
