@@ -269,7 +269,8 @@ DELETE /scheduled-messages/:id
 GET    /attendance-settings  (qualquer papel — o dashboard depende dela)
 PUT    /attendance-settings  (supervisor; grava SLA + expediente e vai para o AuditLog)
 
-GET    /search              GET /dashboard/stats  GET /reports/agents  GET /audit-logs
+GET    /search              GET /reports/agents   GET /audit-logs
+GET    /dashboard/stats?period=today|7d|15d|30d  (período validado por Zod, sem intervalo livre)
 ```
 
 Mídia é servida **somente autenticada**, escopada por organização, com proteção contra
@@ -500,6 +501,24 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   escrever — por isso existe `POST /whatsapp-instances/:id/apply-default-assignee`.
 - Atalho de resposta rápida e nome de etiqueta são **únicos na organização inteira**, não
   por departamento.
+- **Dashboard: o período filtra por atividade e o status agrupa.** Cada card conta conversa
+  que teve **ao menos uma mensagem no período**, pelo status **atual** dela — nunca por data
+  de criação nem por data de mudança de status. Como `lastMessageAt` é sempre o timestamp da
+  última mensagem, "teve mensagem no período" é `lastMessageAt >= início`, e os quatro status
+  saem de **um único `groupBy`**: a soma fecha com o card de conversas ativas por construção.
+  O card de atraso e o de infraestrutura **ignoram o período** — são o estado agora.
+- **Os parâmetros de atendimento são lidos do banco a cada requisição** do dashboard
+  (`lib/attendance-settings.ts`), sem cache em memória e sem carregar no boot. Em cache, a
+  mudança do limite só valeria depois de reiniciar o container — exatamente o problema que a
+  tela de Parâmetros veio resolver.
+- Tempo de atraso conta **só dentro do expediente**, no fuso configurado
+  (`modules/dashboard/metrics.ts`): mensagem que chega 17h50 de sexta volta a contar na
+  abertura do próximo dia ativo, e dia desligado não acumula nada. Semana inteira desligada
+  devolve zero em vez de procurar um próximo horário útil que não existe. Feriado não é
+  tratado e conta como dia normal. Nota interna não é `Message`, então nunca conta como
+  resposta ao cliente; mensagem apagada e saída ainda `pending` também não contam.
+- **Nenhum corte de data do dashboard usa o fuso do servidor** — "hoje" é o dia civil do
+  escritório, não o dia UTC do container.
 - Ingestão é idempotente por `(conversationId, externalMessageId)` — não crie caminho
   paralelo de inserção de mensagem.
 - LID (`@lid`) não é telefone. Existe migration só para limpar telefones que vieram de LID

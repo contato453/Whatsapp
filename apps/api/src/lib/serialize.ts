@@ -12,6 +12,10 @@ import {
   formatPhone,
   PARTICIPANT_WITHOUT_NAME_LABEL,
   type AttendanceSettings,
+  type ConnectionStatus,
+  type ConversationStatus,
+  type ConversationType,
+  type DashboardPeriod,
 } from "@azvchat/shared";
 
 /**
@@ -157,6 +161,71 @@ export function serializeAttendanceSettings(settings: AttendanceSettings) {
       startTime: day.startTime,
       endTime: day.endTime,
     })),
+  };
+}
+
+/** Uma linha do ranking das conversas mais ativas do período. */
+export interface DashboardRankingRow {
+  conversationId: string;
+  title: string;
+  type: ConversationType;
+  instanceName: string | null;
+  received: number;
+  sent: number;
+  total: number;
+}
+
+export interface DashboardStatsInput {
+  period: DashboardPeriod;
+  periodStart: Date;
+  generatedAt: Date;
+  settings: AttendanceSettings;
+  conversationsByStatus: Record<ConversationStatus, number>;
+  instancesByStatus: Record<ConnectionStatus, number>;
+  messagesReceived: number;
+  messagesSent: number;
+  overdue: { count: number; oldestWaitingMinutes: number | null };
+  ranking: DashboardRankingRow[];
+}
+
+/**
+ * Indicadores do dashboard. O total de conversas ativas é somado aqui, dos
+ * mesmos quatro números que vão para a tela: se ele viesse de outra consulta,
+ * a soma poderia não fechar e ninguém desconfiaria.
+ *
+ * O limite de resposta vigente viaja junto para a tela poder dizer contra o
+ * que o atraso está sendo medido.
+ */
+export function serializeDashboardStats(input: DashboardStatsInput) {
+  const byStatus = input.conversationsByStatus;
+  const instances = input.instancesByStatus;
+  return {
+    period: input.period,
+    periodStart: input.periodStart.toISOString(),
+    generatedAt: input.generatedAt.toISOString(),
+    responseLimitMinutes: input.settings.responseLimitMinutes,
+    timezone: input.settings.timezone,
+    conversations: {
+      active: Object.values(byStatus).reduce((total, count) => total + count, 0),
+      byStatus,
+    },
+    overdue: {
+      count: input.overdue.count,
+      oldestWaitingMinutes: input.overdue.oldestWaitingMinutes,
+    },
+    instances: {
+      connected: instances.connected,
+      disconnected: Object.entries(instances).reduce(
+        (total, [status, count]) => (status === "connected" ? total : total + count),
+        0,
+      ),
+      byStatus: instances,
+    },
+    messages: {
+      received: input.messagesReceived,
+      sent: input.messagesSent,
+    },
+    ranking: input.ranking,
   };
 }
 

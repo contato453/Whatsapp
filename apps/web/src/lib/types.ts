@@ -2,6 +2,7 @@ import type {
   ConnectionStatus,
   ConversationStatus,
   ConversationType,
+  DashboardPeriod,
   MessageDirection,
   MessageStatus,
   MessageType,
@@ -293,18 +294,44 @@ export interface AgentReportDto {
   truncated: boolean;
 }
 
+/** Uma linha do ranking das conversas mais ativas do período. */
+export interface DashboardRankingRowDto {
+  conversationId: string;
+  /** Já resolvido pela API: `customTitle` vence `title`, como na Inbox. */
+  title: string;
+  type: ConversationType;
+  instanceName: string | null;
+  received: number;
+  sent: number;
+  total: number;
+}
+
 export interface DashboardStatsDto {
-  instancesConnected: number;
-  instancesDisconnected: number;
-  conversationsOpen: number;
-  conversationsWaitingClient: number;
-  conversationsWaitingInternal: number;
-  conversationsUnassigned: number;
-  messagesReceivedToday: number;
-  messagesSentToday: number;
-  conversationsByDepartment: Array<{
-    departmentId: string | null;
-    departmentName: string;
+  period: DashboardPeriod;
+  periodStart: string;
+  generatedAt: string;
+  /** Limite vigente nos parâmetros de atendimento, para a tela dizer contra o que mede. */
+  responseLimitMinutes: number;
+  timezone: string;
+  conversations: {
+    /** Soma exata dos quatro status abaixo — vem do mesmo agrupamento. */
+    active: number;
+    byStatus: Record<ConversationStatus, number>;
+  };
+  /** Estado agora, sem relação com o período escolhido. */
+  overdue: {
     count: number;
-  }>;
+    /** Maior espera em minutos de expediente, ou null quando não há atraso. */
+    oldestWaitingMinutes: number | null;
+  };
+  instances: {
+    connected: number;
+    disconnected: number;
+    byStatus: Record<ConnectionStatus, number>;
+  };
+  messages: {
+    received: number;
+    sent: number;
+  };
+  ranking: DashboardRankingRowDto[];
 }

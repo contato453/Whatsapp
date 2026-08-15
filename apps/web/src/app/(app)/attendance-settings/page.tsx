@@ -299,7 +299,7 @@ export default function AttendanceSettingsPage() {
                           onChange={(event) =>
                             updateDay(day.weekday, { startTime: event.target.value })
                           }
-                          className="w-28"
+                          className="w-32"
                         />
                         <span className="text-xs text-slate-400">até</span>
                         <Input
@@ -310,7 +310,7 @@ export default function AttendanceSettingsPage() {
                           onChange={(event) =>
                             updateDay(day.weekday, { endTime: event.target.value })
                           }
-                          className="w-28"
+                          className="w-32"
                         />
                       </div>
                     ) : (

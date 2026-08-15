@@ -2,33 +2,15 @@
 
 import { Users2, User, UserRound } from "lucide-react";
 import {
+  CONNECTION_STATUS_COLORS,
+  CONNECTION_STATUS_LABELS,
   CONVERSATION_STATUS_COLORS,
   CONVERSATION_STATUS_LABELS,
-  type ConnectionStatus,
 } from "@azvchat/shared";
 import { cn, formatTime } from "@/lib/utils";
 import type { ConversationDto } from "@/lib/types";
 import { Badge } from "@/components/ui";
 import { ConversationAvatar } from "./conversation-avatar";
-
-/** Cores e rótulos do estado da conexão do número (chip). */
-const INSTANCE_STATUS_COLORS: Record<ConnectionStatus, string> = {
-  connected: "#16a34a",
-  connecting: "#d97706",
-  qr_required: "#d97706",
-  reconnecting: "#d97706",
-  disconnected: "#dc2626",
-  error: "#dc2626",
-};
-
-const INSTANCE_STATUS_LABELS: Record<ConnectionStatus, string> = {
-  connected: "conectado",
-  connecting: "conectando",
-  qr_required: "aguardando QR Code",
-  reconnecting: "reconectando",
-  disconnected: "desconectado",
-  error: "com erro",
-};
 
 export function ConversationListItem({
   conversation,
@@ -90,13 +72,13 @@ export function ConversationListItem({
               <Badge
                 className="bg-slate-100 text-slate-500"
                 // Bolinha indica se o número está conectado no momento
-                title={`Conexão: ${INSTANCE_STATUS_LABELS[conversation.instanceStatus ?? "disconnected"]}`}
+                title={`Conexão: ${CONNECTION_STATUS_LABELS[conversation.instanceStatus ?? "disconnected"]}`}
               >
                 <span
                   className="h-1.5 w-1.5 shrink-0 rounded-full"
                   style={{
                     backgroundColor:
-                      INSTANCE_STATUS_COLORS[conversation.instanceStatus ?? "disconnected"],
+                      CONNECTION_STATUS_COLORS[conversation.instanceStatus ?? "disconnected"],
                   }}
                 />
                 {conversation.instanceName}

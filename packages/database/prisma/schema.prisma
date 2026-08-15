@@ -331,6 +331,9 @@ model Conversation {
   @@unique([whatsappInstanceId, externalChatId])
   @@index([organizationId, status])
   @@index([organizationId, lastMessageAt])
+  /// Dashboard: conversas com atividade no período agrupadas por status, e as
+  /// candidatas a atraso (não resolvidas, paradas há mais que o limite).
+  @@index([organizationId, status, lastMessageAt])
   @@map("conversations")
 }
 

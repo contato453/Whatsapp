@@ -1,7 +1,11 @@
 "use client";
 
-import type { AttendanceSettings, ParticipantClientRole } from "@azvchat/shared";
-import type { QuickReplyDto, TagDto } from "./types";
+import type {
+  AttendanceSettings,
+  DashboardPeriod,
+  ParticipantClientRole,
+} from "@azvchat/shared";
+import type { DashboardStatsDto, QuickReplyDto, TagDto } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -125,6 +129,15 @@ export const quickRepliesApi = {
       .patch<{ quickReply: QuickReplyDto }>(`/quick-replies/${id}`, input)
       .then((data) => data.quickReply),
   remove: (id: string) => api.delete<{ ok: boolean }>(`/quick-replies/${id}`),
+};
+
+/**
+ * Indicadores do dashboard. O período é o único parâmetro e vale para a tela
+ * inteira; a API valida e recusa qualquer valor fora dos quatro.
+ */
+export const dashboardApi = {
+  stats: (period: DashboardPeriod) =>
+    api.get<DashboardStatsDto>(`/dashboard/stats?period=${period}`),
 };
 
 /**

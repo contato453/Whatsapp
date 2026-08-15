@@ -2,21 +2,17 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Plug, PlugZap, Plus, QrCode, Smartphone, Trash2, Unplug, UserCheck } from "lucide-react";
-import { RealtimeEvents, type ConnectionStatus } from "@azvchat/shared";
+import {
+  CONNECTION_STATUS_COLORS,
+  CONNECTION_STATUS_LABELS,
+  RealtimeEvents,
+  type ConnectionStatus,
+} from "@azvchat/shared";
 import { api, ApiError } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { formatDateTime, formatPhone } from "@/lib/utils";
 import type { DepartmentDto, InstanceDto, UserDirectoryDto } from "@/lib/types";
 import { Badge, Button, Card, Field, Input, Modal, Spinner, EmptyState } from "@/components/ui";
-
-const STATUS_LABEL: Record<ConnectionStatus, { label: string; color: string }> = {
-  disconnected: { label: "Desconectado", color: "#64748b" },
-  connecting: { label: "Conectando...", color: "#d97706" },
-  qr_required: { label: "Aguardando QR Code", color: "#d97706" },
-  connected: { label: "Conectado", color: "#16a34a" },
-  reconnecting: { label: "Reconectando...", color: "#d97706" },
-  error: { label: "Erro", color: "#dc2626" },
-};
 
 export default function WhatsAppPage() {
   const socket = useSocket();
@@ -246,7 +242,8 @@ export default function WhatsAppPage() {
           </div>
           <ul className="divide-y divide-slate-200">
             {instances.map((instance) => {
-              const status = STATUS_LABEL[instance.status];
+              const statusLabel = CONNECTION_STATUS_LABELS[instance.status];
+              const statusColor = CONNECTION_STATUS_COLORS[instance.status];
               return (
                 <li
                   key={instance.id}
@@ -313,7 +310,7 @@ export default function WhatsAppPage() {
                   </div>
 
                   <div className="w-36 shrink-0">
-                    <Badge color={status.color}>{status.label}</Badge>
+                    <Badge color={statusColor}>{statusLabel}</Badge>
                   </div>
 
                   <div className="w-44 shrink-0 text-xs text-slate-400">

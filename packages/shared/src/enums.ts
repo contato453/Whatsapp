@@ -13,6 +13,29 @@ export const CONNECTION_STATUSES = [
 ] as const;
 export type ConnectionStatus = (typeof CONNECTION_STATUSES)[number];
 
+/** Rótulos do estado do número (chip) — fonte única para badge, lista e dashboard. */
+export const CONNECTION_STATUS_LABELS: Record<ConnectionStatus, string> = {
+  disconnected: "Desconectado",
+  connecting: "Conectando",
+  qr_required: "Aguardando QR Code",
+  connected: "Conectado",
+  reconnecting: "Reconectando",
+  error: "Erro",
+};
+
+/**
+ * Verde no ar, âmbar em transição (vai voltar sozinho), vermelho travado,
+ * cinza fora do ar por escolha de alguém.
+ */
+export const CONNECTION_STATUS_COLORS: Record<ConnectionStatus, string> = {
+  disconnected: "#64748b",
+  connecting: "#d97706",
+  qr_required: "#d97706",
+  connected: "#16a34a",
+  reconnecting: "#d97706",
+  error: "#dc2626",
+};
+
 export const CONVERSATION_TYPES = ["individual", "group"] as const;
 export type ConversationType = (typeof CONVERSATION_TYPES)[number];
 
