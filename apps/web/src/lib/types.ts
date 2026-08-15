@@ -354,6 +354,7 @@ export interface DashboardStatsDto {
   /** Devolvidos como a API os aplicou, para a tela conferir o que desenhou. */
   filters: {
     instanceId: string | null;
+    status: ConversationStatus | null;
     departmentId: string | null;
     assignedUserId: string | null;
   };

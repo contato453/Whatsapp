@@ -4,19 +4,28 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  AlertCircle,
   AlertTriangle,
   Archive,
   ArrowDownLeft,
   ArrowUpRight,
+  CalendarDays,
   CheckCircle2,
   CircleDot,
+  Database,
   Hourglass,
+  Info,
+  ListFilter,
+  Mail,
   MessagesSquare,
-  Smartphone,
+  PhoneOff,
+  QrCode,
+  RadioTower,
+  RotateCcw,
+  SlidersHorizontal,
   TrendingUp,
   Users2,
   UserRound,
-  X,
 } from "lucide-react";
 import {
   CONNECTION_STATUSES,
@@ -32,6 +41,7 @@ import {
   FILTER_NONE,
   USER_ROLE_LABELS,
   hasRole,
+  type ConnectionStatus,
   type ConversationStatus,
   type DashboardPeriod,
 } from "@azvchat/shared";
@@ -50,6 +60,8 @@ import { Card, EmptyState } from "@/components/ui";
 import { UserAvatar } from "@/components/user-avatar";
 import { MessagesTimeline } from "@/components/dashboard/messages-timeline";
 import { HoursHeatmap } from "@/components/dashboard/hours-heatmap";
+import { Sparkline } from "@/components/dashboard/sparkline";
+import { ConnectivityRing } from "@/components/dashboard/connectivity-ring";
 
 /**
  * Filtros da tela guardados por navegador, igual à barra lateral: mesmo
@@ -62,8 +74,57 @@ const LEGACY_PERIOD_KEY = "zapdesk.dashboard-period";
 
 const DEFAULT_FILTERS: DashboardFilters = { period: "today" };
 
+/** A cada quanto a tela se recarrega sozinha — ver o efeito na página. */
+const AUTO_REFRESH_MS = 60_000;
+
+/** As duas cores das mensagens — o mesmo par validado dos gráficos. */
+const RECEIVED_COLOR = "#16a34a";
+const SENT_COLOR = "#0891b2";
+
+/**
+ * Legenda curta de cada status no fluxo de atendimento. É texto desta tela
+ * (o rótulo de domínio continua vindo de `CONVERSATION_STATUS_LABELS`), não
+ * um enum novo — por isso mora aqui e não no shared.
+ */
+const STATUS_FLOW_HINTS: Record<ConversationStatus, string> = {
+  open: "Em andamento",
+  waiting_client: "Aguardando cliente",
+  waiting_internal: "Aguardando operação",
+  resolved: "Finalizadas",
+};
+
+/**
+ * O que cada estado fora do ar significa na prática, para o bloco de
+ * infraestrutura não obrigar ninguém a decorar os nomes técnicos.
+ */
+const CONNECTION_ISSUE_HINTS: Record<ConnectionStatus, string> = {
+  disconnected: "Número desconectado por alguém da equipe.",
+  connecting: "Número abrindo a conexão agora.",
+  qr_required: "Aguardando a leitura do QR Code.",
+  connected: "Número no ar.",
+  reconnecting: "Número em processo de reconexão.",
+  error: "Conexão com erro — veja a tela de Conexões.",
+};
+
+const CONNECTION_ISSUE_ICONS: Record<ConnectionStatus, ReactNode> = {
+  disconnected: <PhoneOff className="h-4 w-4" />,
+  connecting: <RadioTower className="h-4 w-4" />,
+  qr_required: <QrCode className="h-4 w-4" />,
+  connected: <RadioTower className="h-4 w-4" />,
+  reconnecting: <RadioTower className="h-4 w-4" />,
+  error: <AlertCircle className="h-4 w-4" />,
+};
+
+const numberFormatter = new Intl.NumberFormat("pt-BR");
+
 function isPeriod(value: unknown): value is DashboardPeriod {
   return typeof value === "string" && (DASHBOARD_PERIODS as readonly string[]).includes(value);
+}
+
+function isStatus(value: unknown): value is ConversationStatus {
+  return (
+    typeof value === "string" && (CONVERSATION_STATUSES as readonly string[]).includes(value)
+  );
 }
 
 function isDate(value: unknown): value is string {
@@ -87,6 +148,7 @@ function readFilters(): DashboardFilters {
     if (isDate(value.from)) filters.from = value.from;
     if (isDate(value.to)) filters.to = value.to;
     if (typeof value.instanceId === "string") filters.instanceId = value.instanceId;
+    if (isStatus(value.status)) filters.status = value.status;
     if (typeof value.departmentId === "string") filters.departmentId = value.departmentId;
     if (typeof value.assignedUserId === "string") filters.assignedUserId = value.assignedUserId;
     // Personalizado sem as duas datas não é pedido válido: cai no padrão.
@@ -112,33 +174,6 @@ function todayInput(): string {
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
   return `${now.getFullYear()}-${month}-${day}`;
-}
-
-/**
- * A saudação segue o relógio de quem está olhando, e não o do servidor: quem
- * abre às 8h da manhã precisa ler "bom dia" mesmo que o container esteja em
- * UTC. Por isso ela é calculada depois da hidratação.
- */
-function greetingFor(hour: number): string {
-  if (hour >= 5 && hour < 12) return "Bom dia";
-  if (hour >= 12 && hour < 18) return "Boa tarde";
-  return "Boa noite";
-}
-
-/** Só o primeiro nome; nome de uma palavra só usa ela mesma. */
-function firstNameOf(name: string): string {
-  const [first] = name.trim().split(/\s+/);
-  return first ?? name;
-}
-
-function fullDateOf(date: Date): string {
-  const text = date.toLocaleDateString("pt-BR", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
-  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /**
@@ -205,8 +240,37 @@ function ValueSkeleton({ className }: { className?: string }) {
   );
 }
 
+/** Cabeçalho padrão dos blocos grandes: ícone, título e uma linha de contexto. */
+function BlockHeader({
+  icon,
+  accent,
+  title,
+  subtitle,
+}: {
+  icon: ReactNode;
+  accent: string;
+  title: string;
+  subtitle: string;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <span
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full"
+        style={{ backgroundColor: `${accent}1a`, color: accent }}
+      >
+        {icon}
+      </span>
+      <div className="min-w-0">
+        <h2 className="text-sm font-bold text-slate-900">{title}</h2>
+        <p className="text-xs text-slate-500">{subtitle}</p>
+      </div>
+    </div>
+  );
+}
+
 function StatCard({
   label,
+  sublabel,
   value,
   icon,
   accent,
@@ -216,6 +280,8 @@ function StatCard({
   href,
 }: {
   label: string;
+  /** Linha fina sob o título — normalmente a frase do período. */
+  sublabel?: string;
   value: number;
   icon: ReactNode;
   accent?: string;
@@ -229,31 +295,45 @@ function StatCard({
   const card = (
     <Card
       className={cn(
-        "flex h-full flex-col gap-2 p-4",
+        "relative flex h-full flex-col gap-3 overflow-hidden p-5 pb-6",
         // Alerta só quando existe o que alertar: zero atrasado não é vermelho.
-        alert && "border-red-300 bg-red-50/60",
+        alert && "border-red-200 bg-red-50/60",
         href &&
           "transition-colors hover:border-slate-300 hover:bg-slate-50 motion-reduce:transition-none",
       )}
     >
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-          {label}
-        </span>
+      <div className="flex items-start gap-3">
         <span
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
           style={{ backgroundColor: `${color}1a`, color }}
         >
           {icon}
         </span>
+        <div className="min-w-0">
+          <p className="text-sm font-bold leading-tight text-slate-900">{label}</p>
+          {sublabel && <p className="text-xs text-slate-500">{sublabel}</p>}
+        </div>
       </div>
       {pending ? (
-        <ValueSkeleton />
+        <ValueSkeleton className="h-9 w-16" />
       ) : (
         // Fonte tabular: o número não dança de largura a cada atualização.
-        <span className="text-3xl font-bold leading-none tabular-nums text-slate-900">{value}</span>
+        <span
+          className={cn(
+            "text-4xl font-bold leading-none tabular-nums",
+            alert ? "text-red-700" : "text-slate-900",
+          )}
+        >
+          {numberFormatter.format(value)}
+        </span>
       )}
-      {hint && <div className="text-[11px] leading-tight text-slate-500">{hint}</div>}
+      {hint && <div className="text-xs leading-snug text-slate-500">{hint}</div>}
+      {/* Filete de cor na base — assinatura visual do card, só decoração. */}
+      <span
+        aria-hidden
+        className="absolute inset-x-0 bottom-0 h-1"
+        style={{ backgroundColor: alert ? "#dc2626" : color }}
+      />
     </Card>
   );
   if (!href) return card;
@@ -420,6 +500,45 @@ function FilterSelect({
   );
 }
 
+/** Card interno de Recebidas/Enviadas, com a miniatura da série do período. */
+function MessageTile({
+  label,
+  value,
+  color,
+  icon,
+  series,
+  pending,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  icon: ReactNode;
+  series: number[];
+  pending: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-slate-200 p-4">
+      <div className="flex items-center gap-2.5">
+        <span
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
+          style={{ backgroundColor: `${color}1a`, color }}
+        >
+          {icon}
+        </span>
+        <span className="text-xs font-semibold text-slate-700">{label}</span>
+      </div>
+      {pending ? (
+        <ValueSkeleton className="h-8 w-14" />
+      ) : (
+        <span className="text-3xl font-bold leading-none tabular-nums text-slate-900">
+          {numberFormatter.format(value)}
+        </span>
+      )}
+      <Sparkline values={series} color={color} />
+    </div>
+  );
+}
+
 // ---------- Tela ----------
 
 export default function DashboardPage() {
@@ -430,17 +549,15 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStatsDto | null>(null);
   const [pending, setPending] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [now, setNow] = useState<Date | null>(null);
 
   const [instances, setInstances] = useState<InstanceDto[]>([]);
   const [departments, setDepartments] = useState<DepartmentDto[]>([]);
   const [users, setUsers] = useState<UserDirectoryDto[]>([]);
 
-  // Os filtros salvos e a hora local entram depois da hidratação: o HTML do
-  // servidor não conhece nem o storage nem o relógio de quem está olhando.
+  // Os filtros salvos entram depois da hidratação: o HTML do servidor não
+  // conhece o storage de quem está olhando.
   useEffect(() => {
     setFilters(readFilters());
-    setNow(new Date());
   }, []);
 
   // As três listas já vêm recortadas pelo acesso de quem pediu, então o
@@ -476,6 +593,14 @@ export default function DashboardPage() {
     load(filters);
   }, [load, filters]);
 
+  // A tela se recarrega sozinha: o dashboard fica aberto na TV ou numa
+  // segunda aba, e ninguém volta nela para apertar F5. A recarga é
+  // silenciosa — os números só trocam quando os novos chegam.
+  useEffect(() => {
+    const timer = window.setInterval(() => load(filters), AUTO_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [load, filters]);
+
   function apply(next: DashboardFilters): void {
     setFilters(next);
     writeFilters(next);
@@ -499,18 +624,25 @@ export default function DashboardPage() {
     apply(next);
   }
 
-  const greeting = now ? `${greetingFor(now.getHours())}, ${firstNameOf(user?.name ?? "")}` : "";
+  function chooseStatus(value: string): void {
+    const next = { ...filters };
+    if (isStatus(value)) next.status = value;
+    else delete next.status;
+    apply(next);
+  }
+
   const byStatus = stats?.conversations.byStatus;
   const leader = stats?.ranking[0]?.total ?? 0;
   const topUsers = stats?.topUsers ?? null;
   const topUserLeader = topUsers?.[0]?.total ?? 0;
   const offline = stats ? stats.instances.disconnected : 0;
+  const connected = stats?.instances.connected ?? 0;
   const phrase = DASHBOARD_PERIOD_PHRASES[filters.period];
-  const noAccess = stats !== null && stats.instances.connected + offline === 0;
+  const noAccess = stats !== null && connected + offline === 0;
   const hasScopeFilter = Boolean(
-    filters.instanceId || filters.departmentId || filters.assignedUserId,
+    filters.instanceId || filters.status || filters.departmentId || filters.assignedUserId,
   );
-  // Recortes que a Inbox não sabe reproduzir: o aviso abaixo dos cards de
+  // Recortes que a Inbox não sabe reproduzir: o aviso abaixo do fluxo de
   // status só aparece quando o clique realmente vai levar menos filtro.
   const carriesPartialScope = Boolean(
     filters.assignedUserId || filters.departmentId === FILTER_NONE,
@@ -518,119 +650,141 @@ export default function DashboardPage() {
   // O bloco de equipe é de supervisor para cima, igual ao requireRole que a
   // API aplica — sem isso o atendente veria um card vazio sem saber por quê.
   const canSeeTeam = user ? hasRole(user.role, "supervisor") : false;
+  const initialPending = pending && !stats;
 
   return (
     <div className="thin-scroll h-full overflow-y-auto p-6 lg:p-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-h-[3.25rem]">
-          <h1 className="text-2xl font-bold text-slate-900">{greeting || " "}</h1>
-          <p className="text-sm text-slate-500">{now ? fullDateOf(now) : " "}</p>
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Dashboard de Atendimento</h1>
+          <p className="text-sm text-slate-500">
+            Visão geral do atendimento e da operação em tempo real
+          </p>
         </div>
-        <div
-          className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 shadow-sm"
-          role="group"
-          aria-label="Período dos indicadores"
-        >
-          {DASHBOARD_PERIODS.map((option) => (
-            <button
-              key={option}
-              type="button"
-              aria-pressed={filters.period === option}
-              onClick={() => choosePeriod(option)}
-              className={cn(
-                "rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors motion-reduce:transition-none sm:px-3",
-                filters.period === option
-                  ? "bg-slate-900 text-white"
-                  : "text-slate-600 hover:bg-slate-100",
-              )}
-            >
-              {DASHBOARD_PERIOD_LABELS[option]}
-            </button>
-          ))}
-        </div>
+        {/* O período tem dois controles ligados ao mesmo filtro: este, sempre
+            à mão no topo, e o da barra de filtros, junto dos demais. */}
+        <label className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
+          <CalendarDays className="h-4 w-4 text-slate-500" aria-hidden />
+          <span className="sr-only">Período dos indicadores</span>
+          <select
+            value={filters.period}
+            onChange={(event) => choosePeriod(event.target.value as DashboardPeriod)}
+            className="bg-transparent text-sm font-medium text-slate-700 focus:outline-none"
+          >
+            {DASHBOARD_PERIODS.map((option) => (
+              <option key={option} value={option}>
+                {DASHBOARD_PERIOD_LABELS[option]}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       <Card className="mt-4 p-3">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          {filters.period === "custom" && (
-            <>
-              <label className="flex min-w-0 flex-col gap-1">
-                <span className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                  De
-                </span>
-                <input
-                  type="date"
-                  value={filters.from ?? ""}
-                  max={filters.to}
-                  onChange={(event) => apply({ ...filters, from: event.target.value })}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-                />
-              </label>
-              <label className="flex min-w-0 flex-col gap-1">
-                <span className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                  Até
-                </span>
-                <input
-                  type="date"
-                  value={filters.to ?? ""}
-                  min={filters.from}
-                  onChange={(event) => apply({ ...filters, to: event.target.value })}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-                />
-              </label>
-            </>
-          )}
-          <FilterSelect
-            label="Chip"
-            value={filters.instanceId ?? ""}
-            onChange={(value) => chooseScope("instanceId", value)}
-          >
-            <option value="">Todos os chips</option>
-            {instances.map((instance) => (
-              <option key={instance.id} value={instance.id}>
-                {instance.name}
-              </option>
-            ))}
-          </FilterSelect>
-          <FilterSelect
-            label="Departamento"
-            value={filters.departmentId ?? ""}
-            onChange={(value) => chooseScope("departmentId", value)}
-          >
-            <option value="">Todos os departamentos</option>
-            {departments.map((department) => (
-              <option key={department.id} value={department.id}>
-                {department.name}
-              </option>
-            ))}
-            {/* Conversa sem departamento existe quando o número não tem
-                departamento padrão — precisa ser possível olhar só para ela. */}
-            <option value={FILTER_NONE}>Sem departamento</option>
-          </FilterSelect>
-          <FilterSelect
-            label="Responsável"
-            value={filters.assignedUserId ?? ""}
-            onChange={(value) => chooseScope("assignedUserId", value)}
-          >
-            <option value="">Todos os responsáveis</option>
-            {users.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.name}
-              </option>
-            ))}
-            <option value={FILTER_NONE}>Sem responsável</option>
-          </FilterSelect>
+        <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
+          <span className="inline-flex items-center gap-1.5 self-center pb-0.5 pr-1 text-sm font-semibold text-slate-700">
+            <SlidersHorizontal className="h-4 w-4 text-brand-600" aria-hidden />
+            Filtros
+          </span>
+          <span aria-hidden className="hidden self-stretch border-l border-slate-200 sm:block" />
+          <div className="grid min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <FilterSelect
+              label="Período"
+              value={filters.period}
+              onChange={(value) => choosePeriod(value as DashboardPeriod)}
+            >
+              {DASHBOARD_PERIODS.map((option) => (
+                <option key={option} value={option}>
+                  {DASHBOARD_PERIOD_LABELS[option]}
+                </option>
+              ))}
+            </FilterSelect>
+            {filters.period === "custom" && (
+              <>
+                <label className="flex min-w-0 flex-col gap-1">
+                  <span className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                    De
+                  </span>
+                  <input
+                    type="date"
+                    value={filters.from ?? ""}
+                    max={filters.to}
+                    onChange={(event) => apply({ ...filters, from: event.target.value })}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+                  />
+                </label>
+                <label className="flex min-w-0 flex-col gap-1">
+                  <span className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                    Até
+                  </span>
+                  <input
+                    type="date"
+                    value={filters.to ?? ""}
+                    min={filters.from}
+                    onChange={(event) => apply({ ...filters, to: event.target.value })}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+                  />
+                </label>
+              </>
+            )}
+            <FilterSelect label="Status" value={filters.status ?? ""} onChange={chooseStatus}>
+              <option value="">Todos</option>
+              {CONVERSATION_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {CONVERSATION_STATUS_LABELS[status]}
+                </option>
+              ))}
+            </FilterSelect>
+            <FilterSelect
+              label="Departamento"
+              value={filters.departmentId ?? ""}
+              onChange={(value) => chooseScope("departmentId", value)}
+            >
+              <option value="">Todos</option>
+              {departments.map((department) => (
+                <option key={department.id} value={department.id}>
+                  {department.name}
+                </option>
+              ))}
+              {/* Conversa sem departamento existe quando o número não tem
+                  departamento padrão — precisa ser possível olhar só para ela. */}
+              <option value={FILTER_NONE}>Sem departamento</option>
+            </FilterSelect>
+            <FilterSelect
+              label="Responsável"
+              value={filters.assignedUserId ?? ""}
+              onChange={(value) => chooseScope("assignedUserId", value)}
+            >
+              <option value="">Todos</option>
+              {users.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.name}
+                </option>
+              ))}
+              <option value={FILTER_NONE}>Sem responsável</option>
+            </FilterSelect>
+            <FilterSelect
+              label="Número"
+              value={filters.instanceId ?? ""}
+              onChange={(value) => chooseScope("instanceId", value)}
+            >
+              <option value="">Todos</option>
+              {instances.map((instance) => (
+                <option key={instance.id} value={instance.id}>
+                  {instance.name}
+                </option>
+              ))}
+            </FilterSelect>
+          </div>
           {hasScopeFilter && (
-            <div className="flex items-end">
-              <button
-                type="button"
-                onClick={() => apply({ period: filters.period, from: filters.from, to: filters.to })}
-                className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 motion-reduce:transition-none"
-              >
-                <X className="h-3.5 w-3.5" />
-                Limpar filtros
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => apply({ period: filters.period, from: filters.from, to: filters.to })}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-800 motion-reduce:transition-none"
+            >
+              <RotateCcw className="h-3.5 w-3.5" aria-hidden />
+              Limpar filtros
+            </button>
           )}
         </div>
       </Card>
@@ -651,23 +805,23 @@ export default function DashboardPage() {
         </Card>
       )}
 
-      <SectionTitle>Atendimento</SectionTitle>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          label={`Conversas ativas ${phrase}`}
+          label="Conversas ativas"
+          sublabel={phrase}
           value={stats?.conversations.active ?? 0}
-          icon={<TrendingUp className="h-4 w-4" />}
+          icon={<TrendingUp className="h-5 w-5" />}
           accent="#4f46e5"
           hint="Conversas com ao menos uma mensagem no período, agrupadas pelo status atual."
-          pending={pending && !stats}
+          pending={initialPending}
         />
         <StatCard
           label="Atrasados agora"
           value={stats?.overdue.count ?? 0}
-          icon={<AlertTriangle className="h-4 w-4" />}
+          icon={<AlertTriangle className="h-5 w-5" />}
           accent={stats && stats.overdue.count > 0 ? "#dc2626" : "#64748b"}
           alert={Boolean(stats && stats.overdue.count > 0)}
-          pending={pending && !stats}
+          pending={initialPending}
           hint={
             <>
               {/* Este card não olha o período: é sempre o estado agora. */}
@@ -677,7 +831,7 @@ export default function DashboardPage() {
               </span>
               {stats?.overdue.oldestWaitingMinutes !== null &&
                 stats?.overdue.oldestWaitingMinutes !== undefined && (
-                  <span className="block font-medium text-red-700">
+                  <span className="block font-semibold text-red-700">
                     mais antigo: {formatWaiting(stats.overdue.oldestWaitingMinutes)}
                   </span>
                 )}
@@ -687,82 +841,194 @@ export default function DashboardPage() {
         <StatCard
           label="Números fora do ar"
           value={offline}
-          icon={<Smartphone className="h-4 w-4" />}
+          icon={<PhoneOff className="h-5 w-5" />}
           accent={offline > 0 ? "#dc2626" : "#16a34a"}
           alert={offline > 0}
-          pending={pending && !stats}
+          pending={initialPending}
           hint={
             offline > 0
               ? "Número fora do ar trava atendimento — veja a quebra em Infraestrutura."
               : "Todos os números que você enxerga estão conectados."
           }
         />
+        {/* Fora da soma de ativas de propósito: arquivada não é atendimento.
+            Visual neutro — arquivar é ação deliberada, não problema. */}
+        <StatCard
+          label="Conversas arquivadas"
+          value={stats?.conversations.archived ?? 0}
+          icon={<Archive className="h-5 w-5" />}
+          accent="#6366f1"
+          hint="Estado agora, sem filtro de período. Fora de todos os demais números."
+          pending={initialPending}
+          href={archivedInboxHref(filters)}
+        />
       </div>
 
-      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {CONVERSATION_STATUSES.map((status: ConversationStatus) => (
-          <StatCard
-            key={status}
-            label={CONVERSATION_STATUS_LABELS[status]}
-            value={byStatus?.[status] ?? 0}
-            icon={
-              status === "resolved" ? (
-                <CheckCircle2 className="h-4 w-4" />
-              ) : status === "open" ? (
-                <CircleDot className="h-4 w-4" />
-              ) : (
-                <Hourglass className="h-4 w-4" />
-              )
-            }
-            accent={CONVERSATION_STATUS_COLORS[status]}
-            pending={pending && !stats}
-            href={inboxHref(status, filters)}
+      <Card className="mt-4 overflow-hidden p-0">
+        <div className="border-b border-slate-100 px-5 py-4">
+          <BlockHeader
+            icon={<ListFilter className="h-4 w-4" />}
+            accent="#4f46e5"
+            title="Fluxo de atendimento"
+            subtitle="Distribuição das conversas por status atual"
           />
-        ))}
-      </div>
+        </div>
+        <div className="grid grid-cols-1 divide-y divide-slate-100 xl:grid-cols-4 xl:divide-x xl:divide-y-0">
+          {CONVERSATION_STATUSES.map((status: ConversationStatus) => {
+            const color = CONVERSATION_STATUS_COLORS[status];
+            return (
+              <Link
+                key={status}
+                href={inboxHref(status, filters)}
+                className="flex items-center gap-3 px-5 py-4 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-50 motion-reduce:transition-none"
+              >
+                <span
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
+                  style={{ backgroundColor: `${color}1a`, color }}
+                >
+                  {status === "resolved" ? (
+                    <CheckCircle2 className="h-5 w-5" />
+                  ) : status === "open" ? (
+                    <CircleDot className="h-5 w-5" />
+                  ) : (
+                    <Hourglass className="h-5 w-5" />
+                  )}
+                </span>
+                <div className="flex min-w-0 flex-col gap-1">
+                  <span className="text-sm font-semibold text-slate-900">
+                    {CONVERSATION_STATUS_LABELS[status]}
+                  </span>
+                  {initialPending ? (
+                    <ValueSkeleton className="h-7 w-10" />
+                  ) : (
+                    <span className="text-2xl font-bold leading-none tabular-nums text-slate-900">
+                      {numberFormatter.format(byStatus?.[status] ?? 0)}
+                    </span>
+                  )}
+                  <span
+                    className="w-fit rounded-md px-1.5 py-0.5 text-[10px] font-medium"
+                    style={{ backgroundColor: `${color}1a`, color }}
+                  >
+                    {STATUS_FLOW_HINTS[status]}
+                  </span>
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+      </Card>
       <p className="mt-1.5 text-[11px] text-slate-400">
         Clique em um status para abrir Conversas já filtradas. Lá a lista não usa o período, então
         ela pode vir maior que o número do card
         {carriesPartialScope ? ", e o filtro de responsável não é levado" : ""}.
       </p>
 
-      {/* Separado dos quatro status de propósito: arquivada não é
-          atendimento, e ninguém deve somá-la ao total de ativas. Visual
-          neutro — arquivar é ação deliberada, não problema. */}
-      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          label="Conversas arquivadas"
-          value={stats?.conversations.archived ?? 0}
-          icon={<Archive className="h-4 w-4" />}
-          accent="#64748b"
-          hint="Estado agora, sem filtro de período. Fora de todos os demais números."
-          pending={pending && !stats}
-          href={archivedInboxHref(filters)}
-        />
-      </div>
+      <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <Card className="p-5">
+          <BlockHeader
+            icon={<Mail className="h-4 w-4" />}
+            accent="#4f46e5"
+            title="Mensagens"
+            subtitle={`Atividade de mensagens ${phrase}`}
+          />
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <MessageTile
+              label={`Recebidas ${phrase}`}
+              value={stats?.messages.received ?? 0}
+              color={RECEIVED_COLOR}
+              icon={<ArrowDownLeft className="h-4 w-4" />}
+              series={stats?.timeline.map((point) => point.received) ?? []}
+              pending={initialPending}
+            />
+            <MessageTile
+              label={`Enviadas ${phrase}`}
+              value={stats?.messages.sent ?? 0}
+              color={SENT_COLOR}
+              icon={<ArrowUpRight className="h-4 w-4" />}
+              series={stats?.timeline.map((point) => point.sent) ?? []}
+              pending={initialPending}
+            />
+          </div>
+        </Card>
 
-      <SectionTitle note="Quantidade não significa qualidade.">Mensagens</SectionTitle>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <StatCard
-          label={`Recebidas ${phrase}`}
-          value={stats?.messages.received ?? 0}
-          icon={<ArrowDownLeft className="h-4 w-4" />}
-          accent="#16a34a"
-          pending={pending && !stats}
-        />
-        <StatCard
-          label={`Enviadas ${phrase}`}
-          value={stats?.messages.sent ?? 0}
-          icon={<ArrowUpRight className="h-4 w-4" />}
-          accent="#0891b2"
-          pending={pending && !stats}
-        />
+        <Card className="p-5">
+          <BlockHeader
+            icon={<Database className="h-4 w-4" />}
+            accent="#4f46e5"
+            title="Infraestrutura"
+            subtitle="Conectividade e disponibilidade dos números"
+          />
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="flex items-center gap-4 rounded-xl border border-slate-200 p-4">
+              {initialPending ? (
+                <ValueSkeleton className="h-16 w-16 rounded-full" />
+              ) : (
+                <ConnectivityRing connected={connected} total={connected + offline} />
+              )}
+              <div className="flex min-w-0 flex-col gap-1">
+                <span className="text-sm font-semibold text-slate-900">Números conectados</span>
+                <span className="text-xs text-slate-500">
+                  {connected} de {connected + offline} conectados
+                </span>
+                {!initialPending && (
+                  <span
+                    className={cn(
+                      "w-fit rounded-md px-1.5 py-0.5 text-[10px] font-medium",
+                      offline === 0
+                        ? "bg-emerald-100 text-emerald-700"
+                        : "bg-amber-100 text-amber-700",
+                    )}
+                  >
+                    {offline === 0 ? "Operação normal" : `${offline} fora do ar`}
+                  </span>
+                )}
+              </div>
+            </div>
+            {/* A quebra só aparece quando existe algo fora do ar — lista de
+                zeros não informa nada. */}
+            {stats && offline > 0 ? (
+              CONNECTION_STATUSES.filter(
+                (status) => status !== "connected" && stats.instances.byStatus[status] > 0,
+              ).map((status) => {
+                const color = CONNECTION_STATUS_COLORS[status];
+                return (
+                  <div
+                    key={status}
+                    className="flex items-center gap-3 rounded-xl border p-4"
+                    style={{ borderColor: `${color}33`, backgroundColor: `${color}0d` }}
+                  >
+                    <span
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full"
+                      style={{ backgroundColor: `${color}1a`, color }}
+                    >
+                      {CONNECTION_ISSUE_ICONS[status]}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-slate-900">
+                        {CONNECTION_STATUS_LABELS[status]}{" "}
+                        <span className="tabular-nums" style={{ color }}>
+                          {stats.instances.byStatus[status]}
+                        </span>
+                      </p>
+                      <p className="text-xs text-slate-500">{CONNECTION_ISSUE_HINTS[status]}</p>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="flex items-center rounded-xl border border-slate-200 p-4">
+                <p className="text-xs text-slate-500">Nenhum número fora do ar.</p>
+              </div>
+            )}
+          </div>
+        </Card>
       </div>
 
       {/* Os gráficos ficam sob os cards de mensagens: os cards dão o total do
           período, e estes mostram como esse total se distribuiu. */}
-      <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-2">
-        {pending && !stats ? (
+      <SectionTitle>Análise do período</SectionTitle>
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+        {initialPending ? (
           <>
             <div
               aria-hidden
@@ -783,59 +1049,11 @@ export default function DashboardPage() {
         )}
       </div>
 
-      <SectionTitle>Infraestrutura</SectionTitle>
-      <Card className="p-4">
-        <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
-          <div>
-            <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-              Números conectados
-            </p>
-            {pending && !stats ? (
-              <ValueSkeleton />
-            ) : (
-              <p className="text-3xl font-bold leading-none tabular-nums text-slate-900">
-                {stats?.instances.connected ?? 0}
-                <span className="ml-1 text-base font-medium text-slate-400">
-                  /{(stats?.instances.connected ?? 0) + offline}
-                </span>
-              </p>
-            )}
-          </div>
-          {/* A quebra só aparece quando existe algo fora do ar — lista de
-              zeros não informa nada. */}
-          {stats && offline > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {CONNECTION_STATUSES.filter(
-                (status) => status !== "connected" && stats.instances.byStatus[status] > 0,
-              ).map((status) => (
-                <span
-                  key={status}
-                  className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium tabular-nums"
-                  style={{
-                    backgroundColor: `${CONNECTION_STATUS_COLORS[status]}1a`,
-                    color: CONNECTION_STATUS_COLORS[status],
-                  }}
-                >
-                  <span
-                    className="h-1.5 w-1.5 rounded-full"
-                    style={{ backgroundColor: CONNECTION_STATUS_COLORS[status] }}
-                  />
-                  {CONNECTION_STATUS_LABELS[status]}: {stats.instances.byStatus[status]}
-                </span>
-              ))}
-            </div>
-          )}
-          {stats && offline === 0 && (
-            <p className="text-xs text-slate-500">Nenhum número fora do ar.</p>
-          )}
-        </div>
-      </Card>
-
-      <div className={cn("mb-8 grid grid-cols-1 gap-x-4", canSeeTeam && "xl:grid-cols-2")}>
+      <div className={cn("grid grid-cols-1 gap-x-4", canSeeTeam && "xl:grid-cols-2")}>
         <div className="min-w-0">
           <SectionTitle>Conversas mais ativas {phrase}</SectionTitle>
           <Card className="divide-y divide-slate-100 overflow-hidden">
-            {pending && !stats ? (
+            {initialPending ? (
               <div className="space-y-3 p-4">
                 {[0, 1, 2, 3, 4].map((row) => (
                   <div
@@ -871,7 +1089,7 @@ export default function DashboardPage() {
               Usuários mais ativos {phrase}
             </SectionTitle>
             <Card className="divide-y divide-slate-100 overflow-hidden">
-              {pending && !stats ? (
+              {initialPending ? (
                 <div className="space-y-3 p-4">
                   {[0, 1, 2, 3, 4].map((row) => (
                     <div
@@ -901,6 +1119,11 @@ export default function DashboardPage() {
           </div>
         )}
       </div>
+
+      <p className="mb-2 mt-8 flex items-center justify-center gap-1.5 text-xs text-slate-400">
+        <Info className="h-3.5 w-3.5" aria-hidden />
+        Os dados são atualizados automaticamente a cada minuto.
+      </p>
     </div>
   );
 }

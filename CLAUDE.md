@@ -331,7 +331,8 @@ PUT    /attendance-settings  (supervisor; grava SLA + expediente + janela de log
 
 GET    /search              GET /reports/agents   GET /audit-logs
 GET    /dashboard/stats?period=today|7d|15d|30d|custom[&from=&to=]
-       [&instanceId=][&departmentId=<uuid|none>][&assignedUserId=<uuid|none>]
+       [&instanceId=][&status=open|waiting_client|waiting_internal|resolved]
+       [&departmentId=<uuid|none>][&assignedUserId=<uuid|none>]
        (tudo validado por Zod; `custom` exige as duas datas AAAA-MM-DD, teto de 366 dias;
         o bloco `topUsers` só vem para supervisor, senão é `null`; `timeline` traz um ponto
         por dia civil do período e `hourly` as células dia da semana × hora, esta sempre
@@ -437,9 +438,13 @@ nome técnico no código e neste documento.
   mouse. A escolha é preferência de navegador em `localStorage` (`zapdesk.sidebar-collapsed`)
   — nada de coluna em `User` nem rota na API para isso.
 - Gráficos do dashboard em `src/components/dashboard/`: `chart-card.tsx` (moldura, legenda
-  e o alternador gráfico/tabela), `messages-timeline.tsx` (barras divergentes por dia) e
-  `hours-heatmap.tsx` (mapa dia da semana × hora). **Sem biblioteca de gráfico**: tudo é SVG
-  inline, CSS e Tailwind, respeitando `prefers-reduced-motion`.
+  e o alternador gráfico/tabela), `messages-timeline.tsx` (barras divergentes por dia),
+  `hours-heatmap.tsx` (mapa dia da semana × hora), `sparkline.tsx` (miniatura da série
+  dentro do card de mensagens) e `connectivity-ring.tsx` (anel de números no ar). **Sem
+  biblioteca de gráfico**: tudo é SVG inline, CSS e Tailwind, respeitando
+  `prefers-reduced-motion`. A sparkline e o anel são **acessórios de card**, não gráficos:
+  a sparkline é `aria-hidden` (o total está no card e o detalhe por dia, com tabela, no
+  gráfico logo abaixo) e o anel é uma imagem com rótulo falado, sem interação.
 - Inbox de 3 colunas em `src/components/inbox/`: `inbox-shell.tsx` (o maior arquivo do
   projeto, ~1300 linhas — orquestra lista, chat e composer), `conversation-list.tsx`,
   `message-bubble.tsx`, `context-panel.tsx` (participantes, responsável, departamento,
@@ -662,12 +667,20 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   escritório, não o dia UTC do container. O `custom` pega os dois dias das pontas inteiros;
   os atalhos **não** têm corte superior, de propósito: o relógio do WhatsApp pode vir à
   frente do nosso e um `lte: agora` sumiria com a mensagem recém-chegada.
-- **Os filtros do dashboard refinam o recorte, nunca o ampliam.** Chip, departamento e
-  responsável entram num `AND` junto com `conversationScope`, então pedir um número que o
-  usuário não enxerga devolve vazio em vez de vazar. `departmentId`/`assignedUserId` aceitam
-  `none` para "sem departamento" / "sem responsável". Os filtros valem para a **tela
-  inteira** — inclusive o card de atraso e o de infraestrutura, que continuam ignorando só o
-  período.
+- **Os filtros do dashboard refinam o recorte, nunca o ampliam.** Número, status,
+  departamento e responsável entram num `AND` junto com `conversationScope`, então pedir um
+  número que o usuário não enxerga devolve vazio em vez de vazar.
+  `departmentId`/`assignedUserId` aceitam `none` para "sem departamento" / "sem
+  responsável". Os filtros valem para a **tela inteira** — inclusive o card de atraso e o de
+  infraestrutura, que continuam ignorando só o período. O filtro de `status` é o único que
+  mexe no fluxo por status: com ele as outras três colunas ficam em zero, porque a pergunta
+  passou a ser "só este status" — e `resolved` zera o atraso por construção, já que lá o
+  recorte convive com `status != resolved`.
+- **O dashboard se recarrega sozinho a cada minuto** (`AUTO_REFRESH_MS` na página), e o
+  rodapé promete isso a quem está olhando. É `setInterval` chamando a mesma rota, e **não**
+  evento de socket: a tela agrega dezenas de milhares de mensagens, então empurrar cada
+  mensagem nova custaria mais do que uma consulta por minuto. A recarga é silenciosa — os
+  números antigos ficam na tela até os novos chegarem, sem esqueleto piscando a cada volta.
 - **Os cards de status do dashboard abrem a Inbox pela URL** (`/inbox?status=...`), levando
   também `departmentId`/`instanceId` quando são ids de verdade. Quem semeia o filtro é a
   própria Inbox (`inbox-shell.tsx`), e só em estado que a tela mostra: os seletores de
