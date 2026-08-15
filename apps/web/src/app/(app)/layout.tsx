@@ -27,6 +27,7 @@ import { Spinner, Tooltip } from "@/components/ui";
 import { UserAvatar } from "@/components/user-avatar";
 import { CallAlerts } from "@/components/call-alerts";
 import { MessageSound } from "@/components/message-sound";
+import { SessionSchedule } from "@/components/session-schedule";
 import { UnreadTitle } from "@/components/unread-title";
 import { Logo, LogoMark } from "@/components/logo";
 
@@ -333,6 +334,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       <MessageSound />
       {/* Título da aba piscando: alcança quem está com o som desligado. */}
       <UnreadTitle />
+      {/* Aviso de fechamento do horário de uso, e saída quando ele chega. */}
+      <SessionSchedule />
     </div>
   );
 }

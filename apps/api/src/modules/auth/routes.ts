@@ -1,9 +1,15 @@
 import type { FastifyInstance } from "fastify";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
-import { NOTIFICATION_SOUNDS, NOTIFICATION_VOLUMES } from "@azvchat/shared";
+import {
+  LOGIN_OUTSIDE_SCHEDULE_MESSAGE,
+  NOTIFICATION_SOUNDS,
+  NOTIFICATION_VOLUMES,
+} from "@azvchat/shared";
+import { loadAttendanceSettings } from "../../lib/attendance-settings.js";
 import { authenticate } from "../../lib/auth.js";
 import { AppError, NotFoundError, UnauthorizedError } from "../../lib/errors.js";
+import { checkLoginSchedule } from "../../lib/login-schedule.js";
 import { extensionFromMime } from "../../lib/media-storage.js";
 import { serializeUser } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
@@ -39,6 +45,35 @@ export async function authRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
         });
         throw new UnauthorizedError("Credenciais inválidas");
       }
+
+      /**
+       * Janela de login do escritório, conferida **depois** da senha: antes
+       * dela, a mensagem de horário diria a quem errou a senha que aquele
+       * e-mail existe.
+       *
+       * Vale só para quem não é supervisor, e os parâmetros são lidos do
+       * banco na hora — abrir o dia na tela de Parâmetros libera a entrada na
+       * tentativa seguinte, sem reiniciar nada. Essa é a autorização que a
+       * mensagem manda pedir.
+       */
+      const settings = await loadAttendanceSettings(deps.prisma, user.organizationId);
+      const schedule = checkLoginSchedule(settings, user.role, new Date());
+      if (!schedule.allowed) {
+        deps.audit.record({
+          organizationId: user.organizationId,
+          userId: user.id,
+          action: "auth.login_outside_schedule",
+          entityType: "User",
+          entityId: user.id,
+          metadata: {
+            timezone: settings.timezone,
+            window: schedule.window,
+          },
+          ip: request.ip,
+        });
+        throw new AppError(LOGIN_OUTSIDE_SCHEDULE_MESSAGE, 403, "login_outside_schedule");
+      }
+
       const token = await app.jwt.sign(
         {
           sub: user.id,

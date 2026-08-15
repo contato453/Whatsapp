@@ -11,6 +11,7 @@ import { AuditService } from "./modules/audit/service.js";
 import { MessageIngestService } from "./services/message-ingest.js";
 import { InstanceManager } from "./services/instance-manager.js";
 import { ScheduledMessageWorker } from "./services/scheduler.js";
+import { SessionScheduleWatcher } from "./services/session-schedule-watcher.js";
 import { loadConversationAccess } from "./lib/access.js";
 import type { AuthTokenPayload } from "./lib/auth.js";
 import type { AppDeps } from "./types.js";
@@ -78,6 +79,12 @@ async function main(): Promise<void> {
   const scheduler = new ScheduledMessageWorker(prisma, provider, io, logger);
   scheduler.start();
 
+  // Avisa e encerra as abas quando o horário de uso fecha. A API já recusa
+  // requisição fora do horário; sem este vigia, a aba parada continuaria
+  // recebendo mensagem pelo socket sem nunca perguntar nada ao servidor.
+  const sessionScheduleWatcher = new SessionScheduleWatcher(io, prisma, logger);
+  sessionScheduleWatcher.start();
+
   await app.listen({ port: config.API_PORT, host: config.API_HOST });
   logger.info({ event: "api_started", port: config.API_PORT });
 
@@ -92,6 +99,7 @@ async function main(): Promise<void> {
     logger.info({ event: "shutdown", signal });
     try {
       scheduler.stop();
+      sessionScheduleWatcher.stop();
       await provider.shutdownAll();
       io.close();
       await app.close();
