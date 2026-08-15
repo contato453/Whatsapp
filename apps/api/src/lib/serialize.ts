@@ -156,6 +156,7 @@ export function serializeQuickReply(reply: QuickReply & { departments?: Departme
       reply.mediaUrl && mediaType
         ? { type: mediaType, mimeType: reply.mediaMimeType, filename: reply.mediaFilename }
         : null,
+    lastUsedAt: reply.lastUsedAt?.toISOString() ?? null,
     createdAt: reply.createdAt.toISOString(),
   };
 }

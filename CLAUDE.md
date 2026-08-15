@@ -276,6 +276,9 @@ POST   /quick-replies/:id/media   DELETE /quick-replies/:id/media   GET /quick-r
        (anexo da resposta rápida — só imagem, áudio ou vídeo, decidido por
         `quickReplyMediaTypeFromMime` no shared; upload/remoção exigem poder
         gerenciar a resposta, o download segue o recorte de leitura)
+POST   /quick-replies/:id/used
+       (marca `lastUsedAt` — o composer chama depois que a mensagem SAIU; vale o
+        recorte de leitura, sem auditoria: o envio em si já é auditado)
 GET    /conversations/:id/scheduled-messages   POST /conversations/:id/scheduled-messages
 DELETE /scheduled-messages/:id
 
@@ -551,6 +554,12 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   escrever — por isso existe `POST /whatsapp-instances/:id/apply-default-assignee`.
 - Atalho de resposta rápida e nome de etiqueta são **únicos na organização inteira**, não
   por departamento.
+- **`QuickReply.lastUsedAt` marca o ENVIO, não a edição.** O composer grava o atalho
+  aplicado e chama `POST /quick-replies/:id/used` só depois que a mensagem saiu (nota
+  interna não conta; apagar o rascunho inteiro e escrever outra coisa também não). A tela
+  de Respostas rápidas mostra "Último uso"/"Nunca usada" em cada linha, e o filtro por
+  departamento da tela usa a mesma régua do composer (`appliesToConversation`): filtrar
+  por um departamento inclui as respostas gerais, e "Somente gerais" isola as gerais.
 - **Mídia de resposta rápida**: `QuickReply.mediaUrl` é chave do `MediaStorage` (diretório
   `quick-replies-<organizationId>`, sem vínculo com número) e **nunca sai da API** — o
   binário vem por `GET /quick-replies/:id/media`, autenticado. Só imagem, áudio e vídeo

@@ -140,6 +140,9 @@ export const quickRepliesApi = {
     api
       .delete<{ quickReply: QuickReplyDto }>(`/quick-replies/${id}/media`)
       .then((data) => data.quickReply),
+  /** Fire-and-forget após o envio: falha aqui não pode atrapalhar o atendimento. */
+  markUsed: (id: string) =>
+    api.post<{ ok: boolean }>(`/quick-replies/${id}/used`).catch(() => undefined),
 };
 
 /**

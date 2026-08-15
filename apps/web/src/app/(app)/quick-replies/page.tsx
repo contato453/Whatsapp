@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronRight,
+  Clock,
   Image as ImageIcon,
   Mic,
   Paperclip,
@@ -20,12 +21,13 @@ import {
 } from "@azvchat/shared";
 import { quickRepliesApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { cn } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 import type { QuickReplyDto } from "@/lib/types";
 import { Button, Card, EmptyState, Field, Input, Modal, Spinner, Textarea } from "@/components/ui";
 import {
   DepartmentBadges,
   DepartmentCheckboxes,
+  appliesToConversation,
   canManageScopedItem,
   useMyDepartments,
 } from "@/components/department-picker";
@@ -71,6 +73,8 @@ export default function QuickRepliesPage() {
   // A lista nasce recolhida: com mensagem inteira aberta cabiam três respostas
   // na tela, e o atalho — que é o que se procura aqui — ficava perdido.
   const [expandedIds, setExpandedIds] = useState<string[]>([]);
+  /** "" = todos; "general" = só as gerais; senão o id do departamento. */
+  const [departmentFilter, setDepartmentFilter] = useState("");
 
   const load = useCallback(() => {
     quickRepliesApi.list().then(setReplies);
@@ -78,7 +82,25 @@ export default function QuickRepliesPage() {
   useEffect(load, [load]);
 
   const isAdmin = me?.role === "admin";
-  const allExpanded = !!replies && replies.length > 0 && expandedIds.length === replies.length;
+
+  /**
+   * Filtro local: a lista inteira já veio da API (dezenas de linhas, não
+   * milhares) e refazer a consulta a cada troca só atrasaria a tela. Filtrar
+   * por departamento usa a MESMA régua do composer (`appliesToConversation`):
+   * mostra o que vale para uma conversa daquele departamento — as gerais
+   * entram junto, porque é isso que o atendente enxerga na prática.
+   */
+  const visibleReplies = useMemo(() => {
+    if (!replies) return null;
+    if (!departmentFilter) return replies;
+    if (departmentFilter === "general") return replies.filter((reply) => reply.isGeneral);
+    return replies.filter((reply) => appliesToConversation(reply, departmentFilter));
+  }, [replies, departmentFilter]);
+
+  const allExpanded =
+    !!visibleReplies &&
+    visibleReplies.length > 0 &&
+    visibleReplies.every((reply) => expandedIds.includes(reply.id));
 
   function openNew() {
     // Sem "vale para todos" para quem não é admin: já entra no primeiro
@@ -204,19 +226,46 @@ export default function QuickRepliesPage() {
           mensagem para inserir uma resposta com uma tecla.
         </p>
         {replies && replies.length > 0 && (
-          <button
-            type="button"
-            onClick={() =>
-              setExpandedIds(allExpanded ? [] : replies.map((reply) => reply.id))
-            }
-            className="text-sm font-medium text-brand-600 hover:underline"
-          >
-            {allExpanded ? "Recolher todas" : "Expandir todas"}
-          </button>
+          <div className="flex items-center gap-3">
+            <select
+              value={departmentFilter}
+              onChange={(event) => setDepartmentFilter(event.target.value)}
+              className={cn(
+                "rounded-lg border px-2 py-1.5 text-sm",
+                departmentFilter
+                  ? "border-brand-500 font-medium text-brand-700"
+                  : "border-slate-200 text-slate-600",
+              )}
+            >
+              <option value="">Todos os departamentos</option>
+              <option value="general">Somente gerais</option>
+              {departments.map((department) => (
+                <option key={department.id} value={department.id}>
+                  {department.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() =>
+                setExpandedIds((current) => {
+                  const visibleIds = (visibleReplies ?? []).map((reply) => reply.id);
+                  // Age só sobre as linhas visíveis: expandir com filtro
+                  // ligado não pode abrir o que está escondido.
+                  return allExpanded
+                    ? current.filter((id) => !visibleIds.includes(id))
+                    : [...new Set([...current, ...visibleIds])];
+                })
+              }
+              className="whitespace-nowrap text-sm font-medium text-brand-600 hover:underline"
+            >
+              {allExpanded ? "Recolher todas" : "Expandir todas"}
+            </button>
+          </div>
         )}
       </div>
 
-      {!replies ? (
+      {!replies || !visibleReplies ? (
         <div className="flex justify-center py-16">
           <Spinner className="h-8 w-8" />
         </div>
@@ -226,9 +275,15 @@ export default function QuickRepliesPage() {
           title="Nenhuma resposta rápida cadastrada"
           description='Crie atalhos como /bomdia ou /boleto e use-os na Inbox digitando "/".'
         />
+      ) : visibleReplies.length === 0 ? (
+        // Há respostas, só não neste recorte: mensagem curta em vez do
+        // EmptyState de cadastro, que sugeriria criar do zero.
+        <p className="py-16 text-center text-sm text-slate-500">
+          Nenhuma resposta rápida no departamento selecionado.
+        </p>
       ) : (
         <Card className="divide-y divide-slate-100">
-          {replies.map((reply) => {
+          {visibleReplies.map((reply) => {
             const expanded = expandedIds.includes(reply.id);
             return (
               <div key={reply.id} className="flex items-start gap-2 px-2 py-1">
@@ -250,6 +305,15 @@ export default function QuickRepliesPage() {
                       {reply.title && <span className="text-sm text-slate-500">{reply.title}</span>}
                       <DepartmentBadges item={reply} />
                       {reply.media && <MediaBadge type={reply.media.type} />}
+                      <span
+                        className="ml-auto inline-flex items-center gap-1 whitespace-nowrap text-[11px] text-slate-400"
+                        title="Última vez que o atalho foi enviado na Inbox"
+                      >
+                        <Clock className="h-3 w-3" />
+                        {reply.lastUsedAt
+                          ? `Último uso: ${formatDateTime(reply.lastUsedAt)}`
+                          : "Nunca usada"}
+                      </span>
                     </span>
                     {/* Recolhida mostra só a primeira linha: dá para varrer a
                         lista inteira sem perder a noção do que a resposta diz. */}

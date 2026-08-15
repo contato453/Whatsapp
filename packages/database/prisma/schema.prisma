@@ -584,6 +584,10 @@ model QuickReply {
   mediaUrl       String?
   mediaMimeType  String?
   mediaFilename  String?
+  /// Última vez que o atalho foi de fato ENVIADO pelo composer (não a
+  /// edição do cadastro). É como a equipe descobre resposta parada que
+  /// ninguém usa mais. Null = nunca usada desde que a coluna existe.
+  lastUsedAt     DateTime?
   createdById    String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt

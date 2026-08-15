@@ -341,4 +341,25 @@ export async function quickReplyRoutes(app: FastifyInstance, deps: AppDeps): Pro
     reply.header("Cache-Control", "private, max-age=60");
     return reply.send(data);
   });
+
+  /**
+   * Marca o uso do atalho: o composer chama depois que a mensagem SAIU. Vale
+   * o recorte de leitura (usar não é gerenciar), e não entra na auditoria —
+   * o envio da mensagem em si já é auditado; registrar o uso de novo aqui só
+   * dobraria o ruído do log.
+   */
+  app.post("/quick-replies/:id/used", { preHandler: authenticate }, async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const departmentIds = await accessibleDepartmentIds(deps.prisma, request.user);
+    const existing = await deps.prisma.quickReply.findFirst({
+      where: {
+        id,
+        organizationId: request.user.organizationId,
+        ...departmentResourceScope(departmentIds),
+      },
+    });
+    if (!existing) throw new NotFoundError("Resposta rápida");
+    await deps.prisma.quickReply.update({ where: { id }, data: { lastUsedAt: new Date() } });
+    return { ok: true };
+  });
 }

@@ -219,6 +219,12 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
    * só é baixado na hora do envio.
    */
   const [quickReplyMedia, setQuickReplyMedia] = useState<QuickReplyDto | null>(null);
+  /**
+   * Atalho aplicado no rascunho atual — vira o `lastUsedAt` da resposta
+   * quando a mensagem SAI de fato. Ajustar o texto antes de enviar continua
+   * contando como uso; apagar o rascunho inteiro e escrever outra coisa, não.
+   */
+  const [appliedQuickReplyId, setAppliedQuickReplyId] = useState<string | null>(null);
 
   /** Supervisor e admin enxergam vários números/departamentos; usuário, não. */
   const canFilterScope = me?.role === "admin" || me?.role === "supervisor";
@@ -306,6 +312,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     setMessages(null);
     setReplyTo(null);
     setQuickReplyMedia(null);
+    setAppliedQuickReplyId(null);
     setComposerMode("message");
     // Zera antes de carregar: o contador da conversa anterior não pode
     // aparecer por um instante na conversa recém-aberta.
@@ -520,6 +527,8 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     // Com mídia de resposta rápida anexada, texto vazio ainda envia: a
     // mídia sozinha é uma mensagem completa (um áudio de orientação, p.ex.).
     const pendingMedia = composerMode === "message" ? quickReplyMedia : null;
+    // Nota interna não conta como uso: o cliente não recebeu nada.
+    const usedQuickReplyId = composerMode === "message" ? appliedQuickReplyId : null;
     if (!conversationId || sending) return;
     if (draft.trim().length === 0 && !pendingMedia?.media) return;
     setSending(true);
@@ -566,6 +575,10 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
           );
           appendMessage(textResult.message);
         }
+        if (usedQuickReplyId) {
+          setAppliedQuickReplyId(null);
+          void quickRepliesApi.markUsed(usedQuickReplyId);
+        }
       } catch (err) {
         // Nada saiu (ou saiu pela metade): devolve texto e anexo para a
         // pessoa tentar de novo sem redigitar.
@@ -586,6 +599,10 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         { content, ...(replyId ? { replyToMessageId: replyId } : {}) },
       );
       appendMessage(result.message);
+      if (usedQuickReplyId) {
+        setAppliedQuickReplyId(null);
+        void quickRepliesApi.markUsed(usedQuickReplyId);
+      }
     } catch (err) {
       setDraft(content);
       window.alert(err instanceof Error ? err.message : "Falha ao enviar mensagem");
@@ -825,6 +842,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     // A mídia não sai na hora: vira anexo pendente ao lado do texto, para a
     // pessoa revisar antes do Enter final.
     setQuickReplyMedia(reply.media ? reply : null);
+    setAppliedQuickReplyId(reply.id);
     setQuickReplyDismissed(true);
   }
 
@@ -1302,7 +1320,13 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   rows={2}
                   value={draft}
                   disabled={sending}
-                  onChange={(event) => setDraft(event.target.value)}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setDraft(value);
+                    // Rascunho apagado por inteiro: o que vier depois é outra
+                    // mensagem, não o atalho — não pode contar como uso.
+                    if (value === "") setAppliedQuickReplyId(null);
+                  }}
                   onKeyDown={(event) => {
                     if (quickReplyOpen) {
                       if (event.key === "ArrowDown") {

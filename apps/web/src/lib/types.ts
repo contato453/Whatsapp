@@ -271,6 +271,8 @@ export interface QuickReplyDto {
   /** Lista completa — ver a observação em TagDto. */
   departments: ResourceDepartmentDto[];
   media: QuickReplyMediaDto | null;
+  /** Último ENVIO pelo composer; null = nunca usada desde que existe o registro. */
+  lastUsedAt: string | null;
   createdAt: string;
 }
 
