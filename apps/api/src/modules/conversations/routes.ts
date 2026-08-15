@@ -3,11 +3,14 @@ import type { Prisma } from "@azvchat/database";
 import { z } from "zod";
 import { CONVERSATION_STATUSES, RealtimeEvents } from "@azvchat/shared";
 import {
+  accessibleDepartmentIds,
   conversationScope,
+  departmentResourceScope,
   groupScope,
   loadConversationAccess,
 } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
+import { canApplyToConversation } from "../../lib/department-resource.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import {
   serializeConversation,
@@ -691,11 +694,22 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     const { id, tagId } = z
       .object({ id: z.string().uuid(), tagId: z.string().uuid() })
       .parse(request.params);
-    await findConversationOr404(id, request.user);
+    const conversation = await findConversationOr404(id, request.user);
+    const accessible = await accessibleDepartmentIds(deps.prisma, request.user);
     const tag = await deps.prisma.tag.findFirst({
-      where: { id: tagId, organizationId: request.user.organizationId },
+      where: {
+        id: tagId,
+        organizationId: request.user.organizationId,
+        // Etiqueta que a pessoa não enxerga não existe para ela: 404, e não
+        // 403, para não confirmar a existência de etiqueta de outra equipe.
+        ...departmentResourceScope(accessible),
+      },
+      include: { departments: { select: { departmentId: true } } },
     });
     if (!tag) throw new NotFoundError("Etiqueta");
+    if (!canApplyToConversation(tag, conversation.departmentId)) {
+      throw new ForbiddenError("Esta etiqueta não vale para o departamento desta conversa");
+    }
     await deps.prisma.conversationTag.upsert({
       where: { conversationId_tagId: { conversationId: id, tagId } },
       update: {},

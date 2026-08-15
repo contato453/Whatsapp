@@ -1,5 +1,7 @@
 "use client";
 
+import type { QuickReplyDto, TagDto } from "./types";
+
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 const TOKEN_KEY = "zapdesk.token";
@@ -66,6 +68,46 @@ export const api = {
   patch: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+};
+
+/**
+ * Vínculo com departamento — o mesmo contrato para etiqueta e resposta
+ * rápida: ou vale para todos, ou traz pelo menos um departamento.
+ */
+export interface DepartmentTargetInput {
+  isGeneral: boolean;
+  departmentIds: string[];
+}
+
+export interface TagInput extends DepartmentTargetInput {
+  name: string;
+  color: string;
+}
+
+export const tagsApi = {
+  list: () => api.get<{ tags: TagDto[] }>("/tags").then((data) => data.tags),
+  create: (input: TagInput) => api.post<{ tag: TagDto }>("/tags", input).then((data) => data.tag),
+  update: (id: string, input: Partial<TagInput>) =>
+    api.patch<{ tag: TagDto }>(`/tags/${id}`, input).then((data) => data.tag),
+  remove: (id: string) => api.delete<{ ok: boolean }>(`/tags/${id}`),
+};
+
+export interface QuickReplyInput extends DepartmentTargetInput {
+  shortcut: string;
+  title?: string;
+  content: string;
+}
+
+export const quickRepliesApi = {
+  list: () =>
+    api.get<{ quickReplies: QuickReplyDto[] }>("/quick-replies").then((data) => data.quickReplies),
+  create: (input: QuickReplyInput) =>
+    api.post<{ quickReply: QuickReplyDto }>("/quick-replies", input).then((data) => data.quickReply),
+  update: (id: string, input: Partial<QuickReplyInput>) =>
+    api
+      .patch<{ quickReply: QuickReplyDto }>(`/quick-replies/${id}`, input)
+      .then((data) => data.quickReply),
+  remove: (id: string) => api.delete<{ ok: boolean }>(`/quick-replies/${id}`),
 };
 
 /** URL autenticável de mídia — o token vai por query não é aceito; usamos fetch+blob. */

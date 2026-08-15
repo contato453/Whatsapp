@@ -20,7 +20,7 @@ import {
   Zap,
 } from "lucide-react";
 import { RealtimeEvents, type ScheduledPendingPayload } from "@azvchat/shared";
-import { api } from "@/lib/api";
+import { api, quickRepliesApi } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { useAuth } from "@/lib/auth-context";
 import { cn, formatDateTime, formatDayLabel } from "@/lib/utils";
@@ -36,6 +36,7 @@ import type {
   UserDirectoryDto,
 } from "@/lib/types";
 import { Avatar, Button, EmptyState, Input, Modal, Spinner, Textarea } from "@/components/ui";
+import { appliesToConversation } from "@/components/department-picker";
 import { ConversationListItem } from "./conversation-list";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
 import { AudioRecorder } from "./audio-recorder";
@@ -208,7 +209,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     api.get<{ departments: DepartmentDto[] }>("/departments").then((data) => setDepartments(data.departments)).catch(() => undefined);
     api.get<{ tags: TagDto[] }>("/tags").then((data) => setTags(data.tags)).catch(() => undefined);
     api.get<{ instances: InstanceDto[] }>("/whatsapp-instances").then((data) => setInstances(data.instances)).catch(() => undefined);
-    api.get<{ quickReplies: QuickReplyDto[] }>("/quick-replies").then((data) => setQuickReplies(data.quickReplies)).catch(() => undefined);
+    quickRepliesApi.list().then(setQuickReplies).catch(() => undefined);
   }, []);
 
   // ---------- Lista de conversas ----------
@@ -697,17 +698,21 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   // ---------- Respostas rápidas (atalho "/") ----------
   const slashQuery =
     draft.startsWith("/") && !draft.includes("\n") ? draft.slice(1).toLowerCase() : null;
+  const conversationDepartmentId = conversation?.department?.id ?? null;
   const quickReplyMatches = useMemo(() => {
     if (slashQuery === null || quickReplyDismissed) return [];
     return quickReplies
       .filter(
         (reply) =>
-          reply.shortcut.startsWith(slashQuery) ||
-          (reply.title ?? "").toLowerCase().includes(slashQuery) ||
-          reply.content.toLowerCase().includes(slashQuery),
+          // Mesma regra da etiqueta: a resposta precisa valer para o
+          // departamento desta conversa.
+          appliesToConversation(reply, conversationDepartmentId) &&
+          (reply.shortcut.startsWith(slashQuery) ||
+            (reply.title ?? "").toLowerCase().includes(slashQuery) ||
+            reply.content.toLowerCase().includes(slashQuery)),
       )
       .slice(0, 8);
-  }, [slashQuery, quickReplies, quickReplyDismissed]);
+  }, [slashQuery, quickReplies, quickReplyDismissed, conversationDepartmentId]);
   const quickReplyOpen = quickReplyMatches.length > 0;
 
   useEffect(() => {

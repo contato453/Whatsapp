@@ -14,6 +14,7 @@ import type {
   UserDirectoryDto,
 } from "@/lib/types";
 import { Badge, Button, Textarea } from "@/components/ui";
+import { appliesToConversation } from "@/components/department-picker";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
 
 /**
@@ -257,8 +258,12 @@ export function ContextPanel({
     );
   }
 
+  // Só oferece o que a API vai aceitar: a etiqueta precisa valer para o
+  // departamento desta conversa. As já aplicadas saem da lista.
   const availableTags = tags.filter(
-    (tag) => !conversation.tags.some((assigned) => assigned.id === tag.id),
+    (tag) =>
+      !conversation.tags.some((assigned) => assigned.id === tag.id) &&
+      appliesToConversation(tag, conversation.department?.id ?? null),
   );
 
   /**

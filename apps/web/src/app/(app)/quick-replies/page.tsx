@@ -2,18 +2,24 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Pencil, Plus, Trash2, Zap } from "lucide-react";
-import { api } from "@/lib/api";
+import { quickRepliesApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import type { QuickReplyDto } from "@/lib/types";
 import { Button, Card, EmptyState, Field, Input, Modal, Spinner, Textarea } from "@/components/ui";
 import {
-  DepartmentSelect,
-  departmentLabel,
-  groupByDepartment,
+  DepartmentBadges,
+  DepartmentCheckboxes,
+  canManageScopedItem,
   useMyDepartments,
 } from "@/components/department-picker";
 
-const EMPTY_FORM = { shortcut: "", title: "", content: "", departmentId: "" };
+const EMPTY_FORM = {
+  shortcut: "",
+  title: "",
+  content: "",
+  isGeneral: false,
+  departmentIds: [] as string[],
+};
 
 export default function QuickRepliesPage() {
   const { user: me } = useAuth();
@@ -25,19 +31,18 @@ export default function QuickRepliesPage() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
-    api
-      .get<{ quickReplies: QuickReplyDto[] }>("/quick-replies")
-      .then((data) => setReplies(data.quickReplies));
+    quickRepliesApi.list().then(setReplies);
   }, []);
   useEffect(load, [load]);
 
   const isAdmin = me?.role === "admin";
 
   function openNew() {
-    // Sem "Geral" para quem não é admin: já entra no departamento dele.
+    // Sem "vale para todos" para quem não é admin: já entra no primeiro
+    // departamento dele marcado.
     setForm({
       ...EMPTY_FORM,
-      departmentId: isAdmin ? "" : (departments[0]?.id ?? ""),
+      departmentIds: isAdmin ? [] : departments[0] ? [departments[0].id] : [],
     });
     setError(null);
     setEditing("new");
@@ -48,16 +53,19 @@ export default function QuickRepliesPage() {
       shortcut: reply.shortcut,
       title: reply.title ?? "",
       content: reply.content,
-      departmentId: reply.departmentId ?? "",
+      isGeneral: reply.isGeneral,
+      departmentIds: reply.departments.map((department) => department.id),
     });
     setError(null);
     setEditing(reply);
   }
 
-  /** Só mexe no que é do departamento dele; o geral é do admin. */
-  function canManage(reply: QuickReplyDto): boolean {
-    if (isAdmin) return true;
-    return reply.departmentId != null && departments.some((d) => d.id === reply.departmentId);
+  /**
+   * Ligar "vale para todos" limpa a seleção, desligar volta ao vazio: são os
+   * dois únicos estados que a API aceita.
+   */
+  function toggleGeneral(isGeneral: boolean) {
+    setForm((current) => ({ ...current, isGeneral, departmentIds: [] }));
   }
 
   async function save() {
@@ -67,13 +75,14 @@ export default function QuickRepliesPage() {
       shortcut: form.shortcut.trim().toLowerCase(),
       title: form.title.trim() || undefined,
       content: form.content.trim(),
-      departmentId: form.departmentId || null,
+      isGeneral: form.isGeneral,
+      departmentIds: form.isGeneral ? [] : form.departmentIds,
     };
     try {
       if (editing === "new") {
-        await api.post("/quick-replies", payload);
+        await quickRepliesApi.create(payload);
       } else if (editing) {
-        await api.patch(`/quick-replies/${editing.id}`, payload);
+        await quickRepliesApi.update(editing.id, payload);
       }
       setEditing(null);
       load();
@@ -87,7 +96,7 @@ export default function QuickRepliesPage() {
   async function remove(reply: QuickReplyDto) {
     if (!window.confirm(`Excluir a resposta /${reply.shortcut}?`)) return;
     try {
-      await api.delete(`/quick-replies/${reply.id}`);
+      await quickRepliesApi.remove(reply.id);
       load();
     } catch (err) {
       window.alert(err instanceof Error ? err.message : "Erro ao excluir");
@@ -118,14 +127,8 @@ export default function QuickRepliesPage() {
           description='Crie atalhos como /bomdia ou /boleto e use-os na Inbox digitando "/".'
         />
       ) : (
-        <div className="space-y-4">
-          {groupByDepartment(replies).map((group) => (
-          <div key={group.departmentId ?? "geral"}>
-            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-              {departmentLabel(group.departmentId, departments)}
-            </h2>
-            <Card className="divide-y divide-slate-100">
-          {group.items.map((reply) => (
+        <Card className="divide-y divide-slate-100">
+          {replies.map((reply) => (
             <div key={reply.id} className="flex items-start gap-3 px-5 py-3.5">
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold text-brand-700">
@@ -135,8 +138,11 @@ export default function QuickRepliesPage() {
                   )}
                 </p>
                 <p className="mt-0.5 whitespace-pre-wrap text-sm text-slate-600">{reply.content}</p>
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  <DepartmentBadges item={reply} />
+                </div>
               </div>
-              {canManage(reply) && (
+              {canManageScopedItem(reply, !!isAdmin, departments) && (
                 <div className="flex shrink-0 gap-1">
                   <button
                     onClick={() => openEdit(reply)}
@@ -156,10 +162,7 @@ export default function QuickRepliesPage() {
               )}
             </div>
           ))}
-            </Card>
-          </div>
-          ))}
-        </div>
+        </Card>
       )}
 
       <Modal
@@ -185,14 +188,30 @@ export default function QuickRepliesPage() {
               placeholder="Ex.: Saudação da manhã"
             />
           </Field>
-          <Field label="Departamento">
-            <DepartmentSelect
-              value={form.departmentId}
+          {isAdmin && (
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300 text-brand-600"
+                checked={form.isGeneral}
+                onChange={(event) => toggleGeneral(event.target.checked)}
+              />
+              Vale para todos os departamentos
+            </label>
+          )}
+          <Field label="Departamentos">
+            <DepartmentCheckboxes
+              selected={form.departmentIds}
               departments={departments}
-              canUseGeneral={!!isAdmin}
-              onChange={(value) => setForm({ ...form, departmentId: value })}
+              disabled={form.isGeneral}
+              onChange={(departmentIds) => setForm({ ...form, departmentIds })}
             />
           </Field>
+          <p className="text-xs text-slate-400">
+            {form.isGeneral
+              ? "A resposta aparece no /atalho de toda a organização."
+              : "A resposta aparece para quem atua em qualquer um dos departamentos marcados."}
+          </p>
           <Field label="Mensagem">
             <Textarea
               rows={5}
@@ -208,7 +227,7 @@ export default function QuickRepliesPage() {
               busy ||
               form.shortcut.length === 0 ||
               form.content.trim().length === 0 ||
-              (!isAdmin && !form.departmentId)
+              (!form.isGeneral && form.departmentIds.length === 0)
             }
             onClick={() => void save()}
           >

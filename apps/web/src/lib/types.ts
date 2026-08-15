@@ -70,12 +70,26 @@ export interface DepartmentDto {
   members?: Array<{ id: string; name: string; role: UserRole }>;
 }
 
+/** Departamento a que uma etiqueta ou resposta rápida está vinculada. */
+export interface ResourceDepartmentDto {
+  id: string;
+  name: string;
+  color: string | null;
+}
+
 export interface TagDto {
   id: string;
   name: string;
   color: string;
-  /** Departamento dono; null = geral, visível a todos */
-  departmentId: string | null;
+  /** Vale para todos os departamentos. Ligada, `departments` vem vazia. */
+  isGeneral: boolean;
+  /**
+   * Todos os departamentos da etiqueta, inclusive os que o usuário não
+   * acessa: nome de departamento não é dado sensível, e sem a lista completa
+   * ele não entenderia por que a edição é recusada. Quem barra a gravação
+   * parcial é a API.
+   */
+  departments: ResourceDepartmentDto[];
 }
 
 export interface ConversationDto {
@@ -225,8 +239,10 @@ export interface QuickReplyDto {
   shortcut: string;
   title: string | null;
   content: string;
-  /** Departamento dono; null = geral, visível a todos */
-  departmentId: string | null;
+  /** Vale para todos os departamentos. Ligada, `departments` vem vazia. */
+  isGeneral: boolean;
+  /** Lista completa — ver a observação em TagDto. */
+  departments: ResourceDepartmentDto[];
   createdAt: string;
 }
 

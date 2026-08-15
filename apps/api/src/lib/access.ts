@@ -113,32 +113,61 @@ export async function accessibleDepartmentIds(
 }
 
 /**
- * Filtro de leitura para recursos que pertencem a um departamento
- * (etiquetas e respostas rápidas).
- *
- * `departmentId: null` significa "geral" e aparece para todo mundo — é o
- * que preserva o que já existia antes de os recursos terem departamento.
+ * Filtro Prisma dos recursos ligados a departamentos em N:N — etiquetas e
+ * respostas rápidas. Serve para `Tag` e para `QuickReply`, que têm a mesma
+ * forma: a flag `isGeneral` e a coleção `departments`.
  */
-export function departmentResourceScope(
-  ids: string[] | null,
-): { OR?: Array<{ departmentId: null } | { departmentId: { in: string[] } }> } {
-  if (!ids) return {};
-  return { OR: [{ departmentId: null }, { departmentId: { in: ids } }] };
+export interface DepartmentResourceScope {
+  OR?: Array<{ isGeneral: true } | { departments: { some: { departmentId: { in: string[] } } } }>;
 }
 
 /**
- * Pode criar ou alterar um recurso neste departamento?
+ * Filtro de leitura para recurso de vários departamentos: o usuário enxerga
+ * o que é geral e o que está marcado para pelo menos um departamento dele.
  *
- * Admin faz tudo, inclusive o geral. Os demais só dentro dos próprios
- * departamentos — e nunca no geral, que vale para a organização inteira.
+ * "Geral" é a flag `isGeneral`, e não mais a ausência de departamento. Se
+ * lista vazia significasse geral, excluir um departamento esvaziaria a lista
+ * de um item restrito e ele passaria a valer para a organização inteira sem
+ * ninguém perceber. Com a flag, o item fica sem departamento e some para
+ * quem não é admin — o lado seguro do erro.
+ *
+ * Admin recebe `{}`: nenhum filtro, enxerga tudo, inclusive o item que ficou
+ * sem departamento e precisa ser arrumado.
  */
-export function canWriteInDepartment(
+export function departmentResourceScope(ids: string[] | null): DepartmentResourceScope {
+  if (!ids) return {};
+  // Lista vazia não vira "vê tudo": o ramo `in: []` não casa nada e sobra só
+  // o geral, que é o que a pessoa sem departamento deve mesmo enxergar.
+  return { OR: [{ isGeneral: true }, { departments: { some: { departmentId: { in: ids } } } }] };
+}
+
+/**
+ * Pode criar ou alterar um recurso geral, que vale para a organização
+ * inteira? Continua sendo só o admin: `ids === null` é exatamente o "sem
+ * restrição" que apenas ele recebe de `accessibleDepartmentIds`.
+ */
+export function canWriteGeneralResource(ids: string[] | null): boolean {
+  return ids === null;
+}
+
+/**
+ * Pode gravar um recurso restrito a estes departamentos?
+ *
+ * Exige acesso a TODOS eles, não a um só: com acesso apenas ao Fiscal, a
+ * pessoa poderia pendurar a etiqueta também no Contábil e alterar o que a
+ * outra equipe enxerga. Faltando um, a gravação inteira é recusada — nada
+ * de salvar metade.
+ *
+ * Lista vazia é estado inválido para item restrito (o item ficaria invisível
+ * para todo mundo menos o admin) e é recusada aqui também.
+ */
+export function canWriteInAllDepartments(
   ids: string[] | null,
-  departmentId: string | null,
+  departmentIds: string[],
 ): boolean {
+  if (departmentIds.length === 0) return false;
   if (!ids) return true;
-  if (!departmentId) return false;
-  return ids.includes(departmentId);
+  return departmentIds.every((departmentId) => ids.includes(departmentId));
 }
 
 /**
