@@ -9,6 +9,7 @@ import {
   businessMinutesBetween,
   civilDateIn,
   computeOverdue,
+  periodRange,
   periodStart,
   safeTimeZone,
   weekdayOf,
@@ -53,6 +54,37 @@ describe("cortes de data no fuso configurado", () => {
   it("atravessa a virada do mês sem estranhar", () => {
     const now = sp("2026-03-02T09:00:00");
     expect(periodStart("7d", now, SP).toISOString()).toBe("2026-02-24T03:00:00.000Z");
+  });
+
+  it("intervalo personalizado pega os dois dias inteiros, nas pontas", () => {
+    const range = periodRange("custom", sp("2026-08-15T10:00:00"), SP, {
+      from: "2026-08-01",
+      to: "2026-08-07",
+    });
+    expect(range.start.toISOString()).toBe("2026-08-01T03:00:00.000Z");
+    // Último instante de 07/08 em São Paulo, sem invadir o dia 08.
+    expect(range.end?.toISOString()).toBe("2026-08-08T02:59:59.999Z");
+  });
+
+  it("intervalo personalizado de um dia só é o dia inteiro", () => {
+    const range = periodRange("custom", sp("2026-08-15T10:00:00"), SP, {
+      from: "2026-08-14",
+      to: "2026-08-14",
+    });
+    expect(range.start.toISOString()).toBe("2026-08-14T03:00:00.000Z");
+    expect(range.end?.toISOString()).toBe("2026-08-15T02:59:59.999Z");
+  });
+
+  it("atalho não tem corte superior — mensagem recém-chegada não some", () => {
+    expect(periodRange("today", sp("2026-08-15T10:00:00"), SP).end).toBeNull();
+    expect(periodRange("30d", sp("2026-08-15T10:00:00"), SP).end).toBeNull();
+  });
+
+  it("personalizado sem datas cai no dia de hoje, nunca na base inteira", () => {
+    const now = sp("2026-08-15T10:00:00");
+    expect(periodRange("custom", now, SP).start.toISOString()).toBe(
+      periodRange("today", now, SP).start.toISOString(),
+    );
   });
 
   it("fuso inválido no banco cai no padrão em vez de derrubar a tela", () => {

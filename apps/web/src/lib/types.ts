@@ -312,10 +312,32 @@ export interface DashboardRankingRowDto {
   total: number;
 }
 
+/**
+ * Uma linha do top de usuários. `received` é o que o cliente mandou nas
+ * conversas em que a pessoa é a responsável.
+ */
+export interface DashboardTopUserDto {
+  userId: string;
+  name: string;
+  role: UserRole;
+  hasAvatar: boolean;
+  sent: number;
+  received: number;
+  total: number;
+}
+
 export interface DashboardStatsDto {
   period: DashboardPeriod;
   periodStart: string;
+  /** Nulo nos atalhos, que valem "até agora". */
+  periodEnd: string | null;
   generatedAt: string;
+  /** Devolvidos como a API os aplicou, para a tela conferir o que desenhou. */
+  filters: {
+    instanceId: string | null;
+    departmentId: string | null;
+    assignedUserId: string | null;
+  };
   /** Limite vigente nos parâmetros de atendimento, para a tela dizer contra o que mede. */
   responseLimitMinutes: number;
   timezone: string;
@@ -340,4 +362,6 @@ export interface DashboardStatsDto {
     sent: number;
   };
   ranking: DashboardRankingRowDto[];
+  /** `null` para quem não é supervisor — o bloco não aparece na tela dele. */
+  topUsers: DashboardTopUserDto[] | null;
 }

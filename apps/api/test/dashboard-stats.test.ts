@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import jwt from "@fastify/jwt";
 import type { Prisma, PrismaClient } from "@azvchat/database";
+import { FILTER_NONE } from "@azvchat/shared";
 import { registerErrorHandler } from "../src/lib/errors.js";
 import type { AuthTokenPayload } from "../src/lib/auth.js";
 import { dashboardRoutes } from "../src/modules/dashboard/routes.js";
@@ -21,6 +22,7 @@ interface Recorded {
   conversationGroupBy: Prisma.ConversationGroupByArgs[];
   conversationFindMany: Array<Record<string, unknown>>;
   messageCount: Array<Record<string, unknown>>;
+  messageGroupBy: Array<{ by: string[]; where?: Record<string, unknown> }>;
   instanceGroupBy: Array<Record<string, unknown>>;
 }
 
@@ -49,6 +51,10 @@ function fakePrisma(): PrismaClient {
       findMany: async (args: Record<string, unknown>) => {
         recorded.conversationFindMany.push(args);
         const select = args.select as Record<string, unknown> | undefined;
+        // As conversas com responsável (top de usuários) pedem o responsável.
+        if (select && "assignedUserId" in select) {
+          return [{ id: "conv-1", assignedUserId: "user-1" }];
+        }
         // A busca do ranking pede título; a das candidatas a atraso, só o id.
         if (select && "title" in select) {
           return [
@@ -79,8 +85,21 @@ function fakePrisma(): PrismaClient {
         const where = args.where as { direction?: string };
         return where.direction === "inbound" ? 40 : 25;
       },
-      groupBy: async (args: { by: string[] }) => {
+      groupBy: async (args: { by: string[]; where?: Record<string, unknown> }) => {
+        recorded.messageGroupBy.push(args);
+        if (args.by[0] === "sentByUserId") {
+          return [
+            { sentByUserId: "user-1", _count: { _all: 9 } },
+            { sentByUserId: "user-2", _count: { _all: 4 } },
+          ];
+        }
         if (args.by.length === 1) {
+          const where = args.where as { direction?: string } | undefined;
+          // A varredura de entrada por conversa (top de usuários) pede
+          // `direction: inbound`; a do ranking não pede direção nenhuma.
+          if (where?.direction === "inbound") {
+            return [{ conversationId: "conv-1", _count: { _all: 6 } }];
+          }
           return [{ conversationId: "conv-1", _count: { _all: 12 } }];
         }
         return [
@@ -88,6 +107,12 @@ function fakePrisma(): PrismaClient {
           { conversationId: "conv-1", direction: "outbound", _count: { _all: 5 } },
         ];
       },
+    },
+    user: {
+      findMany: async () => [
+        { id: "user-1", name: "Maria Supervisora", role: "supervisor", avatarUrl: null },
+        { id: "user-2", name: "João Atendente", role: "agent", avatarUrl: "avatar.jpg" },
+      ],
     },
     $queryRaw: async () => [],
   } as unknown as PrismaClient;
@@ -122,10 +147,20 @@ async function stats(app: FastifyInstance, role: AuthTokenPayload["role"], query
   return response;
 }
 
-/** Achata o filtro de conversa em uma lista de condições, para inspecionar. */
+/**
+ * Achata o filtro de conversa em uma lista de condições, para inspecionar.
+ *
+ * O recorte de acesso e os filtros da tela chegam aninhados (o `AND` da rota
+ * carrega o `AND` de `conversationScope` dentro), então a leitura desce um
+ * nível de cada vez em vez de assumir uma lista plana.
+ */
 function conditionsOf(where: Record<string, unknown>): Array<Record<string, unknown>> {
   const and = where.AND;
-  return Array.isArray(and) ? (and as Array<Record<string, unknown>>) : [];
+  if (!Array.isArray(and)) return [];
+  return (and as Array<Record<string, unknown>>).flatMap((condition) => {
+    const nested = conditionsOf(condition);
+    return nested.length > 0 ? nested : [condition];
+  });
 }
 
 describe("GET /dashboard/stats", () => {
@@ -134,6 +169,7 @@ describe("GET /dashboard/stats", () => {
       conversationGroupBy: [],
       conversationFindMany: [],
       messageCount: [],
+      messageGroupBy: [],
       instanceGroupBy: [],
     };
   });
@@ -293,6 +329,164 @@ describe("GET /dashboard/stats", () => {
         NOT: { direction: "outbound", status: "pending" },
       });
     }
+    await app.close();
+  });
+
+  it("filtro de chip refina o recorte em vez de substituí-lo", async () => {
+    const app = await buildTestApp();
+    await stats(app, "agent", "?instanceId=11111111-1111-4111-8111-111111111111");
+    const conditions = conditionsOf(
+      recorded.conversationGroupBy[0]?.where as Record<string, unknown>,
+    );
+    // O filtro entra por cima; o recorte de acesso continua inteiro no AND.
+    expect(conditions).toContainEqual({
+      whatsappInstanceId: "11111111-1111-4111-8111-111111111111",
+    });
+    expect(conditions).toContainEqual({ whatsappInstanceId: { in: ["inst-1"] } });
+    expect(conditions).toContainEqual({
+      OR: [{ assignedUserId: "user-agent" }, { assignedUserId: null }],
+    });
+    // O card de chips passa a olhar só aquele número, sem perder o escopo.
+    expect(recorded.instanceGroupBy[0]?.where).toMatchObject({
+      id: { in: ["inst-1"] },
+    });
+    await app.close();
+  });
+
+  it("filtro de departamento e de responsável aceitam 'sem'", async () => {
+    const app = await buildTestApp();
+    await stats(app, "admin", `?departmentId=${FILTER_NONE}&assignedUserId=${FILTER_NONE}`);
+    const conditions = conditionsOf(
+      recorded.conversationGroupBy[0]?.where as Record<string, unknown>,
+    );
+    expect(conditions).toContainEqual({ departmentId: null });
+    expect(conditions).toContainEqual({ assignedUserId: null });
+    await app.close();
+  });
+
+  it("os filtros valem para a tela inteira, inclusive para o card de atraso", async () => {
+    const app = await buildTestApp();
+    const departmentId = "22222222-2222-4222-8222-222222222222";
+    await stats(app, "admin", `?departmentId=${departmentId}`);
+    const candidatas = recorded.conversationFindMany.find((args) => {
+      const select = (args.select as Record<string, unknown>) ?? {};
+      return !("title" in select) && !("assignedUserId" in select);
+    });
+    expect(conditionsOf(candidatas?.where as Record<string, unknown>)).toContainEqual({
+      departmentId,
+    });
+    for (const args of recorded.messageCount) {
+      const where = args.where as { conversation?: Record<string, unknown> };
+      expect(conditionsOf(where.conversation ?? {})).toContainEqual({ departmentId });
+    }
+    await app.close();
+  });
+
+  it("filtro devolvido na resposta é o que a API aplicou", async () => {
+    const app = await buildTestApp();
+    const instanceId = "11111111-1111-4111-8111-111111111111";
+    const body = (await stats(app, "admin", `?instanceId=${instanceId}`)).json();
+    expect(body.filters).toEqual({
+      instanceId,
+      departmentId: null,
+      assignedUserId: null,
+    });
+    await app.close();
+  });
+
+  it("período personalizado corta o começo e o fim, no fuso configurado", async () => {
+    const app = await buildTestApp();
+    const body = (await stats(app, "admin", "?period=custom&from=2026-08-01&to=2026-08-07")).json();
+    // 00:00 de 01/08 e o último instante de 07/08 em America/Sao_Paulo.
+    expect(body.periodStart).toBe("2026-08-01T03:00:00.000Z");
+    expect(body.periodEnd).toBe("2026-08-08T02:59:59.999Z");
+    const where = recorded.conversationGroupBy[0]?.where as {
+      lastMessageAt?: { gte?: Date; lte?: Date };
+    };
+    expect(where.lastMessageAt?.gte).toBeInstanceOf(Date);
+    expect(where.lastMessageAt?.lte).toBeInstanceOf(Date);
+    await app.close();
+  });
+
+  it("atalho de período não tem corte superior", async () => {
+    const app = await buildTestApp();
+    const body = (await stats(app, "admin", "?period=7d")).json();
+    // Sem `lte`: o relógio do WhatsApp pode vir à frente do nosso, e um corte
+    // em "agora" sumiria com a mensagem que acabou de chegar.
+    expect(body.periodEnd).toBeNull();
+    const where = recorded.conversationGroupBy[0]?.where as {
+      lastMessageAt?: Record<string, unknown>;
+    };
+    expect(where.lastMessageAt).not.toHaveProperty("lte");
+    await app.close();
+  });
+
+  it("recusa período personalizado malformado", async () => {
+    const app = await buildTestApp();
+    // Sem as datas.
+    expect((await stats(app, "admin", "?period=custom")).statusCode).toBe(400);
+    // Fim antes do início.
+    expect(
+      (await stats(app, "admin", "?period=custom&from=2026-08-07&to=2026-08-01")).statusCode,
+    ).toBe(400);
+    // Acima do teto de um ano.
+    expect(
+      (await stats(app, "admin", "?period=custom&from=2024-01-01&to=2026-08-01")).statusCode,
+    ).toBe(400);
+    // Formato errado.
+    expect(
+      (await stats(app, "admin", "?period=custom&from=01/08/2026&to=2026-08-07")).statusCode,
+    ).toBe(400);
+    await app.close();
+  });
+
+  it("recusa id de filtro que não é uuid", async () => {
+    const app = await buildTestApp();
+    expect((await stats(app, "admin", "?instanceId=qualquer-coisa")).statusCode).toBe(400);
+    expect((await stats(app, "admin", "?assignedUserId=qualquer-coisa")).statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("top de usuários é de supervisor para cima", async () => {
+    const app = await buildTestApp();
+    const doAgente = (await stats(app, "agent")).json();
+    // Para o atendente o bloco nem é consultado, e a resposta diz isso.
+    expect(doAgente.topUsers).toBeNull();
+
+    const doSupervisor = (await stats(app, "supervisor")).json();
+    expect(doSupervisor.topUsers).not.toBeNull();
+    const admin = (await stats(app, "admin")).json();
+    expect(admin.topUsers).not.toBeNull();
+    await app.close();
+  });
+
+  it("top de usuários soma enviadas por autor e recebidas por responsável", async () => {
+    const app = await buildTestApp();
+    const body = (await stats(app, "supervisor")).json();
+    expect(body.topUsers).toEqual([
+      {
+        userId: "user-1",
+        name: "Maria Supervisora",
+        role: "supervisor",
+        hasAvatar: false,
+        // 9 enviadas por ela + 6 do cliente na conversa em que é responsável.
+        sent: 9,
+        received: 6,
+        total: 15,
+      },
+      {
+        userId: "user-2",
+        name: "João Atendente",
+        role: "agent",
+        hasAvatar: true,
+        sent: 4,
+        received: 0,
+        total: 4,
+      },
+    ]);
+    // Envio sem autor é da automação e não entra como trabalho de ninguém.
+    const enviadas = recorded.messageGroupBy.find((args) => args.by[0] === "sentByUserId");
+    expect(enviadas?.where).toMatchObject({ sentByUserId: { not: null } });
     await app.close();
   });
 

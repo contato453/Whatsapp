@@ -279,7 +279,10 @@ GET    /attendance-settings  (qualquer papel — o dashboard depende dela)
 PUT    /attendance-settings  (supervisor; grava SLA + expediente e vai para o AuditLog)
 
 GET    /search              GET /reports/agents   GET /audit-logs
-GET    /dashboard/stats?period=today|7d|15d|30d  (período validado por Zod, sem intervalo livre)
+GET    /dashboard/stats?period=today|7d|15d|30d|custom[&from=&to=]
+       [&instanceId=][&departmentId=<uuid|none>][&assignedUserId=<uuid|none>]
+       (tudo validado por Zod; `custom` exige as duas datas AAAA-MM-DD, teto de 366 dias;
+        o bloco `topUsers` só vem para supervisor, senão é `null`)
 ```
 
 Mídia é servida **somente autenticada**, escopada por organização, com proteção contra
@@ -543,7 +546,21 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   tratado e conta como dia normal. Nota interna não é `Message`, então nunca conta como
   resposta ao cliente; mensagem apagada e saída ainda `pending` também não contam.
 - **Nenhum corte de data do dashboard usa o fuso do servidor** — "hoje" é o dia civil do
-  escritório, não o dia UTC do container.
+  escritório, não o dia UTC do container. O `custom` pega os dois dias das pontas inteiros;
+  os atalhos **não** têm corte superior, de propósito: o relógio do WhatsApp pode vir à
+  frente do nosso e um `lte: agora` sumiria com a mensagem recém-chegada.
+- **Os filtros do dashboard refinam o recorte, nunca o ampliam.** Chip, departamento e
+  responsável entram num `AND` junto com `conversationScope`, então pedir um número que o
+  usuário não enxerga devolve vazio em vez de vazar. `departmentId`/`assignedUserId` aceitam
+  `none` para "sem departamento" / "sem responsável". Os filtros valem para a **tela
+  inteira** — inclusive o card de atraso e o de infraestrutura, que continuam ignorando só o
+  período.
+- **`topUsers` é de supervisor para cima**, igual ao relatório por atendente: para o `agent`
+  a rota nem consulta e devolve `null`, e a tela não desenha o bloco. `sent` sai de
+  `Message.sentByUserId` (envio sem autor é do scheduler e não conta como trabalho de
+  ninguém); `received` são as mensagens do cliente nas conversas em que a pessoa é
+  **responsável** — mensagem de entrada não tem autor do nosso lado. É medida de carga, não
+  de produtividade.
 - Ingestão é idempotente por `(conversationId, externalMessageId)` — não crie caminho
   paralelo de inserção de mensagem.
 - LID (`@lid`) não é telefone. Existe migration só para limpar telefones que vieram de LID

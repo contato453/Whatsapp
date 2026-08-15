@@ -132,12 +132,34 @@ export const quickRepliesApi = {
 };
 
 /**
- * Indicadores do dashboard. O período é o único parâmetro e vale para a tela
- * inteira; a API valida e recusa qualquer valor fora dos quatro.
+ * Filtros do dashboard. Valem para a tela inteira: os cards, o ranking e o
+ * top de usuários respondem todos ao mesmo recorte.
+ *
+ * `from`/`to` são datas civis "AAAA-MM-DD" e só valem com `period=custom`.
+ * `departmentId` e `assignedUserId` aceitam "none" para "sem departamento" e
+ * "sem responsável".
  */
+export interface DashboardFilters {
+  period: DashboardPeriod;
+  from?: string;
+  to?: string;
+  instanceId?: string;
+  departmentId?: string;
+  assignedUserId?: string;
+}
+
 export const dashboardApi = {
-  stats: (period: DashboardPeriod) =>
-    api.get<DashboardStatsDto>(`/dashboard/stats?period=${period}`),
+  stats: (filters: DashboardFilters) => {
+    const params = new URLSearchParams({ period: filters.period });
+    if (filters.period === "custom" && filters.from && filters.to) {
+      params.set("from", filters.from);
+      params.set("to", filters.to);
+    }
+    if (filters.instanceId) params.set("instanceId", filters.instanceId);
+    if (filters.departmentId) params.set("departmentId", filters.departmentId);
+    if (filters.assignedUserId) params.set("assignedUserId", filters.assignedUserId);
+    return api.get<DashboardStatsDto>(`/dashboard/stats?${params.toString()}`);
+  },
 };
 
 /**

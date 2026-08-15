@@ -99,8 +99,19 @@ export const DEFAULT_ATTENDANCE_SETTINGS: AttendanceSettings = {
   businessHours: DEFAULT_BUSINESS_HOURS,
 };
 
-/** Períodos aceitos pelo dashboard — intervalo livre não é oferecido. */
-export const DASHBOARD_PERIODS = ["today", "7d", "15d", "30d"] as const;
+/**
+ * Atalhos de período do dashboard. São janelas contadas para trás a partir
+ * de hoje, sempre no fuso do escritório.
+ */
+export const DASHBOARD_FIXED_PERIODS = ["today", "7d", "15d", "30d"] as const;
+export type DashboardFixedPeriod = (typeof DASHBOARD_FIXED_PERIODS)[number];
+
+/**
+ * `custom` é o intervalo escolhido na mão, com data de início e fim. Ele
+ * convive com os atalhos em vez de substituí-los: no dia a dia a pergunta é
+ * "e hoje?", e obrigar a preencher duas datas para isso seria pior.
+ */
+export const DASHBOARD_PERIODS = [...DASHBOARD_FIXED_PERIODS, "custom"] as const;
 export type DashboardPeriod = (typeof DASHBOARD_PERIODS)[number];
 
 export const DASHBOARD_PERIOD_LABELS: Record<DashboardPeriod, string> = {
@@ -108,6 +119,7 @@ export const DASHBOARD_PERIOD_LABELS: Record<DashboardPeriod, string> = {
   "7d": "7 dias",
   "15d": "15 dias",
   "30d": "30 dias",
+  custom: "Personalizado",
 };
 
 /** Como o período aparece dentro da frase de um rótulo ("recebidas hoje"). */
@@ -116,12 +128,25 @@ export const DASHBOARD_PERIOD_PHRASES: Record<DashboardPeriod, string> = {
   "7d": "nos últimos 7 dias",
   "15d": "nos últimos 15 dias",
   "30d": "nos últimos 30 dias",
+  custom: "no período escolhido",
 };
 
-/** Quantos dias corridos cada período cobre, contando o dia atual. */
-export const DASHBOARD_PERIOD_DAYS: Record<DashboardPeriod, number> = {
+/** Quantos dias civis cada atalho cobre, contando o dia atual. */
+export const DASHBOARD_PERIOD_DAYS: Record<DashboardFixedPeriod, number> = {
   today: 1,
   "7d": 7,
   "15d": 15,
   "30d": 30,
 };
+
+/** Data civil "AAAA-MM-DD" — o intervalo personalizado é escolhido em dias. */
+export const DATE_ONLY_PATTERN = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+
+/**
+ * Teto do intervalo personalizado. Um ano cobre qualquer pergunta real do
+ * escritório e evita que um clique errado mande varrer a base inteira.
+ */
+export const MAX_CUSTOM_RANGE_DAYS = 366;
+
+/** Valor de filtro para "sem departamento" e "sem responsável". */
+export const FILTER_NONE = "none";

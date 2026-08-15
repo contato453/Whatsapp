@@ -3,6 +3,7 @@ import {
   DEFAULT_TIMEZONE,
   type AttendanceSettings,
   type BusinessHours,
+  type DashboardFixedPeriod,
   type DashboardPeriod,
   type Weekday,
 } from "@azvchat/shared";
@@ -117,18 +118,67 @@ function addCivilDays(date: CivilDate, days: number): CivilDate {
   };
 }
 
+/** Intervalo do dashboard. `end` nulo = "até agora", sem corte superior. */
+export interface PeriodRange {
+  start: Date;
+  end: Date | null;
+}
+
+/** Datas civis do intervalo personalizado, no formato "AAAA-MM-DD". */
+export interface CustomRange {
+  from: string;
+  to: string;
+}
+
+function parseCivilDate(value: string): CivilDate {
+  const [year, month, day] = value.split("-");
+  return { year: Number(year), month: Number(month), day: Number(day) };
+}
+
 /**
- * Início do período, no fuso do escritório.
+ * Início e fim do período, no fuso do escritório.
  *
- * "Hoje" é da meia-noite local até agora. Os demais são os últimos N dias
+ * "Hoje" é da meia-noite local até agora. Os atalhos são os últimos N dias
  * civis contando o atual — 7 dias é hoje mais os seis anteriores, começando
  * na meia-noite do primeiro deles.
+ *
+ * Os atalhos não têm corte superior de propósito: o relógio do WhatsApp pode
+ * vir alguns segundos à frente do nosso, e um `lte: agora` faria a mensagem
+ * que acabou de chegar sumir do próprio dia dela.
+ *
+ * O personalizado tem os dois cortes: começa na meia-noite do primeiro dia e
+ * termina no último instante do último dia, ambos no fuso configurado — quem
+ * escolhe "01/08 a 07/08" espera os dois dias inteiros dentro da conta.
  */
-export function periodStart(period: DashboardPeriod, now: Date, timezone: string): Date {
+export function periodRange(
+  period: DashboardPeriod,
+  now: Date,
+  timezone: string,
+  custom?: CustomRange,
+): PeriodRange {
   const timeZone = safeTimeZone(timezone);
+  if (period === "custom") {
+    // Sem as datas (só acontece se alguém burlar o Zod) vale o dia de hoje,
+    // que é o padrão da tela — nunca a base inteira.
+    if (!custom) return periodRange("today", now, timezone);
+    const from = parseCivilDate(custom.from);
+    const to = parseCivilDate(custom.to);
+    return {
+      start: zonedTimeToUtc(timeZone, from, 0, 0),
+      // Meia-noite do dia seguinte menos 1ms: pega o último dia inteiro sem
+      // depender de 23:59:59 e sem invadir o dia de depois.
+      end: new Date(zonedTimeToUtc(timeZone, addCivilDays(to, 1), 0, 0).getTime() - 1),
+    };
+  }
   const today = civilDateIn(timeZone, now);
-  const first = addCivilDays(today, -(DASHBOARD_PERIOD_DAYS[period] - 1));
-  return zonedTimeToUtc(timeZone, first, 0, 0);
+  const days = DASHBOARD_PERIOD_DAYS[period as DashboardFixedPeriod];
+  const first = addCivilDays(today, -(days - 1));
+  return { start: zonedTimeToUtc(timeZone, first, 0, 0), end: null };
+}
+
+/** Atalho de leitura para quem só precisa do começo do período. */
+export function periodStart(period: DashboardPeriod, now: Date, timezone: string): Date {
+  return periodRange(period, now, timezone).start;
 }
 
 function minutesOfDay(time: string): number {

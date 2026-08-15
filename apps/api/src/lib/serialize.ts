@@ -16,6 +16,7 @@ import {
   type ConversationStatus,
   type ConversationType,
   type DashboardPeriod,
+  type UserRole,
 } from "@azvchat/shared";
 
 /**
@@ -179,17 +180,41 @@ export interface DashboardRankingRow {
   total: number;
 }
 
+/**
+ * Uma linha do top de usuários. `received` é o que o cliente mandou nas
+ * conversas em que a pessoa é a responsável — mensagem de entrada não tem
+ * autor do nosso lado, quem a recebeu é quem estava com a conversa na mão.
+ */
+export interface DashboardTopUserRow {
+  userId: string;
+  name: string;
+  role: UserRole;
+  hasAvatar: boolean;
+  sent: number;
+  received: number;
+  total: number;
+}
+
 export interface DashboardStatsInput {
   period: DashboardPeriod;
   periodStart: Date;
+  /** Nulo nos atalhos, que não têm corte superior — vale "até agora". */
+  periodEnd: Date | null;
   generatedAt: Date;
   settings: AttendanceSettings;
+  filters: {
+    instanceId: string | null;
+    departmentId: string | null;
+    assignedUserId: string | null;
+  };
   conversationsByStatus: Record<ConversationStatus, number>;
   instancesByStatus: Record<ConnectionStatus, number>;
   messagesReceived: number;
   messagesSent: number;
   overdue: { count: number; oldestWaitingMinutes: number | null };
   ranking: DashboardRankingRow[];
+  /** `null` para quem não é supervisor: o bloco nem aparece na tela dele. */
+  topUsers: DashboardTopUserRow[] | null;
 }
 
 /**
@@ -206,9 +231,13 @@ export function serializeDashboardStats(input: DashboardStatsInput) {
   return {
     period: input.period,
     periodStart: input.periodStart.toISOString(),
+    periodEnd: input.periodEnd?.toISOString() ?? null,
     generatedAt: input.generatedAt.toISOString(),
     responseLimitMinutes: input.settings.responseLimitMinutes,
     timezone: input.settings.timezone,
+    // Os filtros voltam como vieram: a tela confere que está desenhando o
+    // recorte que a API realmente aplicou, e não o que ela pediu.
+    filters: input.filters,
     conversations: {
       active: Object.values(byStatus).reduce((total, count) => total + count, 0),
       byStatus,
@@ -230,6 +259,7 @@ export function serializeDashboardStats(input: DashboardStatsInput) {
       sent: input.messagesSent,
     },
     ranking: input.ranking,
+    topUsers: input.topUsers,
   };
 }
 
