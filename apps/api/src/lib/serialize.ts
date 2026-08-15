@@ -140,6 +140,24 @@ export function serializeConversation(conversation: ConversationWithRelations) {
   };
 }
 
+/**
+ * Conversa aberta na Inbox: o mesmo DTO da lista mais o que só faz sentido
+ * na tela de uma conversa.
+ *
+ * `scheduledPendingCount` fica fora de `serializeConversation` de propósito:
+ * a lista de conversas renderiza dezenas de linhas por carga e um `count`
+ * por linha sairia caro justamente na tela mais usada do sistema.
+ */
+export function serializeConversationDetail(
+  conversation: ConversationWithRelations,
+  scheduledPendingCount: number,
+) {
+  return {
+    ...serializeConversation(conversation),
+    scheduledPendingCount,
+  };
+}
+
 export interface MessageReactionView {
   emoji: string;
   senderName: string | null;

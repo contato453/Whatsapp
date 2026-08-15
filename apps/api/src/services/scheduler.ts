@@ -4,6 +4,7 @@ import type { WhatsAppProvider } from "@azvchat/whatsapp";
 import type { Server } from "socket.io";
 import type { Logger } from "pino";
 import { conversationAudience } from "../realtime/socket.js";
+import { emitScheduledPending } from "../lib/scheduled-pending.js";
 import { serializeConversation, serializeMessage } from "../lib/serialize.js";
 import { applySignature } from "../lib/signature.js";
 import { buildPreview } from "./message-ingest.js";
@@ -144,6 +145,8 @@ export class ScheduledMessageWorker {
           .to(room)
           .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation));
       }
+      // Saiu da fila: o badge do composer cai um (ou some, se era o último).
+      await this.emitPending(scheduled.organizationId, scheduled.conversationId);
       this.logger.info({
         event: "scheduled_message_sent",
         scheduledId: scheduled.id,
@@ -162,10 +165,33 @@ export class ScheduledMessageWorker {
           ...(giveUp ? { status: "failed" as const } : {}),
         },
       });
+      // Só a desistência muda o contador: enquanto o status seguir `pending`
+      // a mensagem continua na fila e o badge não deve mexer.
+      if (giveUp) {
+        await this.emitPending(scheduled.organizationId, scheduled.conversationId);
+      }
       this.logger[giveUp ? "error" : "warn"]({
         event: giveUp ? "scheduled_message_failed" : "scheduled_message_retry",
         scheduledId: scheduled.id,
         attempts,
+        error: String(err),
+      });
+    }
+  }
+
+  /** Avisa o contador de agendamentos pendentes a quem enxerga a conversa. */
+  private async emitPending(organizationId: string, conversationId: string): Promise<void> {
+    try {
+      await emitScheduledPending(
+        { prisma: this.prisma, io: this.io, logger: this.logger },
+        organizationId,
+        conversationId,
+      );
+    } catch (err) {
+      // O contador é acessório: uma falha aqui não pode derrubar o envio.
+      this.logger.warn({
+        event: "scheduled_pending_emit_failed",
+        conversationId,
         error: String(err),
       });
     }

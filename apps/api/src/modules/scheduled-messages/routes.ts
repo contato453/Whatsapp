@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { authenticate } from "../../lib/auth.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
+import { emitScheduledPending } from "../../lib/scheduled-pending.js";
 import { serializeUserDirectory } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
 import type { ScheduledMessage, User } from "@azvchat/database";
@@ -61,6 +62,9 @@ export async function scheduledMessageRoutes(app: FastifyInstance, deps: AppDeps
         entityId: id,
         metadata: { scheduledFor: when.toISOString() },
       });
+      // Badge do composer acompanha na hora, em todas as sessões que
+      // enxergam a conversa.
+      await emitScheduledPending(deps, request.user.organizationId, id);
       return reply.status(201).send({ scheduledMessage: serialize(scheduled) });
     },
   );
@@ -100,6 +104,8 @@ export async function scheduledMessageRoutes(app: FastifyInstance, deps: AppDeps
       where: { id },
       data: { status: "canceled" },
     });
+    // Cancelado sai da conta: o badge cai um na hora.
+    await emitScheduledPending(deps, request.user.organizationId, scheduled.conversationId);
     return { ok: true };
   });
 }
