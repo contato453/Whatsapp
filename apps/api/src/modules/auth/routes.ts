@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
+import { NOTIFICATION_SOUNDS, NOTIFICATION_VOLUMES } from "@azvchat/shared";
 import { authenticate } from "../../lib/auth.js";
 import { AppError, NotFoundError, UnauthorizedError } from "../../lib/errors.js";
 import { extensionFromMime } from "../../lib/media-storage.js";
@@ -79,6 +80,10 @@ export async function authRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
   const updateProfileSchema = z.object({
     name: z.string().min(2, "Nome deve ter no mínimo 2 caracteres").max(120).optional(),
     signMessages: z.boolean().optional(),
+    // Enum fechado: valor fora da lista é recusado aqui, antes de chegar ao
+    // banco, com a mesma mensagem de qualquer outro campo inválido.
+    notificationSound: z.enum(NOTIFICATION_SOUNDS).optional(),
+    notificationVolume: z.enum(NOTIFICATION_VOLUMES).optional(),
   });
 
   /**
@@ -96,6 +101,12 @@ export async function authRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
       data: {
         ...(body.name ? { name: body.name } : {}),
         ...(body.signMessages === undefined ? {} : { signMessages: body.signMessages }),
+        ...(body.notificationSound === undefined
+          ? {}
+          : { notificationSound: body.notificationSound }),
+        ...(body.notificationVolume === undefined
+          ? {}
+          : { notificationVolume: body.notificationVolume }),
       },
     });
     deps.audit.record({

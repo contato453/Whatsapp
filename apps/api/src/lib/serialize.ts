@@ -33,6 +33,10 @@ export function serializeUser(user: User) {
     // A chave do arquivo nunca sai da API; a imagem vem por /users/:id/avatar.
     hasAvatar: user.avatarUrl != null,
     signMessages: user.signMessages,
+    // Preferência pessoal, só do próprio dono: fica fora de
+    // serializeUserDirectory, que é o usuário visto por terceiros.
+    notificationSound: user.notificationSound,
+    notificationVolume: user.notificationVolume,
     lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
     createdAt: user.createdAt.toISOString(),
   };

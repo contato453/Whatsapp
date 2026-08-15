@@ -6,6 +6,8 @@ import type {
   MessageDirection,
   MessageStatus,
   MessageType,
+  NotificationSound,
+  NotificationVolume,
   ParticipantClientRole,
   UserRole,
 } from "@azvchat/shared";
@@ -31,6 +33,10 @@ export interface UserDto extends UserDirectoryDto {
   email: string;
   /** Prefixa as mensagens enviadas com o nome do atendente */
   signMessages: boolean;
+  /** Som do aviso de mensagem recebida — "none" desliga */
+  notificationSound: NotificationSound;
+  /** Volume do aviso de mensagem recebida */
+  notificationVolume: NotificationVolume;
   /** Último acesso ao sistema — null se nunca entrou */
   lastLoginAt: string | null;
   createdAt: string;

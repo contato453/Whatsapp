@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { Spinner, Tooltip } from "@/components/ui";
 import { UserAvatar } from "@/components/user-avatar";
 import { CallAlerts } from "@/components/call-alerts";
+import { MessageSound } from "@/components/message-sound";
 import { Logo, LogoMark } from "@/components/logo";
 
 /**
@@ -327,6 +328,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       </main>
       {/* Chamada tocando: aviso em qualquer tela do sistema. */}
       <CallAlerts />
+      {/* Som de mensagem recebida: vale em qualquer tela, não só na Inbox. */}
+      <MessageSound />
     </div>
   );
 }

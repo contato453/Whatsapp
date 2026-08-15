@@ -99,7 +99,16 @@ snake_case e id `uuid`.
 **Organização e pessoas**
 - `Organization` — raiz do tenant.
 - `User` — `role` (`admin|supervisor|agent`), `status` (`active|inactive`), `avatarUrl`,
-  `signMessages`, `lastLoginAt`.
+  `signMessages`, `notificationSound`, `notificationVolume`, `lastLoginAt`.
+- `User.notificationSound` (`NotificationSound`: `none|sound_1|sound_2|sound_3`, padrão
+  `sound_1`) e `User.notificationVolume` (`NotificationVolume`: `low|medium|high`, padrão
+  `medium`) — preferência **pessoal** do aviso sonoro de mensagem recebida, no mesmo
+  caminho de `signMessages`: `PATCH /auth/me` (Zod contra os enums), `serializeUser`,
+  auditoria `user.profile_updated`. **Não saem em `serializeUserDirectory`.** Os enums e
+  os rótulos vivem também em `packages/shared/src/enums.ts` (`NOTIFICATION_SOUNDS`,
+  `NOTIFICATION_SOUND_LABELS`, `NOTIFICATION_SOUND_DESCRIPTIONS`, `NOTIFICATION_VOLUMES`,
+  `NOTIFICATION_VOLUME_LABELS`). Os três sons são sintetizados com Web Audio em
+  `apps/web/src/lib/notification-sound.ts` — **não há arquivo de áudio no repositório**.
 - `UserWhatsAppInstance` (N:N) — **quais números o usuário enxerga**.
 - `UserDepartment` (N:N) — **em quais departamentos o usuário atua**.
 - `Department` — `name` único na org, `color`, `defaultAssigneeId` (responsável padrão).
@@ -454,6 +463,22 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
 
 ## 13. Armadilhas conhecidas
 
+- **Som de notificação depende de o navegador destravar o áudio.** Chrome e Safari só
+  deixam tocar depois de uma interação na página, e o `AudioContext` nasce suspenso — sem
+  destravar no primeiro clique ou tecla, o som não sai na primeira aba do dia e o recurso
+  parece defeito. `MessageSound` (`apps/web/src/components/message-sound.tsx`) escuta
+  `pointerdown`/`keydown` uma vez para isso e, se mesmo assim o áudio continuar bloqueado
+  quando a mensagem chegar, mostra **um aviso discreto por sessão** — nunca modal, nunca
+  repetido. Aba muito tempo em segundo plano tem o contexto suspenso pelo navegador: o
+  retorno do foco só religa a saída, **não toca o que foi suprimido**. Falha de áudio é
+  sempre engolida: som é acessório, recebimento de mensagem não.
+- **O gatilho do som é a direção da mensagem, não o tipo.** Só `inbound` toca; envio da
+  equipe, reação, edição e mudança de status nunca tocam, e nota interna também não nesta
+  entrega. Silencia apenas quando as duas coisas valem juntas — aba em foco **e** conversa
+  aberta —, com intervalo mínimo de 2s entre sons para rajada de grupo não virar
+  metralhadora (a mensagem suprimida não fica em fila). Com duas abas abertas as duas
+  tocam: não há sincronização entre abas, e isso está registrado em comentário no
+  componente.
 - `title` vs `customTitle` e `name` vs `customName`: o **sync do WhatsApp sobrescreve o
   primeiro e nunca toca no segundo**. Exibição prefere o custom.
 - **Nome do participante é decidido no backend**, em `serializeGroupParticipant`
@@ -538,7 +563,8 @@ responder citando; encaminhar; apagar e editar; gravação de áudio (ffmpeg, co
 enquetes; mensagens agendadas com retentativa; notas internas; etiquetas; atribuição com
 histórico completo; quatro status de atendimento; busca na conversa e busca global;
 respostas rápidas com `/`; dashboard; relatório por atendente; auditoria consultável;
-perfil e troca de senha pelo próprio usuário; aviso de chamada recebida.
+perfil e troca de senha pelo próprio usuário; aviso de chamada recebida; som de
+notificação de mensagem recebida, com som e volume escolhidos por cada usuário.
 
 **Falta** (ordem sugerida): validar o pareamento QR em rede aberta (o ambiente de
 desenvolvimento bloqueia `web.whatsapp.com`); votos de enquete agregados na Inbox;

@@ -50,21 +50,42 @@ enum UserStatus {
   inactive
 }
 
+/// Som do aviso de mensagem recebida. `none` é silêncio escolhido pela
+/// pessoa — nunca o estado inicial, que é `sound_1`.
+enum NotificationSound {
+  none
+  sound_1
+  sound_2
+  sound_3
+}
+
+/// Volume do aviso de mensagem recebida, em três degraus perceptivelmente
+/// distintos (o ganho de cada um é decidido no frontend, que toca o som).
+enum NotificationVolume {
+  low
+  medium
+  high
+}
+
 model User {
-  id             String     @id @default(uuid())
-  organizationId String
-  name           String
-  email          String     @unique
-  passwordHash   String
-  role           UserRole   @default(agent)
-  status         UserStatus @default(active)
-  avatarUrl      String?
+  id                 String             @id @default(uuid())
+  organizationId     String
+  name               String
+  email              String             @unique
+  passwordHash       String
+  role               UserRole           @default(agent)
+  status             UserStatus         @default(active)
+  avatarUrl          String?
   /// Prefixa as mensagens enviadas com o nome do atendente ("Fulano:")
-  signMessages   Boolean    @default(false)
+  signMessages       Boolean            @default(false)
+  /// Som tocado quando chega mensagem recebida — preferência de cada pessoa
+  notificationSound  NotificationSound  @default(sound_1)
+  /// Volume do som de notificação
+  notificationVolume NotificationVolume @default(medium)
   /// Último login bem-sucedido — null enquanto o usuário nunca entrou
-  lastLoginAt    DateTime?
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  lastLoginAt        DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
 
   organization          Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   assignedConversations Conversation[]                  @relation("AssignedConversations")
@@ -248,7 +269,7 @@ enum ParticipantClientRole {
 }
 
 model GroupParticipant {
-  id                String    @id @default(uuid())
+  id                String                 @id @default(uuid())
   groupId           String
   externalContactId String
   phoneNumber       String
@@ -260,14 +281,14 @@ model GroupParticipant {
   /// Independente de `Conversation.partnerName`: um é pessoa do grupo, o
   /// outro é texto livre do cadastro da conversa.
   clientRole        ParticipantClientRole?
-  isAdmin           Boolean   @default(false)
-  isSuperAdmin      Boolean   @default(false)
+  isAdmin           Boolean                @default(false)
+  isSuperAdmin      Boolean                @default(false)
   /// Chave do arquivo da foto no storage (null = sem foto conhecida)
   avatarUrl         String?
   /// Última tentativa de buscar a foto — evita reconsultar o WhatsApp toda hora
   avatarCheckedAt   DateTime?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
 
   group WhatsAppGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
@@ -654,14 +675,14 @@ model AuditLog {
 /// para a organização: no dia em que existir parâmetro por departamento,
 /// basta uma nova linha aqui. Nenhuma coluna de departamento agora.
 model AttendanceSettings {
-  id             String @id @default(uuid())
-  organizationId String @unique
+  id                   String   @id @default(uuid())
+  organizationId       String   @unique
   /// Minutos sem resposta, contados só dentro do expediente, para o
   /// atendimento entrar como atrasado.
-  responseLimitMinutes Int    @default(30)
+  responseLimitMinutes Int      @default(30)
   /// Fuso do escritório. Todo corte de data do dashboard usa este fuso,
   /// nunca o UTC do servidor.
-  timezone             String @default("America/Sao_Paulo")
+  timezone             String   @default("America/Sao_Paulo")
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
@@ -675,7 +696,7 @@ model AttendanceSettings {
 /// se liga e desliga sozinho, porque o escritório pode passar a atender
 /// sábado de manhã sem mexer nos outros dias.
 model AttendanceBusinessHours {
-  id         String @id @default(uuid())
+  id         String  @id @default(uuid())
   settingsId String
   /// 0 = domingo ... 6 = sábado, igual a `Date#getDay()` e a `EXTRACT(DOW)`.
   weekday    Int

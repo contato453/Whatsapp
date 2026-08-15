@@ -1,10 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Camera, KeyRound, Save } from "lucide-react";
-import { USER_ROLE_LABELS } from "@azvchat/shared";
+import { Camera, KeyRound, Play, Save } from "lucide-react";
+import {
+  NOTIFICATION_SOUNDS,
+  NOTIFICATION_SOUND_DESCRIPTIONS,
+  NOTIFICATION_SOUND_LABELS,
+  NOTIFICATION_VOLUMES,
+  NOTIFICATION_VOLUME_LABELS,
+  USER_ROLE_LABELS,
+  type NotificationSound,
+  type NotificationVolume,
+} from "@azvchat/shared";
 import { useAuth } from "@/lib/auth-context";
 import { API_URL, ApiError, api, invalidateUserAvatar } from "@/lib/api";
+import { previewNotificationSound } from "@/lib/notification-sound";
 import type { UserDto } from "@/lib/types";
 import { Button, Card, Field, Input } from "@/components/ui";
 import { UserAvatar } from "@/components/user-avatar";
@@ -19,6 +29,7 @@ export default function SettingsPage() {
       <div className="max-w-xl space-y-4">
         {user && <AvatarCard user={user} onChanged={setUser} />}
         {user && <ProfileCard user={user} onSaved={setSession} />}
+        {user && <NotificationsCard user={user} onSaved={setSession} />}
         <PasswordCard />
         <Card className="p-6">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
@@ -211,6 +222,138 @@ function ProfileCard({
       {saved && !dirty && <p className="text-sm text-emerald-600">Perfil atualizado.</p>}
 
       <Button disabled={busy || !dirty || name.trim().length < 2} onClick={() => void save()}>
+        <Save className="h-4 w-4" /> Salvar
+      </Button>
+    </Card>
+  );
+}
+
+/**
+ * Som de mensagem recebida. Preferência pessoal, gravada pelo mesmo
+ * `PATCH /auth/me` do nome e da assinatura.
+ *
+ * Trocar aqui vale para esta aba na hora e para as outras no próximo
+ * carregamento delas — não há sincronização entre abas nem entre
+ * dispositivos, e não faria diferença prática ter.
+ */
+function NotificationsCard({
+  user,
+  onSaved,
+}: {
+  user: UserDto;
+  onSaved: (token: string, user: UserDto) => void;
+}) {
+  const [sound, setSound] = useState<NotificationSound>(user.notificationSound);
+  const [volume, setVolume] = useState<NotificationVolume>(user.notificationVolume);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    setSound(user.notificationSound);
+    setVolume(user.notificationVolume);
+  }, [user.notificationSound, user.notificationVolume]);
+
+  const muted = sound === "none";
+  const dirty = sound !== user.notificationSound || volume !== user.notificationVolume;
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const data = await api.patch<{ token: string; user: UserDto }>("/auth/me", {
+        notificationSound: sound,
+        notificationVolume: volume,
+      });
+      onSaved(data.token, data.user);
+      setSaved(true);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Não foi possível salvar");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="space-y-4 p-6">
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+        Notificações
+      </h2>
+      <p className="text-xs text-slate-400">
+        Toca quando chega mensagem de cliente. Fica em silêncio quando a conversa já está
+        aberta na sua frente.
+      </p>
+
+      <Field label="Som">
+        <div className="space-y-1.5">
+          {NOTIFICATION_SOUNDS.map((option) => (
+            <div
+              key={option}
+              className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2"
+            >
+              <input
+                type="radio"
+                id={`notification-sound-${option}`}
+                name="notification-sound"
+                className="h-4 w-4 border-slate-300 text-brand-600 focus:ring-brand-500"
+                checked={sound === option}
+                onChange={() => setSound(option)}
+              />
+              <label
+                htmlFor={`notification-sound-${option}`}
+                className="flex-1 cursor-pointer text-sm text-slate-700"
+              >
+                {NOTIFICATION_SOUND_LABELS[option]}
+                <span className="mt-0.5 block text-xs text-slate-400">
+                  {NOTIFICATION_SOUND_DESCRIPTIONS[option]}
+                </span>
+              </label>
+              {/* "Nenhum" não tem o que ouvir; o botão fica visível e desligado
+                  para a linha não parecer quebrada. */}
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={option === "none"}
+                aria-label={`Ouvir ${NOTIFICATION_SOUND_LABELS[option]}`}
+                onClick={() => previewNotificationSound(option, volume)}
+              >
+                <Play className="h-3.5 w-3.5" /> Ouvir
+              </Button>
+            </div>
+          ))}
+        </div>
+      </Field>
+
+      <Field label="Volume">
+        <div className="flex gap-2">
+          {NOTIFICATION_VOLUMES.map((option) => (
+            <Button
+              key={option}
+              size="sm"
+              variant={volume === option ? "primary" : "outline"}
+              disabled={muted}
+              onClick={() => {
+                setVolume(option);
+                // Preview no volume escolhido: é o único jeito de comparar.
+                previewNotificationSound(sound, option);
+              }}
+            >
+              {NOTIFICATION_VOLUME_LABELS[option]}
+            </Button>
+          ))}
+        </div>
+      </Field>
+      {muted && (
+        <p className="text-xs text-slate-400">
+          Com o som em &ldquo;Nenhum&rdquo;, o volume não se aplica.
+        </p>
+      )}
+
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      {saved && !dirty && <p className="text-sm text-emerald-600">Preferências salvas.</p>}
+
+      <Button disabled={busy || !dirty} onClick={() => void save()}>
         <Save className="h-4 w-4" /> Salvar
       </Button>
     </Card>

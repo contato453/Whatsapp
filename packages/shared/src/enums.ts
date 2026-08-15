@@ -129,6 +129,49 @@ export const USER_STATUSES = ["active", "inactive"] as const;
 export type UserStatus = (typeof USER_STATUSES)[number];
 
 /**
+ * Som do aviso de mensagem recebida — preferência pessoal de cada atendente,
+ * como `signMessages`. Os três sons são sintetizados no navegador (Web Audio),
+ * não há arquivo de áudio no repositório.
+ *
+ * `none` é silêncio escolhido de propósito, nunca o estado inicial: quem nunca
+ * abriu Configurações ouve `sound_1`, porque a razão do recurso é justamente
+ * a mensagem que passa despercebida com a Inbox em segundo plano.
+ */
+export const NOTIFICATION_SOUNDS = ["none", "sound_1", "sound_2", "sound_3"] as const;
+export type NotificationSound = (typeof NOTIFICATION_SOUNDS)[number];
+
+export const NOTIFICATION_SOUND_LABELS: Record<NotificationSound, string> = {
+  none: "Nenhum",
+  sound_1: "Som 1",
+  sound_2: "Som 2",
+  sound_3: "Som 3",
+};
+
+/**
+ * Descrição curta do timbre, para a pessoa reconhecer o que vai ouvir antes
+ * mesmo de clicar em ouvir — e depois lembrar qual escolheu.
+ */
+export const NOTIFICATION_SOUND_DESCRIPTIONS: Record<NotificationSound, string> = {
+  none: "Sem som ao receber mensagem",
+  sound_1: "Dois toques curtos, subindo",
+  sound_2: "Toque único, tipo sino",
+  sound_3: "Dois toques graves, descendo",
+};
+
+/**
+ * Volume do aviso, em três degraus. O ganho de cada um mora no módulo de
+ * áudio do frontend — aqui ficam só o domínio e os rótulos.
+ */
+export const NOTIFICATION_VOLUMES = ["low", "medium", "high"] as const;
+export type NotificationVolume = (typeof NOTIFICATION_VOLUMES)[number];
+
+export const NOTIFICATION_VOLUME_LABELS: Record<NotificationVolume, string> = {
+  low: "Baixo",
+  medium: "Médio",
+  high: "Alto",
+};
+
+/**
  * Papel da pessoa dentro do cliente, marcado pela equipe no painel do grupo.
  *
  * Nada a ver com `isAdmin` do participante, que é administrador do GRUPO no
