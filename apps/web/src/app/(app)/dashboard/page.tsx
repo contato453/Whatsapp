@@ -751,7 +751,7 @@ export default function DashboardPage() {
           stats && (
             <>
               <MessagesTimeline points={stats.timeline} periodLabel={phrase} />
-              <HoursHeatmap cells={stats.hourly} periodLabel={phrase} />
+              <HoursHeatmap cells={stats.hourly} />
             </>
           )
         )}

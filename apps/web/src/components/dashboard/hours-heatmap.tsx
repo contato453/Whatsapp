@@ -1,7 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { WEEKDAY_LABELS, WEEKDAY_SHORT_LABELS, WEEKDAYS, type Weekday } from "@azvchat/shared";
+import {
+  DASHBOARD_HEATMAP_DAYS,
+  WEEKDAY_LABELS,
+  WEEKDAY_SHORT_LABELS,
+  WEEKDAYS,
+  type Weekday,
+} from "@azvchat/shared";
 import type { DashboardHourlyCellDto } from "@/lib/types";
 import { ChartCard, ChartTable } from "./chart-card";
 
@@ -43,13 +49,13 @@ function colorFor(value: number, thresholds: number[]): string {
   return RAMP[Math.min(step, RAMP.length - 1)] ?? EMPTY_COLOR;
 }
 
-export function HoursHeatmap({
-  cells,
-  periodLabel,
-}: {
-  cells: DashboardHourlyCellDto[];
-  periodLabel: string;
-}) {
+/**
+ * Este é o único bloco da tela que não segue o período escolhido: hábito de
+ * horário precisa de repetição para aparecer, e "hoje" mostraria um dia em
+ * vez do padrão. Os filtros de número, departamento e responsável continuam
+ * valendo, e o rótulo diz a janela para ninguém ler o número errado.
+ */
+export function HoursHeatmap({ cells }: { cells: DashboardHourlyCellDto[] }) {
   const [active, setActive] = useState<{ weekday: Weekday; hour: number } | null>(null);
 
   const byKey = new Map(cells.map((cell) => [`${cell.weekday}:${cell.hour}`, cell]));
@@ -66,7 +72,7 @@ export function HoursHeatmap({
   return (
     <ChartCard
       title="Quando o cliente procura"
-      subtitle={`Mensagens recebidas por dia da semana e hora, ${periodLabel}.`}
+      subtitle={`Mensagens recebidas por dia da semana e hora, sempre nos últimos ${DASHBOARD_HEATMAP_DAYS} dias — este bloco não segue o filtro de período.`}
       legend={
         <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
           <span>menos</span>
@@ -83,7 +89,7 @@ export function HoursHeatmap({
       empty={
         total === 0 ? (
           <p className="py-8 text-center text-xs text-slate-400">
-            Nenhuma mensagem recebida {periodLabel}.
+            Nenhuma mensagem recebida nos últimos {DASHBOARD_HEATMAP_DAYS} dias.
           </p>
         ) : undefined
       }

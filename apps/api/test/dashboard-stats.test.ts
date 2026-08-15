@@ -61,6 +61,12 @@ function fakePrisma(): PrismaClient {
         if (select && "assignedUserId" in select) {
           return [{ id: "conv-1", assignedUserId: "user-1" }];
         }
+        // Só o id, sem `status` no filtro: é a janela fixa do mapa de calor.
+        // A das candidatas a atraso pede o mesmo id, mas filtra por status.
+        const where = (args.where ?? {}) as { status?: unknown };
+        if (select && "id" in select && !("title" in select) && where.status === undefined) {
+          return [{ id: "conv-1" }];
+        }
         // A busca do ranking pede título; a das candidatas a atraso, só o id.
         if (select && "title" in select) {
           return [
@@ -545,6 +551,50 @@ describe("GET /dashboard/stats", () => {
       { weekday: 5, hour: 9, received: 7, sent: 3 },
       { weekday: 5, hour: 15, received: 2, sent: 0 },
     ]);
+    await app.close();
+  });
+
+  it("o mapa dia × hora usa sempre 30 dias, mesmo com o período em hoje", async () => {
+    const app = await buildTestApp();
+    await stats(app, "admin", "?period=today");
+    // Duas buscas de conversa por atividade: a do período (hoje) e a da
+    // janela fixa do mapa. A do mapa começa bem antes.
+    const janelas = recorded.conversationFindMany
+      .map((args) => (args.where as { lastMessageAt?: { gte?: Date } }).lastMessageAt?.gte)
+      .filter((value): value is Date => value instanceof Date)
+      .map((value) => value.getTime());
+    expect(janelas.length).toBeGreaterThanOrEqual(2);
+    const maisAntiga = Math.min(...janelas);
+    const maisRecente = Math.max(...janelas);
+    const diasDeDiferenca = (maisRecente - maisAntiga) / 86_400_000;
+    // Hoje contra 30 dias: a diferença fica em torno de 29 dias civis.
+    expect(diasDeDiferenca).toBeGreaterThan(28);
+    await app.close();
+  });
+
+  it("com o período já em 30 dias, não repete a consulta do mapa", async () => {
+    const app = await buildTestApp();
+    await stats(app, "admin", "?period=30d");
+    // A janela é a mesma: uma agregação crua basta para os dois blocos.
+    const agregacoes = recorded.rawQueries.filter((text) => text.includes("EXTRACT"));
+    expect(agregacoes).toHaveLength(1);
+    await app.close();
+  });
+
+  it("os filtros da tela continuam valendo no mapa de 30 dias", async () => {
+    const app = await buildTestApp();
+    const departmentId = "22222222-2222-4222-8222-222222222222";
+    await stats(app, "admin", `?period=today&departmentId=${departmentId}`);
+    // Toda busca por atividade — a do período e a do mapa — carrega o filtro.
+    const porAtividade = recorded.conversationFindMany.filter(
+      (args) => (args.where as { lastMessageAt?: unknown }).lastMessageAt !== undefined,
+    );
+    expect(porAtividade.length).toBeGreaterThanOrEqual(2);
+    for (const args of porAtividade) {
+      expect(conditionsOf(args.where as Record<string, unknown>)).toContainEqual({
+        departmentId,
+      });
+    }
     await app.close();
   });
 

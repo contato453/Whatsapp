@@ -342,7 +342,21 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
       activityBuckets,
       civilDaysOfRange({ start, end }, now, settings.timezone),
     );
-    const hourly = foldHourly(activityBuckets);
+
+    /**
+     * O mapa de dia × hora tem janela fixa de 30 dias, e é o único bloco da
+     * tela que ignora o período: padrão de horário só aparece com repetição,
+     * e "hoje" mostraria um dia em vez do hábito do cliente. Os demais
+     * filtros continuam valendo — é a mesma pergunta, recorte diferente.
+     *
+     * Com o período já em 30 dias a janela é a mesma, então reaproveita o que
+     * já foi buscado em vez de repetir duas consultas por nada.
+     */
+    const hourlyBuckets =
+      query.period === "30d"
+        ? activityBuckets
+        : await loadHeatmapBuckets(deps, organizationId, conversationFilter, settings.timezone, now);
+    const hourly = foldHourly(hourlyBuckets);
 
     const topUsers = canSeeTeam
       ? await buildTopUsers(deps, organizationId, activeConversations, sentByUser, withinPeriod)
@@ -512,6 +526,35 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
         },
       ];
     });
+  }
+
+  /**
+   * Movimento dos últimos 30 dias para o mapa de dia × hora.
+   *
+   * Mesmo caminho do resto: as conversas saem de uma busca já escopada por
+   * `access.ts` e pelos filtros da tela, e o SQL só agrega as mensagens
+   * delas. O que muda aqui é só a janela de tempo, que é fixa.
+   */
+  async function loadHeatmapBuckets(
+    { prisma }: AppDeps,
+    organizationId: string,
+    conversationFilter: Prisma.ConversationWhereInput,
+    timezone: string,
+    now: Date,
+  ): Promise<ActivityBucket[]> {
+    const window = periodRange("30d", now, timezone);
+    const conversations = await prisma.conversation.findMany({
+      where: { organizationId, ...conversationFilter, lastMessageAt: { gte: window.start } },
+      select: { id: true },
+      take: MAX_CONVERSATIONS_SCANNED,
+    });
+    return loadActivityBuckets(
+      deps,
+      conversations.map((row) => row.id),
+      timezone,
+      window.start,
+      window.end,
+    );
   }
 
   /**

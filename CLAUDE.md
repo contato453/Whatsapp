@@ -283,7 +283,8 @@ GET    /dashboard/stats?period=today|7d|15d|30d|custom[&from=&to=]
        [&instanceId=][&departmentId=<uuid|none>][&assignedUserId=<uuid|none>]
        (tudo validado por Zod; `custom` exige as duas datas AAAA-MM-DD, teto de 366 dias;
         o bloco `topUsers` só vem para supervisor, senão é `null`; `timeline` traz um ponto
-        por dia civil do período e `hourly` as células dia da semana × hora)
+        por dia civil do período e `hourly` as células dia da semana × hora, esta sempre
+        numa janela fixa de 30 dias)
 ```
 
 Mídia é servida **somente autenticada**, escopada por organização, com proteção contra
@@ -581,6 +582,11 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   cores saem do validador de paleta, não do olho: o par recebidas/enviadas é o mesmo dos
   cards (ΔE 16,1 sob deuteranopia) e o mapa de calor usa **uma** rampa de um tom só
   (indigo 400→800), porque magnitude não se pinta com arco-íris.
+- **O mapa dia × hora é o único bloco que ignora o período**: ele usa sempre os últimos
+  `DASHBOARD_HEATMAP_DAYS` (30) dias, porque padrão de horário só aparece com repetição e
+  "hoje" mostraria um dia em vez do hábito do cliente. Os filtros de número, departamento e
+  responsável continuam valendo nele, o rótulo do card diz a janela, e com o período já em
+  30 dias a rota reaproveita a mesma consulta em vez de repetir.
 - **A série por dia e o mapa de hora são agregados no banco** (`loadActivityBuckets`), num
   SQL cru que corta com `AT TIME ZONE` no fuso configurado. Trinta dias viram no máximo
   30 × 24 × 2 linhas em vez de dezenas de milhares de mensagens no Node. O escopo continua
