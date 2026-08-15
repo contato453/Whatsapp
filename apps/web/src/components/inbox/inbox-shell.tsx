@@ -23,6 +23,7 @@ import { RealtimeEvents, type ScheduledPendingPayload } from "@azvchat/shared";
 import { api, quickRepliesApi } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { useAuth } from "@/lib/auth-context";
+import { pruneDrafts, readDraft, saveDraft, type DraftMode } from "@/lib/drafts";
 import { cn, formatDateTime, formatDayLabel } from "@/lib/utils";
 import type {
   ConversationDetailDto,
@@ -256,7 +257,13 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     setDetail(null);
     setMessages(null);
     setReplyTo(null);
-    setComposerMode("message");
+    // Rascunho é por conversa, e volta com o modo em que foi escrito: nota
+    // interna restaurada em modo mensagem mandaria para o cliente um texto
+    // escrito para a equipe ler. Sem isso, o texto de um cliente também
+    // apareceria no composer do próximo — fácil de mandar para o errado.
+    const restored = conversationId && me ? readDraft(me.id, conversationId) : null;
+    setDraft(restored?.text ?? "");
+    setComposerMode(restored?.mode ?? "message");
     // Zera antes de carregar: o contador da conversa anterior não pode
     // aparecer por um instante na conversa recém-aberta.
     setScheduledPending(0);
@@ -272,7 +279,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       })
       .catch(() => setMessages([]));
     void api.post(`/conversations/${conversationId}/read`).catch(() => undefined);
-  }, [conversationId, loadDetail]);
+  }, [conversationId, loadDetail, me]);
 
   // Busca dentro da conversa (com atraso para não consultar a cada tecla)
   useEffect(() => {
@@ -456,12 +463,39 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     };
   }, [socket, conversationId, loadDetail]);
 
+  /**
+   * Toda escrita no composer passa por aqui, e grava na hora.
+   *
+   * Sem atraso de propósito: a sessão é encerrada no minuto do fechamento do
+   * horário de uso, e um `setTimeout` de meio segundo perderia justamente as
+   * últimas palavras — que são as que a pessoa ainda não mandou. A gravação é
+   * uma chave por conversa no `localStorage`, custo desprezível por tecla.
+   */
+  function updateDraft(text: string, mode: DraftMode = composerMode): void {
+    setDraft(text);
+    setComposerMode(mode);
+    if (conversationId && me) saveDraft(me.id, conversationId, { text, mode });
+  }
+
+  /** Troca de modo sem mexer no texto — o modo faz parte do rascunho. */
+  function updateComposerMode(mode: DraftMode): void {
+    updateDraft(draft, mode);
+  }
+
+  // Rascunho velho de qualquer usuário desta máquina sai do caminho na
+  // abertura: cota cheia faria o rascunho de hoje deixar de ser gravado.
+  useEffect(() => {
+    pruneDrafts();
+  }, []);
+
   // ---------- Envio ----------
   async function sendText() {
     if (!conversationId || draft.trim().length === 0 || sending) return;
     setSending(true);
     const content = draft.trim();
-    setDraft("");
+    // Some do composer e do armazenamento juntos: rascunho já enviado que
+    // voltasse no próximo login seria mandado duas vezes ao cliente.
+    updateDraft("");
 
     // Modo nota interna: grava sem enviar nada ao WhatsApp.
     if (composerMode === "note") {
@@ -469,7 +503,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         await api.post(`/conversations/${conversationId}/notes`, { content });
         loadDetail();
       } catch (err) {
-        setDraft(content);
+        updateDraft(content, "note");
         window.alert(err instanceof Error ? err.message : "Falha ao salvar nota");
       } finally {
         setSending(false);
@@ -490,7 +524,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         return [...current, result.message];
       });
     } catch (err) {
-      setDraft(content);
+      updateDraft(content, "message");
       window.alert(err instanceof Error ? err.message : "Falha ao enviar mensagem");
     } finally {
       setSending(false);
@@ -724,7 +758,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   }, [slashQuery]);
 
   function applyQuickReply(reply: QuickReplyDto) {
-    setDraft(reply.content);
+    updateDraft(reply.content);
     setQuickReplyDismissed(true);
   }
 
@@ -1039,7 +1073,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                       onReact={(message, emoji) => void handleReact(message, emoji)}
                       onReply={(message) => {
                         setReplyTo(message);
-                        setComposerMode("message");
+                        updateComposerMode("message");
                       }}
                       onForward={(message) => setForwarding(message)}
                       onEdit={(message) => void handleEdit(message)}
@@ -1074,7 +1108,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
               {/* Alternância entre resposta ao cliente e nota interna */}
               <div className="mb-2 flex items-center gap-1">
                 <button
-                  onClick={() => setComposerMode("message")}
+                  onClick={() => updateComposerMode("message")}
                   className={cn(
                     "shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
                     composerMode === "message"
@@ -1086,7 +1120,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                 </button>
                 <button
                   onClick={() => {
-                    setComposerMode("note");
+                    updateComposerMode("note");
                     setReplyTo(null);
                   }}
                   className={cn(
@@ -1171,7 +1205,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   rows={2}
                   value={draft}
                   disabled={sending}
-                  onChange={(event) => setDraft(event.target.value)}
+                  onChange={(event) => updateDraft(event.target.value)}
                   onKeyDown={(event) => {
                     if (quickReplyOpen) {
                       if (event.key === "ArrowDown") {

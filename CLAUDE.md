@@ -236,7 +236,8 @@ Outras invariantes de segurança:
   requisição, `services/session-schedule-watcher.ts` varre os sockets a cada minuto:
   `session:closing` a partir de `LOGIN_SCHEDULE_WARNING_MINUTES` (5) minutos do fechamento,
   reenviado a cada volta para o aviso contar para trás sozinho, e `session:closed` +
-  desconexão quando fecha. No frontend quem escuta é `components/session-schedule.tsx`.
+  desconexão quando fecha. No frontend quem escuta é `components/session-schedule.tsx`, e o
+  rascunho do composer já está gravado (ver `src/lib/drafts.ts`) — encerrar não perde texto.
 - O handshake do socket revalida a sessão; mudança de papel/status/recorte **derruba as
   conexões abertas** daquele usuário (`disconnectUser`).
 - A organização **nunca fica sem admin ativo** — rebaixar/desativar o último é recusado
@@ -388,6 +389,16 @@ Rotas em `apps/web/src/app/(app)/`: `dashboard`, `inbox` (+ `inbox/[conversation
 - `src/components/ui.tsx` — kit da casa: `Button`, `Input`, `Textarea`, `Field`, `Badge`,
   `Card`, `Avatar`, `Modal`, `Tooltip`, `Spinner`, `EmptyState`. **Reuse antes de criar
   componente novo.** `Tooltip` é só CSS (hover + `focus-within`), sem biblioteca.
+- **Rascunho do composer** (`src/lib/drafts.ts`): o que está escrito e ainda não foi enviado
+  é gravado no `localStorage` a cada tecla, por conversa, com a chave
+  `zapdesk.draft.<userId>.<conversationId>`. Existe por causa do fim do horário de uso (a
+  sessão é encerrada no minuto do fechamento), e de quebra cobre o F5 e a troca de conversa.
+  Três detalhes que não são opcionais: a chave **inclui o usuário** (máquina compartilhada é o
+  caso normal), o **modo vai junto com o texto** (nota interna restaurada em modo mensagem
+  seria enviada ao cliente), e o envio **apaga** a entrada (senão voltaria no próximo login e
+  seria mandada duas vezes). Nada de coluna em `Conversation` nem de rota gravando por tecla —
+  é estado de uma máquina, como a barra lateral recolhida. `apps/web/test/drafts.test.ts`
+  cobre a regra; é o primeiro teste do frontend (vitest com o alias `@/` do Next).
 - Barra lateral recolhível no `layout.tsx`: o botão no topo alterna entre expandida (`w-56`,
   o padrão) e só ícones (`w-16`) e **empurra** o conteúdo; recolhida, o hover (ou o foco por
   teclado) expande **sobrepondo** a página, para a Inbox não remontar a cada passada de

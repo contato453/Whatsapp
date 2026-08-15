@@ -58,8 +58,8 @@ export function SessionSchedule() {
       <div className="pointer-events-auto flex items-center gap-2.5 rounded-full border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 shadow-lg">
         <Clock className="h-4 w-4 shrink-0" />
         <span>
-          {loginScheduleWarning(closing.minutesLeft)} Encerra às {closing.closesAt}. Salve o que
-          estiver fazendo.
+          {loginScheduleWarning(closing.minutesLeft)} Encerra às {closing.closesAt}. O que estiver
+          escrito no composer fica guardado.
         </span>
       </div>
     </div>
