@@ -584,18 +584,17 @@ export function ContextPanel({
           </h3>
           <div className="thin-scroll max-h-48 space-y-1.5 overflow-y-auto">
             {detail.group.participants.map((participant) => {
-              const nomeExibido =
-                participant.name || formatPhone(participant.phoneNumber) || "Participante";
-              // Quando o nome exibido já é o telefone, a segunda linha
-              // repetiria a mesma informação — some com ela.
-              const telefone = formatPhone(participant.phoneNumber);
-              const mostrarTelefone = !!telefone && telefone !== nomeExibido;
+              // O nome já vem decidido da API — a tela não refaz a cadeia.
+              // A segunda linha some quando o nome exibido já é o telefone,
+              // para não repetir a mesma informação.
+              const nomeExibido = participant.name;
+              const mostrarTelefone = !!participant.phoneNumber && !participant.nameIsPhone;
               return (
                 <div key={participant.id} className="text-xs">
                   <div className="flex items-center gap-1.5">
                     <ParticipantAvatar
                       participantId={participant.id}
-                      name={participant.name ?? participant.phoneNumber}
+                      name={nomeExibido}
                       hasAvatar={participant.hasAvatar}
                       className="h-7 w-7 shrink-0 text-[9px]"
                     />
@@ -619,7 +618,9 @@ export function ContextPanel({
                         <p className="truncate text-slate-700">{nomeExibido}</p>
                       )}
                       {mostrarTelefone && (
-                        <p className="truncate text-[11px] text-slate-400">{telefone}</p>
+                        <p className="truncate text-[11px] text-slate-400">
+                          {formatPhone(participant.phoneNumber)}
+                        </p>
                       )}
                     </div>
                     {/*
@@ -641,9 +642,15 @@ export function ContextPanel({
                       <Badge className="shrink-0 bg-amber-50 text-amber-700">admin</Badge>
                     )}
                     <button
-                      title={participant.name ? "Editar nome" : "Dar um nome a este participante"}
+                      title={
+                        participant.hasKnownName
+                          ? "Editar nome"
+                          : "Dar um nome a este participante"
+                      }
                       aria-label={
-                        participant.name ? "Editar nome" : "Dar um nome a este participante"
+                        participant.hasKnownName
+                          ? "Editar nome"
+                          : "Dar um nome a este participante"
                       }
                       className="shrink-0 rounded-lg p-1 text-slate-300 hover:bg-slate-100 hover:text-slate-600"
                       onClick={() => setRenamingParticipant(participant.id)}

@@ -438,12 +438,24 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
 - `title` vs `customTitle` e `name` vs `customName`: o **sync do WhatsApp sobrescreve o
   primeiro e nunca toca no segundo**. Exibição prefere o custom.
 - **Nome do participante é decidido no backend**, em `serializeGroupParticipant`
-  (`lib/serialize.ts`), nunca no componente. A cadeia é `customName` → nome do `Contact`
-  do número conectado → `name` (pushName do participante) → telefone formatado. `customName`
-  vence porque é a única fonte que a equipe controla e que o sync não sobrescreve. As fontes
-  extras (`Contact` e pushName da última mensagem) são resolvidas **em lote**, dois SELECT
-  para o grupo inteiro — grupo grande não pode virar consulta por participante. Quando o nome
-  exibido já é o telefone, a segunda linha do painel não o repete.
+  (`lib/serialize.ts`), nunca no componente — a tela recebe `name` já pronto (nunca nulo)
+  mais os campos crus que a edição precisa. A cadeia, do mais forte para o mais fraco:
+  1. `customName` — vence porque é a única fonte que a equipe controla e que o sync não
+     sobrescreve;
+  2. nome do `Contact` do número conectado — escolha de alguém do escritório, por isso vem
+     antes do apelido que a pessoa pôs em si mesma;
+  3. `name` do participante — o pushName, gravado na ingestão quando a pessoa escreve, mais
+     o pushName da última mensagem (`sources.pushName`), que cobre quem já tinha escrito
+     antes dessa gravação existir, sem backfill;
+  4. telefone formatado (`formatPhone`, que mora em `@azvchat/shared` justamente porque o
+     backend decide o nome com ela);
+  5. `PARTICIPANT_WITHOUT_NAME_LABEL`. **Nunca o LID cru** — ele é identificador interno e
+     exibi-lo faria a equipe tratá-lo como telefone.
+
+  As fontes extras (`Contact` e pushName) são resolvidas **em lote**, dois SELECT para o
+  grupo inteiro — grupo grande não pode virar consulta por participante. `nameIsPhone` avisa
+  a tela para não repetir o telefone na segunda linha, e `hasKnownName` diz se existe nome
+  de verdade. A ingestão grava o pushName em `name` e **nunca** em `customName`.
 - Relação opcional no Prisma exige `is:` (`conversation: { is: ... }`) — sem isso o filtro
   vazio do admin não casa nada. Já documentado em `groupScope`.
 - Em `Tag`/`QuickReply`, **"geral" é a flag `isGeneral`, nunca a lista vazia de

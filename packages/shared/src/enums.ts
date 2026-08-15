@@ -130,6 +130,14 @@ export const PARTICIPANT_CLIENT_ROLE_COLORS: Record<ParticipantClientRole, strin
   administrative: "#0284c7",
 };
 
+/**
+ * Último degrau da cadeia de nomes do participante: nem nome nem telefone
+ * conhecidos, o que acontece em grupo com endereçamento "@lid" de gente que
+ * nunca escreveu. Um rótulo neutro é a única saída honesta — o LID é
+ * identificador interno e exibi-lo faria a equipe achar que é telefone.
+ */
+export const PARTICIPANT_WITHOUT_NAME_LABEL = "Participante sem nome";
+
 export const ASSIGNMENT_ACTIONS = [
   "assigned",
   "transferred_user",

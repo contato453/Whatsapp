@@ -8,6 +8,7 @@ import type {
   User,
   WhatsAppInstance,
 } from "@azvchat/database";
+import { formatPhone, PARTICIPANT_WITHOUT_NAME_LABEL } from "@azvchat/shared";
 
 /**
  * Serializadores de entidades para a API — controlam exatamente o que
@@ -214,20 +215,48 @@ export interface ParticipantNameSources {
  *
  * A tela recebe o nome JÁ DECIDIDO (`name`) e também os campos crus, que a
  * edição precisa — nenhum componente refaz essa escolha.
+ *
+ * A cadeia, do mais forte para o mais fraco:
+ *
+ *   a. `customName` — o que a equipe definiu. Vence sempre porque é a única
+ *      fonte que a casa controla: o sync do WhatsApp nunca a toca, então é a
+ *      única que não some nem muda sozinha na próxima sincronização.
+ *   b. nome do `Contact` — quem está salvo na agenda do número conectado.
+ *      Vem antes do pushName porque é escolha de alguém do escritório
+ *      ("Marina Contabilidade"), não o apelido que a pessoa pôs em si mesma.
+ *   c. `name` do participante — o pushName que a própria pessoa configurou.
+ *      Chega por duas vias: gravado na ingestão quando ela escreve, e o
+ *      `sources.pushName` da última mensagem, que cobre quem já escreveu
+ *      antes dessa gravação existir, sem precisar de backfill.
+ *   d. telefone formatado.
+ *   e. rótulo neutro. Nunca o LID cru: ele é identificador interno e exibi-lo
+ *      faria a equipe tratá-lo como telefone.
  */
 export function serializeGroupParticipant(
   participant: GroupParticipant,
   sources: ParticipantNameSources = {},
 ) {
   const phoneNumber = participant.phoneNumber || sources.contact?.phoneNumber || "";
-  const whatsappName = participant.name || sources.contact?.name || sources.pushName || null;
+  // Nome de origem: o melhor nome que NÃO veio da equipe. Vai para a tela
+  // como referência ao editar, e é o degrau (b)+(c) da cadeia.
+  const whatsappName =
+    sources.contact?.name || participant.name || sources.pushName || null;
+  const formattedPhone = formatPhone(phoneNumber);
+  const name =
+    participant.customName || whatsappName || formattedPhone || PARTICIPANT_WITHOUT_NAME_LABEL;
   return {
     id: participant.id,
     // Permite ligar o remetente de cada mensagem ao participante
     // (e, com isso, exibir a foto dele no chat).
     externalContactId: participant.externalContactId,
     phoneNumber,
-    name: participant.customName || whatsappName,
+    name,
+    // Avisa a tela que o nome exibido É o telefone, para a segunda linha não
+    // repetir a mesma informação. Quem decide continua sendo o backend.
+    nameIsPhone: name === formattedPhone,
+    // Sem nenhum nome real, o botão de renomear convida a dar um; com nome,
+    // convida a editar. A tela não precisa refazer a conta.
+    hasKnownName: (participant.customName ?? whatsappName) != null,
     customName: participant.customName,
     /// Nome de origem, exibido como referência quando há nome próprio.
     whatsappName,
