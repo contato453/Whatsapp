@@ -533,13 +533,16 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   componente.
 - **O título da aba conta conversas, não mensagens, e não é o `unreadCount` do banco.**
   `UnreadTitle` (`apps/web/src/components/unread-title.tsx`) acumula as conversas que
-  receberam mensagem `inbound` **enquanto a aba esteve fora de foco** e pisca
-  `(n) <título>` a cada 1,2s, alternando com o título original. Voltar o foco zera —
-  quem voltou tem a lista da Inbox com a contagem de verdade, e o piscar já cumpriu o
-  papel de trazer a pessoa. Ler o não lido real exigiria consulta nova a cada
-  carregamento, que é justamente o que este aviso não precisa. Nenhuma rota define
-  `metadata` própria, então o título base é capturado uma vez na montagem; se um dia
-  alguma tela definir o seu, esse pressuposto cai.
+  receberam mensagem `inbound` e pisca `(n) <título>` a cada 1,2s, alternando com o
+  título original. **Quem zera é abrir a Inbox**, não focar a aba: trocar para o
+  Dashboard não apaga o aviso, e o piscar continua até a pessoa ir olhar as conversas.
+  A condição única é `document.hasFocus()` **e** rota começando em `/inbox`
+  (`isWatchingInbox`) — ela decide as duas coisas, o que acumula e o que zera. Sem
+  exigir o foco, a aba esquecida na Inbox em segundo plano, que é o caso mais comum,
+  nunca acumularia nada. Ler o não lido real exigiria consulta nova a cada carregamento
+  para dizer o que a lista da Inbox já diz. Nenhuma rota define `metadata` própria,
+  então o título base é capturado uma vez na montagem; se um dia alguma tela definir o
+  seu, esse pressuposto cai.
 - `title` vs `customTitle` e `name` vs `customName`: o **sync do WhatsApp sobrescreve o
   primeiro e nunca toca no segundo**. Exibição prefere o custom.
 - **Nome do participante é decidido no backend**, em `serializeGroupParticipant`
@@ -679,9 +682,9 @@ respostas rápidas com `/`, inclusive com mídia anexada (imagem, áudio ou víd
 junto com o texto; dashboard; relatório por atendente; auditoria consultável;
 perfil e troca de senha pelo próprio usuário; aviso de chamada recebida; som de
 notificação de mensagem recebida, com som e volume escolhidos por cada usuário; título da
-aba piscando com as conversas que receberam mensagem enquanto a aba esteve fora de foco;
-horário permitido de login por dia da semana, aplicado a quem não é supervisor, com aviso
-5 minutos antes e encerramento da sessão no fechamento.
+aba piscando com as conversas que receberam mensagem, até alguém abrir a Inbox; horário
+permitido de login por dia da semana, aplicado a quem não é supervisor, com aviso 5 minutos
+antes e encerramento da sessão no fechamento.
 
 **Falta** (ordem sugerida): validar o pareamento QR em rede aberta (o ambiente de
 desenvolvimento bloqueia `web.whatsapp.com`); votos de enquete agregados na Inbox;
