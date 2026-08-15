@@ -1,23 +1,26 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import {
-  accessibleDepartmentIds,
-  canWriteInDepartment,
-  departmentResourceScope,
-} from "../../lib/access.js";
+import { accessibleDepartmentIds, departmentResourceScope } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
-import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
+import {
+  assertCanManageResource,
+  auditDepartmentSnapshot,
+  resolveDepartmentTarget,
+} from "../../lib/department-resource.js";
+import { AppError, NotFoundError } from "../../lib/errors.js";
+import { serializeQuickReply } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
-import type { QuickReply } from "@azvchat/database";
 
 /**
- * Respostas rápidas pertencem a um departamento.
- *
- * Cada pessoa vê e cria as dos departamentos em que atua; o admin vê todas
- * e é o único que mexe nas gerais (departmentId null).
+ * Respostas rápidas valem para vários departamentos ao mesmo tempo — mesma
+ * regra da etiqueta, inclusive a unicidade do atalho na organização inteira,
+ * que é justamente o que hoje obriga a cadastrar o mesmo texto três vezes.
  */
 
-const quickReplySchema = z.object({
+/** Departamentos vêm juntos: a tela mostra um Badge por departamento. */
+const withDepartments = { departments: { include: { department: true } } } as const;
+
+const quickReplyFieldsSchema = z.object({
   shortcut: z
     .string()
     .min(1)
@@ -28,20 +31,21 @@ const quickReplySchema = z.object({
     ),
   title: z.string().max(80).optional(),
   content: z.string().min(1).max(4000),
-  /** null = geral (só admin) */
-  departmentId: z.string().uuid().nullable().optional(),
+  /** Vale para todos os departamentos. Ligada, `departmentIds` fica vazio. */
+  isGeneral: z.boolean().default(false),
+  departmentIds: z.array(z.string().uuid()).default([]),
 });
 
-function serializeQuickReply(reply: QuickReply) {
-  return {
-    id: reply.id,
-    shortcut: reply.shortcut,
-    title: reply.title,
-    content: reply.content,
-    departmentId: reply.departmentId,
-    createdAt: reply.createdAt.toISOString(),
-  };
-}
+const WRITE_LABELS = {
+  general: "Apenas o administrador cria respostas gerais",
+  foreign: "Você não tem acesso a todos os departamentos selecionados",
+};
+
+const MANAGE_LABELS = {
+  general: "Apenas o administrador mexe em respostas gerais",
+  foreign: "Esta resposta está em departamentos que você não acessa",
+  orphan: "Esta resposta ficou sem departamento — só o administrador pode ajustá-la",
+};
 
 export async function quickReplyRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
   app.get("/quick-replies", { preHandler: authenticate }, async (request) => {
@@ -51,29 +55,24 @@ export async function quickReplyRoutes(app: FastifyInstance, deps: AppDeps): Pro
         organizationId: request.user.organizationId,
         ...departmentResourceScope(departmentIds),
       },
-      orderBy: [{ departmentId: "asc" }, { shortcut: "asc" }],
+      include: withDepartments,
+      // Gerais primeiro: são as que valem para todo mundo.
+      orderBy: [{ isGeneral: "desc" }, { shortcut: "asc" }],
     });
     return { quickReplies: replies.map(serializeQuickReply) };
   });
 
   app.post("/quick-replies", { preHandler: authenticate }, async (request, reply) => {
-    const body = quickReplySchema.parse(request.body);
-    const departmentIds = await accessibleDepartmentIds(deps.prisma, request.user);
-    const departmentId = body.departmentId ?? null;
-    if (!canWriteInDepartment(departmentIds, departmentId)) {
-      throw new ForbiddenError(
-        departmentId
-          ? "Você não tem acesso a este departamento"
-          : "Apenas o administrador cria respostas gerais",
-      );
-    }
-    if (departmentId) {
-      const department = await deps.prisma.department.findFirst({
-        where: { id: departmentId, organizationId: request.user.organizationId },
-        select: { id: true },
-      });
-      if (!department) throw new AppError("Departamento inválido", 400, "invalid_department");
-    }
+    const body = quickReplyFieldsSchema.parse(request.body);
+    const accessible = await accessibleDepartmentIds(deps.prisma, request.user);
+    const target = await resolveDepartmentTarget(
+      deps.prisma,
+      request.user,
+      accessible,
+      body,
+      WRITE_LABELS,
+    );
+
     const existing = await deps.prisma.quickReply.findUnique({
       where: {
         organizationId_shortcut: {
@@ -85,15 +84,20 @@ export async function quickReplyRoutes(app: FastifyInstance, deps: AppDeps): Pro
     if (existing) {
       throw new AppError(`O atalho /${body.shortcut} já existe`, 409, "shortcut_taken");
     }
+
     const created = await deps.prisma.quickReply.create({
       data: {
         organizationId: request.user.organizationId,
         shortcut: body.shortcut,
         title: body.title ?? null,
         content: body.content,
-        departmentId,
+        isGeneral: target.isGeneral,
         createdById: request.user.sub,
+        departments: {
+          create: target.departmentIds.map((departmentId) => ({ departmentId })),
+        },
       },
+      include: withDepartments,
     });
     deps.audit.record({
       organizationId: request.user.organizationId,
@@ -101,33 +105,40 @@ export async function quickReplyRoutes(app: FastifyInstance, deps: AppDeps): Pro
       action: "quick_reply.created",
       entityType: "QuickReply",
       entityId: created.id,
+      metadata: { depois: auditDepartmentSnapshot(created.isGeneral, created.departments) },
     });
     return reply.status(201).send({ quickReply: serializeQuickReply(created) });
   });
 
   app.patch("/quick-replies/:id", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const body = quickReplySchema.partial().parse(request.body);
-    const departmentIds = await accessibleDepartmentIds(deps.prisma, request.user);
+    const body = quickReplyFieldsSchema.partial().parse(request.body);
+    const accessible = await accessibleDepartmentIds(deps.prisma, request.user);
     const existing = await deps.prisma.quickReply.findFirst({
       where: { id, organizationId: request.user.organizationId },
+      include: withDepartments,
     });
     if (!existing) throw new NotFoundError("Resposta rápida");
-    if (!canWriteInDepartment(departmentIds, existing.departmentId)) {
-      throw new ForbiddenError("Esta resposta é de outro departamento");
-    }
-    // Mudar de departamento exige acesso também ao departamento de destino,
-    // senão daria para tirar uma resposta do alcance de quem a criou.
-    if (body.departmentId !== undefined) {
-      const target = body.departmentId ?? null;
-      if (!canWriteInDepartment(departmentIds, target)) {
-        throw new ForbiddenError(
-          target
-            ? "Você não tem acesso ao departamento de destino"
-            : "Apenas o administrador cria respostas gerais",
-        );
-      }
-    }
+
+    // Precisa poder mexer no estado atual — senão daria para editar resposta
+    // de outro departamento — e também no estado de destino.
+    const current = {
+      isGeneral: existing.isGeneral,
+      departmentIds: existing.departments.map((link) => link.departmentId),
+    };
+    assertCanManageResource(accessible, current, MANAGE_LABELS);
+
+    const target = await resolveDepartmentTarget(
+      deps.prisma,
+      request.user,
+      accessible,
+      {
+        isGeneral: body.isGeneral ?? current.isGeneral,
+        departmentIds: body.departmentIds ?? current.departmentIds,
+      },
+      WRITE_LABELS,
+    );
+
     if (body.shortcut && body.shortcut !== existing.shortcut) {
       const clash = await deps.prisma.quickReply.findUnique({
         where: {
@@ -141,13 +152,35 @@ export async function quickReplyRoutes(app: FastifyInstance, deps: AppDeps): Pro
         throw new AppError(`O atalho /${body.shortcut} já existe`, 409, "shortcut_taken");
       }
     }
-    const updated = await deps.prisma.quickReply.update({
-      where: { id },
-      data: {
-        ...(body.shortcut ? { shortcut: body.shortcut } : {}),
-        ...(body.title !== undefined ? { title: body.title || null } : {}),
-        ...(body.content ? { content: body.content } : {}),
-        ...(body.departmentId === undefined ? {} : { departmentId: body.departmentId }),
+
+    // Em transação e substituindo o conjunto inteiro: apagar e recriar evita
+    // duplicata e deixa o vínculo sempre igual ao que a tela mandou.
+    const updated = await deps.prisma.$transaction(async (tx) => {
+      await tx.quickReplyDepartment.deleteMany({ where: { quickReplyId: id } });
+      return tx.quickReply.update({
+        where: { id },
+        data: {
+          ...(body.shortcut ? { shortcut: body.shortcut } : {}),
+          ...(body.title !== undefined ? { title: body.title || null } : {}),
+          ...(body.content ? { content: body.content } : {}),
+          isGeneral: target.isGeneral,
+          departments: {
+            create: target.departmentIds.map((departmentId) => ({ departmentId })),
+          },
+        },
+        include: withDepartments,
+      });
+    });
+
+    deps.audit.record({
+      organizationId: request.user.organizationId,
+      userId: request.user.sub,
+      action: "quick_reply.updated",
+      entityType: "QuickReply",
+      entityId: id,
+      metadata: {
+        antes: auditDepartmentSnapshot(existing.isGeneral, existing.departments),
+        depois: auditDepartmentSnapshot(updated.isGeneral, updated.departments),
       },
     });
     return { quickReply: serializeQuickReply(updated) };
@@ -155,14 +188,22 @@ export async function quickReplyRoutes(app: FastifyInstance, deps: AppDeps): Pro
 
   app.delete("/quick-replies/:id", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const departmentIds = await accessibleDepartmentIds(deps.prisma, request.user);
+    const accessible = await accessibleDepartmentIds(deps.prisma, request.user);
     const existing = await deps.prisma.quickReply.findFirst({
       where: { id, organizationId: request.user.organizationId },
+      include: withDepartments,
     });
     if (!existing) throw new NotFoundError("Resposta rápida");
-    if (!canWriteInDepartment(departmentIds, existing.departmentId)) {
-      throw new ForbiddenError("Esta resposta é de outro departamento");
-    }
+
+    assertCanManageResource(
+      accessible,
+      {
+        isGeneral: existing.isGeneral,
+        departmentIds: existing.departments.map((link) => link.departmentId),
+      },
+      MANAGE_LABELS,
+    );
+
     await deps.prisma.quickReply.delete({ where: { id } });
     deps.audit.record({
       organizationId: request.user.organizationId,
@@ -170,6 +211,7 @@ export async function quickReplyRoutes(app: FastifyInstance, deps: AppDeps): Pro
       action: "quick_reply.deleted",
       entityType: "QuickReply",
       entityId: id,
+      metadata: { antes: auditDepartmentSnapshot(existing.isGeneral, existing.departments) },
     });
     return { ok: true };
   });

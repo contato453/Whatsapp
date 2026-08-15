@@ -82,7 +82,7 @@ Scripts raiz: `pnpm dev` (api 4000 + web 3000), `pnpm lint`, `pnpm typecheck`,
 | **Departamento** | `Department` — recorte organizacional (Contábil, Fiscal, DP...). Define quem enxerga e pode ter responsável padrão. |
 | **Responsável** | `Conversation.assignedUserId` — quem assumiu o atendimento. |
 | **Nota interna** | `InternalNote` — texto que aparece intercalado no chat, **nunca vai para o WhatsApp**. |
-| **Etiqueta** | `Tag` — rótulo da conversa. Pode ser geral (`departmentId = null`) ou de um departamento. |
+| **Etiqueta** | `Tag` — rótulo da conversa. Vale para todos (`isGeneral`) ou para vários departamentos (N:N). |
 | **Resposta rápida** | `QuickReply` — texto disparado por `/atalho` no composer. |
 | **Participante** | `GroupParticipant` — quem está no grupo, com nome, telefone, foto e flag de admin. |
 | **`externalId` / `externalChatId` / JID** | Identificador do WhatsApp (ex.: `5511999@s.whatsapp.net`, `...@g.us`, `...@lid`). |
@@ -122,7 +122,8 @@ snake_case e id `uuid`.
   `sentByUserId`, `deletedAt`/`deletedByUserId`, `editedAt`, `metadata` (Json, ex.: opções
   de enquete). Única por `(conversationId, externalMessageId)` → ingestão idempotente.
 - `MessageReaction` — única por `(messageId, senderExternalId)`.
-- `InternalNote`, `Tag` + `ConversationTag`, `QuickReply`, `ScheduledMessage`
+- `InternalNote`, `Tag` + `ConversationTag` + `TagDepartment`, `QuickReply` +
+  `QuickReplyDepartment`, `ScheduledMessage`
   (`pending|sent|failed|canceled`, com `attempts`), `ConversationAssignmentHistory`
   (`assigned|transferred_user|transferred_department|unassigned|resolved|reopened`),
   `AuditLog`.
@@ -159,8 +160,10 @@ acesso por conta própria):
 loadConversationAccess(prisma, user)   // → { instanceIds, departmentIds, ownOnly, userId }
 conversationScope(access)              // filtro Prisma para Conversation
 accessibleInstanceIds / instanceScope / instanceIdScope
-accessibleDepartmentIds / departmentResourceScope  // tags e quick replies (null = geral)
-canWriteInDepartment(ids, departmentId)            // não-admin nunca escreve no "geral"
+accessibleDepartmentIds                            // departamentos do usuário (null = admin)
+departmentResourceScope(ids)                       // tags e quick replies: geral OU algum dept
+canWriteGeneralResource(ids)                       // item geral continua sendo só do admin
+canWriteInAllDepartments(ids, departmentIds)       // escrita exige TODOS, não um só
 groupScope(access)                     // consultas que partem do grupo (usa `is:` obrigatório)
 ```
 
@@ -236,6 +239,7 @@ POST   /conversations/:id/polls           POST /messages/:id/reactions
 PATCH  /messages/:id                      DELETE /messages/:id
 POST   /messages/:id/forward              GET  /messages/:id/media
 
+GET    /tags                POST /tags            PATCH|DELETE /tags/:id
 GET    /quick-replies       POST /quick-replies   PATCH|DELETE /quick-replies/:id
 DELETE /scheduled-messages/:id
 
@@ -404,9 +408,21 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   primeiro e nunca toca no segundo**. Exibição prefere o custom.
 - Relação opcional no Prisma exige `is:` (`conversation: { is: ... }`) — sem isso o filtro
   vazio do admin não casa nada. Já documentado em `groupScope`.
-- `departmentId = null` significa **"geral"** em `Tag`/`QuickReply` (visível a todos, só
-  admin escreve) e **"sem departamento"** em `Conversation` (visível a quem tem o número).
-  Semânticas diferentes, mesmo `null`.
+- Em `Tag`/`QuickReply`, **"geral" é a flag `isGeneral`, nunca a lista vazia de
+  departamentos**. Se lista vazia significasse geral, excluir um departamento tornaria um
+  item restrito visível para a organização inteira sem ninguém perceber; com a flag ele
+  fica órfão e some para quem não é admin. Estado válido: `isGeneral` com zero
+  departamentos, ou `isGeneral = false` com pelo menos um. O órfão existe no banco, só não
+  pode ser criado — `lib/department-resource.ts` é a fonte única dessa regra.
+- **Ler exige um departamento em comum; escrever exige todos.** Quem só acessa o Fiscal
+  enxerga a etiqueta de Contábil + Fiscal, mas não consegue salvá-la (403, sem gravação
+  parcial). A tela mostra a lista completa de departamentos mesmo assim: nome de
+  departamento não é dado sensível, gravação parcial é.
+- Etiqueta e resposta rápida só se aplicam à conversa se forem gerais ou se o departamento
+  da conversa estiver entre os delas. **Conversa sem departamento aceita qualquer item
+  visível** — ela existe quando o número não tem departamento padrão.
+- `departmentId = null` em `Conversation` significa **"sem departamento"** (visível a quem
+  tem o número) — não confunda com o "geral" de `Tag`/`QuickReply`, que agora é flag.
 - **Responsável padrão tem cascata**: o do departamento vence, o do número cobre o resto
   (inclusive a conversa sem departamento). Quem recebe precisa **enxergar** a conversa —
   `lib/default-assignee.ts` (`eligibleAssigneeWhere`) é a fonte única dessa checagem, usada

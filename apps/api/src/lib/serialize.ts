@@ -2,6 +2,7 @@ import type {
   Conversation,
   Department,
   Message,
+  QuickReply,
   Tag,
   User,
   WhatsAppInstance,
@@ -90,13 +91,48 @@ export function serializeDepartment(department: Department) {
   };
 }
 
-export function serializeTag(tag: Tag) {
+/**
+ * Departamentos de um recurso N:N, no formato em que as duas junções
+ * (`TagDepartment` e `QuickReplyDepartment`) chegam com `include`.
+ */
+type DepartmentLink = { department: Department };
+
+/**
+ * A lista de departamentos vai completa para a tela, inclusive os que o
+ * usuário não acessa: nome de departamento não é dado sensível, e sem ela a
+ * pessoa não entenderia por que não consegue salvar a edição. Quem barra a
+ * gravação parcial é `canWriteInAllDepartments`, na rota.
+ */
+function serializeResourceDepartments(links: DepartmentLink[] | undefined) {
+  return (links ?? []).map((link) => ({
+    id: link.department.id,
+    name: link.department.name,
+    color: link.department.color,
+  }));
+}
+
+export function serializeTag(tag: Tag & { departments?: DepartmentLink[] }) {
   return {
     id: tag.id,
     name: tag.name,
     color: tag.color,
-    // null = etiqueta geral, visível a todos os departamentos
-    departmentId: tag.departmentId,
+    // Geral é a flag, não a lista vazia: etiqueta restrita que perdeu todos
+    // os departamentos fica com lista vazia e isGeneral false — invisível
+    // para quem não é admin, que é o lado seguro.
+    isGeneral: tag.isGeneral,
+    departments: serializeResourceDepartments(tag.departments),
+  };
+}
+
+export function serializeQuickReply(reply: QuickReply & { departments?: DepartmentLink[] }) {
+  return {
+    id: reply.id,
+    shortcut: reply.shortcut,
+    title: reply.title,
+    content: reply.content,
+    isGeneral: reply.isGeneral,
+    departments: serializeResourceDepartments(reply.departments),
+    createdAt: reply.createdAt.toISOString(),
   };
 }
 

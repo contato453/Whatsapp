@@ -87,24 +87,24 @@ model User {
 // ============================================================
 
 model Department {
-  id             String   @id @default(uuid())
-  organizationId String
-  name           String
-  description    String?
-  color          String?
+  id                String   @id @default(uuid())
+  organizationId    String
+  name              String
+  description       String?
+  color             String?
   /// Responsável padrão: assume as conversas que entram neste departamento
   /// sem ninguém atribuído. Precisa ter acesso ao próprio departamento.
   defaultAssigneeId String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  defaultAssignee User?              @relation("DepartmentDefaultAssignee", fields: [defaultAssigneeId], references: [id], onDelete: SetNull)
+  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  defaultAssignee User?                  @relation("DepartmentDefaultAssignee", fields: [defaultAssigneeId], references: [id], onDelete: SetNull)
   conversations   Conversation[]
   userAccess      UserDepartment[]
   instances       WhatsAppInstance[]
-  tags            Tag[]
-  quickReplies    QuickReply[]
+  tagLinks        TagDepartment[]
+  quickReplyLinks QuickReplyDepartment[]
 
   @@unique([organizationId, name])
   @@map("departments")
@@ -441,20 +441,42 @@ model Tag {
   organizationId String
   name           String
   color          String   @default("#6366f1")
-  /// Departamento dono da etiqueta. null = geral, visível a todos.
-  departmentId   String?
+  /// Vale para a organização inteira. Com ela ligada não existe vínculo em
+  /// `departments`; desligada, a etiqueta precisa de pelo menos um.
+  ///
+  /// "Geral" é esta flag, e não a lista vazia: se lista vazia significasse
+  /// geral, excluir um departamento tornaria uma etiqueta restrita visível
+  /// para todo mundo sem ninguém perceber.
+  isGeneral      Boolean  @default(false)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   organization  Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  department    Department?       @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  departments   TagDepartment[]
   conversations ConversationTag[]
 
   // Nome único na organização inteira: a etiqueta aparece na conversa sem
   // dizer de qual departamento é, então dois "URGENTE" seriam indistinguíveis.
   @@unique([organizationId, name])
-  @@index([departmentId])
+  @@index([isGeneral])
   @@map("tags")
+}
+
+/// Uma etiqueta serve a vários departamentos ao mesmo tempo: o mesmo
+/// "Urgente" vale para Contábil, Fiscal e DP sem precisar de três cadastros.
+model TagDepartment {
+  tagId        String
+  departmentId String
+
+  tag        Tag        @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  // Cascade nas duas pontas. Excluir o departamento apaga só este vínculo —
+  // a etiqueta continua existindo, some para quem não é admin e fica na tela
+  // de gestão para o admin arrumar.
+  @@id([tagId, departmentId])
+  @@index([departmentId])
+  @@map("tag_departments")
 }
 
 model ConversationTag {
@@ -514,21 +536,36 @@ model QuickReply {
   shortcut       String
   title          String?
   content        String
-  /// Departamento dono da resposta. null = geral, visível a todos.
-  departmentId   String?
+  /// Vale para a organização inteira. Mesma regra da etiqueta: com ela
+  /// ligada não existe vínculo em `departments`; desligada, precisa de pelo
+  /// menos um.
+  isGeneral      Boolean  @default(false)
   createdById    String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  department   Department?  @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  createdBy    User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  departments  QuickReplyDepartment[]
+  createdBy    User?                  @relation(fields: [createdById], references: [id], onDelete: SetNull)
 
   // Atalho único na organização: "/bomdia" não pode significar duas coisas
   // diferentes dependendo de quem digita.
   @@unique([organizationId, shortcut])
-  @@index([departmentId])
+  @@index([isGeneral])
   @@map("quick_replies")
+}
+
+/// O mesmo texto padrão serve a vários departamentos — ver TagDepartment.
+model QuickReplyDepartment {
+  quickReplyId String
+  departmentId String
+
+  quickReply QuickReply @relation(fields: [quickReplyId], references: [id], onDelete: Cascade)
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@id([quickReplyId, departmentId])
+  @@index([departmentId])
+  @@map("quick_reply_departments")
 }
 
 // ============================================================

@@ -1,59 +1,90 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Tags as TagsIcon, Trash2 } from "lucide-react";
-import { api } from "@/lib/api";
+import { Pencil, Plus, Tags as TagsIcon, Trash2 } from "lucide-react";
+import { tagsApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import type { TagDto } from "@/lib/types";
 import { Badge, Button, Card, Field, Input, Modal, Spinner, EmptyState } from "@/components/ui";
 import {
-  DepartmentSelect,
-  departmentLabel,
-  groupByDepartment,
+  DepartmentBadges,
+  DepartmentCheckboxes,
+  canManageScopedItem,
   useMyDepartments,
 } from "@/components/department-picker";
+
+const EMPTY_FORM = {
+  name: "",
+  color: "#6366f1",
+  isGeneral: false,
+  departmentIds: [] as string[],
+};
 
 export default function TagsPage() {
   const { user: me } = useAuth();
   const departments = useMyDepartments();
   const [tags, setTags] = useState<TagDto[] | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ name: "", color: "#6366f1", departmentId: "" });
+  const [editing, setEditing] = useState<TagDto | "new" | null>(null);
+  const [form, setForm] = useState(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
-    api.get<{ tags: TagDto[] }>("/tags").then((data) => setTags(data.tags));
+    tagsApi.list().then(setTags);
   }, []);
   useEffect(load, [load]);
 
   const isAdmin = me?.role === "admin";
 
   function openCreate() {
-    // Quem não é admin já entra com o primeiro departamento dele escolhido:
-    // "Geral" não é opção para ele.
+    // Quem não é admin já entra com o primeiro departamento dele marcado:
+    // "vale para todos" não é opção para ele.
     setForm({
-      name: "",
-      color: "#6366f1",
-      departmentId: isAdmin ? "" : (departments[0]?.id ?? ""),
+      ...EMPTY_FORM,
+      departmentIds: isAdmin ? [] : departments[0] ? [departments[0].id] : [],
     });
     setError(null);
-    setCreating(true);
+    setEditing("new");
   }
 
-  async function createTag() {
+  function openEdit(tag: TagDto) {
+    setForm({
+      name: tag.name,
+      color: tag.color,
+      isGeneral: tag.isGeneral,
+      departmentIds: tag.departments.map((department) => department.id),
+    });
+    setError(null);
+    setEditing(tag);
+  }
+
+  /**
+   * Ligar "vale para todos" limpa a seleção, desligar volta ao vazio: são os
+   * dois únicos estados que a API aceita.
+   */
+  function toggleGeneral(isGeneral: boolean) {
+    setForm((current) => ({ ...current, isGeneral, departmentIds: [] }));
+  }
+
+  async function save() {
     setBusy(true);
     setError(null);
+    const payload = {
+      name: form.name.trim(),
+      color: form.color,
+      isGeneral: form.isGeneral,
+      departmentIds: form.isGeneral ? [] : form.departmentIds,
+    };
     try {
-      await api.post("/tags", {
-        name: form.name,
-        color: form.color,
-        departmentId: form.departmentId || null,
-      });
-      setCreating(false);
+      if (editing === "new") {
+        await tagsApi.create(payload);
+      } else if (editing) {
+        await tagsApi.update(editing.id, payload);
+      }
+      setEditing(null);
       load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erro ao criar a etiqueta");
+      setError(err instanceof Error ? err.message : "Erro ao salvar a etiqueta");
     } finally {
       setBusy(false);
     }
@@ -62,25 +93,19 @@ export default function TagsPage() {
   async function remove(tag: TagDto) {
     if (!window.confirm(`Excluir a etiqueta "${tag.name}"?`)) return;
     try {
-      await api.delete(`/tags/${tag.id}`);
+      await tagsApi.remove(tag.id);
       load();
     } catch (err) {
       window.alert(err instanceof Error ? err.message : "Erro ao excluir");
     }
   }
 
-  /** Só mexe no que é do departamento dele; o geral é do admin. */
-  function canManage(tag: TagDto): boolean {
-    if (isAdmin) return true;
-    return tag.departmentId != null && departments.some((d) => d.id === tag.departmentId);
-  }
-
   const canCreate = isAdmin || departments.length > 0;
-  const groups = tags ? groupByDepartment(tags) : [];
+  const invalidTarget = !form.isGeneral && form.departmentIds.length === 0;
 
   return (
     <div className="thin-scroll h-full overflow-y-auto p-8">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-2 flex items-center justify-between">
         <h1 className="text-2xl font-bold text-slate-900">Etiquetas</h1>
         {canCreate && (
           <Button onClick={openCreate}>
@@ -88,6 +113,9 @@ export default function TagsPage() {
           </Button>
         )}
       </div>
+      <p className="mb-6 text-sm text-slate-500">
+        Uma etiqueta pode valer para vários departamentos ao mesmo tempo, ou para todos.
+      </p>
 
       {!tags ? (
         <div className="flex justify-center py-16">
@@ -100,36 +128,43 @@ export default function TagsPage() {
           description="Etiquetas ajudam a classificar conversas: Urgente, Cliente VIP, Pendência..."
         />
       ) : (
-        <div className="space-y-4">
-          {groups.map((group) => (
-            <div key={group.departmentId ?? "geral"}>
-              <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                {departmentLabel(group.departmentId, departments)}
-              </h2>
-              <Card className="flex flex-wrap gap-3 p-6">
-                {group.items.map((tag) => (
-                  <div key={tag.id} className="flex items-center gap-1">
-                    <Badge color={tag.color} className="px-3 py-1 text-sm">
-                      {tag.name}
-                    </Badge>
-                    {canManage(tag) && (
-                      <button
-                        onClick={() => void remove(tag)}
-                        className="rounded p-1 text-slate-300 hover:text-red-600"
-                        title="Excluir"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </Card>
+        <Card className="divide-y divide-slate-100">
+          {tags.map((tag) => (
+            <div key={tag.id} className="flex items-center gap-3 px-5 py-3.5">
+              <Badge color={tag.color} className="px-3 py-1 text-sm">
+                {tag.name}
+              </Badge>
+              <div className="flex min-w-0 flex-1 flex-wrap gap-1">
+                <DepartmentBadges item={tag} />
+              </div>
+              {canManageScopedItem(tag, !!isAdmin, departments) && (
+                <div className="flex shrink-0 gap-1">
+                  <button
+                    onClick={() => openEdit(tag)}
+                    className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                    title="Editar"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => void remove(tag)}
+                    className="rounded-lg p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-600"
+                    title="Excluir"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
             </div>
           ))}
-        </div>
+        </Card>
       )}
 
-      <Modal open={creating} onClose={() => setCreating(false)} title="Nova etiqueta">
+      <Modal
+        open={editing != null}
+        onClose={() => setEditing(null)}
+        title={editing === "new" ? "Nova etiqueta" : "Editar etiqueta"}
+      >
         <div className="space-y-4">
           <Field label="Nome">
             <Input
@@ -138,18 +173,33 @@ export default function TagsPage() {
               placeholder="Ex.: Urgente"
             />
           </Field>
-          <Field label="Departamento">
-            <DepartmentSelect
-              value={form.departmentId}
+
+          {isAdmin && (
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300 text-brand-600"
+                checked={form.isGeneral}
+                onChange={(event) => toggleGeneral(event.target.checked)}
+              />
+              Vale para todos os departamentos
+            </label>
+          )}
+
+          <Field label="Departamentos">
+            <DepartmentCheckboxes
+              selected={form.departmentIds}
               departments={departments}
-              canUseGeneral={!!isAdmin}
-              onChange={(value) => setForm({ ...form, departmentId: value })}
+              disabled={form.isGeneral}
+              onChange={(departmentIds) => setForm({ ...form, departmentIds })}
             />
           </Field>
           <p className="text-xs text-slate-400">
-            A etiqueta aparece apenas para quem atua neste departamento.
-            {isAdmin && " A geral aparece para todo mundo."}
+            {form.isGeneral
+              ? "A etiqueta aparece para toda a organização."
+              : "A etiqueta aparece para quem atua em qualquer um dos departamentos marcados."}
           </p>
+
           <Field label="Cor">
             <input
               type="color"
@@ -158,13 +208,14 @@ export default function TagsPage() {
               className="block h-10 w-20 cursor-pointer rounded-lg border border-slate-300"
             />
           </Field>
+
           {error && <p className="text-sm text-red-600">{error}</p>}
           <Button
             className="w-full"
-            disabled={busy || (!isAdmin && !form.departmentId)}
-            onClick={() => void createTag()}
+            disabled={busy || form.name.trim().length === 0 || invalidTarget}
+            onClick={() => void save()}
           >
-            Criar etiqueta
+            {editing === "new" ? "Criar etiqueta" : "Salvar"}
           </Button>
         </div>
       </Modal>

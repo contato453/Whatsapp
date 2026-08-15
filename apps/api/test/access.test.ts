@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { PrismaClient } from "@azvchat/database";
 import {
   accessibleInstanceIds,
+  canWriteGeneralResource,
+  canWriteInAllDepartments,
   conversationScope,
+  departmentResourceScope,
   groupScope,
   instanceIdScope,
   instanceScope,
@@ -174,5 +177,59 @@ describe("groupScope (filtro de grupo)", () => {
     const filtro = groupScope(admin);
     expect(filtro.whatsappInstanceId).toBeUndefined();
     expect(filtro.OR).toEqual([{ conversationId: null }, { conversation: { is: {} } }]);
+  });
+});
+
+describe("departmentResourceScope (etiqueta e resposta rápida em N:N)", () => {
+  it("admin não recebe filtro nenhum", () => {
+    // Sem filtro ele enxerga inclusive o item que ficou sem departamento
+    // depois de uma exclusão — é ele quem precisa arrumar.
+    expect(departmentResourceScope(null)).toEqual({});
+  });
+
+  it("usuário enxerga o geral e o que está marcado para algum departamento dele", () => {
+    expect(departmentResourceScope(["dep-1", "dep-2"])).toEqual({
+      OR: [
+        { isGeneral: true },
+        { departments: { some: { departmentId: { in: ["dep-1", "dep-2"] } } } },
+      ],
+    });
+  });
+
+  it("usuário sem departamento continua enxergando só o geral", () => {
+    // Lista vazia não pode virar "vê tudo": o ramo `in: []` não casa nada.
+    expect(departmentResourceScope([])).toEqual({
+      OR: [{ isGeneral: true }, { departments: { some: { departmentId: { in: [] } } } }],
+    });
+  });
+});
+
+describe("canWriteGeneralResource (quem cria item geral)", () => {
+  it("só o admin, que é quem vem sem restrição", () => {
+    expect(canWriteGeneralResource(null)).toBe(true);
+    expect(canWriteGeneralResource(["dep-1"])).toBe(false);
+    expect(canWriteGeneralResource([])).toBe(false);
+  });
+});
+
+describe("canWriteInAllDepartments (escrita exige todos)", () => {
+  it("admin grava em qualquer combinação", () => {
+    expect(canWriteInAllDepartments(null, ["dep-1", "dep-2"])).toBe(true);
+  });
+
+  it("usuário grava quando tem acesso a todos os escolhidos", () => {
+    expect(canWriteInAllDepartments(["dep-1", "dep-2"], ["dep-1", "dep-2"])).toBe(true);
+    expect(canWriteInAllDepartments(["dep-1", "dep-2"], ["dep-1"])).toBe(true);
+  });
+
+  it("faltando um único departamento, recusa a gravação inteira", () => {
+    // Supervisor só do Fiscal não pendura a etiqueta também no Contábil.
+    expect(canWriteInAllDepartments(["dep-fiscal"], ["dep-fiscal", "dep-contabil"])).toBe(false);
+  });
+
+  it("nenhum departamento é estado inválido para item restrito", () => {
+    expect(canWriteInAllDepartments(["dep-1"], [])).toBe(false);
+    // Nem para o admin: item restrito sem departamento sumiria de todo mundo.
+    expect(canWriteInAllDepartments(null, [])).toBe(false);
   });
 });

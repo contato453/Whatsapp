@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import type { DepartmentDto } from "@/lib/types";
+import { Badge } from "@/components/ui";
+import type { DepartmentDto, ResourceDepartmentDto } from "@/lib/types";
 
 /**
  * Departamentos em que a pessoa pode criar etiquetas e respostas rápidas.
@@ -19,62 +20,119 @@ export function useMyDepartments(): DepartmentDto[] {
   return departments;
 }
 
-/** Rótulo do grupo: o nome do departamento, ou "Geral" quando não há. */
-export function departmentLabel(
-  departmentId: string | null,
-  departments: DepartmentDto[],
-): string {
-  if (!departmentId) return "Geral (todos os departamentos)";
-  return departments.find((department) => department.id === departmentId)?.name ?? "Departamento";
+/** Recurso que vale para todos os departamentos ou para uma lista deles. */
+export interface DepartmentScopedItem {
+  isGeneral: boolean;
+  departments: ResourceDepartmentDto[];
 }
 
 /**
- * Agrupa por departamento, mantendo a ordem em que vieram da API.
- * O geral fica por último: é o menos específico.
+ * Pode editar e excluir? Precisa de acesso a TODOS os departamentos do item,
+ * espelhando a regra da API — sem isso a tela ofereceria um botão que sempre
+ * responde 403.
+ *
+ * Item que ficou sem departamento (o departamento foi excluído) é assunto de
+ * admin: ele é o único que ainda o enxerga.
  */
-export function groupByDepartment<T extends { departmentId: string | null }>(
-  items: T[],
-): Array<{ departmentId: string | null; items: T[] }> {
-  const groups = new Map<string, T[]>();
-  for (const item of items) {
-    const key = item.departmentId ?? "";
-    const list = groups.get(key) ?? [];
-    list.push(item);
-    groups.set(key, list);
-  }
-  return [...groups.entries()]
-    .map(([key, list]) => ({ departmentId: key === "" ? null : key, items: list }))
-    .sort((a, b) => {
-      if (a.departmentId === null) return 1;
-      if (b.departmentId === null) return -1;
-      return 0;
-    });
+export function canManageScopedItem(
+  item: DepartmentScopedItem,
+  isAdmin: boolean,
+  myDepartments: DepartmentDto[],
+): boolean {
+  if (isAdmin) return true;
+  if (item.isGeneral) return false;
+  if (item.departments.length === 0) return false;
+  return item.departments.every((department) =>
+    myDepartments.some((mine) => mine.id === department.id),
+  );
 }
 
-export function DepartmentSelect({
-  value,
+/**
+ * A etiqueta ou resposta rápida vale para esta conversa?
+ *
+ * Espelha a regra da API: geral vale sempre; restrita, só se o departamento
+ * da conversa estiver entre os dela. Conversa sem departamento aceita
+ * qualquer item visível — é o comportamento que já existia, e ela aparece
+ * quando o número não tem departamento padrão.
+ */
+export function appliesToConversation(
+  item: DepartmentScopedItem,
+  conversationDepartmentId: string | null,
+): boolean {
+  if (item.isGeneral) return true;
+  if (conversationDepartmentId === null) return true;
+  return item.departments.some((department) => department.id === conversationDepartmentId);
+}
+
+/**
+ * Os selos de departamento da listagem: "Geral" quando vale para todos, um
+ * Badge por departamento quando é restrito, e um aviso quando ficou sem
+ * nenhum — que é o estado que só o admin enxerga e precisa arrumar.
+ */
+export function DepartmentBadges({ item }: { item: DepartmentScopedItem }) {
+  if (item.isGeneral) {
+    return <Badge color="#64748b">Geral</Badge>;
+  }
+  if (item.departments.length === 0) {
+    return <Badge color="#dc2626">Sem departamento</Badge>;
+  }
+  return (
+    <>
+      {item.departments.map((department) => (
+        <Badge key={department.id} color={department.color ?? "#64748b"}>
+          {department.name}
+        </Badge>
+      ))}
+    </>
+  );
+}
+
+/**
+ * Seleção múltipla de departamentos. O kit não tem componente de
+ * multiseleção, então são checkboxes montados com o que já existe — sem
+ * biblioteca nova.
+ */
+export function DepartmentCheckboxes({
+  selected,
   departments,
-  canUseGeneral,
+  disabled = false,
   onChange,
 }: {
-  value: string;
+  selected: string[];
+  /** Os departamentos em que esta pessoa pode gravar. */
   departments: DepartmentDto[];
-  /** Só o admin cria recurso geral, que vale para a organização inteira. */
-  canUseGeneral: boolean;
-  onChange: (value: string) => void;
+  disabled?: boolean;
+  onChange: (ids: string[]) => void;
 }) {
+  function toggle(id: string, checked: boolean) {
+    onChange(checked ? [...selected, id] : selected.filter((item) => item !== id));
+  }
+
+  if (departments.length === 0) {
+    return (
+      <p className="text-sm text-slate-500">
+        Você ainda não atua em nenhum departamento. Peça acesso ao administrador.
+      </p>
+    );
+  }
+
   return (
-    <select
-      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-    >
-      {canUseGeneral && <option value="">Geral (todos os departamentos)</option>}
+    <div className="max-h-48 space-y-1 overflow-y-auto rounded-lg border border-slate-200 p-2">
       {departments.map((department) => (
-        <option key={department.id} value={department.id}>
-          {department.name}
-        </option>
+        <label
+          key={department.id}
+          className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-slate-50"
+        >
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded border-slate-300 text-brand-600"
+            checked={selected.includes(department.id)}
+            disabled={disabled}
+            onChange={(event) => toggle(department.id, event.target.checked)}
+          />
+          <span className={disabled ? "text-slate-400" : "text-slate-700"}>{department.name}</span>
+        </label>
       ))}
-    </select>
+    </div>
   );
 }
