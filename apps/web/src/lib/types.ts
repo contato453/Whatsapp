@@ -366,4 +366,26 @@ export interface DashboardStatsDto {
   ranking: DashboardRankingRowDto[];
   /** `null` para quem não é supervisor — o bloco não aparece na tela dele. */
   topUsers: DashboardTopUserDto[] | null;
+  /** Um ponto por dia civil do período, inclusive os zerados. */
+  timeline: DashboardTimelinePointDto[];
+  /** Só as células com movimento; a grade vazia é desenhada pela tela. */
+  hourly: DashboardHourlyCellDto[];
+}
+
+/** Mensagens de um dia do período, no fuso do escritório. */
+export interface DashboardTimelinePointDto {
+  /** "AAAA-MM-DD" no fuso configurado. */
+  date: string;
+  received: number;
+  sent: number;
+}
+
+/** Uma célula do mapa dia da semana × hora, somando os dias do período. */
+export interface DashboardHourlyCellDto {
+  /** 0 = domingo ... 6 = sábado. */
+  weekday: number;
+  /** 0 a 23. */
+  hour: number;
+  received: number;
+  sent: number;
 }

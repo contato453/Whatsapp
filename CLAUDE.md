@@ -282,7 +282,8 @@ GET    /search              GET /reports/agents   GET /audit-logs
 GET    /dashboard/stats?period=today|7d|15d|30d|custom[&from=&to=]
        [&instanceId=][&departmentId=<uuid|none>][&assignedUserId=<uuid|none>]
        (tudo validado por Zod; `custom` exige as duas datas AAAA-MM-DD, teto de 366 dias;
-        o bloco `topUsers` só vem para supervisor, senão é `null`)
+        o bloco `topUsers` só vem para supervisor, senão é `null`; `timeline` traz um ponto
+        por dia civil do período e `hourly` as células dia da semana × hora)
 ```
 
 Mídia é servida **somente autenticada**, escopada por organização, com proteção contra
@@ -365,6 +366,10 @@ Rotas em `apps/web/src/app/(app)/`: `dashboard`, `inbox` (+ `inbox/[conversation
   teclado) expande **sobrepondo** a página, para a Inbox não remontar a cada passada de
   mouse. A escolha é preferência de navegador em `localStorage` (`zapdesk.sidebar-collapsed`)
   — nada de coluna em `User` nem rota na API para isso.
+- Gráficos do dashboard em `src/components/dashboard/`: `chart-card.tsx` (moldura, legenda
+  e o alternador gráfico/tabela), `messages-timeline.tsx` (barras divergentes por dia) e
+  `hours-heatmap.tsx` (mapa dia da semana × hora). **Sem biblioteca de gráfico**: tudo é SVG
+  inline, CSS e Tailwind, respeitando `prefers-reduced-motion`.
 - Inbox de 3 colunas em `src/components/inbox/`: `inbox-shell.tsx` (o maior arquivo do
   projeto, ~1300 linhas — orquestra lista, chat e composer), `conversation-list.tsx`,
   `message-bubble.tsx`, `context-panel.tsx` (participantes, responsável, departamento,
@@ -571,6 +576,18 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   URL por um `agent` é ignorado — filtro invisível deixaria a lista curta sem explicação. O
   período **não** vai junto (a Inbox lista por status, não por atividade), e a tela avisa
   que a lista pode vir maior que o card.
+- **Todo gráfico tem gêmeo em tabela** (o botão na moldura do card). Cor sozinha não é canal
+  acessível, e o valor exato de um dia não pode depender de acertar o mouse na barra. As
+  cores saem do validador de paleta, não do olho: o par recebidas/enviadas é o mesmo dos
+  cards (ΔE 16,1 sob deuteranopia) e o mapa de calor usa **uma** rampa de um tom só
+  (indigo 400→800), porque magnitude não se pinta com arco-íris.
+- **A série por dia e o mapa de hora são agregados no banco** (`loadActivityBuckets`), num
+  SQL cru que corta com `AT TIME ZONE` no fuso configurado. Trinta dias viram no máximo
+  30 × 24 × 2 linhas em vez de dezenas de milhares de mensagens no Node. O escopo continua
+  vindo de `access.ts`: os ids das conversas saem de uma busca já filtrada, e o SQL só olha
+  as mensagens deles — mesmo padrão do card de atraso. Os descartes são os mesmos dos cards
+  (apagada e saída `pending` não contam), senão o gráfico contaria uma história e os cards
+  outra; há teste fixando que a soma da série bate com o card.
 - **`topUsers` é de supervisor para cima**, igual ao relatório por atendente: para o `agent`
   a rota nem consulta e devolve `null`, e a tela não desenha o bloco. `sent` sai de
   `Message.sentByUserId` (envio sem autor é do scheduler e não conta como trabalho de

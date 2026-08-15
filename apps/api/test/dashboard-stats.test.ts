@@ -18,7 +18,13 @@ import type { AppDeps } from "../src/types.js";
  * 3. **a soma dos quatro status fecha** com o card de conversas ativas.
  */
 
+/** Dia de hoje no fuso padrão, para a série bater com o período "today". */
+const TODAY = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/Sao_Paulo",
+}).format(new Date());
+
 interface Recorded {
+  rawQueries: string[];
   conversationGroupBy: Prisma.ConversationGroupByArgs[];
   conversationFindMany: Array<Record<string, unknown>>;
   messageCount: Array<Record<string, unknown>>;
@@ -115,7 +121,20 @@ function fakePrisma(): PrismaClient {
         { id: "user-2", name: "João Atendente", role: "agent", avatarUrl: "avatar.jpg" },
       ],
     },
-    $queryRaw: async () => [],
+    $queryRaw: async (query: { text?: string; sql?: string }) => {
+      // Duas consultas cruas na rota: a da última mensagem (atraso) e a da
+      // agregação por dia/hora. O texto distingue sem precisar de ordem.
+      const text = String(query.sql ?? query.text ?? "");
+      recorded.rawQueries.push(text);
+      if (text.includes("EXTRACT")) {
+        return [
+          { day: TODAY, weekday: 5, hour: 9, direction: "inbound", total: 7 },
+          { day: TODAY, weekday: 5, hour: 9, direction: "outbound", total: 3 },
+          { day: TODAY, weekday: 5, hour: 15, direction: "inbound", total: 2 },
+        ];
+      }
+      return [];
+    },
   } as unknown as PrismaClient;
 }
 
@@ -167,6 +186,7 @@ function conditionsOf(where: Record<string, unknown>): Array<Record<string, unkn
 describe("GET /dashboard/stats", () => {
   beforeEach(() => {
     recorded = {
+      rawQueries: [],
       conversationGroupBy: [],
       conversationFindMany: [],
       messageCount: [],
@@ -503,6 +523,42 @@ describe("GET /dashboard/stats", () => {
     // Envio sem autor é da automação e não entra como trabalho de ninguém.
     const enviadas = recorded.messageGroupBy.find((args) => args.by[0] === "sentByUserId");
     expect(enviadas?.where).toMatchObject({ sentByUserId: { not: null } });
+    await app.close();
+  });
+
+  it("série por dia traz todos os dias do período, com o que veio do banco", async () => {
+    const app = await buildTestApp();
+    const hoje = (await stats(app, "admin", "?period=today")).json();
+    expect(hoje.timeline).toEqual([{ date: TODAY, received: 9, sent: 3 }]);
+
+    const semana = (await stats(app, "admin", "?period=7d")).json();
+    // Sete pontos, um por dia civil — inclusive os seis sem mensagem nenhuma.
+    expect(semana.timeline).toHaveLength(7);
+    expect(semana.timeline.filter((p: { received: number }) => p.received === 0)).toHaveLength(6);
+    await app.close();
+  });
+
+  it("mapa dia × hora soma as células e sai ordenado", async () => {
+    const app = await buildTestApp();
+    const body = (await stats(app, "admin")).json();
+    expect(body.hourly).toEqual([
+      { weekday: 5, hour: 9, received: 7, sent: 3 },
+      { weekday: 5, hour: 15, received: 2, sent: 0 },
+    ]);
+    await app.close();
+  });
+
+  it("a agregação por dia e hora corta no fuso configurado, não em UTC", async () => {
+    const app = await buildTestApp();
+    await stats(app, "admin");
+    const agregacao = recorded.rawQueries.find((text) => text.includes("EXTRACT"));
+    expect(agregacao).toBeDefined();
+    // O corte usa AT TIME ZONE com o fuso dos parâmetros; sem isso "hoje"
+    // seria o dia UTC do container.
+    expect(agregacao).toContain("AT TIME ZONE");
+    // Os mesmos descartes dos cards, senão o gráfico conta outra história.
+    expect(agregacao).toContain('"deletedAt" IS NULL');
+    expect(agregacao).toContain("'pending'");
     await app.close();
   });
 

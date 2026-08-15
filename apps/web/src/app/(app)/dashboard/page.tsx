@@ -47,6 +47,8 @@ import type {
 import { cn } from "@/lib/utils";
 import { Card, EmptyState } from "@/components/ui";
 import { UserAvatar } from "@/components/user-avatar";
+import { MessagesTimeline } from "@/components/dashboard/messages-timeline";
+import { HoursHeatmap } from "@/components/dashboard/hours-heatmap";
 
 /**
  * Filtros da tela guardados por navegador, igual à barra lateral: mesmo
@@ -729,6 +731,30 @@ export default function DashboardPage() {
           accent="#0891b2"
           pending={pending && !stats}
         />
+      </div>
+
+      {/* Os gráficos ficam sob os cards de mensagens: os cards dão o total do
+          período, e estes mostram como esse total se distribuiu. */}
+      <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-2">
+        {pending && !stats ? (
+          <>
+            <div
+              aria-hidden
+              className="h-56 animate-pulse rounded-xl border border-slate-200 bg-slate-50 motion-reduce:animate-none"
+            />
+            <div
+              aria-hidden
+              className="h-56 animate-pulse rounded-xl border border-slate-200 bg-slate-50 motion-reduce:animate-none"
+            />
+          </>
+        ) : (
+          stats && (
+            <>
+              <MessagesTimeline points={stats.timeline} periodLabel={phrase} />
+              <HoursHeatmap cells={stats.hourly} periodLabel={phrase} />
+            </>
+          )
+        )}
       </div>
 
       <SectionTitle>Infraestrutura</SectionTitle>

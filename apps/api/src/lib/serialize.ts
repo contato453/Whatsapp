@@ -217,6 +217,10 @@ export interface DashboardStatsInput {
   ranking: DashboardRankingRow[];
   /** `null` para quem não é supervisor: o bloco nem aparece na tela dele. */
   topUsers: DashboardTopUserRow[] | null;
+  /** Um ponto por dia civil do período, inclusive os dias zerados. */
+  timeline: Array<{ date: string; received: number; sent: number }>;
+  /** Só as células com movimento; a tela desenha a grade vazia sozinha. */
+  hourly: Array<{ weekday: number; hour: number; received: number; sent: number }>;
 }
 
 /**
@@ -262,6 +266,8 @@ export function serializeDashboardStats(input: DashboardStatsInput) {
     },
     ranking: input.ranking,
     topUsers: input.topUsers,
+    timeline: input.timeline,
+    hourly: input.hourly,
   };
 }
 

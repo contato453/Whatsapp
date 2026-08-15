@@ -8,7 +8,10 @@ import {
 import {
   businessMinutesBetween,
   civilDateIn,
+  civilDaysOfRange,
   computeOverdue,
+  foldHourly,
+  foldTimeline,
   periodRange,
   periodStart,
   safeTimeZone,
@@ -99,6 +102,97 @@ describe("cortes de data no fuso configurado", () => {
     expect(civilDateIn(SP, instante)).toEqual({ year: 2026, month: 8, day: 14 });
     // 14/08/2026 é uma sexta-feira.
     expect(weekdayOf({ year: 2026, month: 8, day: 14 })).toBe(5);
+  });
+});
+
+describe("série por dia e mapa dia × hora", () => {
+  const dias = ["2026-08-12", "2026-08-13", "2026-08-14"];
+
+  it("lista os dias civis do intervalo, do primeiro ao último", () => {
+    const range = periodRange("custom", sp("2026-08-15T10:00:00"), SP, {
+      from: "2026-08-12",
+      to: "2026-08-14",
+    });
+    expect(civilDaysOfRange(range, sp("2026-08-15T10:00:00"), SP)).toEqual(dias);
+  });
+
+  it("no atalho sem fim, vai até o dia de hoje no fuso do escritório", () => {
+    const now = sp("2026-08-15T10:00:00");
+    const range = periodRange("7d", now, SP);
+    const days = civilDaysOfRange(range, now, SP);
+    expect(days).toHaveLength(7);
+    expect(days[0]).toBe("2026-08-09");
+    expect(days[6]).toBe("2026-08-15");
+  });
+
+  it("dia sem movimento aparece zerado, e não some da série", () => {
+    const serie = foldTimeline(
+      [
+        { day: "2026-08-12", weekday: 3, hour: 9, direction: "inbound", total: 5 },
+        { day: "2026-08-12", weekday: 3, hour: 9, direction: "outbound", total: 2 },
+        { day: "2026-08-14", weekday: 5, hour: 14, direction: "inbound", total: 1 },
+      ],
+      dias,
+    );
+    expect(serie).toEqual([
+      { date: "2026-08-12", received: 5, sent: 2 },
+      // O dia 13 não teve mensagem: precisa aparecer como zero, senão o
+      // gráfico emenda 12 com 14 e some com o dia parado.
+      { date: "2026-08-13", received: 0, sent: 0 },
+      { date: "2026-08-14", received: 1, sent: 0 },
+    ]);
+  });
+
+  it("soma as horas do mesmo dia da semana ao longo do período", () => {
+    const celulas = foldHourly([
+      { day: "2026-08-12", weekday: 3, hour: 9, direction: "inbound", total: 4 },
+      { day: "2026-08-19", weekday: 3, hour: 9, direction: "inbound", total: 6 },
+      { day: "2026-08-19", weekday: 3, hour: 9, direction: "outbound", total: 3 },
+      { day: "2026-08-14", weekday: 5, hour: 17, direction: "inbound", total: 2 },
+    ]);
+    expect(celulas).toEqual([
+      { weekday: 3, hour: 9, received: 10, sent: 3 },
+      { weekday: 5, hour: 17, received: 2, sent: 0 },
+    ]);
+  });
+
+  it("devolve as células em ordem de dia e hora", () => {
+    const celulas = foldHourly([
+      { day: "2026-08-14", weekday: 5, hour: 17, direction: "inbound", total: 1 },
+      { day: "2026-08-10", weekday: 1, hour: 8, direction: "inbound", total: 1 },
+      { day: "2026-08-14", weekday: 5, hour: 8, direction: "inbound", total: 1 },
+    ]);
+    expect(celulas.map((cell) => [cell.weekday, cell.hour])).toEqual([
+      [1, 8],
+      [5, 8],
+      [5, 17],
+    ]);
+  });
+
+  it("ignora dia ou hora fora da grade e dia fora do período", () => {
+    expect(
+      foldHourly([{ day: "x", weekday: 9, hour: 9, direction: "inbound", total: 5 }]),
+    ).toEqual([]);
+    expect(
+      foldHourly([{ day: "x", weekday: 3, hour: 99, direction: "inbound", total: 5 }]),
+    ).toEqual([]);
+    // Dia que não está na lista não inventa ponto novo na série.
+    expect(
+      foldTimeline([{ day: "1999-01-01", weekday: 5, hour: 9, direction: "inbound", total: 9 }], dias),
+    ).toEqual([
+      { date: "2026-08-12", received: 0, sent: 0 },
+      { date: "2026-08-13", received: 0, sent: 0 },
+      { date: "2026-08-14", received: 0, sent: 0 },
+    ]);
+  });
+
+  it("período sem mensagem nenhuma devolve a série inteira zerada", () => {
+    expect(foldTimeline([], dias)).toEqual([
+      { date: "2026-08-12", received: 0, sent: 0 },
+      { date: "2026-08-13", received: 0, sent: 0 },
+      { date: "2026-08-14", received: 0, sent: 0 },
+    ]);
+    expect(foldHourly([])).toEqual([]);
   });
 });
 
