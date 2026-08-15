@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import { RealtimeEvents } from "@azvchat/shared";
 import { useAuth } from "@/lib/auth-context";
 import { useSocket } from "@/lib/socket-context";
@@ -13,8 +14,8 @@ import type { MessageDto } from "@/lib/types";
 const BLINK_MS = 1_200;
 
 /**
- * Título da aba piscando com quantas conversas receberam mensagem enquanto
- * a aba esteve fora de foco.
+ * Título da aba piscando com quantas conversas receberam mensagem que
+ * ninguém foi ver ainda.
  *
  * Existe pelo mesmo motivo do som, e cobre o caso que o som não cobre: fone
  * tirado, som em "Nenhum", volume do sistema no mudo. A barra de abas fica
@@ -23,18 +24,33 @@ const BLINK_MS = 1_200;
  * Conta **conversas**, não mensagens: dez mensagens do mesmo grupo são um
  * assunto só, e "(1)" descreve melhor o que espera a pessoa do que "(10)".
  *
- * O número é do que chegou desde que a aba perdeu o foco, não o
- * `unreadCount` do banco — saber esse exigiria uma consulta nova a cada
- * carregamento, e o aviso aqui é sobre o que aconteceu enquanto ninguém
- * olhava. Voltar o foco zera: o objetivo do piscar é trazer a pessoa de
- * volta, e quem voltou já tem a lista da Inbox com a contagem de verdade.
+ * O número é do que chegou desde a última passada pela Inbox, não o
+ * `unreadCount` do banco — saber esse exigiria consulta nova a cada
+ * carregamento para dizer o que a lista da Inbox já diz.
  */
 export function UnreadTitle() {
   const socket = useSocket();
   const { user } = useAuth();
+  const pathname = usePathname();
   const [count, setCount] = useState(0);
   const conversationsRef = useRef<Set<string>>(new Set());
   const baseTitleRef = useRef<string>("");
+  const pathnameRef = useRef(pathname);
+
+  const clear = useCallback(() => {
+    conversationsRef.current.clear();
+    setCount(0);
+  }, []);
+
+  /**
+   * Estar na Inbox com a aba em foco é o único jeito de a pessoa realmente
+   * ver o que chegou. Sem exigir o foco, a aba esquecida na Inbox em segundo
+   * plano — que é justamente o caso mais comum — nunca acumularia nada.
+   */
+  const isWatchingInbox = useCallback(
+    () => document.hasFocus() && pathnameRef.current.startsWith("/inbox"),
+    [],
+  );
 
   // Título original, capturado uma vez: nenhuma rota do sistema define
   // metadata própria, então ele é o mesmo em todas as telas.
@@ -42,15 +58,31 @@ export function UnreadTitle() {
     baseTitleRef.current = document.title;
   }, []);
 
+  // Abrir a Inbox zera. Trocar de tela para o Dashboard, não: o aviso
+  // continua até a pessoa ir olhar as conversas.
+  useEffect(() => {
+    pathnameRef.current = pathname;
+    if (isWatchingInbox()) clear();
+  }, [pathname, clear, isWatchingInbox]);
+
+  // Voltar para a aba já parada na Inbox conta como ter ido olhar.
+  useEffect(() => {
+    const onFocus = () => {
+      if (isWatchingInbox()) clear();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [clear, isWatchingInbox]);
+
   useEffect(() => {
     if (!socket || !user) return undefined;
     const onMessageNew = (payload: { message: MessageDto }) => {
       // Mesmo gatilho do som: só o que chegou de fora, e só dentro do
       // recorte de acesso que o socket já entrega a esta pessoa.
       if (payload.message.direction !== "inbound") return;
-      // Aba em foco não pisca: a pessoa está aqui, e título piscando na
-      // frente de quem já está olhando é só barulho.
-      if (document.hasFocus()) return;
+      // Olhando a Inbox agora não acumula: a conversa sobe na lista com o
+      // badge de não lidas na frente da pessoa, o título seria redundante.
+      if (isWatchingInbox()) return;
       const seen = conversationsRef.current;
       if (seen.has(payload.message.conversationId)) return;
       seen.add(payload.message.conversationId);
@@ -60,24 +92,12 @@ export function UnreadTitle() {
     return () => {
       socket.off(RealtimeEvents.MessageNew, onMessageNew);
     };
-  }, [socket, user]);
-
-  // Voltou o foco: o aviso cumpriu o papel e sai de cena.
-  useEffect(() => {
-    const clear = () => {
-      conversationsRef.current.clear();
-      setCount(0);
-    };
-    window.addEventListener("focus", clear);
-    return () => window.removeEventListener("focus", clear);
-  }, []);
+  }, [socket, user, isWatchingInbox]);
 
   // Sair do sistema não pode deixar a aba piscando na tela de login.
   useEffect(() => {
-    if (user) return;
-    conversationsRef.current.clear();
-    setCount(0);
-  }, [user]);
+    if (!user) clear();
+  }, [user, clear]);
 
   useEffect(() => {
     const base = baseTitleRef.current;
