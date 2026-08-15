@@ -41,6 +41,32 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Sessão inválida tem tratamento único: limpa o token e manda para o login.
+ * O motivo importa: sessão encerrada pelo fim do horário de uso não é
+ * token vencido, e mandar a pessoa para o login sem explicar faria ela
+ * tentar entrar de novo achando que foi falha do sistema.
+ *
+ * Extraído para as buscas de mídia (lightbox, download) reusarem — engolir
+ * o 401 ali deixaria a pessoa clicando numa tela morta sem entender o porquê.
+ */
+async function handleUnauthorized(response: Response): Promise<never> {
+  const body = (await response.json().catch(() => null)) as {
+    error?: string;
+    message?: string;
+  } | null;
+  const outsideSchedule = body?.error === "session_outside_schedule";
+  setToken(null);
+  if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+    window.location.href = outsideSchedule ? `/login?motivo=${LOGIN_REASON_SCHEDULE}` : "/login";
+  }
+  throw new ApiError(
+    outsideSchedule ? (body?.message ?? "Horário encerrado") : "Sessão expirada",
+    401,
+    body?.error,
+  );
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
   const response = await fetch(`${API_URL}${path}`, {
@@ -54,23 +80,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   if (response.status === 401) {
-    // O motivo importa: sessão encerrada pelo fim do horário de uso não é
-    // token vencido, e mandar a pessoa para o login sem explicar faria ela
-    // tentar entrar de novo achando que foi falha do sistema.
-    const body = (await response.json().catch(() => null)) as {
-      error?: string;
-      message?: string;
-    } | null;
-    const outsideSchedule = body?.error === "session_outside_schedule";
-    setToken(null);
-    if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
-      window.location.href = outsideSchedule ? `/login?motivo=${LOGIN_REASON_SCHEDULE}` : "/login";
-    }
-    throw new ApiError(
-      outsideSchedule ? (body?.message ?? "Horário encerrado") : "Sessão expirada",
-      401,
-      body?.error,
-    );
+    return handleUnauthorized(response);
   }
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as {
@@ -238,12 +248,21 @@ export const attendanceSettingsApi = {
       .then((data) => data.settings),
 };
 
-/** URL autenticável de mídia — o token vai por query não é aceito; usamos fetch+blob. */
+/**
+ * URL autenticável de mídia — a rota exige o header Authorization e token por
+ * query não é aceito, então um `src`/`href` apontando direto para a API nunca
+ * funcionaria: o binário vem por fetch autenticado e vira blob temporário.
+ * Quem consome é responsável por revogar a URL criada (`URL.revokeObjectURL`),
+ * senão a memória cresce a cada mídia aberta ao longo do dia.
+ */
 export async function fetchMediaBlobUrl(messageId: string): Promise<string> {
   const token = getToken();
   const response = await fetch(`${API_URL}/messages/${messageId}/media`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
+  // Sessão vencida no meio da ação segue o mesmo caminho do client: limpa o
+  // token e vai para o login, em vez de virar um "falha ao carregar" mudo.
+  if (response.status === 401) return handleUnauthorized(response);
   if (!response.ok) throw new ApiError("Falha ao carregar mídia", response.status);
   const blob = await response.blob();
   return URL.createObjectURL(blob);

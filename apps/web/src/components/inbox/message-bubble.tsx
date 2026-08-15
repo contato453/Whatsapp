@@ -13,6 +13,7 @@ import {
   FileText,
   Forward,
   MapPin,
+  Maximize2,
   MoreVertical,
   Pencil,
   Phone,
@@ -24,8 +25,10 @@ import {
   XCircle,
 } from "lucide-react";
 import { fetchMediaBlobUrl } from "@/lib/api";
+import { documentKindLabel, downloadMessageMedia } from "@/lib/media-download";
 import { cn, formatPhone } from "@/lib/utils";
 import type { MessageDto } from "@/lib/types";
+import { Spinner } from "@/components/ui";
 import { AudioPlayer } from "./audio-player";
 import { FormattedText } from "./formatted-text";
 
@@ -48,9 +51,20 @@ function senderColor(key: string): string {
   return SENDER_COLORS[Math.abs(hash) % SENDER_COLORS.length] ?? "#4f46e5";
 }
 
-function MediaContent({ message, outbound }: { message: MessageDto; outbound: boolean }) {
+function MediaContent({
+  message,
+  outbound,
+  onOpenMedia,
+}: {
+  message: MessageDto;
+  outbound: boolean;
+  /** Abre a lightbox de tela cheia — quem gerencia é a Inbox. */
+  onOpenMedia?: (message: MessageDto) => void;
+}) {
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadFailed, setDownloadFailed] = useState(false);
   const isVisual = message.type === "image" || message.type === "sticker";
   const isAudio = message.type === "audio";
   const isVideo = message.type === "video";
@@ -86,22 +100,34 @@ function MediaContent({ message, outbound }: { message: MessageDto; outbound: bo
   }
 
   async function download() {
+    setDownloadFailed(false);
+    setDownloading(true);
     try {
-      const blobUrl = await fetchMediaBlobUrl(message.id);
-      const anchor = document.createElement("a");
-      anchor.href = blobUrl;
-      anchor.download = message.filename ?? `arquivo-${message.id.slice(0, 8)}`;
-      anchor.click();
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
+      // Mesmo caminho autenticado da exibição — link comum não envia o
+      // header Authorization, então o navegador só salva depois do fetch.
+      await downloadMessageMedia(message);
     } catch {
-      setFailed(true);
+      // O 401 já redirecionou para o login dentro do client; o que sobra é
+      // arquivo que sumiu do storage ou falha de rede.
+      setDownloadFailed(true);
+    } finally {
+      setDownloading(false);
     }
   }
 
   if (isVisual) {
     if (failed) return <p className="text-xs italic opacity-70">Falha ao carregar imagem</p>;
     if (!url) return <div className="h-40 w-52 animate-pulse rounded-lg bg-slate-200/60" />;
-    return <img src={url} alt="Imagem" className="max-h-72 max-w-full rounded-lg" />;
+    return (
+      <button
+        type="button"
+        onClick={() => onOpenMedia?.(message)}
+        aria-label={message.type === "sticker" ? "Ampliar figurinha" : "Ampliar imagem"}
+        className="block cursor-zoom-in"
+      >
+        <img src={url} alt="Imagem" className="max-h-72 max-w-full rounded-lg" />
+      </button>
+    );
   }
   if (isAudio) {
     if (failed) return <p className="text-xs italic opacity-70">Falha ao carregar áudio</p>;
@@ -111,26 +137,63 @@ function MediaContent({ message, outbound }: { message: MessageDto; outbound: bo
   if (isVideo) {
     if (failed) return <p className="text-xs italic opacity-70">Falha ao carregar vídeo</p>;
     if (!url) return <div className="h-40 w-52 animate-pulse rounded-lg bg-slate-200/60" />;
-    return <video controls src={url} className="max-h-72 max-w-full rounded-lg" />;
-  }
-  // Documentos e demais tipos: cartão com download
-  return (
-    <button
-      onClick={download}
-      // Cortado na tela, mas o nome inteiro fica acessível ao passar o mouse.
-      title={message.filename ?? "Documento"}
-      className="flex w-full min-w-0 items-center gap-2.5 rounded-lg bg-black/5 px-3 py-2 text-left transition-colors hover:bg-black/10"
-    >
-      <FileText className="h-8 w-8 shrink-0 opacity-60" />
-      <div className="min-w-0 flex-1">
-        {/* Nome longo sem espaços (bem comum em anexo) não pode empurrar a
-            bolha para fora da tela: corta com reticências. */}
-        <p className="truncate text-sm font-medium">{message.filename ?? "Documento"}</p>
-        <p className="flex items-center gap-1 text-xs opacity-60">
-          <Download className="h-3 w-3" /> Baixar
-        </p>
+    return (
+      <div className="relative">
+        <video controls src={url} className="max-h-72 max-w-full rounded-lg" />
+        {/* O clique no vídeo fica com os controles nativos; ampliar ganha
+            botão próprio para não disputar o play. */}
+        <button
+          type="button"
+          onClick={() => onOpenMedia?.(message)}
+          title="Ampliar vídeo"
+          aria-label="Ampliar vídeo"
+          className="absolute right-1.5 top-1.5 rounded-full bg-slate-900/60 p-1.5 text-white transition-colors hover:bg-slate-900/80"
+        >
+          <Maximize2 className="h-3.5 w-3.5" />
+        </button>
       </div>
-    </button>
+    );
+  }
+  // Documentos e demais tipos: cartão com o que existe (nome e tipo — tamanho
+  // não é gravado pela ingestão) e botão de baixar com estado próprio.
+  const kindLabel = documentKindLabel(message.mimeType);
+  return (
+    <div className="w-full min-w-0 rounded-lg bg-black/5 px-3 py-2">
+      <div className="flex items-center gap-2.5">
+        <FileText className="h-8 w-8 shrink-0 opacity-60" />
+        <div className="min-w-0 flex-1">
+          {/* Nome longo sem espaços (bem comum em anexo) não pode empurrar a
+              bolha para fora da tela: corta com reticências; o nome inteiro
+              fica acessível ao passar o mouse. */}
+          <p className="truncate text-sm font-medium" title={message.filename ?? "Documento"}>
+            {message.filename ?? "Documento"}
+          </p>
+          {kindLabel && (
+            <p className="truncate text-xs opacity-60" title={kindLabel}>
+              {kindLabel}
+            </p>
+          )}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={() => void download()}
+        disabled={downloading}
+        className="mt-1.5 flex items-center gap-1.5 text-xs font-medium underline-offset-2 transition-opacity hover:underline disabled:opacity-60"
+      >
+        {downloading ? (
+          <Spinner
+            className={cn("h-3 w-3", outbound ? "border-white/40 border-t-white" : undefined)}
+          />
+        ) : (
+          <Download className="h-3 w-3" />
+        )}
+        {downloading ? "Baixando..." : "Baixar"}
+      </button>
+      {downloadFailed && (
+        <p className="mt-1 text-xs italic opacity-80">Falha ao baixar o arquivo. Tente novamente.</p>
+      )}
+    </div>
   );
 }
 
@@ -156,6 +219,7 @@ export function MessageBubble({
   onForward,
   onEdit,
   onDelete,
+  onOpenMedia,
   senderAvatar,
 }: {
   message: MessageDto;
@@ -166,6 +230,8 @@ export function MessageBubble({
   onForward: (message: MessageDto) => void;
   onEdit: (message: MessageDto) => void;
   onDelete: (message: MessageDto) => void;
+  /** Clique em imagem/vídeo/figurinha — abre a lightbox de tela cheia. */
+  onOpenMedia?: (message: MessageDto) => void;
   /** Foto de quem enviou — exibida ao lado das mensagens recebidas */
   senderAvatar?: ReactNode;
 }) {
@@ -320,7 +386,7 @@ export function MessageBubble({
           />
         ) : (
           <div className="space-y-1.5">
-            <MediaContent message={message} outbound={outbound} />
+            <MediaContent message={message} outbound={outbound} onOpenMedia={onOpenMedia} />
             {message.content && (
               <FormattedText
                 text={message.content}
