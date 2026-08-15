@@ -24,7 +24,7 @@ import {
   RealtimeEvents,
   type ScheduledPendingPayload,
 } from "@azvchat/shared";
-import { api, fetchQuickReplyMediaFile, quickRepliesApi } from "@/lib/api";
+import { api, quickRepliesApi } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { useAuth } from "@/lib/auth-context";
 import { pruneDrafts, readDraft, saveDraft, type DraftMode } from "@/lib/drafts";
@@ -220,6 +220,12 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
    * só é baixado na hora do envio.
    */
   const [quickReplyMedia, setQuickReplyMedia] = useState<QuickReplyDto | null>(null);
+  /**
+   * Atalho aplicado no rascunho atual — vira o `lastUsedAt` da resposta
+   * quando a mensagem SAI de fato. Ajustar o texto antes de enviar continua
+   * contando como uso; apagar o rascunho inteiro e escrever outra coisa, não.
+   */
+  const [appliedQuickReplyId, setAppliedQuickReplyId] = useState<string | null>(null);
 
   /** Supervisor e admin enxergam vários números/departamentos; usuário, não. */
   const canFilterScope = me?.role === "admin" || me?.role === "supervisor";
@@ -310,6 +316,9 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     // pessoa acabou de escolher, e seguir para outra conversa com o anexo
     // colado mandaria arquivo para o cliente errado.
     setQuickReplyMedia(null);
+    // Rascunho restaurado não é o atalho recém-aplicado: o uso só conta na
+    // conversa em que a pessoa escolheu a resposta.
+    setAppliedQuickReplyId(null);
     // Rascunho é por conversa, e volta com o modo em que foi escrito: nota
     // interna restaurada em modo mensagem mandaria para o cliente um texto
     // escrito para a equipe ler. Sem isso, o texto de um cliente também
@@ -555,6 +564,8 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     // Com mídia de resposta rápida anexada, texto vazio ainda envia: a
     // mídia sozinha é uma mensagem completa (um áudio de orientação, p.ex.).
     const pendingMedia = composerMode === "message" ? quickReplyMedia : null;
+    // Nota interna não conta como uso: o cliente não recebeu nada.
+    const usedQuickReplyId = composerMode === "message" ? appliedQuickReplyId : null;
     if (!conversationId || sending) return;
     if (draft.trim().length === 0 && !pendingMedia?.media) return;
     setSending(true);
@@ -577,42 +588,54 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       return;
     }
 
-    // Resposta rápida com mídia: sai pelo mesmo fluxo de mídia do clipe.
-    // Imagem e vídeo levam o texto como legenda; áudio não tem legenda no
-    // WhatsApp, então o texto sai como mensagem separada logo em seguida —
-    // gravar a legenda no áudio mostraria na Inbox um texto que o cliente
-    // nunca recebeu.
+    // Resposta rápida com mídia: a API envia direto do storage dela — daqui
+    // sai só um JSON, nada de baixar o binário para subir de volta (era isso
+    // que fazia vídeo grande parecer travado). O chip fica visível com
+    // "Enviando..." até a confirmação. Imagem e vídeo levam o texto como
+    // legenda; áudio não tem legenda no WhatsApp, então o texto sai como
+    // mensagem separada logo em seguida.
     if (pendingMedia?.media) {
-      setQuickReplyMedia(null);
       setReplyTo(null);
+      const isAudio = pendingMedia.media.type === "audio";
       try {
-        const file = await fetchQuickReplyMediaFile(pendingMedia);
-        const form = new FormData();
-        form.append("file", file);
-        const isAudio = pendingMedia.media.type === "audio";
-        if (!isAudio && content) form.append("caption", content);
-        const result = await api.postForm<{ message: MessageDto }>(
-          `/conversations/${conversationId}/messages/media`,
-          form,
+        const result = await api.post<{ message: MessageDto }>(
+          `/conversations/${conversationId}/quick-reply-media`,
+          {
+            quickReplyId: pendingMedia.id,
+            ...(!isAudio && content ? { caption: content } : {}),
+          },
         );
         appendMessage(result.message);
-        if (isAudio && content) {
+        // A rota já marcou o lastUsedAt — não precisa da segunda chamada.
+        setQuickReplyMedia(null);
+        setAppliedQuickReplyId(null);
+      } catch (err) {
+        // Nada saiu: devolve o texto (regravado como rascunho, pelo
+        // updateDraft) e mantém o anexo para tentar de novo.
+        updateDraft(content, "message");
+        window.alert(err instanceof Error ? err.message : "Falha ao enviar a mídia");
+        setSending(false);
+        return;
+      }
+      if (isAudio && content) {
+        try {
           const textResult = await api.post<{ message: MessageDto }>(
             `/conversations/${conversationId}/messages`,
             { content },
           );
           appendMessage(textResult.message);
+        } catch (err) {
+          // O áudio saiu; só o texto falhou. Devolver o rascunho sem o
+          // anexo evita reenviar o áudio em duplicidade no retry.
+          updateDraft(content, "message");
+          window.alert(
+            err instanceof Error
+              ? `O áudio foi enviado, mas o texto falhou: ${err.message}`
+              : "O áudio foi enviado, mas o texto falhou — envie o texto de novo",
+          );
         }
-      } catch (err) {
-        // Nada saiu (ou saiu pela metade): devolve texto e anexo para a
-        // pessoa tentar de novo sem redigitar. Pelo `updateDraft`, para o
-        // texto devolvido também voltar a ser gravado como rascunho.
-        updateDraft(content, "message");
-        setQuickReplyMedia(pendingMedia);
-        window.alert(err instanceof Error ? err.message : "Falha ao enviar a mídia");
-      } finally {
-        setSending(false);
       }
+      setSending(false);
       return;
     }
 
@@ -624,6 +647,10 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         { content, ...(replyId ? { replyToMessageId: replyId } : {}) },
       );
       appendMessage(result.message);
+      if (usedQuickReplyId) {
+        setAppliedQuickReplyId(null);
+        void quickRepliesApi.markUsed(usedQuickReplyId);
+      }
     } catch (err) {
       updateDraft(content, "message");
       window.alert(err instanceof Error ? err.message : "Falha ao enviar mensagem");
@@ -863,6 +890,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     // A mídia não sai na hora: vira anexo pendente ao lado do texto, para a
     // pessoa revisar antes do Enter final.
     setQuickReplyMedia(reply.media ? reply : null);
+    setAppliedQuickReplyId(reply.id);
     setQuickReplyDismissed(true);
   }
 
@@ -1264,26 +1292,35 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   </button>
                 </div>
               )}
-              {/* Mídia da resposta rápida aguardando envio */}
+              {/* Mídia da resposta rápida aguardando envio. Durante o envio o
+                  chip vira o indicador de progresso: vídeo grande demora e,
+                  sem isso, a espera parecia defeito. */}
               {quickReplyMedia?.media && composerMode === "message" && (
                 <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-500 bg-slate-50 px-2.5 py-1.5">
-                  <Paperclip className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-600" />
+                  {sending ? (
+                    <Spinner className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-600" />
+                  ) : (
+                    <Paperclip className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-600" />
+                  )}
                   <div className="min-w-0 flex-1">
                     <p className="text-[11px] font-semibold text-slate-700">
-                      {QUICK_REPLY_MEDIA_TYPE_LABELS[quickReplyMedia.media.type]} da resposta /
-                      {quickReplyMedia.shortcut}
+                      {sending
+                        ? `Enviando ${QUICK_REPLY_MEDIA_TYPE_LABELS[quickReplyMedia.media.type].toLowerCase()}... aguarde`
+                        : `${QUICK_REPLY_MEDIA_TYPE_LABELS[quickReplyMedia.media.type]} da resposta /${quickReplyMedia.shortcut}`}
                     </p>
                     <p className="truncate text-xs text-slate-500">
                       {quickReplyMedia.media.filename ?? "Sai junto com a mensagem"}
                     </p>
                   </div>
-                  <button
-                    onClick={() => setQuickReplyMedia(null)}
-                    className="rounded p-0.5 text-slate-400 hover:text-slate-600"
-                    aria-label="Remover mídia anexada"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
+                  {!sending && (
+                    <button
+                      onClick={() => setQuickReplyMedia(null)}
+                      className="rounded p-0.5 text-slate-400 hover:text-slate-600"
+                      aria-label="Remover mídia anexada"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </div>
               )}
               {quickReplyOpen && (
@@ -1340,7 +1377,14 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   rows={2}
                   value={draft}
                   disabled={sending}
-                  onChange={(event) => updateDraft(event.target.value)}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    // updateDraft grava o rascunho a cada tecla.
+                    updateDraft(value);
+                    // Rascunho apagado por inteiro: o que vier depois é outra
+                    // mensagem, não o atalho — não pode contar como uso.
+                    if (value === "") setAppliedQuickReplyId(null);
+                  }}
                   onKeyDown={(event) => {
                     if (quickReplyOpen) {
                       if (event.key === "ArrowDown") {

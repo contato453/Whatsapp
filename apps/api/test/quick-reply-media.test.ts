@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { quickReplyMediaTypeFromMime } from "@azvchat/shared";
+import { departmentResourceAppliesTo, quickReplyMediaTypeFromMime } from "@azvchat/shared";
 import type { QuickReply } from "@azvchat/database";
 import { serializeQuickReply } from "../src/lib/serialize.js";
 
@@ -49,6 +49,7 @@ function buildReply(overrides: Partial<QuickReply>): QuickReply {
     mediaUrl: null,
     mediaMimeType: null,
     mediaFilename: null,
+    lastUsedAt: null,
     createdById: null,
     createdAt: new Date("2026-08-15T12:00:00Z"),
     updatedAt: new Date("2026-08-15T12:00:00Z"),
@@ -84,5 +85,43 @@ describe("serializeQuickReply — bloco de mídia", () => {
       buildReply({ mediaUrl: "chave", mediaMimeType: "application/pdf" }),
     );
     expect(serialized.media).toBeNull();
+  });
+});
+
+/**
+ * A regra que decide se o recurso vale para uma conversa é a mesma nas duas
+ * pontas: a tela oferece e a API valida o envio direto da mídia
+ * (POST /conversations/:id/quick-reply-media) com ela.
+ */
+describe("departmentResourceAppliesTo", () => {
+  it("geral vale para qualquer conversa", () => {
+    expect(departmentResourceAppliesTo(true, [], "dept-1")).toBe(true);
+    expect(departmentResourceAppliesTo(true, [], null)).toBe(true);
+  });
+
+  it("conversa sem departamento aceita qualquer item visível", () => {
+    expect(departmentResourceAppliesTo(false, ["dept-1"], null)).toBe(true);
+  });
+
+  it("restrito exige o departamento da conversa na lista", () => {
+    expect(departmentResourceAppliesTo(false, ["dept-1", "dept-2"], "dept-2")).toBe(true);
+    expect(departmentResourceAppliesTo(false, ["dept-1"], "dept-3")).toBe(false);
+  });
+
+  it("órfão (restrito sem departamento) não vale para conversa com departamento", () => {
+    expect(departmentResourceAppliesTo(false, [], "dept-1")).toBe(false);
+  });
+});
+
+describe("serializeQuickReply — último uso", () => {
+  it("nunca usada sai lastUsedAt: null — a tela mostra 'Nunca usada'", () => {
+    expect(serializeQuickReply(buildReply({})).lastUsedAt).toBeNull();
+  });
+
+  it("usada sai como ISO, para a tela formatar no fuso do navegador", () => {
+    const serialized = serializeQuickReply(
+      buildReply({ lastUsedAt: new Date("2026-08-15T18:30:00Z") }),
+    );
+    expect(serialized.lastUsedAt).toBe("2026-08-15T18:30:00.000Z");
   });
 });

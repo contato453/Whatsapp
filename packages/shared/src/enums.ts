@@ -244,3 +244,20 @@ export function quickReplyMediaTypeFromMime(
   if (base.startsWith("video/")) return "video";
   return null;
 }
+
+/**
+ * A etiqueta ou resposta rápida vale para uma conversa? Geral vale sempre;
+ * conversa sem departamento aceita qualquer item visível (ela existe quando
+ * o número não tem departamento padrão); restrita exige o departamento da
+ * conversa na lista. Fonte única da regra: a tela decide o que oferecer e a
+ * API valida o envio com a MESMA decisão.
+ */
+export function departmentResourceAppliesTo(
+  isGeneral: boolean,
+  departmentIds: string[],
+  conversationDepartmentId: string | null,
+): boolean {
+  if (isGeneral) return true;
+  if (conversationDepartmentId === null) return true;
+  return departmentIds.includes(conversationDepartmentId);
+}
