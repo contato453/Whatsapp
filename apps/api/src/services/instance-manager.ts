@@ -769,13 +769,18 @@ export class InstanceManager {
     }
   }
 
-  /** Departamento em que as conversas do número entram por padrão. */
-  private async defaultDepartmentId(instanceId: string): Promise<string | null> {
+  /** Padrões do número aplicados às conversas que nascem nele. */
+  private async instanceDefaults(
+    instanceId: string,
+  ): Promise<{ departmentId: string | null; isBackup: boolean }> {
     const instance = await this.prisma.whatsAppInstance.findUnique({
       where: { id: instanceId },
-      select: { departmentId: true },
+      select: { departmentId: true, isBackup: true },
     });
-    return instance?.departmentId ?? null;
+    return {
+      departmentId: instance?.departmentId ?? null,
+      isBackup: instance?.isBackup ?? false,
+    };
   }
 
   private async syncChats(
@@ -783,7 +788,7 @@ export class InstanceManager {
     organizationId: string,
     chats: ProviderChat[],
   ): Promise<void> {
-    const departmentId = await this.defaultDepartmentId(instanceId);
+    const { departmentId, isBackup } = await this.instanceDefaults(instanceId);
     for (const chat of chats) {
       const title = chat.name ?? chat.externalChatId.split("@")[0] ?? chat.externalChatId;
       await this.prisma.conversation.upsert({
@@ -793,6 +798,8 @@ export class InstanceManager {
             externalChatId: chat.externalChatId,
           },
         },
+        // O update NUNCA toca em archivedAt: o sync não desarquiva o que a
+        // equipe arquivou, nem arquiva retroativamente o que já existia.
         update: {
           ...(chat.name ? { title: chat.name } : {}),
           ...(chat.lastMessageAt ? { lastMessageAt: chat.lastMessageAt } : {}),
@@ -805,7 +812,9 @@ export class InstanceManager {
           title,
           departmentId,
           status: "open",
-          unreadCount: chat.unreadCount,
+          // Número de backup: a carga inicial de chats também nasce
+          // arquivada, senão a primeira conexão do chip encheria a Inbox.
+          ...(isBackup ? { archivedAt: new Date(), unreadCount: 0 } : { unreadCount: chat.unreadCount }),
           lastMessageAt: chat.lastMessageAt,
         },
       });
@@ -850,7 +859,7 @@ export class InstanceManager {
     organizationId: string,
     groups: ProviderGroup[],
   ): Promise<void> {
-    const departmentId = await this.defaultDepartmentId(instanceId);
+    const { departmentId, isBackup } = await this.instanceDefaults(instanceId);
     for (const group of groups) {
       // Grupo é entidade de primeira classe: garante conversa + registro do grupo.
       const conversation = await this.prisma.conversation.upsert({
@@ -860,6 +869,8 @@ export class InstanceManager {
             externalChatId: group.externalId,
           },
         },
+        // O update não toca em archivedAt: sync não desarquiva nem arquiva
+        // retroativamente — mesma regra do sync de chats.
         update: { title: group.name, type: "group" },
         create: {
           organizationId,
@@ -869,6 +880,8 @@ export class InstanceManager {
           title: group.name,
           departmentId,
           status: "open",
+          // Número de backup: grupo sincronizado também nasce arquivado.
+          ...(isBackup ? { archivedAt: new Date() } : {}),
         },
       });
 

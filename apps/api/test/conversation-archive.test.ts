@@ -7,6 +7,7 @@ import { registerErrorHandler } from "../src/lib/errors.js";
 import type { AuthTokenPayload } from "../src/lib/auth.js";
 import { conversationRoutes } from "../src/modules/conversations/routes.js";
 import { searchRoutes } from "../src/modules/search/routes.js";
+import { whatsappInstanceRoutes } from "../src/modules/whatsapp-instances/routes.js";
 import { MessageIngestService } from "../src/services/message-ingest.js";
 import type { MediaStorage } from "../src/lib/media-storage.js";
 import type { AppDeps } from "../src/types.js";
@@ -19,6 +20,8 @@ import type { AppDeps } from "../src/types.js";
  * 2. arquivar passa pelo escopo de acesso (conversa fora do recorte é 404);
  * 3. mensagem nova NÃO desarquiva, não soma não lido e não mexe no status;
  * 4. a busca global continua encontrando arquivada;
+ * 5. a marcação de backup e o arquivamento em massa exigem supervisor;
+ * 6. no número de backup a conversa nova já nasce arquivada.
  */
 
 const CONV_ID = "33333333-3333-4333-8333-333333333333";
@@ -296,6 +299,170 @@ describe("mensagem nova em conversa arquivada (ingestão)", () => {
     const update = recorded.conversationUpdates.at(-1)?.data as Record<string, unknown>;
     expect(update.unreadCount).toEqual({ increment: 1 });
     expect(update.status).toBe("open");
+  });
+});
+
+describe("número de backup (ingestão e papéis)", () => {
+  it("conversa nova no número de backup já nasce arquivada", async () => {
+    const prisma = {
+      conversation: {
+        findUnique: async () => null,
+        create: async (args: Record<string, unknown>) => {
+          recorded.conversationCreates.push(args);
+          return {
+            ...baseConversation(),
+            ...(args.data as Record<string, unknown>),
+          };
+        },
+        update: async (args: Record<string, unknown>) => {
+          recorded.conversationUpdates.push(args);
+          return baseConversation();
+        },
+      },
+      whatsAppInstance: {
+        findUnique: async () => ({ departmentId: null, defaultAssigneeId: null, isBackup: true }),
+      },
+      message: { findUnique: async () => null, create: async () => ({ id: "msg-1" }) },
+      user: { findFirst: async () => null },
+      groupParticipant: { findFirst: async () => null },
+    } as unknown as PrismaClient;
+    const logger = { info: () => undefined, warn: () => undefined } as unknown as Logger;
+    const service = new MessageIngestService(prisma, {} as MediaStorage, logger);
+
+    await service.ingest(
+      {
+        instanceId: INSTANCE_ID,
+        externalChatId: "5511888@s.whatsapp.net",
+        externalMessageId: "wamid-2",
+        chatType: "individual",
+        chatName: null,
+        direction: "inbound",
+        type: "text",
+        content: "Oi",
+        senderExternalId: "5511888@s.whatsapp.net",
+        senderName: "Cliente",
+        senderPhone: "5511888",
+        quotedExternalMessageId: null,
+        timestamp: new Date(),
+        media: null,
+      },
+      { organizationId: "org-1" },
+    );
+    const created = recorded.conversationCreates[0]?.data as Record<string, unknown>;
+    expect(created.archivedAt).toBeInstanceOf(Date);
+    // Nascida arquivada: sem responsável padrão e sem não lido acumulando.
+    const update = recorded.conversationUpdates[0]?.data as Record<string, unknown>;
+    expect(update).not.toHaveProperty("unreadCount");
+  });
+
+  function instancePrisma(): PrismaClient {
+    return {
+      userWhatsAppInstance: { findMany: async () => [{ whatsappInstanceId: INSTANCE_ID }] },
+      whatsAppInstance: {
+        findFirst: async () => ({
+          id: INSTANCE_ID,
+          organizationId: "org-1",
+          name: "Backup",
+          phoneNumber: null,
+          departmentId: null,
+          defaultAssigneeId: null,
+          isBackup: false,
+          status: "connected",
+          provider: "qrcode",
+          lastConnectionAt: null,
+          lastDisconnectionAt: null,
+          createdAt: new Date(),
+        }),
+        update: async (args: { data: Record<string, unknown> }) => ({
+          id: INSTANCE_ID,
+          organizationId: "org-1",
+          name: "Backup",
+          phoneNumber: null,
+          departmentId: null,
+          defaultAssigneeId: null,
+          isBackup: Boolean(args.data.isBackup),
+          status: "connected",
+          provider: "qrcode",
+          lastConnectionAt: null,
+          lastDisconnectionAt: null,
+          createdAt: new Date(),
+        }),
+      },
+      conversation: {
+        count: async (args: Record<string, unknown>) => {
+          recorded.conversationCount.push(args);
+          return 3;
+        },
+        findMany: async (args: Record<string, unknown>) => {
+          recorded.conversationFindMany.push(args);
+          // Uma rodada com lote e a seguinte vazia, para o laço terminar.
+          if (recorded.conversationFindMany.length > 1) return [];
+          return [{ id: CONV_ID }];
+        },
+        updateMany: async (args: Record<string, unknown>) => {
+          recorded.conversationUpdateMany.push(args);
+          return { count: 1 };
+        },
+      },
+    } as unknown as PrismaClient;
+  }
+
+  it("agent não liga a marcação de backup nem arquiva em massa (403)", async () => {
+    const app = await buildApp(whatsappInstanceRoutes, instancePrisma());
+    const patch = await app.inject({
+      method: "PATCH",
+      url: `/whatsapp-instances/${INSTANCE_ID}`,
+      payload: { isBackup: true },
+      headers: { authorization: `Bearer ${tokenFor(app, "agent")}` },
+    });
+    expect(patch.statusCode).toBe(403);
+    const bulk = await app.inject({
+      method: "POST",
+      url: `/whatsapp-instances/${INSTANCE_ID}/archive-all`,
+      headers: { authorization: `Bearer ${tokenFor(app, "agent")}` },
+    });
+    expect(bulk.statusCode).toBe(403);
+    const count = await app.inject({
+      method: "GET",
+      url: `/whatsapp-instances/${INSTANCE_ID}/archivable-count`,
+      headers: { authorization: `Bearer ${tokenFor(app, "agent")}` },
+    });
+    expect(count.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it("supervisor liga a marcação, com auditoria própria", async () => {
+    const app = await buildApp(whatsappInstanceRoutes, instancePrisma());
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/whatsapp-instances/${INSTANCE_ID}`,
+      payload: { isBackup: true },
+      headers: { authorization: `Bearer ${tokenFor(app, "supervisor")}` },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().instance.isBackup).toBe(true);
+    expect(recorded.auditActions).toContain("whatsapp.backup_enabled");
+    await app.close();
+  });
+
+  it("arquivamento em massa roda em lote, zera não lido e audita a quantidade", async () => {
+    const app = await buildApp(whatsappInstanceRoutes, instancePrisma());
+    const response = await app.inject({
+      method: "POST",
+      url: `/whatsapp-instances/${INSTANCE_ID}/archive-all`,
+      headers: { authorization: `Bearer ${tokenFor(app, "supervisor")}` },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ archived: 1 });
+    const data = recorded.conversationUpdateMany[0]?.data as Record<string, unknown>;
+    expect(data.archivedAt).toBeInstanceOf(Date);
+    expect(data.archivedByUserId).toBe("user-supervisor");
+    expect(data.unreadCount).toBe(0);
+    // O lote só pega as ainda não arquivadas — rodar duas vezes não regrava.
+    const where = recorded.conversationFindMany[0]?.where as Record<string, unknown>;
+    expect(where.archivedAt).toBeNull();
+    expect(recorded.auditActions).toContain("whatsapp.conversations_bulk_archived");
+    await app.close();
   });
 });
 

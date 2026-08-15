@@ -1,14 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Plug, PlugZap, Plus, QrCode, Smartphone, Trash2, Unplug, UserCheck } from "lucide-react";
+import {
+  Archive,
+  DatabaseBackup,
+  Plug,
+  PlugZap,
+  Plus,
+  QrCode,
+  Smartphone,
+  Trash2,
+  Unplug,
+  UserCheck,
+} from "lucide-react";
 import {
   CONNECTION_STATUS_COLORS,
   CONNECTION_STATUS_LABELS,
   RealtimeEvents,
   type ConnectionStatus,
 } from "@azvchat/shared";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, instanceBackupApi } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { formatDateTime, formatPhone } from "@/lib/utils";
 import type { DepartmentDto, InstanceDto, UserDirectoryDto } from "@/lib/types";
@@ -181,6 +192,68 @@ export default function WhatsAppPage() {
     }
   }
 
+  /**
+   * Liga/desliga a marcação de backup. Ligar NÃO arquiva o que já existe
+   * (para isso há a ação explícita de arquivar todas) e desligar não
+   * desarquiva nada — dali em diante conversa nova nasce normal.
+   */
+  async function toggleBackup(instance: InstanceDto) {
+    const enabling = !instance.isBackup;
+    if (
+      enabling &&
+      !window.confirm(
+        `Marcar "${instance.name}" como número de backup? Toda conversa NOVA nele já nasce arquivada (fora da Inbox e dos números). As conversas que já existem não mudam — use "Arquivar todas" se quiser arquivá-las também.`,
+      )
+    ) {
+      return;
+    }
+    setBusy(instance.id);
+    setNotice(null);
+    try {
+      await instanceBackupApi.setBackup(instance.id, enabling);
+      load();
+    } catch (err) {
+      setNotice({
+        tone: "error",
+        text: err instanceof ApiError ? err.message : "Não foi possível salvar a marcação",
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Arquiva todas as conversas do número, dizendo quantas antes. */
+  async function archiveAllConversations(instance: InstanceDto) {
+    setBusy(instance.id);
+    setNotice(null);
+    try {
+      const count = await instanceBackupApi.archivableCount(instance.id);
+      if (count === 0) {
+        setNotice({ tone: "ok", text: `Nenhuma conversa por arquivar em "${instance.name}".` });
+        return;
+      }
+      if (
+        !window.confirm(
+          `Arquivar ${count} ${count === 1 ? "conversa" : "conversas"} de "${instance.name}"? Elas somem da Inbox e deixam de contar nos números do sistema. Nada é apagado.`,
+        )
+      ) {
+        return;
+      }
+      const result = await instanceBackupApi.archiveAll(instance.id);
+      setNotice({
+        tone: "ok",
+        text: `${result.archived} ${result.archived === 1 ? "conversa arquivada" : "conversas arquivadas"} em "${instance.name}".`,
+      });
+    } catch (err) {
+      setNotice({
+        tone: "error",
+        text: err instanceof ApiError ? err.message : "Não foi possível arquivar as conversas",
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function disconnect(instance: InstanceDto) {
     setBusy(instance.id);
     try {
@@ -236,6 +309,7 @@ export default function WhatsAppPage() {
             <span className="w-44 shrink-0">Número</span>
             <span className="w-44 shrink-0">Departamento</span>
             <span className="w-52 shrink-0">Responsável padrão</span>
+            <span className="w-28 shrink-0">Backup</span>
             <span className="w-36 shrink-0">Status</span>
             <span className="w-44 shrink-0">Última conexão</span>
             <span className="w-56 shrink-0 text-right">Ações</span>
@@ -254,6 +328,13 @@ export default function WhatsAppPage() {
                       <Smartphone className="h-4 w-4" />
                     </div>
                     <p className="truncate font-semibold text-slate-900">{instance.name}</p>
+                    {/* Selo ao lado do nome: explica por que este número não
+                        aparece nas conversas nem nos números do dashboard. */}
+                    {instance.isBackup && (
+                      <Badge className="shrink-0 bg-slate-200 text-slate-600">
+                        <DatabaseBackup className="h-3 w-3" /> Backup
+                      </Badge>
+                    )}
                   </div>
 
                   <div className="w-44 shrink-0">
@@ -305,6 +386,35 @@ export default function WhatsAppPage() {
                         title="Atribuir também as conversas que já estão sem responsável"
                       >
                         <UserCheck className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex w-28 shrink-0 items-center gap-1">
+                    {/* Papel mínimo: supervisor — o mesmo requireRole da
+                        rota. Esta tela inteira já é de supervisor no NAV. */}
+                    <label
+                      className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-600"
+                      title="Ligado, toda conversa nova deste número já nasce arquivada"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={instance.isBackup}
+                        disabled={busy === instance.id}
+                        onChange={() => void toggleBackup(instance)}
+                        className="h-3.5 w-3.5 accent-slate-600"
+                      />
+                      Backup
+                    </label>
+                    {instance.isBackup && (
+                      <button
+                        type="button"
+                        className="shrink-0 rounded-lg border border-slate-200 p-1.5 text-slate-500 transition-colors hover:bg-slate-100 disabled:opacity-50"
+                        disabled={busy === instance.id}
+                        onClick={() => void archiveAllConversations(instance)}
+                        title="Arquivar todas as conversas deste número (diz quantas antes de executar)"
+                      >
+                        <Archive className="h-3.5 w-3.5" />
                       </button>
                     )}
                   </div>

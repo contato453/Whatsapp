@@ -176,6 +176,22 @@ export const conversationArchiveApi = {
 };
 
 /**
+ * Número de backup: marcação da instância e arquivamento em massa. Tudo de
+ * supervisor para cima — a API recusa por conta própria quem chamar direto.
+ */
+export const instanceBackupApi = {
+  setBackup: (instanceId: string, isBackup: boolean) =>
+    api.patch<{ instance: unknown }>(`/whatsapp-instances/${instanceId}`, { isBackup }),
+  /** Quantas conversas o arquivamento em massa alcançaria agora. */
+  archivableCount: (instanceId: string) =>
+    api
+      .get<{ count: number }>(`/whatsapp-instances/${instanceId}/archivable-count`)
+      .then((data) => data.count),
+  archiveAll: (instanceId: string) =>
+    api.post<{ archived: number }>(`/whatsapp-instances/${instanceId}/archive-all`),
+};
+
+/**
  * Filtros do dashboard. Valem para a tela inteira: os cards, o ranking e o
  * top de usuários respondem todos ao mesmo recorte.
  *

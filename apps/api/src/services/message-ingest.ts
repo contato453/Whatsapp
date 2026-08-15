@@ -354,7 +354,7 @@ export class MessageIngestService {
     // mensagem.
     const instance = await this.prisma.whatsAppInstance.findUnique({
       where: { id: message.instanceId },
-      select: { departmentId: true },
+      select: { departmentId: true, isBackup: true },
     });
     const data: Prisma.ConversationUncheckedCreateInput = {
       organizationId,
@@ -364,6 +364,10 @@ export class MessageIngestService {
       title: fallbackTitle,
       departmentId: instance?.departmentId ?? null,
       status: "open",
+      // Número marcado como backup: a conversa já NASCE arquivada, no mesmo
+      // caminho de criação de sempre — é assim que o chip reserva não enche
+      // a Inbox nem os números do dashboard. Sem autor: foi o sistema.
+      ...(instance?.isBackup ? { archivedAt: new Date() } : {}),
     };
     return this.prisma.conversation.create({ data });
   }

@@ -32,6 +32,12 @@ const updateInstanceSchema = z.object({
   departmentId: z.string().uuid().nullable().optional(),
   /** Responsável padrão das conversas deste número — null remove. */
   defaultAssigneeId: z.string().uuid().nullable().optional(),
+  /**
+   * Número de backup: ligado, conversa nova nele nasce arquivada. Ligar NÃO
+   * arquiva retroativamente (existe a ação explícita de arquivamento em
+   * massa) e desligar NÃO desarquiva nada — dali em diante nasce normal.
+   */
+  isBackup: z.boolean().optional(),
 });
 
 export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
@@ -154,7 +160,7 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       const body = updateInstanceSchema.parse(request.body);
-      await findInstanceOr404(id, request.user);
+      const current = await findInstanceOr404(id, request.user);
       await assertDepartmentInOrg(body.departmentId, request.user.organizationId);
       if (body.defaultAssigneeId) {
         await assertCanBeDefaultAssignee(
@@ -171,6 +177,7 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
           ...(body.defaultAssigneeId !== undefined
             ? { defaultAssigneeId: body.defaultAssigneeId }
             : {}),
+          ...(body.isBackup !== undefined ? { isBackup: body.isBackup } : {}),
         },
       });
       deps.audit.record({
@@ -186,7 +193,101 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
             : {}),
         },
       });
+      // Ligar/desligar backup ganha ação própria na auditoria: é a marcação
+      // que muda como toda conversa futura do número nasce.
+      if (body.isBackup !== undefined && body.isBackup !== current.isBackup) {
+        deps.audit.record({
+          organizationId: request.user.organizationId,
+          userId: request.user.sub,
+          action: body.isBackup ? "whatsapp.backup_enabled" : "whatsapp.backup_disabled",
+          entityType: "WhatsAppInstance",
+          entityId: id,
+        });
+      }
       return { instance: serializeInstance(instance) };
+    },
+  );
+
+  /**
+   * Quantas conversas o arquivamento em massa alcançaria agora. Existe para
+   * a confirmação da tela dizer o número exato antes de executar.
+   */
+  app.get(
+    "/whatsapp-instances/:id/archivable-count",
+    { preHandler: requireRole("supervisor") },
+    async (request) => {
+      const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+      await findInstanceOr404(id, request.user);
+      const count = await deps.prisma.conversation.count({
+        where: {
+          organizationId: request.user.organizationId,
+          whatsappInstanceId: id,
+          archivedAt: null,
+        },
+      });
+      return { count };
+    },
+  );
+
+  /**
+   * Arquiva TODAS as conversas ainda não arquivadas do número, de uma vez.
+   *
+   * É explícito, e não efeito de ligar a marcação de backup: mexer em
+   * conversa antiga em lote é decisão de quem clica sabendo a contagem.
+   * Roda em lotes por id para não carregar a base inteira em memória nem
+   * segurar um UPDATE gigante — o volume real de um chip de backup é de
+   * milhares de conversas.
+   */
+  app.post(
+    "/whatsapp-instances/:id/archive-all",
+    { preHandler: requireRole("supervisor") },
+    async (request) => {
+      const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+      await findInstanceOr404(id, request.user);
+
+      const BATCH = 500;
+      let archived = 0;
+      for (;;) {
+        const batch = await deps.prisma.conversation.findMany({
+          where: {
+            organizationId: request.user.organizationId,
+            whatsappInstanceId: id,
+            archivedAt: null,
+          },
+          select: { id: true },
+          take: BATCH,
+        });
+        if (batch.length === 0) break;
+        await deps.prisma.conversation.updateMany({
+          where: { id: { in: batch.map((conversation) => conversation.id) } },
+          data: {
+            archivedAt: new Date(),
+            archivedByUserId: request.user.sub,
+            unreadCount: 0,
+          },
+        });
+        archived += batch.length;
+      }
+
+      deps.audit.record({
+        organizationId: request.user.organizationId,
+        userId: request.user.sub,
+        action: "whatsapp.conversations_bulk_archived",
+        entityType: "WhatsAppInstance",
+        entityId: id,
+        metadata: { conversations: archived },
+      });
+      request.log.info({
+        event: "conversations_bulk_archived",
+        instanceId: id,
+        count: archived,
+      });
+
+      // Sem evento por conversa de propósito: emitir milhares de
+      // conversation:updated de uma vez inundaria os sockets. Quem está com
+      // a Inbox aberta vê a lista certa na próxima carga; o arquivamento
+      // individual continua propagando em tempo real.
+      return { archived };
     },
   );
 

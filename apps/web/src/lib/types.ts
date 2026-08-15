@@ -58,6 +58,8 @@ export interface InstanceDto {
   phoneNumber: string | null;
   departmentId: string | null;
   defaultAssigneeId: string | null;
+  /** Número de backup: conversa nova nele já nasce arquivada. */
+  isBackup: boolean;
   status: ConnectionStatus;
   provider: string;
   lastConnectionAt: string | null;

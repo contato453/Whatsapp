@@ -116,7 +116,10 @@ snake_case e id `uuid`.
 **WhatsApp**
 - `WhatsAppInstance` — `status` (`disconnected|connecting|qr_required|connected|reconnecting|error`),
   `sessionId`, `departmentId` (departamento padrão das conversas que chegam),
-  `defaultAssigneeId` (responsável padrão do número), `provider`.
+  `defaultAssigneeId` (responsável padrão do número), `provider`, `isBackup`
+  (número de backup: ligado, **toda conversa nova nele nasce arquivada**, na
+  ingestão e nos syncs de chats/grupos; ligar não arquiva retroativamente e
+  desligar não desarquiva — para o retroativo existe o arquivamento em massa).
 - `Contact`, `WhatsAppGroup` (com `participantCount`, `conversationId`), `GroupParticipant`
   (`name` do WhatsApp vs `customName` da equipe, `isAdmin`, `avatarUrl`, `avatarCheckedAt`,
   `clientRole`).
@@ -132,7 +135,12 @@ snake_case e id `uuid`.
   vs `customTitle` (definido pela equipe, o sync **nunca** toca), `partnerName` (sócio
   representante), `status` (`open|waiting_client|waiting_internal|resolved`),
   `assignedUserId`, `departmentId`, `unreadCount`, `lastMessageAt`, `lastMessagePreview`,
-  `externalReference`/`externalSource` (gancho para CRM futuro).
+  `archivedAt`/`archivedByUserId` (arquivamento: a data responde "está arquivada?",
+  nulo = não; **ortogonal ao status** — não é um quinto status, e ao desarquivar a
+  conversa volta com o status que tinha; `archivedByUserId` nulo = arquivada pelo
+  sistema, caso do número de backup), `externalReference`/`externalSource` (gancho
+  para CRM futuro). Índice `(organizationId, archivedAt, lastMessageAt)` serve a
+  lista da Inbox (não arquivadas por última mensagem).
 - `Message` — `direction`, `type` (`text|image|audio|video|document|sticker|location|contact|poll|call|other`),
   `status` (`pending|sent|delivered|read|failed`), `content`, `mediaUrl`, `quotedMessageId`,
   `sentByUserId`, `deletedAt`/`deletedByUserId`, `editedAt`, `metadata` (Json, ex.: opções
@@ -276,8 +284,16 @@ POST   /whatsapp-instances/:id/connect    POST /whatsapp-instances/:id/disconnec
 POST   /whatsapp-instances/:id/logout     GET  /whatsapp-instances/:id/qr
 GET    /whatsapp-instances/:id/assignees  (quem pode ser responsável padrão do número)
 POST   /whatsapp-instances/:id/apply-default-assignee  (aplica às conversas já sem responsável)
+GET    /whatsapp-instances/:id/archivable-count  (supervisor; quantas o arquivamento em massa pegaria)
+POST   /whatsapp-instances/:id/archive-all       (supervisor; arquiva todas as conversas do número,
+       em lotes de 500, auditado com a quantidade — usado no número de backup)
 
 GET    /conversations                     GET /conversations/:id
+       (a lista EXCLUI arquivadas por padrão; `?archived=true` traz só elas —
+        não existe "todas misturadas")
+POST   /conversations/:id/archive         POST /conversations/:id/unarchive
+       (papel mínimo agent, o mesmo de status/atribuição; arquivar zera o
+        unreadCount, audita e emite conversation:updated)
 PATCH  /conversations/:id                 PATCH /conversations/:id/reference
 GET    /conversations/:id/avatar          POST /conversations/:id/avatar/refresh
 GET    /group-participants/:id/avatar     PATCH /group-participants/:id
@@ -684,6 +700,21 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   (`20260814140000_clear_lid_phone_numbers`).
 - Mensagem apagada mantém a linha (`deletedAt`) para histórico/auditoria — não faça
   `delete` físico.
+- **Conversa arquivada NÃO desarquiva com mensagem nova** — de propósito, e diferente
+  do WhatsApp do celular: o número de backup recebe as mesmas conversas o dia inteiro
+  e desarquivaria tudo sozinho. A mensagem é gravada (histórico completo, acha pela
+  busca), mas não incrementa `unreadCount`, não reabre status e a conversa não volta
+  para a lista de quem está com a Inbox aberta (o frontend filtra pelo `archivedAt`
+  do payload). Mensagem agendada em conversa arquivada ainda é enviada — compromisso
+  com o cliente — e também não desarquiva.
+- **Toda contagem ou listagem nova de `Conversation`/`Message` precisa excluir
+  arquivadas** (`archivedAt: null`), POR CIMA do escopo de `access.ts` — nunca no
+  lugar dele. Hoje excluem: lista da Inbox, todos os blocos do dashboard (cards,
+  atraso, ranking, top de usuários, série por dia, mapa de calor), relatório por
+  atendente, `apply-default-assignee` e o responsável padrão da ingestão. As duas
+  exceções deliberadas: a busca global (`GET /search`) continua encontrando
+  arquivada — senão não haveria como achá-la para desarquivar — e o card
+  "Conversas arquivadas" do dashboard conta só elas, ignorando o período.
 - Baileys é integração não oficial: risco de banimento do número. Use números dedicados.
 
 ---
