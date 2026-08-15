@@ -320,7 +320,13 @@ Rotas em `apps/web/src/app/(app)/`: `dashboard`, `inbox` (+ `inbox/[conversation
   o método em `api.ts`.
 - `src/lib/auth-context.tsx` e `src/lib/socket-context.tsx` — sessão e socket.
 - `src/components/ui.tsx` — kit da casa: `Button`, `Input`, `Textarea`, `Field`, `Badge`,
-  `Card`, `Avatar`, `Modal`, `Spinner`, `EmptyState`. **Reuse antes de criar componente novo.**
+  `Card`, `Avatar`, `Modal`, `Tooltip`, `Spinner`, `EmptyState`. **Reuse antes de criar
+  componente novo.** `Tooltip` é só CSS (hover + `focus-within`), sem biblioteca.
+- Barra lateral recolhível no `layout.tsx`: o botão no topo alterna entre expandida (`w-56`,
+  o padrão) e só ícones (`w-16`) e **empurra** o conteúdo; recolhida, o hover (ou o foco por
+  teclado) expande **sobrepondo** a página, para a Inbox não remontar a cada passada de
+  mouse. A escolha é preferência de navegador em `localStorage` (`zapdesk.sidebar-collapsed`)
+  — nada de coluna em `User` nem rota na API para isso.
 - Inbox de 3 colunas em `src/components/inbox/`: `inbox-shell.tsx` (o maior arquivo do
   projeto, ~1300 linhas — orquestra lista, chat e composer), `conversation-list.tsx`,
   `message-bubble.tsx`, `context-panel.tsx` (participantes, responsável, departamento,
