@@ -57,6 +57,7 @@ import { FilterBar } from "./filter-bar";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
 import { AudioRecorder } from "./audio-recorder";
 import { ScheduleModal } from "./composer-modals";
+import { MediaLightbox } from "./media-lightbox";
 import { MessageBubble } from "./message-bubble";
 import { ContextPanel } from "./context-panel";
 import { StatusSelect } from "./status-select";
@@ -189,6 +190,8 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const [chatSearch, setChatSearch] = useState("");
   const [chatResults, setChatResults] = useState<MessageDto[] | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  /** Mídia aberta em tela cheia — guarda o id para sobreviver a atualizações da lista. */
+  const [lightboxMessageId, setLightboxMessageId] = useState<string | null>(null);
 
   const [users, setUsers] = useState<UserDirectoryDto[]>([]);
   const [departments, setDepartments] = useState<DepartmentDto[]>([]);
@@ -347,6 +350,8 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     setDetail(null);
     setMessages(null);
     setReplyTo(null);
+    // A lightbox pertence à conversa aberta: trocar de conversa fecha.
+    setLightboxMessageId(null);
     // A mídia pendente não é rascunho: ela vive na resposta rápida que a
     // pessoa acabou de escolher, e seguir para outra conversa com o anexo
     // colado mandaria arquivo para o cliente errado.
@@ -947,6 +952,26 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   }
 
   /**
+   * Mídias visuais já carregadas na janela de mensagens — é só entre elas que
+   * a lightbox navega; ampliar nunca busca mais mensagens do servidor.
+   * Mensagem apagada fica de fora: se for apagada com a lightbox aberta, o
+   * índice some e a lightbox fecha sozinha.
+   */
+  const lightboxMessages = useMemo(
+    () =>
+      (messages ?? []).filter(
+        (message) =>
+          !message.deletedAt &&
+          message.hasMedia &&
+          (message.type === "image" || message.type === "video" || message.type === "sticker"),
+      ),
+    [messages],
+  );
+  const lightboxIndex = lightboxMessageId
+    ? lightboxMessages.findIndex((message) => message.id === lightboxMessageId)
+    : -1;
+
+  /**
    * Linha do tempo: mensagens do WhatsApp e notas internas da equipe
    * intercaladas por horário. As notas nunca são enviadas ao cliente.
    */
@@ -1213,6 +1238,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                       onForward={(message) => setForwarding(message)}
                       onEdit={(message) => void handleEdit(message)}
                       onDelete={(message) => void handleDelete(message)}
+                      onOpenMedia={(message) => setLightboxMessageId(message.id)}
                       senderAvatar={senderAvatarFor(item.message)}
                     />
                     </div>
@@ -1582,6 +1608,19 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
             onChanged={loadDetail}
           />
         </div>
+      )}
+
+      {/* Mídia ampliada em tela cheia */}
+      {lightboxIndex >= 0 && (
+        <MediaLightbox
+          messages={lightboxMessages}
+          index={lightboxIndex}
+          onClose={() => setLightboxMessageId(null)}
+          onNavigate={(nextIndex) => {
+            const target = lightboxMessages[nextIndex];
+            if (target) setLightboxMessageId(target.id);
+          }}
+        />
       )}
     </div>
   );

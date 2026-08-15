@@ -444,7 +444,19 @@ nome técnico no código e neste documento.
   projeto, ~1300 linhas — orquestra lista, chat e composer), `conversation-list.tsx`,
   `message-bubble.tsx`, `context-panel.tsx` (participantes, responsável, departamento,
   etiquetas, notas, histórico, arquivos), `composer-modals.tsx`, `audio-recorder.tsx`,
-  `audio-player.tsx`, `status-select.tsx`, `formatted-text.tsx`.
+  `audio-player.tsx`, `status-select.tsx`, `formatted-text.tsx`, `media-lightbox.tsx`
+  (mídia ampliada em tela cheia, navegando só entre as mídias já carregadas na janela).
+- **Mídia de mensagem nunca é apontada por `src`/`href` direto**: a rota exige o header
+  Authorization, então tudo passa por `fetchMediaBlobUrl` (`lib/api.ts`) — fetch
+  autenticado + blob temporário, revogado por quem consome. O download (bolha de
+  documento e lightbox) usa `lib/media-download.ts`, mesmo caminho autenticado; o nome
+  salvo é o original ou um legível por tipo e data, nunca o id da mensagem.
+- **Linkificação em `formatted-text.tsx`**: URL http/https (ou `www.` com domínio) vira
+  `<a target="_blank" rel="noopener noreferrer">` — os dois atributos sempre, senão a
+  página aberta ganha `window.opener` e pode redirecionar a aba para um login falso. A
+  detecção produz **nós React**, nunca HTML (`dangerouslySetInnerHTML` é proibido ali: o
+  texto vem do cliente), só aceita http/https e não linkifica dentro de trecho
+  monoespaçado. Regra pura em `splitLinkParts`, coberta por `test/formatted-text.test.ts`.
 - Rótulos, cores e hierarquia de papéis vêm de `@azvchat/shared`
   (`CONVERSATION_STATUS_LABELS`, `CONVERSATION_STATUS_COLORS`, `USER_ROLE_LABELS`,
   `hasRole`) — **não redeclare no frontend**.
@@ -732,7 +744,9 @@ responder citando; encaminhar; apagar e editar; gravação de áudio (ffmpeg, co
 enquetes; mensagens agendadas com retentativa; notas internas; etiquetas; atribuição com
 histórico completo; quatro status de atendimento; busca na conversa e busca global;
 respostas rápidas com `/`, inclusive com mídia anexada (imagem, áudio ou vídeo) que sai
-junto com o texto; dashboard; relatório por atendente; auditoria consultável;
+junto com o texto; mídia ampliada em tela cheia com navegação por teclado e download;
+botão de baixar em documento recebido; link clicável no texto da mensagem (nova aba,
+com `noopener noreferrer`); dashboard; relatório por atendente; auditoria consultável;
 perfil e troca de senha pelo próprio usuário; aviso de chamada recebida; som de
 notificação de mensagem recebida, com som e volume escolhidos por cada usuário; título da
 aba piscando com as conversas que receberam mensagem, até alguém abrir a Inbox; horário
