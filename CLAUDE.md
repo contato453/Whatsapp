@@ -83,7 +83,7 @@ Scripts raiz: `pnpm dev` (api 4000 + web 3000), `pnpm lint`, `pnpm typecheck`,
 | **Responsável** | `Conversation.assignedUserId` — quem assumiu o atendimento. |
 | **Nota interna** | `InternalNote` — texto que aparece intercalado no chat, **nunca vai para o WhatsApp**. |
 | **Etiqueta** | `Tag` — rótulo da conversa. Vale para todos (`isGeneral`) ou para vários departamentos (N:N). |
-| **Resposta rápida** | `QuickReply` — texto disparado por `/atalho` no composer. |
+| **Resposta rápida** | `QuickReply` — texto disparado por `/atalho` no composer, com mídia opcional (imagem, áudio ou vídeo) que sai junto. |
 | **Participante** | `GroupParticipant` — quem está no grupo, com nome, telefone, foto e flag de admin. |
 | **`externalId` / `externalChatId` / JID** | Identificador do WhatsApp (ex.: `5511999@s.whatsapp.net`, `...@g.us`, `...@lid`). |
 | **LID** | Identificador anônimo novo do WhatsApp. `packages/whatsapp/src/qrcode/normalize.ts` cuida disso; número de LID **não** é telefone e não deve ser exibido como tal. |
@@ -272,6 +272,10 @@ POST   /messages/:id/forward              GET  /messages/:id/media
 
 GET    /tags                POST /tags            PATCH|DELETE /tags/:id
 GET    /quick-replies       POST /quick-replies   PATCH|DELETE /quick-replies/:id
+POST   /quick-replies/:id/media   DELETE /quick-replies/:id/media   GET /quick-replies/:id/media
+       (anexo da resposta rápida — só imagem, áudio ou vídeo, decidido por
+        `quickReplyMediaTypeFromMime` no shared; upload/remoção exigem poder
+        gerenciar a resposta, o download segue o recorte de leitura)
 GET    /conversations/:id/scheduled-messages   POST /conversations/:id/scheduled-messages
 DELETE /scheduled-messages/:id
 
@@ -543,6 +547,14 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   escrever — por isso existe `POST /whatsapp-instances/:id/apply-default-assignee`.
 - Atalho de resposta rápida e nome de etiqueta são **únicos na organização inteira**, não
   por departamento.
+- **Mídia de resposta rápida**: `QuickReply.mediaUrl` é chave do `MediaStorage` (diretório
+  `quick-replies-<organizationId>`, sem vínculo com número) e **nunca sai da API** — o
+  binário vem por `GET /quick-replies/:id/media`, autenticado. Só imagem, áudio e vídeo
+  (`quickReplyMediaTypeFromMime`, no shared, é a fonte única — API e tela recusam com a
+  mesma regra; documento fica de fora de propósito). No envio pelo composer a mídia sai
+  pelo fluxo normal de `/messages/media`: imagem e vídeo levam o texto como **legenda**;
+  áudio não tem legenda no WhatsApp, então o texto sai como **mensagem separada** logo em
+  seguida — legenda em áudio mostraria na Inbox um texto que o cliente nunca recebeu.
 - **Dashboard: o período filtra por atividade e o status agrupa.** Cada card conta conversa
   que teve **ao menos uma mensagem no período**, pelo status **atual** dela — nunca por data
   de criação nem por data de mudança de status. Como `lastMessageAt` é sempre o timestamp da
@@ -612,7 +624,8 @@ envio de texto, imagem, áudio, vídeo, documento, figurinha, localização, con
 responder citando; encaminhar; apagar e editar; gravação de áudio (ffmpeg, com fallback);
 enquetes; mensagens agendadas com retentativa; notas internas; etiquetas; atribuição com
 histórico completo; quatro status de atendimento; busca na conversa e busca global;
-respostas rápidas com `/`; dashboard; relatório por atendente; auditoria consultável;
+respostas rápidas com `/`, inclusive com mídia anexada (imagem, áudio ou vídeo) que sai
+junto com o texto; dashboard; relatório por atendente; auditoria consultável;
 perfil e troca de senha pelo próprio usuário; aviso de chamada recebida; som de
 notificação de mensagem recebida, com som e volume escolhidos por cada usuário; título da
 aba piscando com as conversas que receberam mensagem enquanto a aba esteve fora de foco.

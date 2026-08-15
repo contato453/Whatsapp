@@ -9,6 +9,7 @@ import type {
   NotificationSound,
   NotificationVolume,
   ParticipantClientRole,
+  QuickReplyMediaType,
   UserRole,
 } from "@azvchat/shared";
 
@@ -253,6 +254,13 @@ export interface ScheduledMessageDto {
   createdAt: string;
 }
 
+/** Mídia anexada à resposta — o binário vem por /quick-replies/:id/media. */
+export interface QuickReplyMediaDto {
+  type: QuickReplyMediaType;
+  mimeType: string;
+  filename: string | null;
+}
+
 export interface QuickReplyDto {
   id: string;
   shortcut: string;
@@ -262,6 +270,7 @@ export interface QuickReplyDto {
   isGeneral: boolean;
   /** Lista completa — ver a observação em TagDto. */
   departments: ResourceDepartmentDto[];
+  media: QuickReplyMediaDto | null;
   createdAt: string;
 }
 

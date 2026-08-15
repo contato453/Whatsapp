@@ -213,3 +213,34 @@ export const ASSIGNMENT_ACTIONS = [
   "reopened",
 ] as const;
 export type AssignmentAction = (typeof ASSIGNMENT_ACTIONS)[number];
+
+/**
+ * Mídia anexável a uma resposta rápida: só imagem, áudio e vídeo. Documento
+ * fica de fora de propósito — resposta rápida é conteúdo padronizado de
+ * atendimento, não repositório de arquivos; boleto e contrato variam por
+ * cliente e continuam indo pelo clipe do composer.
+ */
+export const QUICK_REPLY_MEDIA_TYPES = ["image", "audio", "video"] as const;
+export type QuickReplyMediaType = (typeof QUICK_REPLY_MEDIA_TYPES)[number];
+
+export const QUICK_REPLY_MEDIA_TYPE_LABELS: Record<QuickReplyMediaType, string> = {
+  image: "Imagem",
+  audio: "Áudio",
+  video: "Vídeo",
+};
+
+/**
+ * Deduz o tipo pelo mime type; null significa "não pode ser anexado". Vive
+ * no shared porque a mesma decisão vale nas duas pontas: a API recusa o
+ * upload e a tela recusa o arquivo antes mesmo de enviar.
+ */
+export function quickReplyMediaTypeFromMime(
+  mimeType: string | null | undefined,
+): QuickReplyMediaType | null {
+  // "audio/ogg; codecs=opus" precisa contar como áudio: só a base decide.
+  const base = (mimeType ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
+  if (base.startsWith("image/")) return "image";
+  if (base.startsWith("audio/")) return "audio";
+  if (base.startsWith("video/")) return "video";
+  return null;
+}

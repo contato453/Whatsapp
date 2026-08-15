@@ -129,7 +129,35 @@ export const quickRepliesApi = {
       .patch<{ quickReply: QuickReplyDto }>(`/quick-replies/${id}`, input)
       .then((data) => data.quickReply),
   remove: (id: string) => api.delete<{ ok: boolean }>(`/quick-replies/${id}`),
+  uploadMedia: (id: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api
+      .postForm<{ quickReply: QuickReplyDto }>(`/quick-replies/${id}/media`, form)
+      .then((data) => data.quickReply);
+  },
+  removeMedia: (id: string) =>
+    api
+      .delete<{ quickReply: QuickReplyDto }>(`/quick-replies/${id}/media`)
+      .then((data) => data.quickReply),
 };
+
+/**
+ * Mídia da resposta rápida como File: o composer reenvia pelo mesmo fluxo
+ * de mídia do clipe, então o backend não precisa de caminho novo de envio.
+ */
+export async function fetchQuickReplyMediaFile(reply: QuickReplyDto): Promise<File> {
+  const token = getToken();
+  const response = await fetch(`${API_URL}/quick-replies/${reply.id}/media`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) {
+    throw new ApiError("Falha ao carregar a mídia da resposta rápida", response.status);
+  }
+  const blob = await response.blob();
+  const filename = reply.media?.filename ?? `resposta-${reply.shortcut}`;
+  return new File([blob], filename, { type: reply.media?.mimeType ?? blob.type });
+}
 
 /**
  * Filtros do dashboard. Valem para a tela inteira: os cards, o ranking e o
