@@ -11,6 +11,7 @@ import type {
 import {
   formatPhone,
   PARTICIPANT_WITHOUT_NAME_LABEL,
+  quickReplyMediaTypeFromMime,
   type AttendanceSettings,
   type ConnectionStatus,
   type ConversationStatus,
@@ -140,6 +141,8 @@ export function serializeTag(tag: Tag & { departments?: DepartmentLink[] }) {
 }
 
 export function serializeQuickReply(reply: QuickReply & { departments?: DepartmentLink[] }) {
+  // O tipo sai derivado do mime, nunca gravado: uma fonte só de decisão.
+  const mediaType = quickReplyMediaTypeFromMime(reply.mediaMimeType);
   return {
     id: reply.id,
     shortcut: reply.shortcut,
@@ -147,6 +150,12 @@ export function serializeQuickReply(reply: QuickReply & { departments?: Departme
     content: reply.content,
     isGeneral: reply.isGeneral,
     departments: serializeResourceDepartments(reply.departments),
+    // A chave do arquivo nunca sai da API; o binário vem por
+    // GET /quick-replies/:id/media, autenticado e escopado.
+    media:
+      reply.mediaUrl && mediaType
+        ? { type: mediaType, mimeType: reply.mediaMimeType, filename: reply.mediaFilename }
+        : null,
     createdAt: reply.createdAt.toISOString(),
   };
 }
