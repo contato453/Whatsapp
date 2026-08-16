@@ -56,48 +56,6 @@ function phoneFromChatId(externalChatId: string): string | null {
   return numero;
 }
 
-/** Campo de texto que salva ao sair ou no Enter, com rótulo curto. */
-function InlineField({
-  label,
-  value,
-  placeholder,
-  disabled,
-  onSave,
-}: {
-  label: string;
-  value: string | null;
-  placeholder: string;
-  disabled?: boolean;
-  onSave: (valor: string | null) => void | Promise<void>;
-}) {
-  const [texto, setTexto] = useState(value ?? "");
-  useEffect(() => setTexto(value ?? ""), [value]);
-
-  function salvar() {
-    const limpo = texto.trim();
-    if (limpo === (value ?? "")) return;
-    void onSave(limpo.length > 0 ? limpo : null);
-  }
-
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <span className="shrink-0 text-slate-500">{label}</span>
-      <input
-        className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-right text-xs text-slate-700 focus:border-brand-500 focus:outline-none"
-        value={texto}
-        placeholder={placeholder}
-        disabled={disabled}
-        onChange={(event) => setTexto(event.target.value)}
-        onBlur={salvar}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") event.currentTarget.blur();
-          if (event.key === "Escape") setTexto(value ?? "");
-        }}
-      />
-    </div>
-  );
-}
-
 /** Nome exibido quando o arquivo chegou sem nome original. */
 const FILE_TYPE_LABELS: Record<string, string> = {
   image: "Imagem",
@@ -496,16 +454,6 @@ export function ContextPanel({
               />
             </div>
           )}
-          {/* Sócio representante perante a Receita Federal */}
-          <InlineField
-            label="Sócio"
-            value={conversation.partnerName}
-            placeholder="Nome do sócio"
-            disabled={busy}
-            onSave={(valor) =>
-              run(() => api.patch(`/conversations/${conversation.id}`, { partnerName: valor }))
-            }
-          />
         </div>
         {/* Sem botões de "Assumir" e "Concluir": o responsável é trocado no
             seletor logo acima e o status, na barra da conversa. Dois caminhos
