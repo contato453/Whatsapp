@@ -85,6 +85,69 @@ jobs:
           fi
           chmod 600 ~/.ssh/known_hosts
 
+      # Escreve as variáveis da integração com o Azevedo-OS no .env da VPS.
+      #
+      # Existe para que ligar a integração não exija SSH: quem administra
+      # cadastra os segredos aqui no GitHub e o deploy leva para a VPS. O .env
+      # continua sendo a fonte em produção — este passo só o mantém em dia.
+      #
+      # Três decisões que valem explicação:
+      #
+      # 1. **Sem os segredos, não encosta no .env.** Faltando URL ou token o
+      #    passo sai em verde sem escrever nada, porque quem configurou à mão
+      #    na VPS não pode ter o arquivo apagado por um deploy.
+      # 2. **Remove antes de acrescentar.** Sem isso cada deploy empilharia uma
+      #    cópia das linhas; a última venceria e o diagnóstico do dia em que o
+      #    valor mudasse seria um inferno.
+      # 3. **O token vai por stdin, não na linha de comando.** Passar como
+      #    argumento do ssh o deixaria visível em `ps` na VPS. Vai em base64
+      #    dentro do heredoc — não é sigilo, é transporte seguro de um valor
+      #    que pode conter qualquer caractere.
+      - name: Configurar a integração com o Azevedo-OS
+        if: steps.segredos.outputs.configurado == 'true'
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_PATH: ${{ secrets.VPS_PATH }}
+          AZEVEDO_OS_API_URL: ${{ secrets.AZEVEDO_OS_API_URL }}
+          AZEVEDO_OS_API_TOKEN: ${{ secrets.AZEVEDO_OS_API_TOKEN }}
+          AZEVEDO_OS_WEB_URL: ${{ secrets.AZEVEDO_OS_WEB_URL }}
+          AZEVEDO_OS_TIMEOUT_MS: ${{ secrets.AZEVEDO_OS_TIMEOUT_MS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${AZEVEDO_OS_API_URL:-}" ] || [ -z "${AZEVEDO_OS_API_TOKEN:-}" ]; then
+            echo "::notice::Integração com o Azevedo-OS não configurada (faltam os segredos AZEVEDO_OS_API_URL e/ou AZEVEDO_OS_API_TOKEN). O .env da VPS fica como está."
+            exit 0
+          fi
+          porta="${VPS_PORT:-22}"
+          caminho="${VPS_PATH:-}"
+          fragmento=$(
+            {
+              printf 'AZEVEDO_OS_API_URL=%s\n' "$AZEVEDO_OS_API_URL"
+              printf 'AZEVEDO_OS_API_TOKEN=%s\n' "$AZEVEDO_OS_API_TOKEN"
+              if [ -n "${AZEVEDO_OS_WEB_URL:-}" ]; then
+                printf 'AZEVEDO_OS_WEB_URL=%s\n' "$AZEVEDO_OS_WEB_URL"
+              fi
+              printf 'AZEVEDO_OS_TIMEOUT_MS=%s\n' "${AZEVEDO_OS_TIMEOUT_MS:-5000}"
+            } | base64 -w0
+          )
+          ssh -i ~/.ssh/id_deploy -p "$porta" -o BatchMode=yes \
+            "$VPS_USER@$VPS_HOST" \
+            "CAMINHO='$caminho' bash -s" <<REMOTO
+          set -eu
+          cd "\${CAMINHO:-\$HOME/Whatsapp}"
+          umask 077
+          touch .env
+          # grep -v sai 1 quando não sobra nenhuma linha (arquivo só com essas,
+          # ou vazio). Não é erro aqui, daí o || true.
+          grep -v '^AZEVEDO_OS_' .env > .env.deploy || true
+          printf '%s' '$fragmento' | base64 -d >> .env.deploy
+          mv .env.deploy .env
+          chmod 600 .env
+          echo "==> .env atualizado: \$(grep -c '^AZEVEDO_OS_' .env) variáveis do Azevedo-OS"
+          REMOTO
+
       - name: Atualizar e subir os containers
         if: steps.segredos.outputs.configurado == 'true'
         env:

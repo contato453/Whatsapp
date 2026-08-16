@@ -832,6 +832,14 @@ avisa): `AZEVEDO_OS_API_URL`, `AZEVEDO_OS_API_TOKEN`, `AZEVEDO_OS_WEB_URL` (ende
 da empresa com `{id}`; sem ela o botão "Abrir no Azevedo-OS" não aparece, em vez de virar
 link quebrado) e `AZEVEDO_OS_TIMEOUT_MS` (padrão 5000).
 
+Elas chegam ao `.env` da VPS por dois caminhos, e o `DEPLOY.md` descreve os dois: pelos
+segredos do GitHub, que o passo "Configurar a integração com o Azevedo-OS" do `deploy.yml`
+grava a cada publicação, ou à mão na VPS. **Faltando o par URL+token, esse passo não encosta
+no `.env`** — apagar a configuração de quem fez à mão seria pior do que não configurar. Ele
+remove as linhas `AZEVEDO_OS_*` antes de escrever as novas, senão cada deploy empilharia uma
+cópia e a última venceria em silêncio; e manda o token por stdin em base64, porque como
+argumento do ssh ele apareceria em `ps` na VPS.
+
 **Resiliência.** Timeout curto e explícito, e toda falha vira `AzevedoOsError` → erro só do
 card ("Azevedo-OS temporariamente indisponível."). Abrir conversa, carregar mensagens,
 enviar, atribuir, anotar e etiquetar **seguem funcionando com o Azevedo-OS fora do ar** —

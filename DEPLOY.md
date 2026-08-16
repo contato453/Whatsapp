@@ -80,18 +80,41 @@ nano .env   # confira e ajuste os domínios
 
 O Azevedo-OS é a fonte da verdade do cadastro empresarial. Ligando estas quatro linhas, o painel de contexto da conversa passa a mostrar o card do cliente — nome, CNPJ, número da empresa, status, regime tributário, folha e contatos — buscado na hora. **Nada é copiado para o banco do AZVCHAT**, e a integração é somente leitura: o AZVCHAT não cria, não altera e não apaga nada lá.
 
-Acrescente ao mesmo `.env`:
+O token é o mesmo valor guardado no Azevedo-OS como segredo `AZVCHAT_INTEGRATION_TOKEN`, em **Edge Functions → Secrets** do painel do Supabase (`/project/<ref>/functions/secrets`). É esse par de valores idênticos que faz os dois sistemas se reconhecerem. Ele vive só no processo da API — nunca vai para o navegador, para o banco nem para log.
+
+Há dois caminhos para colocar isso na VPS. **O primeiro não exige SSH e é o recomendado.**
+
+#### Opção A — pelos segredos do GitHub (sem SSH)
+
+Em **Settings → Secrets and variables → Actions**, no environment `production` (o mesmo onde moram `VPS_HOST` e companhia), cadastre:
+
+| Segredo | Valor |
+| --- | --- |
+| `AZEVEDO_OS_API_URL` | `https://xkjynctcbfftermvlpam.supabase.co/functions/v1/azvchat` |
+| `AZEVEDO_OS_API_TOKEN` | o mesmo token do `AZVCHAT_INTEGRATION_TOKEN` |
+| `AZEVEDO_OS_WEB_URL` | `https://portal.azevedoassessoria.com.br/m/gestao/empresas/{id}` |
+| `AZEVEDO_OS_TIMEOUT_MS` | opcional; sem ele o deploy usa `5000` |
+
+O passo "Configurar a integração com o Azevedo-OS" do `deploy.yml` escreve essas linhas no `.env` da VPS a cada publicação, antes de subir os containers. É idempotente (remove as antigas antes de gravar as novas, então não empilha cópias) e o token viaja por stdin, nunca na linha de comando — não aparece em `ps` na VPS.
+
+Depois de cadastrar, dispare um deploy: aba **Actions → Deploy → Run workflow**. Trocar o token no futuro é editar o segredo e repetir esse clique.
+
+**Faltando `AZEVEDO_OS_API_URL` ou `AZEVEDO_OS_API_TOKEN`, o passo não encosta no `.env`** e sai em verde. Isso é de propósito: quem configurou à mão pela Opção B não pode ter o arquivo apagado por um deploy.
+
+#### Opção B — direto na VPS
 
 ```bash
+cd ~/Whatsapp
 cat >> .env <<'EOF'
 AZEVEDO_OS_API_URL=https://xkjynctcbfftermvlpam.supabase.co/functions/v1/azvchat
 AZEVEDO_OS_WEB_URL=https://portal.azevedoassessoria.com.br/m/gestao/empresas/{id}
 AZEVEDO_OS_TIMEOUT_MS=5000
 EOF
-nano .env   # acrescente o AZEVEDO_OS_API_TOKEN à mão (veja abaixo)
+nano .env   # acrescente a linha AZEVEDO_OS_API_TOKEN=<o token>
+docker compose -f docker-compose.prod.yml up -d
 ```
 
-O **token não entra por script**: ele é o mesmo valor guardado no Azevedo-OS como segredo `AZVCHAT_INTEGRATION_TOKEN` (Supabase → Project Settings → Edge Functions → Secrets). Copie de lá e cole na linha `AZEVEDO_OS_API_TOKEN=`. Ele vive só no processo da API — nunca vai para o navegador, para o banco nem para log.
+Confira com `grep -c AZEVEDO_OS .env`, que tem de responder `4`. Respondendo `8`, as linhas foram coladas duas vezes: abra o `nano` e apague as repetidas, senão a última vence em silêncio.
 
 Duas observações que evitam meia hora de diagnóstico:
 
