@@ -319,7 +319,6 @@ export function serializeConversation(conversation: ConversationWithRelations) {
     customTitle: conversation.customTitle,
     /// Nome do WhatsApp, exibido como referência quando há nome próprio.
     whatsappTitle: conversation.title,
-    partnerName: conversation.partnerName,
     // A chave interna do arquivo nunca vai ao frontend; ele busca a imagem
     // pelo endpoint autenticado /conversations/:id/avatar.
     hasAvatar: conversation.profilePicture != null,

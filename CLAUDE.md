@@ -126,14 +126,15 @@ snake_case e id `uuid`.
 - `GroupParticipant.clientRole` (`ParticipantClientRole`: `partner` | `administrative` |
   `null`) — papel da pessoa **dentro do cliente**, marcado pela equipe. Coluna única, então
   a seleção é única por construção. **Não confundir com `isAdmin`**, que é administrador do
-  grupo no WhatsApp e vem do sync; e **não alimenta** `Conversation.partnerName`, que segue
-  independente. Rótulos e cores em `PARTICIPANT_CLIENT_ROLE_LABELS` /
+  grupo no WhatsApp e vem do sync. Desde que o texto livre "sócio" saiu da conversa
+  (migration `20260816200000_drop_partner_name`), é a única marcação de quem representa
+  o cliente do lado do WhatsApp. Rótulos e cores em `PARTICIPANT_CLIENT_ROLE_LABELS` /
   `PARTICIPANT_CLIENT_ROLE_COLORS` (`@azvchat/shared`).
 
 **Atendimento**
 - `Conversation` — `type` (`individual|group`), `title` (vem do WhatsApp, o sync sobrescreve)
-  vs `customTitle` (definido pela equipe, o sync **nunca** toca), `partnerName` (sócio
-  representante), `status` (`open|waiting_client|waiting_internal|resolved`),
+  vs `customTitle` (definido pela equipe, o sync **nunca** toca), `status`
+  (`open|waiting_client|waiting_internal|resolved`),
   `assignedUserId`, `departmentId`, `unreadCount`, `lastMessageAt`, `lastMessagePreview`,
   `archivedAt`/`archivedByUserId` (arquivamento: a data responde "está arquivada?",
   nulo = não; **ortogonal ao status** — não é um quinto status, e ao desarquivar a

@@ -677,7 +677,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
   });
 
   /**
-   * Nome próprio da conversa e sócio representante.
+   * Nome próprio da conversa.
    *
    * O nome digitado vive em `customTitle`, separado do `title` que vem do
    * WhatsApp — assim a sincronização continua atualizando o nome de origem
@@ -688,33 +688,26 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     const body = z
       .object({
         customTitle: z.string().trim().max(120).nullable().optional(),
-        partnerName: z.string().trim().max(120).nullable().optional(),
       })
       .parse(request.body);
     await findConversationOr404(id, request.user);
 
-    const limpo = (valor: string | null | undefined) =>
-      valor === undefined ? undefined : valor && valor.length > 0 ? valor : null;
-    const customTitle = limpo(body.customTitle);
-    const partnerName = limpo(body.partnerName);
+    const customTitle =
+      body.customTitle === undefined
+        ? undefined
+        : body.customTitle && body.customTitle.length > 0
+          ? body.customTitle
+          : null;
+    if (customTitle === undefined) return { ok: true };
 
-    await deps.prisma.conversation.update({
-      where: { id },
-      data: {
-        ...(customTitle !== undefined ? { customTitle } : {}),
-        ...(partnerName !== undefined ? { partnerName } : {}),
-      },
-    });
+    await deps.prisma.conversation.update({ where: { id }, data: { customTitle } });
     deps.audit.record({
       organizationId: request.user.organizationId,
       userId: request.user.sub,
       action: "conversation.renamed",
       entityType: "Conversation",
       entityId: id,
-      metadata: {
-        ...(customTitle !== undefined ? { customTitle } : {}),
-        ...(partnerName !== undefined ? { partnerName } : {}),
-      },
+      metadata: { customTitle },
     });
     await emitConversationUpdated(id, request.user.organizationId);
     return { ok: true };

@@ -56,7 +56,6 @@ function conversa(overrides: Partial<ConversationDto> = {}): ConversationDto {
     title: "EMPRESA 001 - Geral",
     customTitle: null,
     whatsappTitle: "EMPRESA 001 - Geral",
-    partnerName: null,
     hasAvatar: false,
     status: "open",
     assignedUser: null,
