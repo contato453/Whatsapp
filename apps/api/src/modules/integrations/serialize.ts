@@ -23,6 +23,7 @@ export function serializeAzevedoOsCompany(
     tradeName: company.tradeName,
     cnpj: company.cnpj,
     status: company.status,
+    statusLabel: company.statusLabel,
     taxRegime: company.taxRegime,
     payrollInfo: company.payrollInfo,
     contacts: company.contacts.map((contact) => ({

@@ -112,6 +112,9 @@ const FIELD_ALIASES = {
   tradeName: ["tradeName", "trade_name", "nomeFantasia", "nome_fantasia"],
   cnpj: ["cnpj", "document", "documento"],
   status: ["status", "situacao"],
+  // O Azevedo-OS manda o rótulo pronto ao lado do código, de propósito, para
+  // não existir um segundo dicionário de status deste lado do muro.
+  statusLabel: ["statusLabel", "status_label", "situacaoRotulo"],
   taxRegime: ["taxRegime", "tax_regime", "regimeTributario", "regime_tributario"],
   payrollInfo: ["payrollInfo", "payroll_info", "folhaPagamento", "folha_pagamento"],
   contacts: ["contacts", "contatos"],
@@ -161,6 +164,7 @@ export function normalizeCompany(raw: RawCompany): AzevedoOsCompany {
     tradeName: readText(record, FIELD_ALIASES.tradeName),
     cnpj: readText(record, FIELD_ALIASES.cnpj),
     status: readText(record, FIELD_ALIASES.status),
+    statusLabel: readText(record, FIELD_ALIASES.statusLabel),
     taxRegime: readText(record, FIELD_ALIASES.taxRegime),
     payrollInfo: readText(record, FIELD_ALIASES.payrollInfo),
     contacts: readContacts(record),

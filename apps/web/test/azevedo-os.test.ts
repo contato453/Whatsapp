@@ -22,6 +22,7 @@ function empresa(overrides: Partial<AzevedoOsCompany> = {}): AzevedoOsCompany {
     tradeName: "Azevedo Comércio",
     cnpj: "00.000.000/0001-00",
     status: "active",
+    statusLabel: "Ativo",
     taxRegime: "Imune/Isenta",
     payrollInfo: "Só Pró-labore",
     contacts: [],
@@ -80,6 +81,45 @@ describe("status da empresa", () => {
   it("sem status não há linha de status", () => {
     expect(normalizeAzevedoOsStatus(null)).toBeNull();
     expect(normalizeAzevedoOsStatus("   ")).toBeNull();
+    // Rótulo sem código não é status: a tela não teria como classificá-lo.
+    expect(normalizeAzevedoOsStatus(null, "Ativo")).toBeNull();
+  });
+
+  /**
+   * O rótulo é do Azevedo-OS; a cor é daqui. Um segundo dicionário de status
+   * deste lado já divergiu uma vez — `onboarding` chegou, a tabela local não
+   * conhecia, e o card escreveu "Onboarding" num painel em português.
+   */
+  it("o rótulo do Azevedo-OS vence o da tabela local", () => {
+    expect(normalizeAzevedoOsStatus("active", "Ativo desde 2019")).toEqual({
+      tone: "active",
+      label: "Ativo desde 2019",
+    });
+  });
+
+  it("status que a tabela local não conhece usa o rótulo da origem, sem inglês vazando", () => {
+    expect(normalizeAzevedoOsStatus("em_homologacao", "Em homologação")).toEqual({
+      tone: "neutral",
+      label: "Em homologação",
+    });
+  });
+
+  it("empresa em implantação não vira 'Onboarding' nem quando o rótulo falta", () => {
+    expect(normalizeAzevedoOsStatus("onboarding")).toEqual({
+      tone: "neutral",
+      label: "Implantação",
+    });
+    expect(normalizeAzevedoOsStatus("onboarding", "Implantação")).toEqual({
+      tone: "neutral",
+      label: "Implantação",
+    });
+  });
+
+  it("cliente desativado no Azevedo-OS aparece em tom de saída", () => {
+    expect(normalizeAzevedoOsStatus("inactive", "Desativado")).toEqual({
+      tone: "inactive",
+      label: "Desativado",
+    });
   });
 
   it("cada tom tem a sua cor de ponto", () => {

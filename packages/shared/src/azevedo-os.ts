@@ -48,7 +48,14 @@ export interface AzevedoOsCompany {
   legalName: string | null;
   tradeName: string | null;
   cnpj: string | null;
+  /** Código estável do status, o único campo comparado em código. */
   status: string | null;
+  /**
+   * Rótulo do status **em português, escrito pelo Azevedo-OS**. Ele manda os
+   * dois de propósito: o código para o AZVCHAT comparar e o rótulo para o
+   * AZVCHAT exibir — assim o vocabulário tem um dono só. Ver o mapa abaixo.
+   */
+  statusLabel: string | null;
   taxRegime: string | null;
   payrollInfo: string | null;
   contacts: AzevedoOsContact[];
@@ -74,11 +81,21 @@ export interface AzevedoOsStatus {
 }
 
 /**
- * Status conhecidos, em português e em inglês. O Azevedo-OS pode mudar o
- * vocabulário sem avisar, então valor desconhecido **não vira "inválido"**:
- * ele é exibido como veio (só com a primeira letra maiúscula), em tom
- * neutro. Esconder um status que existe seria pior do que mostrá-lo sem
- * cor.
+ * Status conhecidos, em português e em inglês.
+ *
+ * **A divisão de responsabilidade importa mais que a tabela.** O rótulo é do
+ * Azevedo-OS: ele manda `statusLabel` pronto, e é ele quem usar. O que é
+ * decidido aqui é o **tom**, porque cor é escolha de tela e o Azevedo-OS não
+ * conhece a paleta da Inbox. O `label` desta tabela é só a rede de proteção
+ * para quando o `statusLabel` não vier.
+ *
+ * Manter um segundo dicionário de rótulos foi o que já cobrou uma vez: o
+ * Azevedo-OS passou a mandar `onboarding` para empresa em implantação, esta
+ * tabela não conhecia a chave, e o card escrevia "Onboarding" — palavra em
+ * inglês num painel em português — em vez de "Implantação".
+ *
+ * Valor desconhecido **não vira "inválido"**: sai como veio, em tom neutro.
+ * Esconder um status que existe seria pior do que mostrá-lo sem cor.
  */
 const STATUS_MAP: Record<string, AzevedoOsStatus> = {
   active: { tone: "active", label: "Ativo" },
@@ -87,23 +104,48 @@ const STATUS_MAP: Record<string, AzevedoOsStatus> = {
   inactive: { tone: "inactive", label: "Inativo" },
   inativo: { tone: "inactive", label: "Inativo" },
   inativa: { tone: "inactive", label: "Inativo" },
+  // Desativado é como o Azevedo-OS chama o cliente que saiu da operação.
+  desativado: { tone: "inactive", label: "Desativado" },
+  desativada: { tone: "inactive", label: "Desativado" },
   suspended: { tone: "inactive", label: "Suspenso" },
   suspenso: { tone: "inactive", label: "Suspenso" },
   suspensa: { tone: "inactive", label: "Suspenso" },
   closed: { tone: "inactive", label: "Baixada" },
   baixado: { tone: "inactive", label: "Baixada" },
   baixada: { tone: "inactive", label: "Baixada" },
+  // Cliente em implantação ainda não é carteira ativa, mas também não saiu:
+  // tom neutro é a leitura honesta, e o rótulo vem do Azevedo-OS.
+  onboarding: { tone: "neutral", label: "Implantação" },
+  implantacao: { tone: "neutral", label: "Implantação" },
   pending: { tone: "neutral", label: "Pendente" },
   pendente: { tone: "neutral", label: "Pendente" },
   prospect: { tone: "neutral", label: "Prospect" },
 };
 
-export function normalizeAzevedoOsStatus(raw: string | null | undefined): AzevedoOsStatus | null {
+/**
+ * Tom e rótulo do status, a partir do que o Azevedo-OS mandou.
+ *
+ * `label` é o `statusLabel` da origem quando ele existe — quem nomeia o
+ * próprio vocabulário é o dono do cadastro. Só na ausência dele a tabela
+ * daqui responde, e, faltando as duas, o código cru aparece capitalizado.
+ *
+ * O tom nunca vem de fora: é decisão de tela.
+ */
+export function normalizeAzevedoOsStatus(
+  raw: string | null | undefined,
+  label?: string | null,
+): AzevedoOsStatus | null {
   const value = raw?.trim();
+  const fromSource = label?.trim() || null;
+  // Sem código não há status — nem quando veio rótulo solto, porque rótulo
+  // sem código é texto que a tela não consegue classificar.
   if (!value) return null;
   const known = STATUS_MAP[value.toLowerCase()];
-  if (known) return known;
-  return { tone: "neutral", label: value.charAt(0).toUpperCase() + value.slice(1) };
+  const fallback = value.charAt(0).toUpperCase() + value.slice(1);
+  return {
+    tone: known?.tone ?? "neutral",
+    label: fromSource ?? known?.label ?? fallback,
+  };
 }
 
 /**

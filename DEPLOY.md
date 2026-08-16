@@ -76,6 +76,30 @@ nano .env   # confira e ajuste os domínios
 
 ⚠️ Troque `seudominio.com.br` pelos seus subdomínios reais. As senhas já são geradas aleatórias.
 
+### Passo 5b — Ligar o card de cliente do Azevedo-OS (opcional)
+
+O Azevedo-OS é a fonte da verdade do cadastro empresarial. Ligando estas quatro linhas, o painel de contexto da conversa passa a mostrar o card do cliente — nome, CNPJ, número da empresa, status, regime tributário, folha e contatos — buscado na hora. **Nada é copiado para o banco do AZVCHAT**, e a integração é somente leitura: o AZVCHAT não cria, não altera e não apaga nada lá.
+
+Acrescente ao mesmo `.env`:
+
+```bash
+cat >> .env <<'EOF'
+AZEVEDO_OS_API_URL=https://qmydtcgotpiyxamdthhr.supabase.co/functions/v1/azvchat
+AZEVEDO_OS_WEB_URL=https://portal.azevedoassessoria.com.br/m/gestao/empresas/{id}
+AZEVEDO_OS_TIMEOUT_MS=5000
+EOF
+nano .env   # acrescente o AZEVEDO_OS_API_TOKEN à mão (veja abaixo)
+```
+
+O **token não entra por script**: ele é o mesmo valor guardado no Azevedo-OS como segredo `AZVCHAT_INTEGRATION_TOKEN` (Supabase → Project Settings → Edge Functions → Secrets). Copie de lá e cole na linha `AZEVEDO_OS_API_TOKEN=`. Ele vive só no processo da API — nunca vai para o navegador, para o banco nem para log.
+
+Duas observações que evitam meia hora de diagnóstico:
+
+- **A URL termina em `/azvchat`, sem `/companies`.** O client acrescenta o caminho. Com `/companies` no fim, toda consulta cai em 404.
+- **`{id}` no `AZEVEDO_OS_WEB_URL` é literal**, e é onde entra o identificador da empresa. Sem essa chave a API recusa a configuração na largada, em vez de publicar um botão que abre link quebrado.
+
+Faltando a URL ou o token, a integração **nasce desligada**: o card avisa que não está configurada e o resto do AZVCHAT segue inteiro. Nenhuma outra parte do sistema depende dela.
+
 ## Passo 6 — Subir o sistema
 
 ```bash

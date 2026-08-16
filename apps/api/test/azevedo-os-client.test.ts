@@ -195,10 +195,32 @@ describe("client do Azevedo-OS — leitura do contrato", () => {
       tradeName: null,
       cnpj: null,
       status: null,
+      statusLabel: null,
       taxRegime: null,
       payrollInfo: null,
       contacts: [],
     });
+  });
+
+  /**
+   * O Azevedo-OS manda `status` (código, para comparar) e `statusLabel`
+   * (rótulo em português, para exibir). Descartar o segundo obrigaria o
+   * AZVCHAT a manter o próprio dicionário — e ele já divergiu: `onboarding`
+   * chegava, a tabela local não conhecia a chave, e o card escrevia
+   * "Onboarding" num painel em português em vez de "Implantação".
+   */
+  it("lê o rótulo do status ao lado do código", async () => {
+    const client = build((async () =>
+      jsonResponse({
+        id: "empresa-implantacao",
+        status: "onboarding",
+        statusLabel: "Implantação",
+      })) as unknown as typeof fetch);
+
+    const company = await client.getCompany("empresa-implantacao");
+
+    expect(company.status).toBe("onboarding");
+    expect(company.statusLabel).toBe("Implantação");
   });
 
   it("busca aceita lista crua ou envelopada e respeita o limite", async () => {

@@ -224,7 +224,7 @@ export function AzevedoOsCard({
     }
   }
 
-  const status = company ? normalizeAzevedoOsStatus(company.status) : null;
+  const status = company ? normalizeAzevedoOsStatus(company.status, company.statusLabel) : null;
   const nome = company ? azevedoOsCompanyDisplayName(company) : null;
 
   return (

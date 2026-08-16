@@ -844,6 +844,20 @@ card. Campos exibidos: nome, CNPJ, número da empresa, status, regime tributári
 pagamento e contatos. **Não há bloco de responsáveis internos** nesta fase — nem na tela,
 nem na consulta.
 
+**Quem nomeia o status é o Azevedo-OS.** O contrato manda os dois campos de propósito:
+`status` é o código estável, o único comparado em código, e `statusLabel` é o rótulo já em
+português, para exibir. `normalizeAzevedoOsStatus(status, statusLabel)` usa o rótulo da
+origem e decide **só o tom** pela tabela local — cor é escolha de tela, e o Azevedo-OS não
+conhece a paleta da Inbox.
+
+O primeiro desenho descartava o `statusLabel` e remontava o texto num dicionário daqui.
+Custou o que dicionário duplicado sempre custa: o Azevedo-OS manda `onboarding` para
+empresa em implantação, a tabela local não conhecia a chave, e o card caía no genérico
+"valor desconhecido aparece como veio" — escrevendo **"Onboarding"**, palavra em inglês,
+num painel em português. Nada quebrava, nada ficava vermelho, e só quem abrisse a conversa
+de um cliente em implantação veria. A tabela local ganhou as chaves que faltavam, mas o que
+de fato conserta é a ordem de precedência: **rótulo de fora vence rótulo de dentro.**
+
 **Tempo real e auditoria.** Nenhum evento novo: vincular, trocar e desvincular emitem
 `RealtimeEvents.ConversationUpdated` para `conversationAudience()`, que já carrega
 `externalReference`/`externalSource` no DTO. Auditoria em
