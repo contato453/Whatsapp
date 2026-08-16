@@ -51,7 +51,6 @@ function baseConversation(overrides: Record<string, unknown> = {}) {
     type: "individual",
     title: "Cliente",
     customTitle: null,
-    partnerName: null,
     profilePicture: null,
     status: "open",
     assignedUserId: null,

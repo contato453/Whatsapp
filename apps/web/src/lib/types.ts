@@ -116,8 +116,6 @@ export interface ConversationDto {
   customTitle: string | null;
   /** Nome que veio do WhatsApp, exibido como referência. */
   whatsappTitle: string;
-  /** Sócio representante perante a Receita Federal. */
-  partnerName: string | null;
   hasAvatar: boolean;
   status: ConversationStatus;
   assignedUser: UserDirectoryDto | null;

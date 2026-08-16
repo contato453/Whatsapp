@@ -1,0 +1,11 @@
+-- Remove o "sócio representante" da conversa.
+--
+-- O campo saiu do painel de contexto: quem representa o cliente já aparece
+-- na marcação de sócio dos participantes do grupo (`GroupParticipant.clientRole`)
+-- e nos contatos do card do Azevedo-OS. Sem tela que escreva ou leia, a
+-- coluna seria só dado parado envelhecendo — e dado de cadastro parado é
+-- pior que dado nenhum, porque alguém acaba confiando nele.
+--
+-- Remoção destrutiva e deliberada: o conteúdo digitado é perdido junto com
+-- a coluna, autorizada pelo dono do sistema.
+ALTER TABLE "conversations" DROP COLUMN "partnerName";

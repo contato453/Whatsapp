@@ -283,8 +283,9 @@ model GroupParticipant {
   /// Nome definido pela equipe — ganha do `name` na exibição.
   customName        String?
   /// Sócio ou contato administrativo do cliente; null = sem marcação.
-  /// Independente de `Conversation.partnerName`: um é pessoa do grupo, o
-  /// outro é texto livre do cadastro da conversa.
+  /// Não confundir com `isAdmin`, que é administrador do grupo no WhatsApp
+  /// e vem do sync. Desde que o texto livre "sócio" saiu da conversa, esta
+  /// é a única marcação de quem representa o cliente do lado do WhatsApp.
   clientRole        ParticipantClientRole?
   isAdmin           Boolean                @default(false)
   isSuperAdmin      Boolean                @default(false)
@@ -328,8 +329,6 @@ model Conversation {
   /// Nome definido pela equipe. Tem prioridade sobre `title` na exibição e
   /// nunca é tocado pela sincronização.
   customTitle        String?
-  /// Sócio representante da empresa perante a Receita Federal.
-  partnerName        String?
   profilePicture     String?
   status             ConversationStatus @default(open)
   assignedUserId     String?
