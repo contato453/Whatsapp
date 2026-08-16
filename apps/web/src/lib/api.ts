@@ -4,6 +4,7 @@ import { AZEVEDO_OS_SOURCE } from "@azvchat/shared";
 import type {
   AttendanceSettings,
   AzevedoOsCompanyDto,
+  ConversationStatus,
   DashboardPeriod,
   ParticipantClientRole,
 } from "@azvchat/shared";
@@ -251,6 +252,8 @@ export interface DashboardFilters {
   from?: string;
   to?: string;
   instanceId?: string;
+  /** Recorta a tela inteira para um status de atendimento. */
+  status?: ConversationStatus;
   departmentId?: string;
   assignedUserId?: string;
 }
@@ -263,6 +266,7 @@ export const dashboardApi = {
       params.set("to", filters.to);
     }
     if (filters.instanceId) params.set("instanceId", filters.instanceId);
+    if (filters.status) params.set("status", filters.status);
     if (filters.departmentId) params.set("departmentId", filters.departmentId);
     if (filters.assignedUserId) params.set("assignedUserId", filters.assignedUserId);
     return api.get<DashboardStatsDto>(`/dashboard/stats?${params.toString()}`);

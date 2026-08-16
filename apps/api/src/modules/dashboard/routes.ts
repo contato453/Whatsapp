@@ -38,6 +38,12 @@ const statsQuerySchema = z
     from: z.string().regex(DATE_ONLY_PATTERN, "Data deve estar no formato AAAA-MM-DD").optional(),
     to: z.string().regex(DATE_ONLY_PATTERN, "Data deve estar no formato AAAA-MM-DD").optional(),
     instanceId: z.string().uuid().optional(),
+    /**
+     * Recorta a tela inteira para um status de atendimento. Com ele, o fluxo
+     * por status mostra só a coluna pedida — os filtros refinam, nunca somem
+     * com número em silêncio.
+     */
+    status: z.enum(CONVERSATION_STATUSES).optional(),
     departmentId: idOrNone.optional(),
     assignedUserId: idOrNone.optional(),
   })
@@ -135,6 +141,11 @@ function dashboardFilterConditions(query: StatsQuery): Prisma.ConversationWhereI
   const conditions: Prisma.ConversationWhereInput[] = [];
   if (query.instanceId) {
     conditions.push({ whatsappInstanceId: query.instanceId });
+  }
+  if (query.status) {
+    // Entra no mesmo AND dos demais: pedir `resolved` zera o card de atraso
+    // por construção, porque lá o filtro convive com `status != resolved`.
+    conditions.push({ status: query.status });
   }
   if (query.departmentId) {
     conditions.push({
@@ -442,7 +453,9 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
       {
         event: "dashboard_stats",
         period: query.period,
-        filtered: Boolean(query.instanceId || query.departmentId || query.assignedUserId),
+        filtered: Boolean(
+          query.instanceId || query.status || query.departmentId || query.assignedUserId,
+        ),
         overdueCandidates: overdueCandidates.length,
         durationMs: Date.now() - now.getTime(),
       },
@@ -457,6 +470,7 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
       settings,
       filters: {
         instanceId: query.instanceId ?? null,
+        status: query.status ?? null,
         departmentId: query.departmentId ?? null,
         assignedUserId: query.assignedUserId ?? null,
       },

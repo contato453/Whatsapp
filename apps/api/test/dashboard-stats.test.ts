@@ -477,9 +477,38 @@ describe("GET /dashboard/stats", () => {
     const body = (await stats(app, "admin", `?instanceId=${instanceId}`)).json();
     expect(body.filters).toEqual({
       instanceId,
+      status: null,
       departmentId: null,
       assignedUserId: null,
     });
+    await app.close();
+  });
+
+  it("filtro de status refina a tela inteira, sem substituir o recorte de acesso", async () => {
+    const app = await buildTestApp();
+    await stats(app, "agent", "?status=open");
+    const conditions = conditionsOf(
+      recorded.conversationGroupBy[0]?.where as Record<string, unknown>,
+    );
+    // O filtro entra no AND junto com o escopo, nunca no lugar dele.
+    expect(conditions).toContainEqual({ status: "open" });
+    expect(conditions).toContainEqual({
+      OR: [{ assignedUserId: "user-agent" }, { assignedUserId: null }],
+    });
+    // As contagens de mensagem seguem o mesmo recorte, senão os cards de
+    // mensagens contariam conversas que os cards de status esconderam.
+    for (const args of recorded.messageCount) {
+      const where = args.where as { conversation?: Record<string, unknown> };
+      expect(conditionsOf(where.conversation ?? {})).toContainEqual({ status: "open" });
+    }
+    await app.close();
+  });
+
+  it("recusa status fora dos quatro do atendimento", async () => {
+    const app = await buildTestApp();
+    const response = await stats(app, "admin", "?status=qualquer");
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toBe("validation_error");
     await app.close();
   });
 
