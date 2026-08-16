@@ -82,9 +82,14 @@ O Azevedo-OS é a fonte da verdade do cadastro empresarial. Ligando estas quatro
 
 O token é o mesmo valor guardado no Azevedo-OS como segredo `AZVCHAT_INTEGRATION_TOKEN`, em **Edge Functions → Secrets** do painel do Supabase (`/project/<ref>/functions/secrets`). É esse par de valores idênticos que faz os dois sistemas se reconhecerem. Ele vive só no processo da API — nunca vai para o navegador, para o banco nem para log.
 
-Há dois caminhos para colocar isso na VPS. **O primeiro não exige SSH e é o recomendado.**
+Há dois caminhos para colocar isso na VPS, e a escolha depende de **como a sua VPS se atualiza**:
 
-#### Opção A — pelos segredos do GitHub (sem SSH)
+- Se ela usa a **atualização automática** (`deploy/instalar-atualizacao-automatica.sh`, o timer do systemd), o GitHub não entra na VPS e os segredos de Actions não chegam lá. Use a Opção B.
+- Se ela usa o **deploy por SSH** (com `VPS_HOST`, `VPS_USER` e `VPS_SSH_KEY` cadastrados no environment `production`), use a Opção A.
+
+> **A Opção A não dispensa o SSH, ela o centraliza.** Todo o job do deploy — inclusive o passo desta integração — está atrás do portão `configurado == 'true'`, que exige aqueles três segredos. Sem eles o workflow fecha **verde sem fazer nada**, e o log mostra os passos como `skipped`. Ao conferir se um deploy funcionou, olhe os passos, não só o resultado do run: verde aqui também significa "não havia o que fazer".
+
+#### Opção A — pelos segredos do GitHub (quando o deploy por SSH já está ligado)
 
 Em **Settings → Secrets and variables → Actions**, no environment `production` (o mesmo onde moram `VPS_HOST` e companhia), cadastre:
 
@@ -102,6 +107,8 @@ Depois de cadastrar, dispare um deploy: aba **Actions → Deploy → Run workflo
 **Faltando `AZEVEDO_OS_API_URL` ou `AZEVEDO_OS_API_TOKEN`, o passo não encosta no `.env`** e sai em verde. Isso é de propósito: quem configurou à mão pela Opção B não pode ter o arquivo apagado por um deploy.
 
 #### Opção B — direto na VPS
+
+Vale para quem usa a atualização automática, e é o caminho da maioria. Entre na VPS por SSH **ou pelo console web do provedor** (Hetzner, DigitalOcean e Contabo têm um terminal no navegador, que pede só a senha de root e dispensa chave). Depois:
 
 ```bash
 cd ~/Whatsapp

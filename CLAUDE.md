@@ -840,6 +840,18 @@ remove as linhas `AZEVEDO_OS_*` antes de escrever as novas, senão cada deploy e
 cópia e a última venceria em silêncio; e manda o token por stdin em base64, porque como
 argumento do ssh ele apareceria em `ps` na VPS.
 
+> **O caminho do GitHub não dispensa o SSH, ele o centraliza — e isso já enganou.** O job
+> inteiro do `deploy.yml`, este passo incluído, está atrás de `configurado == 'true'`, que
+> exige `VPS_HOST`, `VPS_USER` e `VPS_SSH_KEY`. Sem eles o run fecha **verde com todos os
+> passos `skipped`**, que é o desenho certo (quem usa a atualização automática do systemd não
+> pode ver merge vermelho por não ter chave), mas produz o pior sinal possível para quem
+> confere: sucesso indistinguível de "não havia o que fazer".
+>
+> Em 16/08/2026 eu li `conclusion: success` de três deploys e afirmei que a VPS tinha sido
+> atualizada por eles. Nenhum tinha: os três pularam tudo, e o SSH nunca esteve configurado —
+> a VPS se atualiza pelo timer do systemd. **Resultado de run não é evidência de execução; a
+> lista de passos é.** Ao conferir deploy aqui, olhe `conclusion` de cada step, não do run.
+
 **Resiliência.** Timeout curto e explícito, e toda falha vira `AzevedoOsError` → erro só do
 card ("Azevedo-OS temporariamente indisponível."). Abrir conversa, carregar mensagens,
 enviar, atribuir, anotar e etiquetar **seguem funcionando com o Azevedo-OS fora do ar** —
