@@ -84,7 +84,7 @@ Acrescente ao mesmo `.env`:
 
 ```bash
 cat >> .env <<'EOF'
-AZEVEDO_OS_API_URL=https://qmydtcgotpiyxamdthhr.supabase.co/functions/v1/azvchat
+AZEVEDO_OS_API_URL=https://xkjynctcbfftermvlpam.supabase.co/functions/v1/azvchat
 AZEVEDO_OS_WEB_URL=https://portal.azevedoassessoria.com.br/m/gestao/empresas/{id}
 AZEVEDO_OS_TIMEOUT_MS=5000
 EOF
