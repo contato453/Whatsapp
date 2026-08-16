@@ -15,6 +15,8 @@ import {
   X,
 } from "lucide-react";
 import {
+  AZEVEDO_OS_SOURCE,
+  canManageAzevedoOsLink,
   CONVERSATION_STATUSES,
   CONVERSATION_STATUS_LABELS,
   PARTICIPANT_CLIENT_ROLES,
@@ -37,8 +39,10 @@ import type {
   TagDto,
   UserDirectoryDto,
 } from "@/lib/types";
+import { useAuth } from "@/lib/auth-context";
 import { Badge, Button, Textarea } from "@/components/ui";
 import { appliesToConversation } from "@/components/department-picker";
+import { AzevedoOsCard } from "./azevedo-os-card";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
 
 /**
@@ -169,7 +173,10 @@ export function ContextPanel({
   onChanged: () => void;
 }) {
   const router = useRouter();
+  const { user: me } = useAuth();
   const conversation = detail.conversation;
+  /** Conversa vinculada a uma empresa do Azevedo-OS (ver o card abaixo). */
+  const vinculadaAoAzevedoOs = conversation.externalSource === AZEVEDO_OS_SOURCE;
   const [noteText, setNoteText] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -464,23 +471,31 @@ export function ContextPanel({
               ))}
             </select>
           </div>
-          {/* Código do cadastro da empresa/grupo no escritório */}
-          <div className="flex items-center justify-between">
-            <span className="text-slate-500">Cadastro</span>
-            <input
-              className="max-w-[55%] rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-amber-800 placeholder:font-normal placeholder:normal-case placeholder:tracking-normal placeholder:text-slate-400"
-              value={reference}
-              maxLength={40}
-              placeholder="EMPRESA 001"
-              disabled={busy}
-              onChange={(event) => setReference(event.target.value)}
-              onBlur={() => void saveReference()}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") event.currentTarget.blur();
-                if (event.key === "Escape") setReference(conversation.externalReference ?? "");
-              }}
-            />
-          </div>
+          {/*
+            Código do cadastro da empresa/grupo no escritório. Some quando a
+            conversa está vinculada ao Azevedo-OS: o campo no banco é o mesmo
+            (`externalReference`), e ali ele guarda o identificador da
+            empresa — deixar o campo editável convidaria a apagar o vínculo
+            sem querer, e a API recusaria a gravação de qualquer forma.
+          */}
+          {!vinculadaAoAzevedoOs && (
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">Cadastro</span>
+              <input
+                className="max-w-[55%] rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-amber-800 placeholder:font-normal placeholder:normal-case placeholder:tracking-normal placeholder:text-slate-400"
+                value={reference}
+                maxLength={40}
+                placeholder="EMPRESA 001"
+                disabled={busy}
+                onChange={(event) => setReference(event.target.value)}
+                onBlur={() => void saveReference()}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.currentTarget.blur();
+                  if (event.key === "Escape") setReference(conversation.externalReference ?? "");
+                }}
+              />
+            </div>
+          )}
           {/* Sócio representante perante a Receita Federal */}
           <InlineField
             label="Sócio"
@@ -528,6 +543,18 @@ export function ContextPanel({
           </Button>
         )}
       </section>
+
+      {/*
+        Cliente no Azevedo-OS. Fica logo abaixo do atendimento porque
+        responde "com quem estou falando", que é a primeira pergunta de quem
+        abre a conversa. Carrega e falha sozinho: Azevedo-OS fora do ar não
+        atrapalha nada no restante do painel.
+      */}
+      <AzevedoOsCard
+        conversation={conversation}
+        canManage={me ? canManageAzevedoOsLink(me.role) : false}
+        onChanged={onChanged}
+      />
 
       {/* Etiquetas */}
       <section className="space-y-2">

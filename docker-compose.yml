@@ -27,6 +27,11 @@ services:
       WHATSAPP_SESSION_DIR: /app/data/sessions
       MEDIA_DIR: /app/data/media
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Integração com o Azevedo-OS: vazias = desligada (ver .env.example).
+      AZEVEDO_OS_API_URL: ${AZEVEDO_OS_API_URL:-}
+      AZEVEDO_OS_API_TOKEN: ${AZEVEDO_OS_API_TOKEN:-}
+      AZEVEDO_OS_WEB_URL: ${AZEVEDO_OS_WEB_URL:-}
+      AZEVEDO_OS_TIMEOUT_MS: ${AZEVEDO_OS_TIMEOUT_MS:-5000}
     volumes:
       # Sessões do WhatsApp e mídias SOBREVIVEM a deploys/restarts.
       - whatsapp_sessions:/app/data/sessions

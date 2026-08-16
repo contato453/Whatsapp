@@ -20,6 +20,7 @@ import {
   Zap,
 } from "lucide-react";
 import {
+  AZEVEDO_OS_SOURCE,
   QUICK_REPLY_MEDIA_TYPE_LABELS,
   RealtimeEvents,
   type ScheduledPendingPayload,
@@ -1096,12 +1097,15 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                     <h2 className="truncate text-sm font-semibold text-slate-900">
                       {conversation.title}
                     </h2>
-                    {/* Cadastro da empresa no escritório */}
-                    {conversation.externalReference && (
-                      <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800">
-                        {conversation.externalReference}
-                      </span>
-                    )}
+                    {/* Cadastro da empresa no escritório. O identificador do
+                        Azevedo-OS mora no mesmo campo e não vira chip: é
+                        interno, e a empresa aparece no card do painel. */}
+                    {conversation.externalReference &&
+                      conversation.externalSource !== AZEVEDO_OS_SOURCE && (
+                        <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800">
+                          {conversation.externalReference}
+                        </span>
+                      )}
                   </div>
                   <p className="truncate text-[11px] text-slate-400">
                     {isGroup

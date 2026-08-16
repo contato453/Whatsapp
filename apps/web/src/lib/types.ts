@@ -130,8 +130,18 @@ export interface ConversationDto {
   archivedBy: UserDirectoryDto | null;
   lastMessageAt: string | null;
   lastMessagePreview: string | null;
-  /** Código do cadastro no escritório ("EMPRESA 001", "GRUPO 040") */
+  /**
+   * Referência externa: ou o código do cadastro digitado no escritório
+   * ("EMPRESA 001"), ou o identificador da empresa no Azevedo-OS — quem
+   * diz qual é `externalSource`.
+   */
   externalReference: string | null;
+  /**
+   * `manual` = código digitado; `azevedo-os` = empresa vinculada pela
+   * integração (`AZEVEDO_OS_SOURCE`); nulo = sem referência. A tela precisa
+   * saber: o identificador do Azevedo-OS é interno e não vira chip.
+   */
+  externalSource: string | null;
   createdAt: string;
 }
 

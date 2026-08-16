@@ -68,6 +68,7 @@ function conversa(overrides: Partial<ConversationDto> = {}): ConversationDto {
     lastMessageAt: null,
     lastMessagePreview: null,
     externalReference: null,
+    externalSource: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
   };

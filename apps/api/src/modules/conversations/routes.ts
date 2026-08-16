@@ -2,10 +2,13 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Prisma } from "@azvchat/database";
 import { z } from "zod";
 import {
+  AZEVEDO_OS_SOURCE,
   CONVERSATION_STATUSES,
+  EXTERNAL_REFERENCE_SOURCES,
   PARTICIPANT_CLIENT_ROLES,
   RealtimeEvents,
 } from "@azvchat/shared";
+import { planReferenceUpdate } from "../../lib/azevedo-os-link.js";
 import {
   accessibleDepartmentIds,
   conversationScope,
@@ -14,6 +17,7 @@ import {
   loadConversationAccess,
 } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
+import { accessibleConversationWhere } from "../../lib/conversation-access.js";
 import { canApplyToConversation } from "../../lib/department-resource.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import {
@@ -57,9 +61,10 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
    * conversa de um número sem acesso responde 404, como se não existisse.
    */
   async function findConversationOr404(id: string, user: FastifyRequest["user"]) {
-    const access = await loadConversationAccess(deps.prisma, user);
     const conversation = await deps.prisma.conversation.findFirst({
-      where: { id, organizationId: user.organizationId, ...conversationScope(access) },
+      // O mesmo recorte que os outros módulos usam para chegar a uma
+      // conversa pelo id — inclusive a integração com o Azevedo-OS.
+      where: await accessibleConversationWhere(deps.prisma, user, id),
       include: conversationInclude,
     });
     if (!conversation) throw new NotFoundError("Conversa");
@@ -594,32 +599,78 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
   });
 
   /**
-   * Código do cadastro da empresa/grupo no escritório ("EMPRESA 001").
+   * Referência externa da conversa — o ÚNICO caminho de escrita em
+   * `externalReference`, para os dois mecanismos que o campo atende:
    *
-   * Usa o campo externalReference, que já existia no modelo para referência
-   * a sistemas externos. externalSource marca que veio digitado, e não de
-   * uma integração — para uma sincronização futura saber o que pode
-   * sobrescrever.
+   * - `manual`: o código do cadastro digitado pela equipe ("EMPRESA 001");
+   * - `azevedo-os`: o ponteiro para a empresa no Azevedo-OS, gravado pelo
+   *   card de cliente da Inbox.
+   *
+   * `externalSource` não aceita texto livre (Zod contra a lista conhecida):
+   * sem isso o navegador registraria qualquer origem e a próxima integração
+   * herdaria vínculos que ninguém sabe de onde vieram. Quem pode o quê é
+   * decidido em `planReferenceUpdate` — a regra depende do estado da
+   * conversa, não só do papel.
+   *
+   * Vínculo com o Azevedo-OS é confirmado antes de gravar: a empresa
+   * precisa existir lá. Azevedo-OS fora do ar recusa o vínculo (é escrita,
+   * e gravar um id não conferido é pior do que adiar), mas não atrapalha
+   * nenhuma outra operação da conversa.
    */
   app.patch("/conversations/:id/reference", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const { externalReference } = z
-      .object({ externalReference: z.string().trim().max(40).nullable() })
+    const body = z
+      .object({
+        // 64 caracteres cobrem o código digitado e também o identificador do
+        // Azevedo-OS (uuid tem 36) sem prender o formato: id externo que um
+        // dia deixar de ser uuid continua cabendo.
+        externalReference: z.string().trim().max(64).nullable(),
+        externalSource: z.enum(EXTERNAL_REFERENCE_SOURCES).default("manual"),
+      })
       .parse(request.body);
-    await findConversationOr404(id, request.user);
+    const conversation = await findConversationOr404(id, request.user);
 
-    const value = externalReference && externalReference.length > 0 ? externalReference : null;
+    const nextReference =
+      body.externalReference && body.externalReference.length > 0 ? body.externalReference : null;
+    // Nada mudou: sai antes de auditar, senão reabrir a tela viraria um
+    // registro de alteração que nunca aconteceu.
+    if (
+      nextReference === conversation.externalReference &&
+      (nextReference === null || body.externalSource === conversation.externalSource)
+    ) {
+      return { ok: true };
+    }
+
+    const plan = planReferenceUpdate({
+      currentReference: conversation.externalReference,
+      currentSource: conversation.externalSource,
+      nextReference,
+      nextSource: body.externalSource,
+      role: request.user.role,
+    });
+
+    if (plan.verifyCompany && plan.reference) {
+      // Empresa inexistente responde 404 do próprio client; indisponível
+      // responde 502/504. Em nenhum dos casos a conversa é alterada.
+      await deps.azevedoOs.getCompany(plan.reference);
+    }
+
     await deps.prisma.conversation.update({
       where: { id },
-      data: { externalReference: value, externalSource: value ? "manual" : null },
+      data: { externalReference: plan.reference, externalSource: plan.source },
     });
     deps.audit.record({
       organizationId: request.user.organizationId,
       userId: request.user.sub,
-      action: "conversation.reference_changed",
+      action: plan.auditAction,
       entityType: "Conversation",
       entityId: id,
-      metadata: { externalReference: value },
+      // Dado de cadastro da empresa não entra na auditoria: o id externo
+      // basta para reconstruir o que foi feito, e o resto vive no Azevedo-OS.
+      metadata:
+        plan.source === AZEVEDO_OS_SOURCE || conversation.externalSource === AZEVEDO_OS_SOURCE
+          ? { companyId: plan.reference, previousCompanyId: conversation.externalReference }
+          : { externalReference: plan.reference },
     });
     await emitConversationUpdated(id, request.user.organizationId);
     return { ok: true };
