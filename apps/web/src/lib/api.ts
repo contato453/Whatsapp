@@ -1,7 +1,9 @@
 "use client";
 
+import { AZEVEDO_OS_SOURCE } from "@azvchat/shared";
 import type {
   AttendanceSettings,
+  AzevedoOsCompanyDto,
   DashboardPeriod,
   ParticipantClientRole,
 } from "@azvchat/shared";
@@ -173,6 +175,41 @@ export const quickRepliesApi = {
     api.post<{ ok: boolean }>(`/quick-replies/${id}/used`).catch(() => undefined),
 };
 
+
+/**
+ * Cliente do Azevedo-OS visto pelo navegador: tudo passa pela API do
+ * AZVCHAT, que é quem tem o token. Nenhuma chamada daqui sai para o
+ * Azevedo-OS.
+ *
+ * Vincular e desvincular reusam `PATCH /conversations/:id/reference` — o
+ * campo é o mesmo do código de cadastro manual, e dois caminhos de escrita
+ * para o mesmo campo seria pedir para eles divergirem.
+ */
+export const azevedoOsApi = {
+  /** Empresa vinculada; `null` quando a conversa não tem vínculo. */
+  company: (conversationId: string) =>
+    api
+      .get<{ company: AzevedoOsCompanyDto | null }>(
+        `/conversations/${conversationId}/external-company`,
+      )
+      .then((data) => data.company),
+  /** A conversa vai junto: a API confere o acesso a ela antes de pesquisar. */
+  search: (conversationId: string, search: string) =>
+    api
+      .get<{ companies: AzevedoOsCompanyDto[] }>(
+        `/integrations/azevedo-os/companies?conversationId=${conversationId}&search=${encodeURIComponent(search)}`,
+      )
+      .then((data) => data.companies),
+  link: (conversationId: string, companyId: string) =>
+    api.patch<{ ok: boolean }>(`/conversations/${conversationId}/reference`, {
+      externalReference: companyId,
+      externalSource: AZEVEDO_OS_SOURCE,
+    }),
+  unlink: (conversationId: string) =>
+    api.patch<{ ok: boolean }>(`/conversations/${conversationId}/reference`, {
+      externalReference: null,
+    }),
+};
 
 /**
  * Arquivamento de conversa: some da Inbox e deixa de contar nos números do

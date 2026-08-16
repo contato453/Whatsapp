@@ -39,6 +39,12 @@ services:
       WHATSAPP_SESSION_DIR: /app/data/sessions
       MEDIA_DIR: /app/data/media
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Integração de leitura com o Azevedo-OS. Vazias = desligada; o token
+      # fica só no processo da API (o serviço web nem o recebe).
+      AZEVEDO_OS_API_URL: ${AZEVEDO_OS_API_URL:-}
+      AZEVEDO_OS_API_TOKEN: ${AZEVEDO_OS_API_TOKEN:-}
+      AZEVEDO_OS_WEB_URL: ${AZEVEDO_OS_WEB_URL:-}
+      AZEVEDO_OS_TIMEOUT_MS: ${AZEVEDO_OS_TIMEOUT_MS:-5000}
     volumes:
       # Sessões do WhatsApp e mídias sobrevivem a deploys e reinicializações.
       - whatsapp_sessions:/app/data/sessions

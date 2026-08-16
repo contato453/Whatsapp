@@ -2,6 +2,7 @@
 
 import { Archive, Users2, User, UserRound } from "lucide-react";
 import {
+  AZEVEDO_OS_SOURCE,
   CONNECTION_STATUS_COLORS,
   CONNECTION_STATUS_LABELS,
   CONVERSATION_STATUS_COLORS,
@@ -117,7 +118,11 @@ export function ConversationListItem({
             ) : (
               <span className="truncate font-medium text-amber-600">Sem responsável</span>
             )}
-            {conversation.externalReference && (
+            {/* Vínculo com o Azevedo-OS guarda o identificador da empresa no
+                mesmo campo. Ele é interno: como chip viraria um punhado de
+                caracteres sem significado no lugar do código do cadastro.
+                Quem mostra a empresa é o card do painel de contexto. */}
+            {conversation.externalReference && conversation.externalSource !== AZEVEDO_OS_SOURCE && (
               <span className="ml-auto shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800">
                 {conversation.externalReference}
               </span>

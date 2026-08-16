@@ -138,9 +138,12 @@ snake_case e id `uuid`.
   `archivedAt`/`archivedByUserId` (arquivamento: a data responde "está arquivada?",
   nulo = não; **ortogonal ao status** — não é um quinto status, e ao desarquivar a
   conversa volta com o status que tinha; `archivedByUserId` nulo = arquivada pelo
-  sistema, caso do número de backup), `externalReference`/`externalSource` (gancho
-  para CRM futuro). Índice `(organizationId, archivedAt, lastMessageAt)` serve a
-  lista da Inbox (não arquivadas por última mensagem).
+  sistema, caso do número de backup), `externalReference`/`externalSource` (referência
+  a sistema externo — **um campo, dois mecanismos**: `manual` guarda o código do
+  cadastro digitado no escritório ("EMPRESA 001") e `azevedo-os` guarda o
+  identificador da empresa no Azevedo-OS; ver a seção 15). Índice
+  `(organizationId, archivedAt, lastMessageAt)` serve a lista da Inbox (não
+  arquivadas por última mensagem).
 - `Message` — `direction`, `type` (`text|image|audio|video|document|sticker|location|contact|poll|call|other`),
   `status` (`pending|sent|delivered|read|failed`), `content`, `mediaUrl`, `quotedMessageId`,
   `sentByUserId`, `deletedAt`/`deletedByUserId`, `editedAt`, `metadata` (Json, ex.: opções
@@ -761,7 +764,89 @@ testes de integração com banco; multi-organização real (cadastro e billing).
 
 ---
 
-## 15. Como escrever um bom prompt para este sistema
+## 15. AZVCHAT ↔ Azevedo-OS (integração de leitura)
+
+O **Azevedo-OS é a fonte da verdade do cadastro empresarial**; o AZVCHAT é a fonte da
+verdade da comunicação. A Inbox mostra a empresa do cliente **sem replicar o cadastro**:
+guarda só o ponteiro e consulta na hora de exibir.
+
+```
+Frontend AZVCHAT → API Fastify (token) → API do Azevedo-OS → base do Azevedo-OS
+```
+
+Os dois caminhos proibidos, e o motivo: **frontend → Azevedo-OS** exporia o token no
+navegador; **Postgres do AZVCHAT → base do Azevedo-OS** amarraria os dois esquemas e faria
+migration de um quebrar o outro. Toda comunicação é por API, servidor-a-servidor.
+
+**Vínculo.** `Conversation.externalSource = "azevedo-os"` (`AZEVEDO_OS_SOURCE`, em
+`@azvchat/shared`) e `Conversation.externalReference = <id da empresa>`. **Sem migration**:
+os dois campos já existiam. O ponteiro é o id externo, então trocar razão social, nome
+fantasia, CNPJ, telefone, contato ou regime tributário no Azevedo-OS **não mexe no
+vínculo**. Não existe tabela de empresa no AZVCHAT, e não deve passar a existir — cache que
+vira segunda base cadastral é exatamente o que esta arquitetura evita.
+
+**Um campo, dois mecanismos.** O mesmo `externalReference` guarda o código digitado pela
+equipe (fonte `manual`, "EMPRESA 001") e o id da empresa. Por isso a escrita é uma só:
+`PATCH /conversations/:id/reference`, com `externalSource` validado por Zod contra a lista
+conhecida (`EXTERNAL_REFERENCE_SOURCES`) — o navegador não registra origem arbitrária. Quem
+decide o que cada papel pode é `lib/azevedo-os-link.ts` (`planReferenceUpdate`), e a regra
+**depende do estado**, não só do papel: em conversa vinculada, limpar o campo É desvincular
+e exige supervisor; gravar código manual em conversa vinculada é recusado até para o admin
+(desvincular é decisão explícita). Sem isso, um `agent` apagaria o vínculo digitando no
+campo "Cadastro". Vincular e trocar **confirmam a empresa no Azevedo-OS antes de gravar**.
+
+**Endpoints.**
+
+```
+GET  /conversations/:id/external-company         (agent+; sem vínculo devolve company: null)
+GET  /integrations/azevedo-os/companies?conversationId=&search=   (supervisor+)
+PATCH /conversations/:id/reference               (endpoint existente, evoluído)
+```
+
+A pesquisa **exige a conversa** que vai receber o vínculo e valida o acesso a ela: sem
+isso a integração viraria um diretório de empresas aberto a quem tem login. O acesso sai
+de `lib/conversation-access.ts`, que usa `access.ts` — nenhum `where` na mão. Conversa fora
+do recorte responde 404 (padrão da casa), papel insuficiente responde 403.
+
+**Segredo.** `AZEVEDO_OS_API_TOKEN` existe só no processo da API, dentro de
+`services/azevedo-os-client.ts` — o único lugar do sistema que fala com o Azevedo-OS.
+Nunca vai para o banco, para log, para o DTO nem para o Next.js (não há `NEXT_PUBLIC_`
+equivalente). Mensagem de erro do Azevedo-OS **não é repassada**: resposta de erro costuma
+ecoar o cabeçalho enviado, e o cabeçalho carrega o token.
+
+**Variáveis** (todas opcionais; sem URL ou sem token a integração nasce desligada e o card
+avisa): `AZEVEDO_OS_API_URL`, `AZEVEDO_OS_API_TOKEN`, `AZEVEDO_OS_WEB_URL` (endereço real
+da empresa com `{id}`; sem ela o botão "Abrir no Azevedo-OS" não aparece, em vez de virar
+link quebrado) e `AZEVEDO_OS_TIMEOUT_MS` (padrão 5000).
+
+**Resiliência.** Timeout curto e explícito, e toda falha vira `AzevedoOsError` → erro só do
+card ("Azevedo-OS temporariamente indisponível."). Abrir conversa, carregar mensagens,
+enviar, atribuir, anotar e etiquetar **seguem funcionando com o Azevedo-OS fora do ar** —
+a única operação que a indisponibilidade barra é gravar um vínculo novo, porque gravar um
+id não conferido é pior do que adiar.
+
+**Contrato.** O client lê o contrato com tolerância: só o `id` é obrigatório, cada campo
+aceita alguns nomes (camelCase, snake_case, português) e o que faltar vira `null` e some do
+card. Campos exibidos: nome, CNPJ, número da empresa, status, regime tributário, folha de
+pagamento e contatos. **Não há bloco de responsáveis internos** nesta fase — nem na tela,
+nem na consulta.
+
+**Tempo real e auditoria.** Nenhum evento novo: vincular, trocar e desvincular emitem
+`RealtimeEvents.ConversationUpdated` para `conversationAudience()`, que já carrega
+`externalReference`/`externalSource` no DTO. Auditoria em
+`conversation.azevedo_os_company_linked` / `_changed` / `_unlinked`, com `companyId` e
+`previousCompanyId` — dado de cadastro da empresa não entra no `AuditLog`, o id basta.
+
+**Na tela.** Card "Cliente Azevedo-OS" em `components/inbox/azevedo-os-card.tsx`, dentro do
+painel de contexto, com estado próprio de carregamento e de erro. `agent` vê o card inteiro
+e nenhum botão de vínculo. O identificador do Azevedo-OS **não vira chip** na lista nem no
+cabeçalho da conversa: ele é interno, e o chip âmbar continua sendo do código de cadastro
+manual. Com a conversa vinculada, o campo "Cadastro" some do painel — é o mesmo campo no
+banco, e deixá-lo editável convidaria a apagar o vínculo sem querer.
+
+---
+
+## 16. Como escrever um bom prompt para este sistema
 
 Um prompt fica bom aqui quando responde, nesta ordem:
 

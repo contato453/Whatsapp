@@ -12,6 +12,7 @@ import { MessageIngestService } from "./services/message-ingest.js";
 import { InstanceManager } from "./services/instance-manager.js";
 import { ScheduledMessageWorker } from "./services/scheduler.js";
 import { SessionScheduleWatcher } from "./services/session-schedule-watcher.js";
+import { createAzevedoOsClient } from "./services/azevedo-os-client.js";
 import { loadConversationAccess } from "./lib/access.js";
 import type { AuthTokenPayload } from "./lib/auth.js";
 import type { AppDeps } from "./types.js";
@@ -27,6 +28,17 @@ async function main(): Promise<void> {
   const storage = new LocalMediaStorage(config.mediaDir);
   const audit = new AuditService(prisma, logger);
   const ingest = new MessageIngestService(prisma, storage, logger);
+
+  // Leitura do cadastro empresarial no Azevedo-OS. Nasce desligado quando
+  // falta URL ou token — e desligado significa card avisando, não API
+  // quebrada.
+  const azevedoOs = createAzevedoOsClient({
+    baseUrl: config.AZEVEDO_OS_API_URL,
+    token: config.AZEVEDO_OS_API_TOKEN,
+    webUrlTemplate: config.AZEVEDO_OS_WEB_URL,
+    timeoutMs: config.AZEVEDO_OS_TIMEOUT_MS,
+    logger: logger.child({ module: "azevedo-os" }),
+  });
 
   // Único ponto do sistema que instancia um provider concreto.
   const provider = new QrCodeWhatsAppProvider({
@@ -46,6 +58,7 @@ async function main(): Promise<void> {
     storage,
     audit,
     ingest,
+    azevedoOs,
     // io e instanceManager são atribuídos logo abaixo, antes de listen().
   } as unknown as AppDeps;
 
