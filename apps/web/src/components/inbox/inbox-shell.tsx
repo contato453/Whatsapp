@@ -27,7 +27,7 @@ import {
   RealtimeEvents,
   type ScheduledPendingPayload,
 } from "@azvchat/shared";
-import { api, quickRepliesApi } from "@/lib/api";
+import { api, conversationMediaApi, quickRepliesApi } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { useAuth } from "@/lib/auth-context";
 import { pruneDrafts, readDraft, saveDraft, type DraftMode } from "@/lib/drafts";
@@ -59,6 +59,11 @@ import { ConversationListItem } from "./conversation-list";
 import { FilterBar } from "./filter-bar";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
 import { AudioRecorder } from "./audio-recorder";
+import {
+  ATTACHMENT_PASTE_FIELD,
+  AttachmentDropZone,
+  useBlockStrayFileDrop,
+} from "./attachment-drop";
 import { ScheduleModal } from "./composer-modals";
 import { MediaLightbox } from "./media-lightbox";
 import { MessageBubble } from "./message-bubble";
@@ -261,6 +266,17 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  /**
+   * Gravação de áudio em andamento: enquanto ela existe, arrastar e colar
+   * arquivo ficam desligados — a prévia de anexo por cima do gravador
+   * disputaria o mesmo Enter e o mesmo Esc.
+   */
+  const [recordingAudio, setRecordingAudio] = useState(false);
+
+  // Arquivo solto fora da conversa (lista, painel, menu) não pode abrir no
+  // navegador: isso trocaria a página pelo arquivo e o atendente perderia a
+  // tela. Vale também com nenhuma conversa aberta, por isso fica aqui.
+  useBlockStrayFileDrop();
 
   // ---------- Carregamento de dados auxiliares ----------
   // Quando cada lista chega, o filtro reidratado que aponta para um id que
@@ -806,18 +822,9 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     if (!conversationId) return;
     setSending(true);
     try {
-      const form = new FormData();
-      form.append("asVoiceNote", "true");
-      form.append("file", file);
-      const result = await api.postForm<{ message: MessageDto }>(
-        `/conversations/${conversationId}/messages/media`,
-        form,
+      appendMessage(
+        await conversationMediaApi.send(conversationId, file, { asVoiceNote: true }),
       );
-      setMessages((current) => {
-        if (!current) return [result.message];
-        if (current.some((message) => message.id === result.message.id)) return current;
-        return [...current, result.message];
-      });
     } catch (err) {
       window.alert(err instanceof Error ? err.message : "Falha ao enviar áudio");
     } finally {
@@ -843,17 +850,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     if (!conversationId || sending) return;
     setSending(true);
     try {
-      const form = new FormData();
-      form.append("file", file);
-      const result = await api.postForm<{ message: MessageDto }>(
-        `/conversations/${conversationId}/messages/media`,
-        form,
-      );
-      setMessages((current) => {
-        if (!current) return [result.message];
-        if (current.some((message) => message.id === result.message.id)) return current;
-        return [...current, result.message];
-      });
+      appendMessage(await conversationMediaApi.send(conversationId, file));
     } catch (err) {
       window.alert(err instanceof Error ? err.message : "Falha ao enviar arquivo");
     } finally {
@@ -976,6 +973,30 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     : -1;
 
   /**
+   * Arrastar e colar arquivo ficam desligados quando outra coisa já manda no
+   * teclado: envio em curso, gravação de áudio, encaminhar, agendar ou mídia
+   * ampliada. Sem isso o Ctrl+V dado dentro de um desses abriria a prévia de
+   * anexo por cima deles.
+   */
+  const attachmentsDisabled =
+    sending || recordingAudio || forwarding !== null || scheduleOpen || lightboxIndex >= 0;
+
+  /**
+   * A prévia de anexo levou o texto do composer como legenda e o envio saiu:
+   * só agora o rascunho pode ir embora. A conversa vem no parâmetro porque a
+   * prévia fica amarrada à conversa de origem — se a pessoa já trocou de
+   * conversa, o que se limpa é o rascunho gravado daquela, não o texto que
+   * está na tela agora.
+   */
+  function consumeComposerCaption(id: string) {
+    if (id === conversationId) {
+      updateDraft("");
+      return;
+    }
+    if (me) saveDraft(me.id, id, { text: "", mode: "message" });
+  }
+
+  /**
    * Linha do tempo: mensagens do WhatsApp e notas internas da equipe
    * intercaladas por horário. As notas nunca são enviadas ao cliente.
    */
@@ -1072,7 +1093,23 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         </div>
       </div>
 
-      {/* Centro: chat */}
+      {/* Centro: chat.
+          A zona de arrastar/colar arquivo envolve a coluna inteira, e não só
+          a janela de mensagens: trocar de conversa zera o `detail` por um
+          instante, e uma zona dentro do ramo da conversa carregada seria
+          desmontada nesse piscar — descartando em silêncio a prévia que a
+          pessoa tinha aberto. Fora da coluna (lista, painel, menu) o gesto
+          continua não fazendo nada. */}
+      <AttachmentDropZone
+        conversationId={conversationId ?? null}
+        conversationTitle={conversation?.title ?? null}
+        instanceStatus={conversation?.instanceStatus ?? null}
+        // Nota interna não vira legenda de mídia do cliente.
+        captionSeed={composerMode === "message" ? draft : ""}
+        onCaptionConsumed={consumeComposerCaption}
+        onMessageSent={appendMessage}
+        disabled={attachmentsDisabled}
+      >
       <div className="flex min-w-0 flex-1 flex-col bg-slate-100">
         {!conversationId ? (
           <EmptyState
@@ -1413,6 +1450,10 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   rows={2}
                   value={draft}
                   disabled={sending}
+                  // Marca o composer como o campo em que colar ARQUIVO abre a
+                  // prévia de anexo. Sem a marca, colar arquivo na busca da
+                  // conversa também seria interceptado — e lá o Ctrl+V é dela.
+                  data-attachment-paste={ATTACHMENT_PASTE_FIELD}
                   onChange={(event) => {
                     const value = event.target.value;
                     // updateDraft grava o rascunho a cada tecla.
@@ -1472,7 +1513,11 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                       >
                         <Paperclip className="h-4 w-4" />
                       </Button>
-                      <AudioRecorder disabled={sending} onSend={sendVoiceNote} />
+                      <AudioRecorder
+                        disabled={sending}
+                        onSend={sendVoiceNote}
+                        onActiveChange={setRecordingAudio}
+                      />
                       {/*
                         O badge é sobreposto ao ícone, então o botão precisa
                         ser a referência de posicionamento. Zero não renderiza
@@ -1540,6 +1585,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
           </>
         )}
       </div>
+      </AttachmentDropZone>
 
       {/* Encaminhar mensagem */}
       <Modal

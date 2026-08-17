@@ -18,9 +18,16 @@ function formatDuration(seconds: number): string {
 export function AudioRecorder({
   disabled,
   onSend,
+  onActiveChange,
 }: {
   disabled?: boolean;
   onSend: (file: File) => Promise<void> | void;
+  /**
+   * Avisa quando há gravação em andamento ou áudio em revisão. O composer usa
+   * para desligar o arrastar/colar arquivo: com a prévia de anexo aberta por
+   * cima da gravação, os dois disputariam o mesmo Enter.
+   */
+  onActiveChange?: (active: boolean) => void;
 }) {
   const [state, setState] = useState<State>("idle");
   const [seconds, setSeconds] = useState(0);
@@ -30,6 +37,10 @@ export function AudioRecorder({
   const blobRef = useRef<Blob | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    onActiveChange?.(state !== "idle");
+  }, [state, onActiveChange]);
 
   useEffect(() => {
     return () => {

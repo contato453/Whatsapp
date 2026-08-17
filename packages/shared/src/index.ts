@@ -1,3 +1,4 @@
+export * from "./attachments.js";
 export * from "./attendance.js";
 export * from "./azevedo-os.js";
 export * from "./enums.js";

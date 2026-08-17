@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { MediaPayload, QuotedMessageRef } from "@azvchat/shared";
 import {
   departmentResourceAppliesTo,
+  outboundMediaTypeFromMime,
   quickReplyMediaTypeFromMime,
   RealtimeEvents,
 } from "@azvchat/shared";
@@ -32,13 +33,6 @@ const listQuerySchema = z.object({
   before: z.string().datetime().optional(),
   limit: z.coerce.number().min(1).max(100).default(50),
 });
-
-function mediaTypeFromMime(mimeType: string): MediaPayload["type"] {
-  if (mimeType.startsWith("image/")) return "image";
-  if (mimeType.startsWith("audio/")) return "audio";
-  if (mimeType.startsWith("video/")) return "video";
-  return "document";
-}
 
 export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
   /** Escopado por organização e pelas conexões liberadas para o usuário. */
@@ -487,7 +481,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
           mimeType: original.mimeType ?? "application/octet-stream",
           filename: original.filename ?? undefined,
           caption: original.content ?? undefined,
-          type: mediaTypeFromMime(original.mimeType ?? ""),
+          type: outboundMediaTypeFromMime(original.mimeType),
         },
       );
     } else {
@@ -668,7 +662,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       }
 
       const mediaType: MediaPayload["type"] =
-        asSticker && mimeType === "image/webp" ? "sticker" : mediaTypeFromMime(mimeType);
+        asSticker && mimeType === "image/webp" ? "sticker" : outboundMediaTypeFromMime(mimeType);
       const result = await deps.provider.sendMedia(
         conversation.whatsappInstanceId,
         conversation.externalChatId,

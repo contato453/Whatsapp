@@ -8,7 +8,7 @@ import type {
   DashboardPeriod,
   ParticipantClientRole,
 } from "@azvchat/shared";
-import type { DashboardStatsDto, QuickReplyDto, TagDto } from "./types";
+import type { DashboardStatsDto, MessageDto, QuickReplyDto, TagDto } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -176,6 +176,38 @@ export const quickRepliesApi = {
     api.post<{ ok: boolean }>(`/quick-replies/${id}/used`).catch(() => undefined),
 };
 
+
+/**
+ * Envio de arquivo para a conversa — o MESMO caminho do clipe do composer,
+ * da gravação de áudio e do arrastar/colar: `POST
+ * /conversations/:id/messages/media`, um arquivo por requisição (o multipart
+ * da API aceita um só, e cada arquivo é uma mensagem no chat do cliente).
+ *
+ * Passa pelo `api.postForm` de propósito: é ele que trata o 401 limpando o
+ * token e mandando para o login. Um `fetch`/XHR próprio aqui (que daria a
+ * barra de progresso em bytes) engoliria a sessão vencida no meio do upload e
+ * deixaria a pessoa olhando um envio parado para sempre.
+ */
+export const conversationMediaApi = {
+  send: (
+    conversationId: string,
+    file: File,
+    options: { caption?: string; asVoiceNote?: boolean } = {},
+  ) => {
+    const form = new FormData();
+    if (options.asVoiceNote) form.append("asVoiceNote", "true");
+    if (options.caption) form.append("caption", options.caption);
+    form.append("file", file);
+    return api
+      .postForm<{ message: MessageDto }>(`/conversations/${conversationId}/messages/media`, form)
+      .then((data) => data.message);
+  },
+  /** Texto puro na mesma conversa — usado quando a legenda não cabe na mídia. */
+  sendText: (conversationId: string, content: string) =>
+    api
+      .post<{ message: MessageDto }>(`/conversations/${conversationId}/messages`, { content })
+      .then((data) => data.message),
+};
 
 /**
  * Cliente do Azevedo-OS visto pelo navegador: tudo passa pela API do

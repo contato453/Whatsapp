@@ -480,7 +480,30 @@ nome técnico no código e neste documento.
   `message-bubble.tsx`, `context-panel.tsx` (participantes, responsável, departamento,
   etiquetas, notas, histórico, arquivos), `composer-modals.tsx`, `audio-recorder.tsx`,
   `audio-player.tsx`, `status-select.tsx`, `formatted-text.tsx`, `media-lightbox.tsx`
-  (mídia ampliada em tela cheia, navegando só entre as mídias já carregadas na janela).
+  (mídia ampliada em tela cheia, navegando só entre as mídias já carregadas na janela) e
+  `attachment-drop.tsx` (arrastar arquivo para a conversa e colar com Ctrl+V).
+- **Arrastar e colar arquivo** vivem em `attachment-drop.tsx`, fora do `inbox-shell` — que
+  só passa a conversa aberta, o rascunho e o `disabled`. A área válida é a **coluna do
+  chat**: a zona envolve a coluna inteira (e não só a janela de mensagens) porque trocar de
+  conversa zera o `detail` por um instante, e uma zona dentro do ramo da conversa carregada
+  seria desmontada nesse piscar, descartando a prévia em silêncio. Regras que não são
+  negociáveis: **nada é enviado sem a prévia** (mensagem enviada não se desfaz no WhatsApp);
+  o **paste só é interceptado quando o clipboard traz arquivo** e o campo é o composer ou a
+  legenda, marcados com `data-attachment-paste` (`ATTACHMENT_PASTE_FIELD`) — colar texto, ou
+  colar arquivo na busca da conversa, continua sendo do campo; `useBlockStrayFileDrop()` é
+  chamado no shell para o arquivo solto **fora** da área não abrir no navegador e trocar a
+  tela do atendente; o contador de profundidade (`dragenter`/`dragleave`) evita o piscar da
+  sobreposição; a prévia fica **amarrada à conversa de origem** (trocar de conversa mostra o
+  aviso, nunca redireciona o arquivo) e o composer só é limpo **depois** do envio confirmado.
+  Miniatura é `URL.createObjectURL` revogada ao sair da prévia. Cada arquivo é uma mensagem,
+  pelo caminho que já existia (`conversationMediaApi`, em `lib/api.ts` — o mesmo do clipe e
+  do áudio gravado): sem rota nova, sem evento novo, sem auditoria nova.
+- Limites do anexo em `@azvchat/shared` (`attachments.ts`, fonte única das duas pontas):
+  `DEFAULT_MEDIA_MAX_SIZE` (25 MB, que é o padrão de `MEDIA_MAX_SIZE` da API — o `.env` da
+  VPS ainda manda no valor real), `ATTACHMENT_MAX_FILES` (10 por vez) e
+  `outboundMediaTypeFromMime`, que decide `image|audio|video|document` — **nenhum arquivo é
+  recusado por tipo**, o que não é mídia vira documento. Pasta, arquivo de 0 KB e acima do
+  limite são barrados **na prévia**, com o limite em números, antes de subir um byte.
 - **Mídia de mensagem nunca é apontada por `src`/`href` direto**: a rota exige o header
   Authorization, então tudo passa por `fetchMediaBlobUrl` (`lib/api.ts`) — fetch
   autenticado + blob temporário, revogado por quem consome. O download (bolha de
@@ -811,7 +834,9 @@ enquetes; mensagens agendadas com retentativa; notas internas; etiquetas; atribu
 histórico completo; quatro status de atendimento; busca na conversa e busca global;
 respostas rápidas com `/`, inclusive com mídia anexada (imagem, áudio ou vídeo) que sai
 junto com o texto; mídia ampliada em tela cheia com navegação por teclado e download;
-botão de baixar em documento recebido; link clicável no texto da mensagem (nova aba,
+botão de baixar em documento recebido; arrastar arquivo para a conversa e colar com Ctrl+V,
+os dois com prévia (miniatura, legenda, remover, adicionar, progresso por arquivo e
+retentativa do que falhou); link clicável no texto da mensagem (nova aba,
 com `noopener noreferrer`); dashboard; relatório por atendente; auditoria consultável;
 perfil e troca de senha pelo próprio usuário; aviso de chamada recebida; som de
 notificação de mensagem recebida, com som e volume escolhidos por cada usuário; título da

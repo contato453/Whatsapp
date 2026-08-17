@@ -1,5 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
+import { DEFAULT_MEDIA_MAX_SIZE } from "@azvchat/shared";
 
 /**
  * Variável opcional que também aceita valor vazio. No `.env` de produção o
@@ -25,7 +26,10 @@ const envSchema = z.object({
   WHATSAPP_SESSION_DIR: z.string().default("./data/sessions"),
   WHATSAPP_PROXY_URL: z.string().optional(),
   MEDIA_DIR: z.string().default("./data/media"),
-  MEDIA_MAX_SIZE: z.coerce.number().default(25 * 1024 * 1024),
+  // O padrão vem do shared: a tela barra o arquivo grande na prévia com o
+  // mesmo número, antes de subir byte nenhum. Apertar ou soltar o limite
+  // real continua sendo coisa do `.env` da VPS.
+  MEDIA_MAX_SIZE: z.coerce.number().default(DEFAULT_MEDIA_MAX_SIZE),
   LOG_LEVEL: z.string().default("info"),
 
   /**
