@@ -125,6 +125,20 @@ export function hasRole(userRole: UserRole, minimumRole: UserRole): boolean {
   return ROLE_LEVEL[userRole] >= ROLE_LEVEL[minimumRole];
 }
 
+/**
+ * Papel mínimo para gravar o departamento de uma conversa.
+ *
+ * Departamento não é classificação de atendimento: é o campo que decide
+ * QUEM ENXERGA a conversa (ver `conversationScope` em `lib/access.ts`).
+ * Deixar o atendente trocá-lo significa deixá-lo tirar a conversa do campo
+ * de visão de um time inteiro — ou fazer a própria conversa sumir da tela
+ * dele, sem que ele entenda o porquê. Classificar é decisão de supervisão.
+ *
+ * Fonte única do valor: a API protege a rota com ele e o painel de contexto
+ * decide com ele se desenha o campo. Mudou aqui, muda nos dois.
+ */
+export const CONVERSATION_DEPARTMENT_MIN_ROLE: UserRole = "supervisor";
+
 export const USER_STATUSES = ["active", "inactive"] as const;
 export type UserStatus = (typeof USER_STATUSES)[number];
 

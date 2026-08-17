@@ -16,8 +16,10 @@ import {
 } from "lucide-react";
 import {
   canManageAzevedoOsLink,
+  CONVERSATION_DEPARTMENT_MIN_ROLE,
   CONVERSATION_STATUSES,
   CONVERSATION_STATUS_LABELS,
+  hasRole,
   PARTICIPANT_CLIENT_ROLES,
   PARTICIPANT_CLIENT_ROLE_COLORS,
   PARTICIPANT_CLIENT_ROLE_LABELS,
@@ -132,6 +134,12 @@ export function ContextPanel({
   const router = useRouter();
   const { user: me } = useAuth();
   const conversation = detail.conversation;
+  /**
+   * Mesmo papel mínimo que a API exige na rota de transferência — o valor
+   * vem de `@azvchat/shared` justamente para os dois não divergirem. Sessão
+   * ainda carregando (`me` nulo) esconde o campo: o lado seguro do erro.
+   */
+  const podeTrocarDepartamento = me ? hasRole(me.role, CONVERSATION_DEPARTMENT_MIN_ROLE) : false;
   const [noteText, setNoteText] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -385,31 +393,42 @@ export function ContextPanel({
               ))}
             </select>
           </div>
-          <div className="flex items-center justify-between">
-            <span className="text-slate-500">Departamento</span>
-            <select
-              className="max-w-[55%] rounded-lg border border-slate-200 px-2 py-1 text-xs"
-              value={conversation.department?.id ?? ""}
-              disabled={busy}
-              onChange={(event) => {
-                const value = event.target.value;
-                if (value) {
-                  void run(() =>
-                    api.post(`/conversations/${conversation.id}/transfer-department`, {
-                      departmentId: value,
-                    }),
-                  );
-                }
-              }}
-            >
-              <option value="">Sem departamento</option>
-              {departments.map((department) => (
-                <option key={department.id} value={department.id}>
-                  {department.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          {/*
+            Departamento só aparece para quem pode gravá-lo. Não é campo
+            desabilitado: o atendente não classifica conversa, então mostrar
+            um seletor travado só o faria perguntar por que não funciona.
+            A informação não se perde — o departamento continua no chip da
+            lista de conversas. A API recusa a gravação de qualquer forma
+            (`requireRole` na rota de transferência); esconder aqui é a
+            outra metade, nunca o controle de acesso sozinho.
+          */}
+          {podeTrocarDepartamento && (
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">Departamento</span>
+              <select
+                className="max-w-[55%] rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                value={conversation.department?.id ?? ""}
+                disabled={busy}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  if (value) {
+                    void run(() =>
+                      api.post(`/conversations/${conversation.id}/transfer-department`, {
+                        departmentId: value,
+                      }),
+                    );
+                  }
+                }}
+              >
+                <option value="">Sem departamento</option>
+                {departments.map((department) => (
+                  <option key={department.id} value={department.id}>
+                    {department.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
         {/* Sem botões de "Assumir" e "Concluir": o responsável é trocado no
             seletor logo acima e o status, na barra da conversa. Dois caminhos

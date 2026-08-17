@@ -224,8 +224,20 @@ ações":
 | Ação | Papel mínimo |
 | --- | --- |
 | Criar/editar usuário; excluir número ou departamento | `admin` |
-| Criar/conectar número, criar departamento e etiqueta, ver auditoria, relatórios, **gravar parâmetros de atendimento** (item "Parâmetros" do menu), editar nota de terceiro | `supervisor` |
-| Inbox, atribuição, notas próprias, respostas rápidas, próprio perfil e senha, **ler parâmetros de atendimento** | `agent` |
+| Criar/conectar número, criar departamento e etiqueta, ver auditoria, relatórios, **gravar parâmetros de atendimento** (item "Parâmetros" do menu), editar nota de terceiro, **alterar o departamento da conversa** | `supervisor` |
+| Inbox, atribuição, status, notas próprias, respostas rápidas, próprio perfil e senha, **ler parâmetros de atendimento** | `agent` |
+
+**Departamento da conversa é escrita de supervisão.** É o campo que decide *quem enxerga*
+(ele alimenta `conversationScope`), então trocá-lo tira a conversa do campo de visão de um
+time inteiro — ou some com ela da tela de quem trocou. O papel mínimo vive em
+`CONVERSATION_DEPARTMENT_MIN_ROLE` (`@azvchat/shared`) e é usado nos dois lados: o
+`requireRole` de `POST /conversations/:id/transfer-department` e o painel de contexto, que
+**não desenha** o campo para `agent` (desabilitar só geraria a pergunta "por que não
+funciona?"; a informação continua no chip da lista). A mesma rota de atribuição aceita
+`departmentId` no corpo — ali a recusa é **do campo, não da rota**
+(`canWriteConversationDepartment`, em `lib/conversation-access.ts`): sem o campo, o
+atendente atribui normalmente. Conversa sem departamento não abre exceção: classificar
+pela primeira vez também é decisão de supervisão.
 
 A hierarquia vive em `packages/shared/src/enums.ts` (`hasRole`) e é a **mesma tabela** usada
 por `requireRole()` na API e pelo array `NAV` em `apps/web/src/app/(app)/layout.tsx`.
