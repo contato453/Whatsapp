@@ -78,6 +78,12 @@ export interface NormalizedMessage {
   senderPhone: string | null;
   senderName: string | null;
   quotedExternalMessageId: string | null;
+  /**
+   * Quem a mensagem marcou ("@"). Vem do `contextInfo` do WhatsApp, e não do
+   * texto: é esta lista que notifica, o nome escrito na frase é só enfeite.
+   * Pode conter JID de telefone ou identificador interno ("@lid").
+   */
+  mentionedExternalIds: string[];
   /** Opções da enquete, quando type === "poll" */
   pollOptions?: string[];
   timestamp: Date;
@@ -99,6 +105,18 @@ export interface ReactionEvent {
   senderExternalId: string;
   senderName: string | null;
   fromMe: boolean;
+}
+
+/**
+ * Extras do envio de texto que não são o texto.
+ *
+ * `mentionedExternalIds` existe porque menção NÃO é formatação: o WhatsApp só
+ * notifica quem está nesta lista, mesmo que o nome apareça escrito na
+ * mensagem. Ela viaja ao lado do texto do composer até o provider, sem
+ * passar por nenhuma etapa que mexa em string.
+ */
+export interface SendTextOptions {
+  mentionedExternalIds?: string[];
 }
 
 /** Referência a uma mensagem citada, para reply. */

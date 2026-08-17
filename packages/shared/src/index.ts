@@ -2,6 +2,7 @@ export * from "./attachments.js";
 export * from "./attendance.js";
 export * from "./azevedo-os.js";
 export * from "./enums.js";
+export * from "./mentions.js";
 export * from "./phone.js";
 export * from "./types.js";
 export * from "./realtime.js";

@@ -21,6 +21,8 @@
  * um texto escrito para a equipe ler.
  */
 
+import type { DraftMention } from "@azvchat/shared";
+
 const PREFIX = "zapdesk.draft.";
 
 /** Rascunho parado há mais de uma semana já não é rascunho, é lixo. */
@@ -31,13 +33,35 @@ export type DraftMode = "message" | "note";
 export interface Draft {
   text: string;
   mode: DraftMode;
+  /**
+   * Marcações vivas no texto. Vão junto porque menção não é formatação: o
+   * rótulo "@João" restaurado sem a lista de identificadores sairia como
+   * texto e não notificaria ninguém — o pior dos defeitos, porque a tela
+   * continuaria parecendo certa.
+   */
+  mentions?: DraftMention[];
 }
 
 interface StoredDraft extends Draft {
   updatedAt: number;
 }
 
-const EMPTY: Draft = { text: "", mode: "message" };
+const EMPTY: Draft = { text: "", mode: "message", mentions: [] };
+
+/** Entrada gravada por outra versão pode vir torta — só o que tem forma entra. */
+function parseMentions(value: unknown): DraftMention[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is DraftMention => {
+    if (typeof entry !== "object" || entry === null) return false;
+    const candidate = entry as Partial<DraftMention>;
+    return (
+      typeof candidate.label === "string" &&
+      typeof candidate.token === "string" &&
+      Array.isArray(candidate.externalIds) &&
+      candidate.externalIds.every((id) => typeof id === "string")
+    );
+  });
+}
 
 function keyFor(userId: string, conversationId: string): string {
   return `${PREFIX}${userId}.${conversationId}`;
@@ -63,7 +87,11 @@ export function readDraft(userId: string, conversationId: string): Draft {
     if (!raw) return EMPTY;
     const parsed = JSON.parse(raw) as Partial<StoredDraft>;
     if (typeof parsed.text !== "string" || parsed.text.length === 0) return EMPTY;
-    return { text: parsed.text, mode: parsed.mode === "note" ? "note" : "message" };
+    return {
+      text: parsed.text,
+      mode: parsed.mode === "note" ? "note" : "message",
+      mentions: parseMentions(parsed.mentions),
+    };
   }, EMPTY);
 }
 

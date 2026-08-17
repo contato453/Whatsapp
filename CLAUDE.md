@@ -336,6 +336,8 @@ POST   /conversations/:id/notes           PATCH|DELETE /conversations/:id/notes/
 
 GET    /conversations/:id/messages        GET /conversations/:id/messages/search
 GET    /conversations/:id/messages/around POST /conversations/:id/messages
+       (`mentions`: participantes marcados, SEPARADO do `content` — é a lista que
+        notifica, conferida contra os participantes daquela conversa)
 POST   /conversations/:id/quick-reply-media
        (envia a mídia da resposta rápida direto do storage da API — do navegador
         sai só JSON; valida com `departmentResourceAppliesTo` e marca `lastUsedAt`)
@@ -421,6 +423,13 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
 - Eventos do provider (normalizados): `qr`, `status`, `message`, `message-status`,
   `message-reaction`, `message-deleted`, `message-edited`, `call`, `chats-sync`,
   `contacts-sync`, `groups-sync`.
+- **Marcação de participantes ("@")**: `sendText` recebe um 5º parâmetro opcional
+  `options?: SendTextOptions` (`@azvchat/shared`) com `mentionedExternalIds` — os JIDs que
+  o Baileys grava em `contextInfo.mentionedJid`. **É essa lista que notifica**, não o texto;
+  o `@<telefone>` escrito na mensagem só faz o aplicativo de quem recebe desenhar o
+  destaque. Na entrada, `extractMentionedJids` (`normalize.ts`) lê o mesmo `contextInfo` e
+  preenche `NormalizedMessage.mentionedExternalIds`, que a ingestão grava em
+  `Message.metadata.mentions`. `sendMedia` **não** leva menção nesta entrega.
 - `apps/api/src/services/instance-manager.ts` orquestra provider ⇄ banco ⇄ socket
   (registro de instância, sync de chats/grupos/contatos, fotos, reconexão com backoff,
   `resumeSessions` no boot).
@@ -480,8 +489,24 @@ nome técnico no código e neste documento.
   `message-bubble.tsx`, `context-panel.tsx` (participantes, responsável, departamento,
   etiquetas, notas, histórico, arquivos), `composer-modals.tsx`, `audio-recorder.tsx`,
   `audio-player.tsx`, `status-select.tsx`, `formatted-text.tsx`, `media-lightbox.tsx`
-  (mídia ampliada em tela cheia, navegando só entre as mídias já carregadas na janela) e
-  `attachment-drop.tsx` (arrastar arquivo para a conversa e colar com Ctrl+V).
+  (mídia ampliada em tela cheia, navegando só entre as mídias já carregadas na janela),
+  `attachment-drop.tsx` (arrastar arquivo para a conversa e colar com Ctrl+V) e
+  `mention-picker.tsx` (o seletor do "@").
+- **Marcação de participantes ("@")** em `components/inbox/mention-picker.tsx`, fora do
+  `inbox-shell` — que só guarda a cola: a consulta digitada, o índice ativo e o que fazer
+  ao escolher. A mecânica é a **mesma** do autocomplete de "/" (lista sobreposta ao
+  composer, seta navega, Enter ou Tab escolhe, Esc fecha, clique também escolhe); as regras
+  puras (quando o "@" abre, o que sai no texto, o que continua marcado) vivem em
+  `packages/shared/src/mentions.ts`, porque o navegador e a API precisam decidir igual.
+  Só existe em conversa de **grupo** e só na aba "Responder ao cliente" — na nota interna o
+  "@" é texto literal, já que os participantes são clientes e a nota é justamente o que o
+  cliente nunca vê. O nome exibido é o que a API já decidiu (`serializeGroupParticipant`),
+  sem cadeia própria na tela; quem não tem telefone conhecido aparece **desabilitado**, com
+  a explicação no `title` — sumir com a pessoa faria a equipe achar que ela saiu do grupo.
+  A primeira linha é o coletivo `@todos`. A exibição fica em `formatted-text.tsx`
+  (`splitMentionParts` + `makeMentionResolver`, nós React, nunca `dangerouslySetInnerHTML`):
+  o número marcado vira nome, quem não tem cadastro vira telefone formatado e LID
+  desconhecido continua como veio — nunca formatado como telefone.
 - **Arrastar e colar arquivo** vivem em `attachment-drop.tsx`, fora do `inbox-shell` — que
   só passa a conversa aberta, o rascunho e o `disabled`. A área válida é a **coluna do
   chat**: a zona envolve a coluna inteira (e não só a janela de mensagens) porque trocar de
@@ -801,6 +826,29 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   lidas por usuário, que é outra entrega.
 - Ingestão é idempotente por `(conversationId, externalMessageId)` — não crie caminho
   paralelo de inserção de mensagem.
+- **Menção NÃO é formatação de texto.** Escrever "@Fulano" (ou até o número) na mensagem
+  não marca ninguém: quem notifica é a lista de identificadores em
+  `contextInfo.mentionedJid`, que viaja **ao lado** do texto — do composer
+  (`DraftMention`) para `POST /conversations/:id/messages` (campo `mentions`, separado do
+  `content`) e daí para `sendText(..., { mentionedExternalIds })`. Tratar isso como texto
+  produz o pior defeito possível: a mensagem sai visualmente perfeita e ninguém é avisado,
+  e a falha só aparece semanas depois. Três consequências que valem para qualquer mexida
+  aqui: (1) o rascunho grava texto **e** menções juntos (`lib/drafts.ts`), senão o F5 as
+  descarta em silêncio; (2) toda escrita no campo recalcula a lista
+  (`activeMentions`) — apagar o rótulo com backspace **tem** que desmarcar a pessoa, e
+  menção órfã notificaria alguém que não aparece na frase; (3) a API confere cada
+  identificador contra os participantes daquela conversa (`lib/mentions.ts`), então marcar
+  um número de fora do grupo é impossível. Quem saiu do grupo entre a escolha e o Enter é
+  **descartado** (com log `mentions_dropped`, só a contagem), nunca derruba a mensagem
+  inteira.
+- **Marcar exige telefone conhecido.** O token do texto é `@<dígitos do telefone>` e o JID
+  marcado é `<telefone>@s.whatsapp.net` — é assim que o cliente do WhatsApp casa uma coisa
+  com a outra. Participante que só tem `@lid` **não é mencionável**: o LID não é telefone,
+  e mandá-lo como marcação não notifica ninguém. Ele aparece na lista desabilitado, e o
+  `@todos` avisa no composer quantos ficarão de fora **antes** do envio. O `@todos` fica
+  literal no texto (não existe token de grupo no protocolo) e marca todo mundo pela lista,
+  respeitando o teto de `MENTION_MAX_PER_MESSAGE` (100, teto nosso: o Baileys não impõe
+  nenhum e o WhatsApp não documenta).
 - LID (`@lid`) não é telefone. Existe migration só para limpar telefones que vieram de LID
   (`20260814140000_clear_lid_phone_numbers`).
 - Mensagem apagada mantém a linha (`deletedAt`) para histórico/auditoria — não faça
@@ -832,6 +880,8 @@ envio de texto, imagem, áudio, vídeo, documento, figurinha, localização, con
 responder citando; encaminhar; apagar e editar; gravação de áudio (ffmpeg, com fallback);
 enquetes; mensagens agendadas com retentativa; notas internas; etiquetas; atribuição com
 histórico completo; quatro status de atendimento; busca na conversa e busca global;
+marcação de participantes com `@` em grupo, com `@todos` e nome exibido no lugar do
+número (enviadas e recebidas);
 respostas rápidas com `/`, inclusive com mídia anexada (imagem, áudio ou vídeo) que sai
 junto com o texto; mídia ampliada em tela cheia com navegação por teclado e download;
 botão de baixar em documento recebido; arrastar arquivo para a conversa e colar com Ctrl+V,

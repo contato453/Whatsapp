@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { splitLinkParts } from "@/components/inbox/formatted-text";
+import {
+  makeMentionResolver,
+  splitLinkParts,
+  splitMentionParts,
+} from "@/components/inbox/formatted-text";
 
 /**
  * A detecção de link roda sobre o que o CLIENTE escreveu — qualquer pessoa
@@ -93,5 +97,78 @@ describe("splitLinkParts", () => {
 
   it("só o esquema, sem endereço, não é link", () => {
     expect(splitLinkParts("https://")).toEqual([{ kind: "text", value: "https://" }]);
+  });
+});
+
+/**
+ * Exibição da marcação. O texto gravado traz o NÚMERO ("@5511999998888"),
+ * porque é essa a forma que o WhatsApp entende — quem diz que aquilo é
+ * marcação de verdade é a lista de identificadores da mensagem, nunca o
+ * texto. Aqui se fixam as duas pontas: o que vira nome e o que continua
+ * sendo texto comum.
+ */
+describe("splitMentionParts / makeMentionResolver", () => {
+  const nomes = new Map([
+    ["5511999998888", "João Silva"],
+    ["123456789012", "Marina"],
+  ]);
+
+  it("troca o número marcado pelo nome do participante", () => {
+    const resolve = makeMentionResolver(["5511999998888@s.whatsapp.net"], nomes);
+    expect(splitMentionParts("bom dia @5511999998888, confere?", resolve)).toEqual([
+      { kind: "text", value: "bom dia " },
+      { kind: "mention", label: "@João Silva" },
+      { kind: "text", value: ", confere?" },
+    ]);
+  });
+
+  it("número escrito na mão NÃO vira marcação — só o que está na lista", () => {
+    const resolve = makeMentionResolver([], nomes);
+    expect(splitMentionParts("ligue para @5511999998888", resolve)).toEqual([
+      { kind: "text", value: "ligue para @5511999998888" },
+    ]);
+  });
+
+  it("marcado sem cadastro aparece com o telefone formatado, nunca com o JID", () => {
+    // Quem saiu do grupo continua marcado na mensagem antiga.
+    const resolve = makeMentionResolver(["5511777776666@s.whatsapp.net"], nomes);
+    const parts = splitMentionParts("@5511777776666 saiu", resolve);
+    expect(parts[0]).toEqual({ kind: "mention", label: "@+55 11 77777-6666" });
+  });
+
+  it("identificador interno conhecido vira nome", () => {
+    const resolve = makeMentionResolver(["123456789012@lid"], nomes);
+    expect(splitMentionParts("@123456789012 pode ver", resolve)[0]).toEqual({
+      kind: "mention",
+      label: "@Marina",
+    });
+  });
+
+  it("identificador interno DESCONHECIDO nunca é exibido como telefone", () => {
+    const resolve = makeMentionResolver(["999888777666@lid"], nomes);
+    // Sem cadastro, o trecho fica como veio: o número do LID não é telefone
+    // de ninguém e formatá-lo seria inventar um contato.
+    expect(splitMentionParts("@999888777666 ok", resolve)).toEqual([
+      { kind: "text", value: "@999888777666 ok" },
+    ]);
+  });
+
+  it("'@todos' só destaca quando a mensagem marcou alguém de verdade", () => {
+    const comMarcacao = makeMentionResolver(["5511999998888@s.whatsapp.net"], nomes);
+    expect(splitMentionParts("@todos, reunião", comMarcacao)[0]).toEqual({
+      kind: "mention",
+      label: "@todos",
+    });
+    const semMarcacao = makeMentionResolver([], nomes);
+    expect(splitMentionParts("@todos, reunião", semMarcacao)).toEqual([
+      { kind: "text", value: "@todos, reunião" },
+    ]);
+  });
+
+  it("'@' no meio de palavra continua sendo e-mail", () => {
+    const resolve = makeMentionResolver(["5511999998888@s.whatsapp.net"], nomes);
+    expect(splitMentionParts("nota@5511999998888", resolve)).toEqual([
+      { kind: "text", value: "nota@5511999998888" },
+    ]);
   });
 });

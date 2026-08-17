@@ -40,11 +40,12 @@ describe("rascunho do composer", () => {
     expect(readDraft(ANA, CONVERSA)).toEqual({
       text: "Bom dia, seguem os documentos",
       mode: "message",
+      mentions: [],
     });
   });
 
   it("conversa sem rascunho vem vazia, em modo mensagem", () => {
-    expect(readDraft(ANA, "conversa-sem-nada")).toEqual({ text: "", mode: "message" });
+    expect(readDraft(ANA, "conversa-sem-nada")).toEqual({ text: "", mode: "message", mentions: [] });
   });
 
   it("não mistura conversas — o texto de um cliente não vai para o outro", () => {
@@ -73,7 +74,7 @@ describe("rascunho do composer", () => {
 
   it("entrada corrompida não derruba a Inbox", () => {
     window.localStorage.setItem(`zapdesk.draft.${ANA}.${CONVERSA}`, "{isto não é json");
-    expect(readDraft(ANA, CONVERSA)).toEqual({ text: "", mode: "message" });
+    expect(readDraft(ANA, CONVERSA)).toEqual({ text: "", mode: "message", mentions: [] });
   });
 
   it("apaga rascunho parado há mais de uma semana e mantém o de hoje", () => {
@@ -99,6 +100,26 @@ describe("rascunho do composer", () => {
     // @ts-expect-error — o teste apaga o global de propósito.
     delete globalThis.window;
     expect(() => saveDraft(ANA, CONVERSA, { text: "x", mode: "message" })).not.toThrow();
-    expect(readDraft(ANA, CONVERSA)).toEqual({ text: "", mode: "message" });
+    expect(readDraft(ANA, CONVERSA)).toEqual({ text: "", mode: "message", mentions: [] });
+  });
+
+  it("as marcações voltam junto com o texto", () => {
+    // Sem elas, o rótulo "@João" restaurado seria só texto: a mensagem sairia
+    // certinha na tela e não notificaria ninguém.
+    const mencao = {
+      label: "@João",
+      token: "@5511999998888",
+      externalIds: ["5511999998888@s.whatsapp.net"],
+    };
+    saveDraft(ANA, CONVERSA, { text: "@João, confere?", mode: "message", mentions: [mencao] });
+    expect(readDraft(ANA, CONVERSA).mentions).toEqual([mencao]);
+  });
+
+  it("marcação gravada torta é descartada em vez de derrubar a leitura", () => {
+    window.localStorage.setItem(
+      `zapdesk.draft.${ANA}.${CONVERSA}`,
+      JSON.stringify({ text: "oi", mode: "message", mentions: [{ label: "@x" }, "nada"] }),
+    );
+    expect(readDraft(ANA, CONVERSA)).toEqual({ text: "oi", mode: "message", mentions: [] });
   });
 });

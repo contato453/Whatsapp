@@ -12,6 +12,7 @@ import type {
   QrCodeEvent,
   QuotedMessageRef,
   ReactionEvent,
+  SendTextOptions,
 } from "@azvchat/shared";
 
 /**
@@ -95,11 +96,18 @@ export interface WhatsAppProvider {
     externalId: string,
   ): Promise<{ data: Buffer; mimeType: string } | null>;
 
+  /**
+   * `options.mentionedExternalIds` é a lista de quem a mensagem marca.
+   * Ela é obrigatória para a marcação funcionar: o WhatsApp notifica pelo
+   * `contextInfo`, nunca pelo texto — mandar "@Fulano" escrito na frase, sem
+   * a lista, entrega a mensagem sem aviso nenhum para o Fulano.
+   */
   sendText(
     instanceId: string,
     chatId: string,
     text: string,
     quoted?: QuotedMessageRef,
+    options?: SendTextOptions,
   ): Promise<MessageResult>;
 
   sendMedia(

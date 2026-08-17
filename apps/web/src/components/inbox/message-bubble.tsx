@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Ban,
   BarChart3,
@@ -30,7 +30,7 @@ import { cn, formatPhone } from "@/lib/utils";
 import type { MessageDto } from "@/lib/types";
 import { Spinner } from "@/components/ui";
 import { AudioPlayer } from "./audio-player";
-import { FormattedText } from "./formatted-text";
+import { FormattedText, makeMentionResolver } from "./formatted-text";
 
 /** Emojis oferecidos no acesso rápido de reação. */
 export const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
@@ -221,6 +221,7 @@ export function MessageBubble({
   onDelete,
   onOpenMedia,
   senderAvatar,
+  mentionNames,
 }: {
   message: MessageDto;
   isGroup: boolean;
@@ -234,8 +235,20 @@ export function MessageBubble({
   onOpenMedia?: (message: MessageDto) => void;
   /** Foto de quem enviou — exibida ao lado das mensagens recebidas */
   senderAvatar?: ReactNode;
+  /**
+   * Nome de cada participante do grupo por dígitos do identificador, para
+   * trocar o número marcado pelo nome. Sem ele a marcação continua sendo
+   * exibida como veio — nunca como JID cru.
+   */
+  mentionNames?: Map<string, string>;
 }) {
   const outbound = message.direction === "outbound";
+  // A lista de marcados é da mensagem; o cadastro de nomes é do grupo. Só a
+  // combinação dos dois vira nome na tela.
+  const resolveMention = useMemo(
+    () => makeMentionResolver(message.metadata?.mentions ?? [], mentionNames ?? new Map()),
+    [message.metadata?.mentions, mentionNames],
+  );
   const senderKey = message.senderExternalId ?? message.senderPhone ?? "?";
   const senderLabel =
     message.senderName ?? (message.senderPhone ? formatPhone(message.senderPhone) : "Desconhecido");
@@ -382,6 +395,7 @@ export function MessageBubble({
         ) : message.type === "text" ? (
           <FormattedText
             text={message.content ?? ""}
+            resolveMention={resolveMention}
             className="whitespace-pre-wrap break-words text-sm"
           />
         ) : (
@@ -390,6 +404,7 @@ export function MessageBubble({
             {message.content && (
               <FormattedText
                 text={message.content}
+                resolveMention={resolveMention}
                 className="whitespace-pre-wrap break-words text-sm"
               />
             )}

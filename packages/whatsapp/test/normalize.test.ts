@@ -3,6 +3,7 @@ import {
   chatTypeFromJid,
   directionFromKey,
   extractContent,
+  extractMentionedJids,
   extractQuotedMessageId,
   extractSender,
   isGroupJid,
@@ -146,6 +147,42 @@ describe("extractQuotedMessageId", () => {
 
   it("retorna null quando não há citação", () => {
     expect(extractQuotedMessageId({ conversation: "oi" })).toBeNull();
+  });
+});
+
+describe("extractMentionedJids", () => {
+  it("lê a lista de marcados do contextInfo — não do texto", () => {
+    // Quem notifica é esta lista. O "@5511..." escrito na frase é só o que o
+    // aplicativo usa para desenhar o destaque.
+    const message = {
+      extendedTextMessage: {
+        text: "@5511999998888 confere?",
+        contextInfo: { mentionedJid: ["5511999998888@s.whatsapp.net"] },
+      },
+    };
+    expect(extractMentionedJids(message)).toEqual(["5511999998888@s.whatsapp.net"]);
+  });
+
+  it("mantém o identificador interno como veio — LID não é telefone", () => {
+    const message = {
+      extendedTextMessage: { text: "oi", contextInfo: { mentionedJid: ["123456789012@lid"] } },
+    };
+    expect(extractMentionedJids(message)).toEqual(["123456789012@lid"]);
+  });
+
+  it("mensagem sem marcação devolve lista vazia", () => {
+    expect(extractMentionedJids({ conversation: "@ninguem" })).toEqual([]);
+    expect(extractMentionedJids(null)).toEqual([]);
+  });
+
+  it("descarta o que não é conversa de gente (status, broadcast)", () => {
+    const message = {
+      imageMessage: {
+        caption: "foto",
+        contextInfo: { mentionedJid: ["status@broadcast", "5511999998888@s.whatsapp.net"] },
+      },
+    };
+    expect(extractMentionedJids(message)).toEqual(["5511999998888@s.whatsapp.net"]);
   });
 });
 

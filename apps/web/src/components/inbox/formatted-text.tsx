@@ -1,5 +1,11 @@
 import { Fragment } from "react";
-import { parseWhatsAppText, type FormattedSegment } from "@azvchat/shared";
+import {
+  MENTION_ALL_LABEL,
+  formatPhone,
+  mentionDigits,
+  parseWhatsAppText,
+  type FormattedSegment,
+} from "@azvchat/shared";
 
 /**
  * Renderiza o texto com a formatação do WhatsApp (*negrito*, _itálico_,
@@ -68,10 +74,75 @@ export function splitLinkParts(text: string): LinkPart[] {
   return parts;
 }
 
+/**
+ * Marcação ("@") dentro do texto.
+ *
+ * O que chega gravado na mensagem é o número — "@5511999998888" —, porque é
+ * essa a forma que o WhatsApp entende. Quem diz que aquilo é marcação de
+ * verdade não é o texto, e sim a lista de identificadores do
+ * `metadata.mentions`: número digitado na mão pelo atendente continua sendo
+ * número. Por isso o resolvedor devolve `null` para tudo que não está na
+ * lista, e a linha segue como texto comum.
+ */
+export type MentionResolver = (token: string) => string | null;
+
+export type MentionPart =
+  | { kind: "text"; value: string }
+  | { kind: "mention"; label: string };
+
+/** "@" seguido de dígitos (telefone) ou do coletivo "@todos". */
+const MENTION_PATTERN = /@(\d{6,20}|todos)\b/giu;
+
+/** Separa o texto em trechos comuns e marcações — puro, para o teste cobrir. */
+export function splitMentionParts(text: string, resolve: MentionResolver): MentionPart[] {
+  const parts: MentionPart[] = [];
+  let cursor = 0;
+  for (const match of text.matchAll(MENTION_PATTERN)) {
+    const start = match.index;
+    // Mesma regra do composer: "@" colado em letra ou número é e-mail ou
+    // continuação de palavra, nunca marcação.
+    const previous = start > 0 ? (text[start - 1] as string) : "";
+    if (previous && /[\p{L}\p{N}]/u.test(previous)) continue;
+    const label = resolve((match[1] as string).toLowerCase());
+    if (!label) continue;
+    if (start > cursor) parts.push({ kind: "text", value: text.slice(cursor, start) });
+    parts.push({ kind: "mention", label });
+    cursor = start + match[0].length;
+  }
+  if (cursor < text.length) parts.push({ kind: "text", value: text.slice(cursor) });
+  return parts;
+}
+
+/**
+ * Monta o resolvedor de uma mensagem a partir do que ela marcou e do cadastro
+ * de participantes do grupo.
+ *
+ * Quem saiu do grupo (ou nunca teve cadastro) aparece com o telefone
+ * formatado — nunca o JID cru. Identificador interno ("@lid") não vira
+ * telefone em hipótese alguma: o número dele não é número de ninguém, então
+ * o trecho fica exatamente como veio, sem virar marcação.
+ */
+export function makeMentionResolver(
+  mentioned: string[],
+  names: Map<string, string>,
+): MentionResolver {
+  if (mentioned.length === 0) return () => null;
+  const marked = new Map<string, boolean>();
+  for (const jid of mentioned) marked.set(mentionDigits(jid), jid.endsWith("@lid"));
+  return (token) => {
+    if (token === "todos") return MENTION_ALL_LABEL;
+    const isLid = marked.get(token);
+    if (isLid === undefined) return null;
+    const name = names.get(token);
+    if (name) return `@${name}`;
+    return isLid ? null : `@${formatPhone(token)}`;
+  };
+}
+
 /** Link longo é truncado só na exibição; o href e o title levam a URL inteira. */
 const LINK_DISPLAY_LIMIT = 60;
 
-function renderTextWithLinks(value: string): React.ReactNode {
+function renderLinks(value: string): React.ReactNode {
   const parts = splitLinkParts(value);
   if (parts.length === 1 && parts[0]?.kind === "text") return value;
   return parts.map((part, index) => {
@@ -100,18 +171,49 @@ function renderTextWithLinks(value: string): React.ReactNode {
   });
 }
 
-function renderSegments(segments: FormattedSegment[], linkify: boolean): React.ReactNode {
+/**
+ * Marcação primeiro, link depois: um "@5511..." nunca é URL, e resolver a
+ * marcação antes evita que o número entre no caminho da linkificação.
+ */
+function renderTextWithLinks(value: string, resolve: MentionResolver): React.ReactNode {
+  const parts = splitMentionParts(value, resolve);
+  if (parts.length === 1 && parts[0]?.kind === "text") return renderLinks(value);
+  return parts.map((part, index) =>
+    part.kind === "text" ? (
+      <Fragment key={index}>{renderLinks(part.value)}</Fragment>
+    ) : (
+      <span
+        key={index}
+        // Destaque leve: a bolha já tem cor própria (branca na saída), então
+        // o realce vem do peso e de um fundo translúcido, não de cor fixa.
+        className="rounded bg-black/10 px-0.5 font-semibold"
+      >
+        {part.label}
+      </span>
+    ),
+  );
+}
+
+function renderSegments(
+  segments: FormattedSegment[],
+  linkify: boolean,
+  resolveMention: MentionResolver,
+): React.ReactNode {
   return segments.map((segment, index) => {
     if (segment.type === "text") {
       return (
         <Fragment key={index}>
-          {linkify ? renderTextWithLinks(segment.value) : segment.value}
+          {linkify ? renderTextWithLinks(segment.value, resolveMention) : segment.value}
         </Fragment>
       );
     }
     // Dentro do monoespaçado o cliente está mostrando texto literal — nada de
     // link ali; o trecho continua exatamente como foi escrito.
-    const children = renderSegments(segment.children, linkify && segment.mark !== "mono");
+    const children = renderSegments(
+      segment.children,
+      linkify && segment.mark !== "mono",
+      resolveMention,
+    );
     switch (segment.mark) {
       case "bold":
         return <strong key={index}>{children}</strong>;
@@ -129,6 +231,20 @@ function renderSegments(segments: FormattedSegment[], linkify: boolean): React.R
   });
 }
 
-export function FormattedText({ text, className }: { text: string; className?: string }) {
-  return <p className={className}>{renderSegments(parseWhatsAppText(text), true)}</p>;
+/** Sem resolvedor (nota, prévia, mensagem sem marcação) nada vira marcação. */
+const NO_MENTIONS: MentionResolver = () => null;
+
+export function FormattedText({
+  text,
+  className,
+  resolveMention = NO_MENTIONS,
+}: {
+  text: string;
+  className?: string;
+  /** Decide quais "@" desta mensagem são marcação de verdade. */
+  resolveMention?: MentionResolver;
+}) {
+  return (
+    <p className={className}>{renderSegments(parseWhatsAppText(text), true, resolveMention)}</p>
+  );
 }

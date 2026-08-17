@@ -210,6 +210,29 @@ export const conversationMediaApi = {
 };
 
 /**
+ * Envio de texto pelo composer.
+ *
+ * `mentions` viaja SEPARADO do conteúdo porque menção não é formatação: o
+ * WhatsApp notifica pela lista de identificadores, e o "@5511..." que aparece
+ * no texto é só o que o aplicativo de quem recebe usa para desenhar o
+ * destaque. Mandar o texto sem a lista entrega uma mensagem bonita que não
+ * chama ninguém.
+ */
+export interface SendMessageInput {
+  content: string;
+  replyToMessageId?: string;
+  /** `externalContactId` dos participantes marcados. */
+  mentions?: string[];
+}
+
+export const messagesApi = {
+  send: (conversationId: string, input: SendMessageInput) =>
+    api
+      .post<{ message: MessageDto }>(`/conversations/${conversationId}/messages`, input)
+      .then((data) => data.message),
+};
+
+/**
  * Cliente do Azevedo-OS visto pelo navegador: tudo passa pela API do
  * AZVCHAT, que é quem tem o token. Nenhuma chamada daqui sai para o
  * Azevedo-OS.

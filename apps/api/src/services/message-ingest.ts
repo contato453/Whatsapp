@@ -163,6 +163,12 @@ export class MessageIngestService {
         quotedMessageId: message.quotedExternalMessageId,
         timestamp: message.timestamp,
         status: isInbound ? "delivered" : "sent",
+        // Quem a mensagem marcou. Guardado porque o texto sozinho não diz:
+        // ele traz "@5511999998888", e é esta lista que permite à Inbox
+        // exibir o NOME do participante no lugar do número.
+        ...(message.mentionedExternalIds?.length
+          ? { metadata: { mentions: message.mentionedExternalIds } }
+          : {}),
       },
     });
 

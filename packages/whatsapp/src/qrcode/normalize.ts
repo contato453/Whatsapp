@@ -215,17 +215,41 @@ export function extractContent(
   };
 }
 
+/** O `contextInfo` do conteúdo, onde quer que ele esteja. */
+function contextInfoOf(rawMessage: proto.IMessage | null | undefined) {
+  const message = unwrapMessage(rawMessage);
+  return (
+    message?.extendedTextMessage?.contextInfo
+    ?? message?.imageMessage?.contextInfo
+    ?? message?.videoMessage?.contextInfo
+    ?? message?.audioMessage?.contextInfo
+    ?? message?.documentMessage?.contextInfo
+    ?? null
+  );
+}
+
 /** ID externo da mensagem citada (reply), quando houver. */
 export function extractQuotedMessageId(
   rawMessage: proto.IMessage | null | undefined,
 ): string | null {
-  const message = unwrapMessage(rawMessage);
-  const contextInfo = message?.extendedTextMessage?.contextInfo
-    ?? message?.imageMessage?.contextInfo
-    ?? message?.videoMessage?.contextInfo
-    ?? message?.audioMessage?.contextInfo
-    ?? message?.documentMessage?.contextInfo;
-  return contextInfo?.stanzaId ?? null;
+  return contextInfoOf(rawMessage)?.stanzaId ?? null;
+}
+
+/**
+ * Quem a mensagem marcou.
+ *
+ * A marcação NÃO está no texto: o "@5511..." escrito na frase é só o que o
+ * aplicativo destaca. Quem foi de fato notificado está no
+ * `contextInfo.mentionedJid` — e é dele que a Inbox precisa para trocar o
+ * número pelo nome do participante ao exibir a mensagem recebida.
+ */
+export function extractMentionedJids(
+  rawMessage: proto.IMessage | null | undefined,
+): string[] {
+  const mentioned = contextInfoOf(rawMessage)?.mentionedJid ?? [];
+  return mentioned.filter(
+    (jid): jid is string => typeof jid === "string" && jid.length > 0 && !isIgnorableJid(jid),
+  );
 }
 
 export function directionFromKey(key: proto.IMessageKey | null | undefined): MessageDirection {

@@ -25,12 +25,14 @@ import type {
   ProviderContact,
   ProviderGroup,
   QuotedMessageRef,
+  SendTextOptions,
 } from "@azvchat/shared";
 import type { MessageTarget, WhatsAppProvider, WhatsAppProviderEvents } from "../provider.js";
 import {
   chatTypeFromJid,
   directionFromKey,
   extractContent,
+  extractMentionedJids,
   extractQuotedMessageId,
   extractSender,
   isGroupJid,
@@ -442,6 +444,7 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
       senderPhone,
       senderName: message.pushName ?? null,
       quotedExternalMessageId: extractQuotedMessageId(message.message),
+      mentionedExternalIds: extractMentionedJids(message.message),
       ...(extracted.pollOptions ? { pollOptions: extracted.pollOptions } : {}),
       timestamp: toDate(message.messageTimestamp),
       media: extracted.hasMedia && socket
@@ -587,14 +590,27 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     chatId: string,
     text: string,
     quoted?: QuotedMessageRef,
+    options?: SendTextOptions,
   ): Promise<MessageResult> {
     const socket = this.requireSocket(instanceId);
+    // `mentions` é o que o Baileys transforma em `contextInfo.mentionedJid` —
+    // a única coisa que faz o WhatsApp notificar quem foi marcado. O texto
+    // com "@5511..." só serve para o aplicativo de quem recebe desenhar o
+    // destaque; sozinho, ele não avisa ninguém.
+    const mentions = options?.mentionedExternalIds ?? [];
     const result = await socket.sendMessage(
       chatId,
-      { text },
+      { text, ...(mentions.length > 0 ? { mentions } : {}) },
       quoted ? { quoted: this.buildQuoted(chatId, quoted) } : undefined,
     );
-    this.logger.info({ instanceId, event: "message_sent", chatId, messageId: result?.key?.id });
+    this.logger.info({
+      instanceId,
+      event: "message_sent",
+      chatId,
+      messageId: result?.key?.id,
+      // Só a quantidade: número mencionado é conteúdo, não vai para o log.
+      mentions: mentions.length,
+    });
     return {
       externalMessageId: result?.key?.id ?? `local-${Date.now()}`,
       timestamp: toDate(result?.messageTimestamp),

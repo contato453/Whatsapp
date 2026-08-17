@@ -16,6 +16,7 @@ import {
 import { authenticate } from "../../lib/auth.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import { extensionFromMime } from "../../lib/media-storage.js";
+import { mentionsSchema, resolveMentionTargets } from "../../lib/mentions.js";
 import { transcodeToOpusOgg } from "../../lib/audio-transcode.js";
 import { convertToSticker } from "../../lib/sticker-convert.js";
 import {
@@ -531,13 +532,46 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
 
   app.post("/conversations/:id/messages", { preHandler: authenticate }, async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const { content, replyToMessageId } = z
+    const { content, replyToMessageId, mentions } = z
       .object({
         content: z.string().min(1).max(65_000),
         replyToMessageId: z.string().uuid().optional(),
+        // Identificadores dos participantes marcados. Vem separado do texto
+        // porque é ele, e não o texto, que faz o WhatsApp notificar.
+        mentions: mentionsSchema.optional(),
       })
       .parse(request.body);
     const conversation = await findConversationOr404(id, request.user);
+
+    // Marcação: confere um a um contra os participantes DESTA conversa —
+    // ninguém pode notificar um número que não está no grupo. Quem saiu
+    // entre a escolha e o Enter é descartado, e a mensagem segue para os
+    // demais: perder o texto por causa disso seria pior.
+    const resolvedMentions = mentions?.length
+      ? resolveMentionTargets(
+          conversation.type,
+          mentions,
+          await deps.prisma.groupParticipant.findMany({
+            where: {
+              externalContactId: { in: mentions },
+              group: {
+                whatsappInstanceId: conversation.whatsappInstanceId,
+                externalId: conversation.externalChatId,
+              },
+            },
+            select: { externalContactId: true, phoneNumber: true },
+          }),
+        )
+      : { jids: [], dropped: 0 };
+    const mentionedJids = resolvedMentions.jids;
+    if (resolvedMentions.dropped > 0) {
+      // Só a contagem: identificador de participante é conteúdo da conversa.
+      deps.logger.info({
+        conversationId: id,
+        event: "mentions_dropped",
+        dropped: resolvedMentions.dropped,
+      });
+    }
 
     // Reply: monta a referência da mensagem citada a partir do que temos salvo.
     let quoted: QuotedMessageRef | undefined;
@@ -568,6 +602,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       conversation.externalChatId,
       outgoing,
       quoted,
+      mentionedJids.length > 0 ? { mentionedExternalIds: mentionedJids } : undefined,
     );
 
     const message = await deps.prisma.message.create({
@@ -583,6 +618,9 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
         timestamp: result.timestamp,
         status: "sent",
         sentByUserId: request.user.sub,
+        // Sem isto a mensagem enviada voltaria à tela com o número cru: é a
+        // lista que permite exibir o nome de quem foi marcado.
+        ...(mentionedJids.length > 0 ? { metadata: { mentions: mentionedJids } } : {}),
       },
     });
     await deps.prisma.conversation.update({

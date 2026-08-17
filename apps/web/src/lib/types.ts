@@ -188,6 +188,12 @@ export interface MessageDto {
     selectableCount?: number;
     callStatus?: string;
     isVideo?: boolean;
+    /**
+     * JIDs marcados na mensagem ("@"). Vem do WhatsApp (recebidas) ou do
+     * envio (enviadas) — nunca é deduzido do texto, porque o texto sozinho
+     * não diz quem foi notificado.
+     */
+    mentions?: string[];
   } | null;
 }
 

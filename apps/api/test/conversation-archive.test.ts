@@ -272,6 +272,7 @@ describe("mensagem nova em conversa arquivada (ingestão)", () => {
     senderName: "Cliente",
     senderPhone: "5511999",
     quotedExternalMessageId: null,
+    mentionedExternalIds: [],
     timestamp: new Date(),
     media: null,
   };
@@ -342,6 +343,7 @@ describe("número de backup (ingestão e papéis)", () => {
         senderName: "Cliente",
         senderPhone: "5511888",
         quotedExternalMessageId: null,
+        mentionedExternalIds: [],
         timestamp: new Date(),
         media: null,
       },

@@ -25,9 +25,16 @@ import {
   FILTER_NONE,
   QUICK_REPLY_MEDIA_TYPE_LABELS,
   RealtimeEvents,
+  MENTION_ALL_TOKEN,
+  activeMentions,
+  buildOutboundMention,
+  insertMention,
+  mentionDigits,
+  mentionTrigger,
+  type DraftMention,
   type ScheduledPendingPayload,
 } from "@azvchat/shared";
-import { api, conversationMediaApi, quickRepliesApi } from "@/lib/api";
+import { api, conversationMediaApi, messagesApi, quickRepliesApi } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { useAuth } from "@/lib/auth-context";
 import { pruneDrafts, readDraft, saveDraft, type DraftMode } from "@/lib/drafts";
@@ -58,6 +65,7 @@ import { ArchivedBanner } from "./archived-banner";
 import { ConversationListItem } from "./conversation-list";
 import { FilterBar } from "./filter-bar";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
+import { MentionPicker, mentionOptions, type MentionOption } from "./mention-picker";
 import { AudioRecorder } from "./audio-recorder";
 import {
   ATTACHMENT_PASTE_FIELD,
@@ -132,6 +140,9 @@ function isStatusQuickFilter(value: string | null): value is QuickFilter {
   return value !== null && (STATUS_QUICK_FILTERS as string[]).includes(value);
 }
 
+/** Grupo ainda não carregado ou conversa individual — sempre a mesma lista vazia. */
+const NO_PARTICIPANTS: NonNullable<ConversationDetailDto["group"]>["participants"] = [];
+
 export function InboxShell({ conversationId }: { conversationId?: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -180,6 +191,18 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [showPanel, setShowPanel] = useState(true);
   const [draft, setDraft] = useState("");
+  /**
+   * Marcações vivas no rascunho. Andam SEMPRE junto com o texto: é esta
+   * lista, e não o "@Fulano" escrito na frase, que faz o WhatsApp notificar
+   * alguém. Separá-las produziria a pior falha possível — mensagem correta na
+   * tela e ninguém avisado.
+   */
+  const [mentions, setMentions] = useState<DraftMention[]>([]);
+  /** Posição do cursor no composer, para saber onde o "@" foi digitado. */
+  const [caret, setCaret] = useState(0);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionDismissed, setMentionDismissed] = useState(false);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const [sending, setSending] = useState(false);
   /** "message" envia ao WhatsApp; "note" grava nota interna da equipe. */
   const [composerMode, setComposerMode] = useState<"message" | "note">("message");
@@ -386,6 +409,9 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     const restored = conversationId && me ? readDraft(me.id, conversationId) : null;
     setDraft(restored?.text ?? "");
     setComposerMode(restored?.mode ?? "message");
+    setMentions(restored?.mentions ?? []);
+    setMentionDismissed(false);
+    setCaret(restored?.text.length ?? 0);
     // Zera antes de carregar: o contador da conversa anterior não pode
     // aparecer por um instante na conversa recém-aberta.
     setScheduledPending(0);
@@ -610,15 +636,104 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
    * últimas palavras — que são as que a pessoa ainda não mandou. A gravação é
    * uma chave por conversa no `localStorage`, custo desprezível por tecla.
    */
-  function updateDraft(text: string, mode: DraftMode = composerMode): void {
+  function updateDraft(
+    text: string,
+    mode: DraftMode = composerMode,
+    nextMentions: DraftMention[] = mentions,
+  ): void {
+    // Toda escrita recalcula as marcações: apagar "@João" com backspace tira
+    // o João da lista na mesma tecla. Menção órfã notificaria alguém que já
+    // não aparece no texto da mensagem.
+    const alive = activeMentions(text, nextMentions);
     setDraft(text);
     setComposerMode(mode);
-    if (conversationId && me) saveDraft(me.id, conversationId, { text, mode });
+    setMentions(alive);
+    if (conversationId && me) saveDraft(me.id, conversationId, { text, mode, mentions: alive });
   }
 
   /** Troca de modo sem mexer no texto — o modo faz parte do rascunho. */
   function updateComposerMode(mode: DraftMode): void {
     updateDraft(draft, mode);
+  }
+
+  // ---------- Marcação de participantes (atalho "@") ----------
+  /**
+   * O seletor só existe em GRUPO e só na aba "Responder ao cliente".
+   *
+   * Em conversa individual não há a quem marcar. Na nota interna, marcar não
+   * faria sentido nenhum: os participantes são clientes, e a nota é justamente
+   * o texto que o cliente nunca vai ver — a notificação chegaria para ele
+   * falando de algo que ele não pode ler. Marcar colega de equipe é outra
+   * funcionalidade, com outra lista de gente.
+   */
+  const mentionsEnabled = detail?.conversation.type === "group" && composerMode === "message";
+  // Referência estável: `?? []` criaria um array novo a cada render e
+  // invalidaria os memos abaixo sem nenhum motivo.
+  const groupParticipants = detail?.group?.participants ?? NO_PARTICIPANTS;
+  const mentionTriggerAt = mentionsEnabled && !mentionDismissed
+    ? mentionTrigger(draft, caret)
+    : null;
+  const mentionQuery = mentionTriggerAt?.query ?? null;
+  const mentionList = useMemo(
+    () => (mentionQuery === null ? [] : mentionOptions(groupParticipants, mentionQuery)),
+    [mentionQuery, groupParticipants],
+  );
+  const mentionOpen = mentionTriggerAt !== null;
+  /**
+   * Nome de cada participante indexado pelos dígitos do identificador — pelo
+   * telefone e também pelo "@lid", porque a mensagem recebida pode marcar por
+   * qualquer um dos dois. É o que troca o número cru pelo nome na bolha.
+   */
+  const mentionNames = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const participant of groupParticipants) {
+      if (participant.phoneNumber) {
+        names.set(mentionDigits(participant.phoneNumber), participant.name);
+      }
+      const internal = mentionDigits(participant.externalContactId);
+      if (internal) names.set(internal, participant.name);
+    }
+    return names;
+  }, [groupParticipants]);
+
+  /**
+   * Com "@todos" no rascunho, quantos participantes o coletivo NÃO consegue
+   * notificar — por não terem telefone conhecido ou por passarem do teto de
+   * menções. A conta só aparece quando o coletivo está mesmo no texto: num
+   * "@Fulano" comum ela seria ruído.
+   */
+  const mentionAllSkipped = useMemo(() => {
+    if (!mentionsEnabled) return 0;
+    const coletivo = mentions.find((mention) => mention.token === MENTION_ALL_TOKEN);
+    if (!coletivo) return 0;
+    return groupParticipants.length - coletivo.externalIds.length;
+  }, [mentionsEnabled, mentions, groupParticipants]);
+
+  useEffect(() => {
+    setMentionIndex(0);
+  }, [mentionTriggerAt?.query, mentionTriggerAt?.start]);
+
+  useEffect(() => {
+    if (!mentionTriggerAt) setMentionDismissed(false);
+    // Só o `start` importa: enquanto o mesmo "@" estiver sendo editado, o
+    // Esc continua valendo.
+  }, [mentionTriggerAt?.start]);
+
+  function applyMention(option: MentionOption): void {
+    const chosen = option.mention;
+    if (!chosen || !mentionTriggerAt) return;
+    const { text, caret: nextCaret } = insertMention(draft, mentionTriggerAt, chosen.label);
+    updateDraft(text, composerMode, [...mentions, chosen]);
+    setMentionDismissed(false);
+    setCaret(nextCaret);
+    // O cursor precisa ir para depois do rótulo: sem isso a próxima tecla
+    // cairia no meio do nome recém-inserido.
+    window.requestAnimationFrame(() => {
+      const field = composerRef.current;
+      if (!field) return;
+      field.focus();
+      field.setSelectionRange(nextCaret, nextCaret);
+    });
   }
 
   // Rascunho velho de qualquer usuário desta máquina sai do caminho na
@@ -647,9 +762,12 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     if (draft.trim().length === 0 && !pendingMedia?.media) return;
     setSending(true);
     const content = draft.trim();
+    // Guardadas antes de limpar o campo: limpar o rascunho zera as marcações,
+    // e elas precisam viajar com este texto.
+    const sentMentions = composerMode === "message" ? activeMentions(content, mentions) : [];
     // Some do composer e do armazenamento juntos: rascunho já enviado que
     // voltasse no próximo login seria mandado duas vezes ao cliente.
-    updateDraft("");
+    updateDraft("", composerMode, []);
 
     // Modo nota interna: grava sem enviar nada ao WhatsApp.
     if (composerMode === "note") {
@@ -718,18 +836,24 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
 
     const replyId = replyTo?.id;
     setReplyTo(null);
+    // O texto que sai leva os tokens no lugar dos rótulos ("@João Silva" vira
+    // "@5511999998888"), e a lista de participantes vai SEPARADA no corpo da
+    // requisição. É a lista que notifica — o token no texto só faz o aplicativo
+    // de quem recebe desenhar o destaque.
+    const outgoing = buildOutboundMention(content, sentMentions);
     try {
-      const result = await api.post<{ message: MessageDto }>(
-        `/conversations/${conversationId}/messages`,
-        { content, ...(replyId ? { replyToMessageId: replyId } : {}) },
-      );
-      appendMessage(result.message);
+      const result = await messagesApi.send(conversationId, {
+        content: outgoing.text,
+        ...(replyId ? { replyToMessageId: replyId } : {}),
+        ...(outgoing.externalIds.length > 0 ? { mentions: outgoing.externalIds } : {}),
+      });
+      appendMessage(result);
       if (usedQuickReplyId) {
         setAppliedQuickReplyId(null);
         void quickRepliesApi.markUsed(usedQuickReplyId);
       }
     } catch (err) {
-      updateDraft(content, "message");
+      updateDraft(content, "message", sentMentions);
       window.alert(err instanceof Error ? err.message : "Falha ao enviar mensagem");
     } finally {
       setSending(false);
@@ -1289,6 +1413,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                       onDelete={(message) => void handleDelete(message)}
                       onOpenMedia={(message) => setLightboxMessageId(message.id)}
                       senderAvatar={senderAvatarFor(item.message)}
+                      mentionNames={mentionNames}
                     />
                     </div>
                   ) : (
@@ -1401,7 +1526,26 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   )}
                 </div>
               )}
-              {quickReplyOpen && (
+              {mentionOpen && (
+                <MentionPicker
+                  options={mentionList}
+                  activeIndex={mentionIndex}
+                  onHover={setMentionIndex}
+                  onSelect={applyMention}
+                  hasParticipants={groupParticipants.length > 0}
+                />
+              )}
+              {/* Aviso ANTES do envio: com "@todos" num grupo em que alguém
+                  não tem telefone conhecido, a mensagem sai para os demais —
+                  ninguém descobre a falha depois de mandar. */}
+              {mentionAllSkipped > 0 && (
+                <p className="mb-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-700">
+                  {mentionAllSkipped === 1
+                    ? "1 participante ficará de fora do @todos — a mensagem sai para os demais."
+                    : `${mentionAllSkipped} participantes ficarão de fora do @todos — a mensagem sai para os demais.`}
+                </p>
+              )}
+              {quickReplyOpen && !mentionOpen && (
                 <div className="absolute bottom-full left-3 right-3 z-20 mb-1 max-h-72 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
                   <p className="flex items-center gap-1.5 border-b border-slate-100 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                     <Zap className="h-3 w-3" /> Respostas rápidas — Enter insere, Esc fecha
@@ -1452,23 +1596,61 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                 {/* O campo ocupa a linha inteira: duas linhas de texto ficam
                     visíveis sem precisar rolar. As ações vão para baixo. */}
                 <Textarea
+                  ref={composerRef}
                   rows={2}
                   value={draft}
                   disabled={sending}
+                  // O seletor de "@" precisa saber ONDE está o cursor: só
+                  // abre quando o "@" começa a mensagem ou vem depois de
+                  // espaço, e isso se decide pelo caractere anterior a ele.
+                  onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
                   // Marca o composer como o campo em que colar ARQUIVO abre a
                   // prévia de anexo. Sem a marca, colar arquivo na busca da
                   // conversa também seria interceptado — e lá o Ctrl+V é dela.
                   data-attachment-paste={ATTACHMENT_PASTE_FIELD}
                   onChange={(event) => {
                     const value = event.target.value;
-                    // updateDraft grava o rascunho a cada tecla.
+                    setCaret(event.target.selectionStart ?? value.length);
+                    // updateDraft grava o rascunho a cada tecla — e recalcula
+                    // as marcações, para o backspace desmarcar de verdade.
                     updateDraft(value);
                     // Rascunho apagado por inteiro: o que vier depois é outra
                     // mensagem, não o atalho — não pode contar como uso.
                     if (value === "") setAppliedQuickReplyId(null);
                   }}
                   onKeyDown={(event) => {
-                    if (quickReplyOpen) {
+                    if (mentionOpen) {
+                      // Mesma mecânica do "/": seta navega, Enter ou Tab
+                      // escolhe, Esc fecha e deixa o "@" como texto.
+                      if (event.key === "ArrowDown" && mentionList.length > 0) {
+                        event.preventDefault();
+                        setMentionIndex((index) => (index + 1) % mentionList.length);
+                        return;
+                      }
+                      if (event.key === "ArrowUp" && mentionList.length > 0) {
+                        event.preventDefault();
+                        setMentionIndex(
+                          (index) => (index - 1 + mentionList.length) % mentionList.length,
+                        );
+                        return;
+                      }
+                      if (event.key === "Enter" || event.key === "Tab") {
+                        const selected = mentionList[mentionIndex];
+                        // Linha desabilitada (sem telefone) não escolhe nada,
+                        // e o Enter não pode virar envio no meio da busca.
+                        if (selected) {
+                          event.preventDefault();
+                          if (selected.mention) applyMention(selected);
+                          return;
+                        }
+                      }
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        setMentionDismissed(true);
+                        return;
+                      }
+                    }
+                    if (quickReplyOpen && !mentionOpen) {
                       if (event.key === "ArrowDown") {
                         event.preventDefault();
                         setQuickReplyIndex((index) => (index + 1) % quickReplyMatches.length);
@@ -1558,7 +1740,10 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                     </>
                   )}
                   <span className="ml-auto hidden truncate whitespace-nowrap pr-1 text-[11px] text-slate-400 xl:block">
-                    {composerMode === "message" && '"/" respostas rápidas · Enter envia'}
+                    {composerMode === "message" &&
+                      (mentionsEnabled
+                        ? '"/" respostas rápidas · "@" marca participante · Enter envia'
+                        : '"/" respostas rápidas · Enter envia')}
                   </span>
                   <Button
                     variant={composerMode === "note" ? "secondary" : "primary"}
