@@ -148,6 +148,74 @@ describe("conversationScope (regra de visibilidade)", () => {
   });
 });
 
+/**
+ * Conversa marcada como "@todos" — o atendimento coletivo.
+ *
+ * A prova que interessa aqui é negativa: a marcação NÃO mexe em regra de
+ * acesso nenhuma. Ela deixa `assignedUserId` nulo justamente para reusar o
+ * recorte que já existe, então "@todos" é todos DO DEPARTAMENTO, dentro dos
+ * números liberados — nunca todos da organização.
+ */
+describe("@todos e a regra de visibilidade", () => {
+  /**
+   * Avaliador do filtro do Prisma, no subconjunto que `conversationScope`
+   * produz (AND, OR, `in` e igualdade). Sem ele o teste só compararia a forma
+   * do objeto, e forma igual não prova que a pessoa certa enxerga a conversa.
+   */
+  function matches(filter: Record<string, unknown>, conversation: Record<string, unknown>): boolean {
+    return Object.entries(filter).every(([key, condition]) => {
+      if (key === "AND") return (condition as Array<Record<string, unknown>>).every((part) => matches(part, conversation));
+      if (key === "OR") return (condition as Array<Record<string, unknown>>).some((part) => matches(part, conversation));
+      const value = conversation[key];
+      if (condition && typeof condition === "object" && "in" in condition) {
+        return (condition as { in: unknown[] }).in.includes(value);
+      }
+      return value === condition;
+    });
+  }
+
+  /** O grupo coletivo: sem responsável (por decisão) e no departamento fiscal. */
+  const coletiva = {
+    whatsappInstanceId: "chip-a",
+    departmentId: "dep-fiscal",
+    assignedUserId: null,
+    assignedToAll: true,
+  };
+
+  function agente(userId: string, instanceIds: string[], departmentIds: string[]): ConversationAccess {
+    return { instanceIds, departmentIds, ownOnly: true, userId };
+  }
+
+  it("os dois atendentes do departamento, com o número, enxergam a conversa", () => {
+    const ana = agente("ana", ["chip-a"], ["dep-fiscal"]);
+    const bruno = agente("bruno", ["chip-a"], ["dep-fiscal"]);
+    expect(matches(conversationScope(ana), coletiva)).toBe(true);
+    expect(matches(conversationScope(bruno), coletiva)).toBe(true);
+  });
+
+  it("atendente de OUTRO departamento não enxerga", () => {
+    const carla = agente("carla", ["chip-a"], ["dep-contabil"]);
+    expect(matches(conversationScope(carla), coletiva)).toBe(false);
+  });
+
+  it("atendente sem o número não enxerga, mesmo estando no departamento", () => {
+    const diego = agente("diego", ["chip-b"], ["dep-fiscal"]);
+    expect(matches(conversationScope(diego), coletiva)).toBe(false);
+  });
+
+  it("coletiva SEM departamento aparece para quem tem o número", () => {
+    const semDepartamento = { ...coletiva, departmentId: null };
+    const elias = agente("elias", ["chip-a"], ["dep-contabil"]);
+    expect(matches(conversationScope(elias), semDepartamento)).toBe(true);
+  });
+
+  it("a conversa com dono continua só do dono — a marcação não afrouxa nada", () => {
+    const daAna = { ...coletiva, assignedToAll: false, assignedUserId: "ana" };
+    expect(matches(conversationScope(agente("ana", ["chip-a"], ["dep-fiscal"])), daAna)).toBe(true);
+    expect(matches(conversationScope(agente("bruno", ["chip-a"], ["dep-fiscal"])), daAna)).toBe(false);
+  });
+});
+
 describe("groupScope (filtro de grupo)", () => {
   const restrito: ConversationAccess = {
     instanceIds: ["chip-a"],

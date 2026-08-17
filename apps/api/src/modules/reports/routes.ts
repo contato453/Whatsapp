@@ -74,7 +74,16 @@ export async function reportRoutes(app: FastifyInstance, deps: AppDeps): Promise
         },
         _count: { _all: true },
       }),
-      // Fila atual por status — retrato de agora, não do período.
+      /**
+       * Fila atual por status — retrato de agora, não do período.
+       *
+       * `assignedUserId: { not: null }` já deixa a conversa coletiva
+       * ("@todos") de fora, e é assim que tem que ser: ela não é trabalho de
+       * ninguém em particular, e distribuí-la entre as pessoas inflaria a
+       * fila de todo mundo com a mesma conversa. Buraco no relatório não há —
+       * conversa sem responsável nunca apareceu aqui, coletiva ou órfã —,
+       * então também não há linha própria a inventar.
+       */
       deps.prisma.conversation.groupBy({
         by: ["assignedUserId", "status"],
         where: {

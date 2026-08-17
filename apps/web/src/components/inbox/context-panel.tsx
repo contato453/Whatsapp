@@ -15,6 +15,9 @@ import {
   X,
 } from "lucide-react";
 import {
+  ALL_USERS_ASSIGNEE_HINT,
+  ALL_USERS_ASSIGNEE_LABEL,
+  ASSIGNMENT_ACTION_LABELS,
   canManageAzevedoOsLink,
   CONVERSATION_DEPARTMENT_MIN_ROLE,
   CONVERSATION_STATUSES,
@@ -28,6 +31,7 @@ import {
 import {
   api,
   conversationArchiveApi,
+  conversationAssignmentApi,
   fetchMediaBlobUrl,
   groupParticipantsApi,
   invalidateConversationAvatar,
@@ -66,14 +70,11 @@ const FILE_TYPE_LABELS: Record<string, string> = {
   sticker: "Figurinha",
 };
 
-const ACTION_LABELS: Record<string, string> = {
-  assigned: "assumiu o atendimento",
-  transferred_user: "transferiu o atendimento",
-  transferred_department: "transferiu para departamento",
-  unassigned: "removeu o responsável",
-  resolved: "concluiu o atendimento",
-  reopened: "reabriu o atendimento",
-};
+/**
+ * Valor do seletor de responsável que representa o coletivo. Não é id de
+ * ninguém — no banco a conversa marcada segue sem responsável.
+ */
+const ALL_USERS_OPTION = "__all_users__";
 
 /**
  * Descrição do grupo recolhida em 3 linhas. Descrições longas empurram o
@@ -373,26 +374,56 @@ export function ContextPanel({
           <div className="flex items-center justify-between">
             <span className="text-slate-500">Responsável</span>
             <select
-              className="max-w-[55%] rounded-lg border border-slate-200 px-2 py-1 text-xs"
-              value={conversation.assignedUser?.id ?? ""}
+              className={cn(
+                "max-w-[55%] rounded-lg border px-2 py-1 text-xs",
+                // Coletivo marcado fica visualmente diferente de um nome de
+                // pessoa: no banco não existe usuário "@todos", e na tela ele
+                // também não pode passar por um.
+                conversation.assignedToAll
+                  ? "border-indigo-200 bg-indigo-50 font-semibold text-indigo-700"
+                  : "border-slate-200",
+              )}
+              value={
+                conversation.assignedToAll ? ALL_USERS_OPTION : (conversation.assignedUser?.id ?? "")
+              }
               disabled={busy}
               onChange={(event) => {
                 const value = event.target.value;
-                if (!value) {
-                  void run(() => api.post(`/conversations/${conversation.id}/unassign`));
+                if (value === ALL_USERS_OPTION) {
+                  // Um movimento só: tira o responsável atual e liga a marcação.
+                  void run(() => conversationAssignmentApi.assignAll(conversation.id));
+                } else if (!value) {
+                  void run(() => conversationAssignmentApi.unassign(conversation.id));
                 } else {
-                  void run(() => api.post(`/conversations/${conversation.id}/assign`, { userId: value }));
+                  // Atribuir desliga o @todos sozinho, do lado da API.
+                  void run(() => conversationAssignmentApi.assign(conversation.id, value));
                 }
               }}
             >
+              {/* No topo e separado das pessoas: é uma decisão de atendimento,
+                  não mais um nome na lista. */}
+              <option value={ALL_USERS_OPTION}>{ALL_USERS_ASSIGNEE_LABEL}</option>
               <option value="">Sem responsável</option>
-              {assignable.map((user) => (
-                <option key={user.id} value={user.id}>
-                  {user.name}
-                </option>
-              ))}
+              <optgroup label="Pessoas">
+                {assignable.map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {user.name}
+                  </option>
+                ))}
+              </optgroup>
             </select>
           </div>
+          {/* A linha fica sempre visível: o efeito de "@todos" precisa estar
+              explicado ANTES de a pessoa escolher, e um <option> não comporta
+              texto de apoio. Marcada, ela muda de tom e confirma o estado. */}
+          <p
+            className={cn(
+              "text-right text-[11px]",
+              conversation.assignedToAll ? "text-indigo-600" : "text-slate-400",
+            )}
+          >
+            {ALL_USERS_ASSIGNEE_LABEL}: {ALL_USERS_ASSIGNEE_HINT}
+          </p>
           {/*
             Departamento só aparece para quem pode gravá-lo. Não é campo
             desabilitado: o atendente não classifica conversa, então mostrar
@@ -753,7 +784,8 @@ export function ContextPanel({
           {detail.assignmentHistory.map((entry) => (
             <p key={entry.id} className="text-[11px] leading-snug text-slate-500">
               <span className="font-medium text-slate-700">{entry.performedBy?.name ?? "Sistema"}</span>{" "}
-              {ACTION_LABELS[entry.action] ?? entry.action}
+              {ASSIGNMENT_ACTION_LABELS[entry.action as keyof typeof ASSIGNMENT_ACTION_LABELS] ??
+                entry.action}
               <span className="text-slate-400"> · {formatDateTime(entry.createdAt)}</span>
             </p>
           ))}

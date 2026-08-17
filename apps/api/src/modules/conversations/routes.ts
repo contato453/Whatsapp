@@ -6,6 +6,8 @@ import {
   CONVERSATION_DEPARTMENT_MIN_ROLE,
   CONVERSATION_STATUSES,
   EXTERNAL_REFERENCE_SOURCES,
+  FILTER_ALL_USERS,
+  FILTER_NONE,
   PARTICIPANT_CLIENT_ROLES,
   RealtimeEvents,
 } from "@azvchat/shared";
@@ -22,6 +24,13 @@ import {
   accessibleConversationWhere,
   canWriteConversationDepartment,
 } from "../../lib/conversation-access.js";
+import {
+  assignedToAllWhere,
+  assignToAllData,
+  assignToUserData,
+  clearAssignmentData,
+  unassignedConversationWhere,
+} from "../../lib/conversation-assignment.js";
 import { canApplyToConversation } from "../../lib/department-resource.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import {
@@ -42,7 +51,7 @@ import type { AppDeps } from "../../types.js";
 const listQuerySchema = z.object({
   status: z.enum(CONVERSATION_STATUSES).optional(),
   type: z.enum(["individual", "group"]).optional(),
-  assigned: z.string().optional(), // "me" | "none" | userId
+  assigned: z.string().optional(), // "me" | "none" | "all_users" | userId
   departmentId: z.string().uuid().optional(),
   instanceId: z.string().uuid().optional(),
   tagId: z.string().uuid().optional(),
@@ -111,8 +120,12 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     };
     if (query.assigned === "me") {
       where.assignedUserId = request.user.sub;
-    } else if (query.assigned === "none") {
-      where.assignedUserId = null;
+    } else if (query.assigned === FILTER_NONE) {
+      // "Sem responsável" é a fila de quem precisa de dono: a conversa
+      // coletiva tem `assignedUserId` nulo mas já tem destino, e some daqui.
+      Object.assign(where, unassignedConversationWhere());
+    } else if (query.assigned === FILTER_ALL_USERS) {
+      Object.assign(where, assignedToAllWhere());
     } else if (query.assigned) {
       where.assignedUserId = query.assigned;
     }
@@ -381,14 +394,40 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     const targetUserId = body.userId ?? request.user.sub;
     const isTransfer = conversation.assignedUserId != null && conversation.assignedUserId !== targetUserId;
 
+    /**
+     * Assumir uma conversa coletiva DESLIGA a marcação — é a forma natural de
+     * sair do @todos, e a exclusão mútua é obrigatória (o banco recusaria o
+     * par marcação + responsável). O histórico ganha as duas linhas: sair do
+     * coletivo e a atribuição em si.
+     *
+     * A saída recebe um instante anterior de propósito: as duas linhas nascem
+     * na mesma transação, e o `now()` do Postgres as empataria — o painel, que
+     * ordena por data, mostraria "assumiu" antes de "saiu de @todos" na
+     * metade das vezes.
+     */
+    const leftAllUsers = conversation.assignedToAll;
+
     await deps.prisma.$transaction([
       deps.prisma.conversation.update({
         where: { id },
         data: {
-          assignedUserId: targetUserId,
+          ...assignToUserData(targetUserId),
           ...(body.departmentId ? { departmentId: body.departmentId } : {}),
         },
       }),
+      ...(leftAllUsers
+        ? [
+            deps.prisma.conversationAssignmentHistory.create({
+              data: {
+                organizationId: request.user.organizationId,
+                conversationId: id,
+                action: "unassigned_from_all" as const,
+                performedByUserId: request.user.sub,
+                createdAt: new Date(Date.now() - 1),
+              },
+            }),
+          ]
+        : []),
       deps.prisma.conversationAssignmentHistory.create({
         data: {
           organizationId: request.user.organizationId,
@@ -401,6 +440,15 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
         },
       }),
     ]);
+    if (leftAllUsers) {
+      deps.audit.record({
+        organizationId: request.user.organizationId,
+        userId: request.user.sub,
+        action: "conversation.unassigned_from_all",
+        entityType: "Conversation",
+        entityId: id,
+      });
+    }
     deps.audit.record({
       organizationId: request.user.organizationId,
       userId: request.user.sub,
@@ -438,6 +486,9 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       await deps.prisma.$transaction([
         deps.prisma.conversation.update({
           where: { id },
+          // A marcação de @todos NÃO é tocada de propósito: ela é do
+          // atendimento, não do departamento. Conversa coletiva que muda de
+          // time continua coletiva, agora para o time novo.
           data: { departmentId: body.departmentId, assignedUserId: null },
         }),
         deps.prisma.conversationAssignmentHistory.create({
@@ -458,21 +509,89 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     },
   );
 
-  app.post("/conversations/:id/unassign", { preHandler: authenticate }, async (request) => {
+  /**
+   * Marca o atendimento como coletivo ("@todos"): a conversa passa a ser de
+   * todo o departamento em vez de ficar com uma pessoa.
+   *
+   * Papel mínimo `agent`, o mesmo de atribuir e desatribuir — e por um motivo
+   * concreto: o atendente já produz esse efeito hoje simplesmente removendo o
+   * responsável. Exigir supervisor aqui travaria por fora o que continua
+   * permitido por dentro, e o único ganho da marcação (saber que o coletivo
+   * foi decidido, e não esquecido) se perderia.
+   *
+   * Vale para grupo e para conversa individual, com ou sem departamento: sem
+   * departamento, "todos" são todos os que enxergam aquele número — que é
+   * exatamente o alcance que a conversa órfã já tinha.
+   *
+   * **Limitação conhecida e aceita:** o não lido é da conversa, e não por
+   * pessoa (`Conversation.unreadCount` é uma coluna só). Numa conversa
+   * coletiva, quem abrir primeiro zera o badge para todo mundo. Resolver isso
+   * exigiria não lidas por usuário — outra entrega, e que mexeria em toda a
+   * Inbox; aqui fica registrado para ninguém tratar como bug novo.
+   */
+  app.post("/conversations/:id/assign-all", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z.object({ note: z.string().max(500).optional() }).parse(request.body ?? {});
     const conversation = await findConversationOr404(id, request.user);
+    // Clique repetido não vira segunda linha de histórico.
+    if (conversation.assignedToAll) return { ok: true };
+
     await deps.prisma.$transaction([
-      deps.prisma.conversation.update({ where: { id }, data: { assignedUserId: null } }),
+      deps.prisma.conversation.update({ where: { id }, data: assignToAllData() }),
       deps.prisma.conversationAssignmentHistory.create({
         data: {
           organizationId: request.user.organizationId,
           conversationId: id,
-          action: "unassigned",
+          action: "assigned_to_all",
+          // Quem estava com a conversa antes: a marcação tira o responsável
+          // no mesmo movimento, e o histórico precisa dizer de quem saiu.
+          fromUserId: conversation.assignedUserId,
+          toDepartmentId: conversation.departmentId,
+          performedByUserId: request.user.sub,
+          note: body.note,
+        },
+      }),
+    ]);
+    deps.audit.record({
+      organizationId: request.user.organizationId,
+      userId: request.user.sub,
+      action: "conversation.assigned_to_all",
+      entityType: "Conversation",
+      entityId: id,
+    });
+    // A conversa muda de sala ao perder o responsável (de `mine` para `free`):
+    // quem passa a enxergá-la recebe a linha aqui, sem reload.
+    await emitConversationUpdated(id, request.user.organizationId);
+    return { ok: true };
+  });
+
+  app.post("/conversations/:id/unassign", { preHandler: authenticate }, async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const conversation = await findConversationOr404(id, request.user);
+    // Sair do coletivo tem ação própria: "removeu o responsável" descreveria
+    // errado uma conversa que não tinha responsável nenhum.
+    const leftAllUsers = conversation.assignedToAll;
+    await deps.prisma.$transaction([
+      deps.prisma.conversation.update({ where: { id }, data: clearAssignmentData() }),
+      deps.prisma.conversationAssignmentHistory.create({
+        data: {
+          organizationId: request.user.organizationId,
+          conversationId: id,
+          action: leftAllUsers ? "unassigned_from_all" : "unassigned",
           fromUserId: conversation.assignedUserId,
           performedByUserId: request.user.sub,
         },
       }),
     ]);
+    if (leftAllUsers) {
+      deps.audit.record({
+        organizationId: request.user.organizationId,
+        userId: request.user.sub,
+        action: "conversation.unassigned_from_all",
+        entityType: "Conversation",
+        entityId: id,
+      });
+    }
     await emitConversationUpdated(id, request.user.organizationId);
     return { ok: true };
   });

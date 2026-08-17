@@ -119,6 +119,11 @@ export interface ConversationDto {
   hasAvatar: boolean;
   status: ConversationStatus;
   assignedUser: UserDirectoryDto | null;
+  /**
+   * Atendimento coletivo ("@todos"): a conversa é de todo o departamento.
+   * Nunca vem junto de `assignedUser` — as duas coisas se excluem no banco.
+   */
+  assignedToAll: boolean;
   department: DepartmentDto | null;
   tags: TagDto[];
   unreadCount: number;
@@ -334,6 +339,8 @@ export interface DashboardRankingRowDto {
   instanceName: string | null;
   /** Responsável pelo atendimento; `null` quando a conversa está sem dono. */
   assignee: { userId: string; name: string; hasAvatar: boolean } | null;
+  /** Atendimento coletivo ("@todos"): sem dono por decisão, não por falta. */
+  assignedToAll: boolean;
   received: number;
   sent: number;
   total: number;

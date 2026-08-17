@@ -32,12 +32,14 @@ import {
   CONNECTION_STATUS_COLORS,
   CONNECTION_STATUS_LABELS,
   CONVERSATION_STATUSES,
+  ALL_USERS_ASSIGNEE_LABEL,
   CONVERSATION_STATUS_COLORS,
   CONVERSATION_STATUS_LABELS,
   DASHBOARD_PERIODS,
   DASHBOARD_PERIOD_LABELS,
   DASHBOARD_PERIOD_PHRASES,
   DATE_ONLY_PATTERN,
+  FILTER_ALL_USERS,
   FILTER_NONE,
   USER_ROLE_LABELS,
   hasRole,
@@ -411,6 +413,10 @@ function RankingRow({
                 dono é o caso que pede ação. */}
             {row.assignee ? (
               <span className="truncate text-slate-600">{row.assignee.name}</span>
+            ) : row.assignedToAll ? (
+              <span className="shrink-0 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
+                {ALL_USERS_ASSIGNEE_LABEL}
+              </span>
             ) : (
               <span className="truncate font-medium text-amber-600">Sem responsável</span>
             )}
@@ -761,7 +767,10 @@ export default function DashboardPage() {
                   {option.name}
                 </option>
               ))}
+              {/* "Sem responsável" conta só as verdadeiramente órfãs; as
+                  coletivas têm valor próprio, e nunca somam com elas. */}
               <option value={FILTER_NONE}>Sem responsável</option>
+              <option value={FILTER_ALL_USERS}>{ALL_USERS_ASSIGNEE_LABEL}</option>
             </FilterSelect>
             <FilterSelect
               label="Número"

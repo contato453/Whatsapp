@@ -2,6 +2,7 @@
 
 import { Archive, Users2, User, UserRound } from "lucide-react";
 import {
+  ALL_USERS_ASSIGNEE_LABEL,
   AZEVEDO_OS_SOURCE,
   CONNECTION_STATUS_COLORS,
   CONNECTION_STATUS_LABELS,
@@ -115,6 +116,13 @@ export function ConversationListItem({
             <UserRound className="h-3 w-3 shrink-0 text-slate-400" />
             {conversation.assignedUser ? (
               <span className="truncate text-slate-600">{conversation.assignedUser.name}</span>
+            ) : conversation.assignedToAll ? (
+              /* Coletivo por decisão: ocupa o lugar do responsável, mas com
+                 estilo próprio para ninguém ler "@todos" como nome de gente —
+                 e para não se confundir com o âmbar de quem está sem dono. */
+              <span className="shrink-0 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
+                {ALL_USERS_ASSIGNEE_LABEL}
+              </span>
             ) : (
               <span className="truncate font-medium text-amber-600">Sem responsável</span>
             )}

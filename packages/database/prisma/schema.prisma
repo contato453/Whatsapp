@@ -332,6 +332,16 @@ model Conversation {
   profilePicture     String?
   status             ConversationStatus @default(open)
   assignedUserId     String?
+  /// Atribuição coletiva ("@todos"): o atendimento é de todo o departamento,
+  /// por decisão, e não de uma pessoa. Convive com `assignedUserId` NULO de
+  /// propósito — a visibilidade já sai da regra existente (o atendente vê o
+  /// que é dele mais o que está sem responsável), então nada em access.ts
+  /// muda e não há usuário fictício "@todos" no banco. A coluna serve para
+  /// distinguir o coletivo da conversa órfã esperando alguém pegar: as duas
+  /// aparecem igual na Inbox, mas só a órfã deve entrar nas contagens de
+  /// "sem responsável" e receber responsável padrão.
+  /// Constraint no banco garante que marcação e responsável nunca coexistem.
+  assignedToAll      Boolean            @default(false)
   departmentId       String?
   unreadCount        Int                @default(0)
   /// Arquivamento: a data responde "está arquivada?" (nulo = não). É
@@ -552,6 +562,13 @@ enum AssignmentAction {
   transferred_user
   transferred_department
   unassigned
+  /// Entrou no atendimento coletivo ("@todos"). Ação própria porque
+  /// `assigned` significa pessoa: reaproveitá-la faria o histórico dizer
+  /// "assumiu o atendimento" para uma marcação que não tem dono.
+  assigned_to_all
+  /// Saiu do coletivo — seja por ficar sem responsável, seja por alguém
+  /// assumir (aí vem seguida de `assigned`).
+  unassigned_from_all
   resolved
   reopened
 }

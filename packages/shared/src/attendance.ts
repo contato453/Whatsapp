@@ -236,3 +236,13 @@ export const MAX_CUSTOM_RANGE_DAYS = 366;
 
 /** Valor de filtro para "sem departamento" e "sem responsável". */
 export const FILTER_NONE = "none";
+
+/**
+ * Valor de filtro para o atendimento coletivo ("@todos").
+ *
+ * Existe separado de `FILTER_NONE` porque as duas perguntas são diferentes:
+ * "sem responsável" é a fila de quem precisa de dono, e o coletivo já tem
+ * destino definido. Somar os dois num filtro só devolveria a confusão que a
+ * marcação veio desfazer.
+ */
+export const FILTER_ALL_USERS = "all_users";

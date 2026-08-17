@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import jwt from "@fastify/jwt";
 import type { Prisma, PrismaClient } from "@azvchat/database";
-import { FILTER_NONE } from "@azvchat/shared";
+import { FILTER_ALL_USERS, FILTER_NONE } from "@azvchat/shared";
 import { registerErrorHandler } from "../src/lib/errors.js";
 import type { AuthTokenPayload } from "../src/lib/auth.js";
 import { dashboardRoutes } from "../src/modules/dashboard/routes.js";
@@ -449,7 +449,19 @@ describe("GET /dashboard/stats", () => {
       recorded.conversationGroupBy[0]?.where as Record<string, unknown>,
     );
     expect(conditions).toContainEqual({ departmentId: null });
-    expect(conditions).toContainEqual({ assignedUserId: null });
+    // "Sem responsável" conta só as verdadeiramente órfãs: a conversa marcada
+    // como @todos também tem `assignedUserId` nulo, mas já tem destino.
+    expect(conditions).toContainEqual({ assignedUserId: null, assignedToAll: false });
+    await app.close();
+  });
+
+  it("o atendimento coletivo tem filtro próprio, separado de 'sem responsável'", async () => {
+    const app = await buildTestApp();
+    await stats(app, "admin", `?assignedUserId=${FILTER_ALL_USERS}`);
+    const conditions = conditionsOf(
+      recorded.conversationGroupBy[0]?.where as Record<string, unknown>,
+    );
+    expect(conditions).toContainEqual({ assignedToAll: true });
     await app.close();
   });
 

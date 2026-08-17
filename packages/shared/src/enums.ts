@@ -223,10 +223,43 @@ export const ASSIGNMENT_ACTIONS = [
   "transferred_user",
   "transferred_department",
   "unassigned",
+  "assigned_to_all",
+  "unassigned_from_all",
   "resolved",
   "reopened",
 ] as const;
 export type AssignmentAction = (typeof ASSIGNMENT_ACTIONS)[number];
+
+/**
+ * Como cada ação aparece no histórico do painel de contexto. Vive aqui, e não
+ * no componente, pelo mesmo motivo dos outros rótulos: ação nova no enum sem
+ * rótulo correspondente é linha em branco no histórico.
+ */
+export const ASSIGNMENT_ACTION_LABELS: Record<AssignmentAction, string> = {
+  assigned: "assumiu o atendimento",
+  transferred_user: "transferiu o atendimento",
+  transferred_department: "transferiu para departamento",
+  unassigned: "removeu o responsável",
+  assigned_to_all: "marcou como @todos",
+  unassigned_from_all: "tirou de @todos",
+  resolved: "concluiu o atendimento",
+  reopened: "reabriu o atendimento",
+};
+
+/**
+ * Atendimento coletivo: a conversa é de todo o departamento, e não de uma
+ * pessoa.
+ *
+ * O rótulo começa com "@" para não se confundir com nome de gente — na lista
+ * de conversas ele ocupa exatamente o lugar onde apareceria o responsável.
+ * No banco não existe usuário "@todos": a conversa marcada continua com
+ * `assignedUserId` nulo, e é a coluna `assignedToAll` que distingue o
+ * coletivo por decisão da conversa órfã esperando alguém pegar.
+ */
+export const ALL_USERS_ASSIGNEE_LABEL = "@todos";
+
+/** Linha de apoio do seletor de responsável, para o efeito ficar explícito. */
+export const ALL_USERS_ASSIGNEE_HINT = "Aparece para todo o departamento, sem dono fixo";
 
 /**
  * Mídia anexável a uma resposta rápida: só imagem, áudio e vídeo. Documento
