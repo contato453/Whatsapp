@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PrismaClient } from "@azvchat/database";
+import { CONVERSATION_DEPARTMENT_MIN_ROLE, hasRole } from "@azvchat/shared";
+import { canWriteConversationDepartment } from "../src/lib/conversation-access.js";
 import {
   accessibleInstanceIds,
   canWriteGeneralResource,
@@ -231,5 +233,39 @@ describe("canWriteInAllDepartments (escrita exige todos)", () => {
     expect(canWriteInAllDepartments(["dep-1"], [])).toBe(false);
     // Nem para o admin: item restrito sem departamento sumiria de todo mundo.
     expect(canWriteInAllDepartments(null, [])).toBe(false);
+  });
+});
+
+/**
+ * Quem pode ESCREVER o departamento da conversa.
+ *
+ * A visibilidade não muda com esta regra — quem vê o quê continua saindo de
+ * `conversationScope`, acima. O que estes testes protegem é o campo que
+ * ALIMENTA aquele filtro: se o atendente pudesse trocá-lo, tiraria a
+ * conversa do campo de visão de um time inteiro (ou da própria tela dele)
+ * com um clique, e nenhum dos filtros acima acusaria nada de errado.
+ *
+ * Status e responsável continuam sendo do atendente: a restrição é do
+ * campo departamento, não da rota de atendimento.
+ */
+describe("canWriteConversationDepartment (quem classifica a conversa)", () => {
+  it("atendente é recusado ao gravar o departamento", () => {
+    expect(canWriteConversationDepartment("agent")).toBe(false);
+  });
+
+  it("supervisor grava", () => {
+    expect(canWriteConversationDepartment("supervisor")).toBe(true);
+  });
+
+  it("admin grava, pela hierarquia de hasRole", () => {
+    expect(canWriteConversationDepartment("admin")).toBe(true);
+  });
+
+  it("status e responsável seguem liberados para o atendente", () => {
+    // O papel mínimo dessas duas ações é `agent`, e não se mexeu nele:
+    // a mesma conversa continua sendo atendida por quem a atende.
+    expect(hasRole("agent", "agent")).toBe(true);
+    // E o campo que move a conversa entre times exige supervisão.
+    expect(CONVERSATION_DEPARTMENT_MIN_ROLE).toBe("supervisor");
   });
 });

@@ -3,6 +3,7 @@ import type { Prisma } from "@azvchat/database";
 import { z } from "zod";
 import {
   AZEVEDO_OS_SOURCE,
+  CONVERSATION_DEPARTMENT_MIN_ROLE,
   CONVERSATION_STATUSES,
   EXTERNAL_REFERENCE_SOURCES,
   PARTICIPANT_CLIENT_ROLES,
@@ -16,8 +17,11 @@ import {
   groupScope,
   loadConversationAccess,
 } from "../../lib/access.js";
-import { authenticate } from "../../lib/auth.js";
-import { accessibleConversationWhere } from "../../lib/conversation-access.js";
+import { authenticate, requireRole } from "../../lib/auth.js";
+import {
+  accessibleConversationWhere,
+  canWriteConversationDepartment,
+} from "../../lib/conversation-access.js";
 import { canApplyToConversation } from "../../lib/department-resource.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import {
@@ -364,6 +368,13 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
   app.post("/conversations/:id/assign", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = assignSchema.parse(request.body);
+    // Atribuir continua sendo do atendente, mas esta rota também aceita
+    // departamento no mesmo corpo — seria a porta lateral para o campo que
+    // decide quem enxerga a conversa. A recusa é do CAMPO, não da rota:
+    // sem `departmentId`, o atendente atribui normalmente.
+    if (body.departmentId && !canWriteConversationDepartment(request.user.role)) {
+      throw new ForbiddenError();
+    }
     const conversation = await findConversationOr404(id, request.user);
 
     // Sem corpo: o próprio usuário assume o atendimento.
@@ -401,9 +412,18 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     return { ok: true };
   });
 
+  /**
+   * Trocar o departamento da conversa é decisão de supervisão, e não de
+   * atendimento: o campo é o que define quem enxerga a conversa, então o
+   * atendente que o alterasse tiraria o atendimento do campo de visão de um
+   * time inteiro — inclusive do dele próprio, sem entender o motivo.
+   *
+   * `requireRole` já inclui o admin pela hierarquia de `hasRole`. Status e
+   * responsável seguem liberados para o atendente, nas rotas ao lado.
+   */
   app.post(
     "/conversations/:id/transfer-department",
-    { preHandler: authenticate },
+    { preHandler: requireRole(CONVERSATION_DEPARTMENT_MIN_ROLE) },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       const body = z
