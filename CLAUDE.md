@@ -806,8 +806,13 @@ conhecida (`EXTERNAL_REFERENCE_SOURCES`) — o navegador não registra origem ar
 decide o que cada papel pode é `lib/azevedo-os-link.ts` (`planReferenceUpdate`), e a regra
 **depende do estado**, não só do papel: em conversa vinculada, limpar o campo É desvincular
 e exige supervisor; gravar código manual em conversa vinculada é recusado até para o admin
-(desvincular é decisão explícita). Sem isso, um `agent` apagaria o vínculo digitando no
-campo "Cadastro". Vincular e trocar **confirmam a empresa no Azevedo-OS antes de gravar**.
+(desvincular é decisão explícita). Vincular e trocar **confirmam a empresa no Azevedo-OS
+antes de gravar**.
+
+O código manual **não tem mais campo na tela**: a caixa "Cadastro" saiu do painel de
+contexto. A regra do lado `manual` continua no endpoint de propósito — os códigos já
+gravados seguem aparecendo no chip âmbar e sendo encontrados pela busca, e a régua de
+permissão precisa continuar valendo se um dia a caixa voltar em outro lugar.
 
 **Endpoints.**
 
@@ -889,8 +894,9 @@ de fato conserta é a ordem de precedência: **rótulo de fora vence rótulo de 
 painel de contexto, com estado próprio de carregamento e de erro. `agent` vê o card inteiro
 e nenhum botão de vínculo. O identificador do Azevedo-OS **não vira chip** na lista nem no
 cabeçalho da conversa: ele é interno, e o chip âmbar continua sendo do código de cadastro
-manual. Com a conversa vinculada, o campo "Cadastro" some do painel — é o mesmo campo no
-banco, e deixá-lo editável convidaria a apagar o vínculo sem querer.
+manual já gravado. O painel **não tem mais a caixa "Cadastro"** — a empresa do cliente é o
+card, e um campo de texto ao lado dele escrevendo no MESMO `externalReference` era convite
+a apagar o vínculo sem querer.
 
 ---
 

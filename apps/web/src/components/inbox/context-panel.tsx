@@ -15,7 +15,6 @@ import {
   X,
 } from "lucide-react";
 import {
-  AZEVEDO_OS_SOURCE,
   canManageAzevedoOsLink,
   CONVERSATION_STATUSES,
   CONVERSATION_STATUS_LABELS,
@@ -133,8 +132,6 @@ export function ContextPanel({
   const router = useRouter();
   const { user: me } = useAuth();
   const conversation = detail.conversation;
-  /** Conversa vinculada a uma empresa do Azevedo-OS (ver o card abaixo). */
-  const vinculadaAoAzevedoOs = conversation.externalSource === AZEVEDO_OS_SOURCE;
   const [noteText, setNoteText] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -225,12 +222,6 @@ export function ContextPanel({
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
 
-  // Código do cadastro: editado localmente e salvo ao sair do campo.
-  const [reference, setReference] = useState(conversation.externalReference ?? "");
-  useEffect(() => {
-    setReference(conversation.externalReference ?? "");
-  }, [conversation.id, conversation.externalReference]);
-
   /**
    * Abre a conversa individual com o participante — o "chamar no privado".
    * A conversa é criada na hora se ainda não existir.
@@ -247,16 +238,6 @@ export function ContextPanel({
     } finally {
       setBusy(false);
     }
-  }
-
-  async function saveReference() {
-    const value = reference.trim();
-    if (value === (conversation.externalReference ?? "")) return;
-    await run(() =>
-      api.patch(`/conversations/${conversation.id}/reference`, {
-        externalReference: value.length > 0 ? value : null,
-      }),
-    );
   }
 
   // Só oferece o que a API vai aceitar: a etiqueta precisa valer para o
@@ -429,31 +410,6 @@ export function ContextPanel({
               ))}
             </select>
           </div>
-          {/*
-            Código do cadastro da empresa/grupo no escritório. Some quando a
-            conversa está vinculada ao Azevedo-OS: o campo no banco é o mesmo
-            (`externalReference`), e ali ele guarda o identificador da
-            empresa — deixar o campo editável convidaria a apagar o vínculo
-            sem querer, e a API recusaria a gravação de qualquer forma.
-          */}
-          {!vinculadaAoAzevedoOs && (
-            <div className="flex items-center justify-between">
-              <span className="text-slate-500">Cadastro</span>
-              <input
-                className="max-w-[55%] rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-amber-800 placeholder:font-normal placeholder:normal-case placeholder:tracking-normal placeholder:text-slate-400"
-                value={reference}
-                maxLength={40}
-                placeholder="EMPRESA 001"
-                disabled={busy}
-                onChange={(event) => setReference(event.target.value)}
-                onBlur={() => void saveReference()}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") event.currentTarget.blur();
-                  if (event.key === "Escape") setReference(conversation.externalReference ?? "");
-                }}
-              />
-            </div>
-          )}
         </div>
         {/* Sem botões de "Assumir" e "Concluir": o responsável é trocado no
             seletor logo acima e o status, na barra da conversa. Dois caminhos
