@@ -224,6 +224,22 @@ export const conversationArchiveApi = {
 };
 
 /**
+ * Responsável da conversa. As três saídas do seletor num lugar só: uma
+ * pessoa, o atendimento coletivo ("@todos") ou ninguém.
+ *
+ * Passar de @todos para uma pessoa não precisa de chamada extra — a API
+ * desliga a marcação na própria atribuição, porque as duas nunca coexistem.
+ */
+export const conversationAssignmentApi = {
+  assign: (conversationId: string, userId: string) =>
+    api.post<{ ok: boolean }>(`/conversations/${conversationId}/assign`, { userId }),
+  assignAll: (conversationId: string) =>
+    api.post<{ ok: boolean }>(`/conversations/${conversationId}/assign-all`),
+  unassign: (conversationId: string) =>
+    api.post<{ ok: boolean }>(`/conversations/${conversationId}/unassign`),
+};
+
+/**
  * Número de backup: marcação da instância e arquivamento em massa. Tudo de
  * supervisor para cima — a API recusa por conta própria quem chamar direto.
  */

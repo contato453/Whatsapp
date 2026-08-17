@@ -60,7 +60,13 @@ export class MessageIngestService {
     // Arquivada fica de fora: ela não está em fila nenhuma, e o número de
     // backup (onde toda conversa nasce arquivada) geraria histórico de
     // atribuição em massa para alguém que nunca vai atender ali.
-    if (!conversation.assignedUserId && !conversation.archivedAt) {
+    //
+    // A marcada como @todos também fica: ela está sem responsável POR
+    // DECISÃO, e não por falta de dono. Sem esta condição o grupo coletivo
+    // ganharia responsável sozinho na próxima mensagem do cliente — a
+    // marcação viraria enfeite e o grupo sumiria da tela dos demais
+    // justamente no caso que ela veio resolver.
+    if (!conversation.assignedUserId && !conversation.assignedToAll && !conversation.archivedAt) {
       await this.applyDefaultAssignee(conversation, message.instanceId, context.organizationId);
     }
 

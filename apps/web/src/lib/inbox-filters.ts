@@ -25,6 +25,7 @@ export type QuickFilter =
   | "all"
   | "mine"
   | "unassigned"
+  | "all_users"
   | "groups"
   | "individual"
   | "unread"
@@ -38,6 +39,7 @@ const QUICK_FILTERS: QuickFilter[] = [
   "all",
   "mine",
   "unassigned",
+  "all_users",
   "groups",
   "individual",
   "unread",
@@ -175,7 +177,13 @@ export function conversationMatchesFilters(
       if (!meId || conversation.assignedUser?.id !== meId) return false;
       break;
     case "unassigned":
-      if (conversation.assignedUser !== null) return false;
+      // Coletiva não é órfã: ela tem `assignedUser` nulo, mas o destino dela
+      // foi decidido, e misturá-la aqui inflaria de volta a fila que a
+      // marcação veio limpar.
+      if (conversation.assignedUser !== null || conversation.assignedToAll) return false;
+      break;
+    case "all_users":
+      if (!conversation.assignedToAll) return false;
       break;
     case "groups":
       if (conversation.type !== "group") return false;

@@ -132,6 +132,20 @@ snake_case e id `uuid`.
   `PARTICIPANT_CLIENT_ROLE_COLORS` (`@azvchat/shared`).
 
 **Atendimento**
+- `Conversation.assignedToAll` (padrão `false`) — **atendimento coletivo ("@todos")**: a
+  conversa é de todo o departamento por decisão, e não de uma pessoa. Convive com
+  `assignedUserId` **nulo** de propósito — a visibilidade já sai da regra existente (o
+  atendente enxerga o que é dele mais o que está sem responsável), então `lib/access.ts`
+  **não foi tocado** e não existe usuário fictício "@todos" no banco. A constraint
+  `conversations_assigned_to_all_without_user` garante que marcação e responsável nunca
+  coexistem; a fonte única dos dois lados (quem grava e quem conta) é
+  `lib/conversation-assignment.ts`. Rótulos em `ALL_USERS_ASSIGNEE_LABEL` /
+  `ALL_USERS_ASSIGNEE_HINT` e filtro `FILTER_ALL_USERS` (`@azvchat/shared`); as ações
+  `assigned_to_all` / `unassigned_from_all` de `AssignmentAction` registram entrada e saída
+  do coletivo — `assigned`/`unassigned` continuam significando pessoa. Independente do
+  departamento (coletiva sem departamento aparece para quem tem o número), vale para grupo e
+  individual, e sobrevive a resolver, reabrir, arquivar e trocar de departamento. Papel
+  mínimo `agent`, o mesmo de atribuir/desatribuir.
 - `Conversation` — `type` (`individual|group`), `title` (vem do WhatsApp, o sync sobrescreve)
   vs `customTitle` (definido pela equipe, o sync **nunca** toca), `status`
   (`open|waiting_client|waiting_internal|resolved`),
@@ -739,6 +753,29 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   ninguém); `received` são as mensagens do cliente nas conversas em que a pessoa é
   **responsável** — mensagem de entrada não tem autor do nosso lado. É medida de carga, não
   de produtividade.
+- **"Sem responsável" não é mais `assignedUserId IS NULL`.** Com o `@todos`, a conta
+  passou a ser `assignedUserId IS NULL AND assignedToAll = false`: a conversa
+  coletiva também está sem dono, mas por decisão, e somá-la de volta faz o número
+  de órfãs mentir exatamente onde a marcação veio ajudar. **Toda contagem, listagem
+  ou filtro novo de "sem responsável" precisa usar `unassignedConversationWhere()`
+  de `lib/conversation-assignment.ts`** — nunca `assignedUserId: null` na mão. Hoje
+  excluem: a lista da Inbox (`assigned=none`), o filtro do dashboard, o filtro
+  rápido do frontend (`inbox-filters.ts`) e o `apply-default-assignee` em lote. O
+  coletivo tem filtro próprio (`FILTER_ALL_USERS`), nunca somado ao das órfãs. O
+  relatório por atendente não muda: ele já ignorava conversa sem responsável, e a
+  coletiva não é creditada a ninguém nem distribuída entre as pessoas.
+- **Toda atribuição automática precisa respeitar o `@todos`.** São dois pontos, e os
+  dois já checam: a ingestão (`message-ingest.ts`, junto do `archivedAt`) e o
+  `POST /whatsapp-instances/:id/apply-default-assignee`. Sem isso o grupo coletivo
+  ganha dono sozinho na próxima mensagem do cliente e a marcação vira enfeite —
+  falha silenciosa, que só aparece quando o grupo some da tela dos demais. O
+  responsável padrão do departamento **não se aplica** à conversa marcada, em
+  momento nenhum. Atribuir uma pessoa desliga a marcação (é a saída natural do
+  coletivo), e a exclusão mútua também é garantida por constraint no banco.
+- **O não lido de uma conversa `@todos` é da conversa, não por pessoa**: quem abrir
+  zera para todos. É limitação conhecida do modelo atual (`Conversation.unreadCount`
+  é uma coluna só) e está registrada em comentário no código — resolver exigiria não
+  lidas por usuário, que é outra entrega.
 - Ingestão é idempotente por `(conversationId, externalMessageId)` — não crie caminho
   paralelo de inserção de mensagem.
 - LID (`@lid`) não é telefone. Existe migration só para limpar telefones que vieram de LID

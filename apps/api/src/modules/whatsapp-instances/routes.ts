@@ -15,6 +15,7 @@ import {
   loadAssigneeReach,
   reachableConversationFilter,
 } from "../../lib/default-assignee.js";
+import { unassignedConversationWhere } from "../../lib/conversation-assignment.js";
 import { conversationInclude } from "../../lib/conversation-events.js";
 import { conversationAudience } from "../../realtime/socket.js";
 import type { AppDeps } from "../../types.js";
@@ -351,12 +352,14 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
 
       // Só as que essa pessoa enxerga: conversa de departamento em que ela
       // não atua sairia da fila e sumiria da tela de todo mundo. Arquivada
-      // também fica de fora — ela não está em fila nenhuma para ter dono.
+      // também fica de fora — ela não está em fila nenhuma para ter dono —, e
+      // a marcada como @todos idem: ela está sem responsável por decisão, e
+      // dar dono a ela em lote desfaria em silêncio a escolha da equipe.
       const targets = await deps.prisma.conversation.findMany({
         where: {
           organizationId: request.user.organizationId,
           whatsappInstanceId: id,
-          assignedUserId: null,
+          ...unassignedConversationWhere(),
           archivedAt: null,
           ...reachableConversationFilter(reach),
         },

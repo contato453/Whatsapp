@@ -196,6 +196,8 @@ export interface DashboardRankingRow {
   instanceName: string | null;
   /** Responsável pelo atendimento; `null` quando a conversa está sem dono. */
   assignee: { userId: string; name: string; hasAvatar: boolean } | null;
+  /** Atendimento coletivo ("@todos") — sem dono por decisão, não por falta. */
+  assignedToAll: boolean;
   received: number;
   sent: number;
   total: number;
@@ -326,6 +328,9 @@ export function serializeConversation(conversation: ConversationWithRelations) {
     assignedUser: conversation.assignedUser
       ? serializeUserDirectory(conversation.assignedUser)
       : null,
+    // Atendimento coletivo: a tela mostra "@todos" no lugar do nome. Nunca
+    // vem junto de `assignedUser` — as duas coisas se excluem no banco.
+    assignedToAll: conversation.assignedToAll,
     department: conversation.department ? serializeDepartment(conversation.department) : null,
     tags: conversation.tags?.map((entry) => serializeTag(entry.tag)) ?? [],
     unreadCount: conversation.unreadCount,

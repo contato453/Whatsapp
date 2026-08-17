@@ -59,6 +59,7 @@ function conversa(overrides: Partial<ConversationDto> = {}): ConversationDto {
     hasAvatar: false,
     status: "open",
     assignedUser: null,
+    assignedToAll: false,
     department: null,
     tags: [],
     unreadCount: 0,
@@ -210,5 +211,25 @@ describe("casamento de conversa com o filtro ativo (tempo real)", () => {
     expect(
       conversationMatchesFilters(conversa({ whatsappTitle: "Outro grupo" }), { ...EMPTY_INBOX_FILTERS, search: "x" }, ANA),
     ).toBe(true);
+  });
+});
+
+/**
+ * Atendimento coletivo ("@todos"): a conversa fica sem responsável por
+ * decisão, e não por falta de dono. O filtro do tempo real precisa saber
+ * separar as duas — senão a lista "Sem responsável" volta a misturar a fila
+ * de verdade com os grupos que já têm destino.
+ */
+describe("@todos nos filtros da lista", () => {
+  it('"Sem responsável" não traz a coletiva', () => {
+    const filtro: InboxFilters = { ...EMPTY_INBOX_FILTERS, quick: "unassigned" };
+    expect(conversationMatchesFilters(conversa(), filtro, ANA)).toBe(true);
+    expect(conversationMatchesFilters(conversa({ assignedToAll: true }), filtro, ANA)).toBe(false);
+  });
+
+  it('"@todos" traz só as coletivas', () => {
+    const filtro: InboxFilters = { ...EMPTY_INBOX_FILTERS, quick: "all_users" };
+    expect(conversationMatchesFilters(conversa({ assignedToAll: true }), filtro, ANA)).toBe(true);
+    expect(conversationMatchesFilters(conversa(), filtro, ANA)).toBe(false);
   });
 });

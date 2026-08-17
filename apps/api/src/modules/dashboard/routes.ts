@@ -6,6 +6,7 @@ import {
   CONVERSATION_STATUSES,
   DASHBOARD_PERIODS,
   DATE_ONLY_PATTERN,
+  FILTER_ALL_USERS,
   FILTER_NONE,
   hasRole,
   MAX_CUSTOM_RANGE_DAYS,
@@ -14,6 +15,10 @@ import {
 } from "@azvchat/shared";
 import { conversationScope, instanceIdScope, loadConversationAccess } from "../../lib/access.js";
 import { loadAttendanceSettings } from "../../lib/attendance-settings.js";
+import {
+  assignedToAllWhere,
+  unassignedConversationWhere,
+} from "../../lib/conversation-assignment.js";
 import { authenticate } from "../../lib/auth.js";
 import { serializeDashboardStats, type DashboardTopUserRow } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
@@ -31,6 +36,13 @@ import {
 /** Filtro que aceita um id ou a ausência dele ("sem departamento", "sem responsável"). */
 const idOrNone = z.union([z.string().uuid(), z.literal(FILTER_NONE)]);
 
+/**
+ * O de responsável aceita um valor a mais: o atendimento coletivo ("@todos").
+ * Ele fica FORA de "sem responsável" de propósito — as duas conversas têm
+ * `assignedUserId` nulo, mas só uma delas está esperando alguém pegar.
+ */
+const assigneeFilter = z.union([idOrNone, z.literal(FILTER_ALL_USERS)]);
+
 const statsQuerySchema = z
   .object({
     period: z.enum(DASHBOARD_PERIODS).default("today"),
@@ -45,7 +57,7 @@ const statsQuerySchema = z
      */
     status: z.enum(CONVERSATION_STATUSES).optional(),
     departmentId: idOrNone.optional(),
-    assignedUserId: idOrNone.optional(),
+    assignedUserId: assigneeFilter.optional(),
   })
   .superRefine((query, ctx) => {
     if (query.period !== "custom") return;
@@ -152,10 +164,14 @@ function dashboardFilterConditions(query: StatsQuery): Prisma.ConversationWhereI
       departmentId: query.departmentId === FILTER_NONE ? null : query.departmentId,
     });
   }
-  if (query.assignedUserId) {
-    conditions.push({
-      assignedUserId: query.assignedUserId === FILTER_NONE ? null : query.assignedUserId,
-    });
+  if (query.assignedUserId === FILTER_NONE) {
+    // "Sem responsável" conta só as verdadeiramente órfãs: a coletiva tem
+    // destino definido e sairia como problema de fila se entrasse aqui.
+    conditions.push(unassignedConversationWhere());
+  } else if (query.assignedUserId === FILTER_ALL_USERS) {
+    conditions.push(assignedToAllWhere());
+  } else if (query.assignedUserId) {
+    conditions.push({ assignedUserId: query.assignedUserId });
   }
   return conditions;
 }
@@ -294,6 +310,9 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
                 // porque "conversa mais ativa" sem dono é justamente a que
                 // precisa de alguém, e não só de atenção.
                 assignedUser: { select: { id: true, name: true, avatarUrl: true } },
+                // Sem dono pode ser fila ou decisão: a linha do ranking
+                // precisa dizer qual das duas, como a lista da Inbox diz.
+                assignedToAll: true,
               },
             })
           : Promise.resolve([]),
@@ -433,6 +452,7 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
                 hasAvatar: conversation.assignedUser.avatarUrl != null,
               }
             : null,
+          assignedToAll: conversation.assignedToAll,
           received: receivedByConversation.get(row.conversationId) ?? 0,
           sent: sentByConversation.get(row.conversationId) ?? 0,
           total: row._count._all,

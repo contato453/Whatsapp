@@ -21,6 +21,8 @@ import {
 } from "lucide-react";
 import {
   AZEVEDO_OS_SOURCE,
+  FILTER_ALL_USERS,
+  FILTER_NONE,
   QUICK_REPLY_MEDIA_TYPE_LABELS,
   RealtimeEvents,
   type ScheduledPendingPayload,
@@ -309,7 +311,8 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     const params = new URLSearchParams();
     const quick = filters.quick;
     if (quick === "mine") params.set("assigned", "me");
-    if (quick === "unassigned") params.set("assigned", "none");
+    if (quick === "unassigned") params.set("assigned", FILTER_NONE);
+    if (quick === "all_users") params.set("assigned", FILTER_ALL_USERS);
     if (quick === "groups") params.set("type", "group");
     if (quick === "individual") params.set("type", "individual");
     if (quick === "unread") params.set("unread", "true");

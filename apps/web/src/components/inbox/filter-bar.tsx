@@ -1,6 +1,7 @@
 "use client";
 
 import { ListFilter, Search, X } from "lucide-react";
+import { ALL_USERS_ASSIGNEE_LABEL } from "@azvchat/shared";
 import { cn } from "@/lib/utils";
 import {
   countActiveInboxFilters,
@@ -29,6 +30,9 @@ const QUICK_FILTER_GROUPS: Array<{ label: string; options: Array<{ key: QuickFil
     options: [
       { key: "mine", label: "Minhas" },
       { key: "unassigned", label: "Sem responsável" },
+      // Separado de "Sem responsável" de propósito: as duas têm a conversa
+      // sem dono, mas só uma está esperando alguém pegar.
+      { key: "all_users", label: ALL_USERS_ASSIGNEE_LABEL },
       { key: "unread", label: "Não lidas" },
       // Visão à parte, nunca misturada: o padrão da lista é sem arquivadas.
       { key: "archived", label: "Arquivadas" },
