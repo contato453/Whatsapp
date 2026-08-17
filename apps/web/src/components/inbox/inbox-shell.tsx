@@ -1110,7 +1110,12 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         onMessageSent={appendMessage}
         disabled={attachmentsDisabled}
       >
-      <div className="flex min-w-0 flex-1 flex-col bg-slate-100">
+      {/* `min-h-0` é obrigatório aqui: como filho de um flex COLUNA (a zona de
+          anexo), a altura mínima automática desta coluna passa a ser a do
+          conteúdo, e a janela de mensagens deixaria de rolar por dentro —
+          empurrando o cabeçalho para fora da tela e o composer para baixo.
+          Como filho direto da linha, o `stretch` fazia esse papel sozinho. */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-slate-100">
         {!conversationId ? (
           <EmptyState
             icon={<InboxIcon className="h-14 w-14" />}
