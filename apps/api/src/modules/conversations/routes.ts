@@ -5,6 +5,7 @@ import {
   AZEVEDO_OS_SOURCE,
   azevedoOsFacetValueIsValid,
   CONVERSATION_DEPARTMENT_MIN_ROLE,
+  canManageInternalNote,
   CONVERSATION_STATUSES,
   EXTERNAL_REFERENCE_SOURCES,
   FILTER_ALL_USERS,
@@ -1242,7 +1243,13 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       where: { id: noteId, conversationId: id, organizationId: request.user.organizationId },
     });
     if (!note) throw new NotFoundError("Nota interna");
-    if (note.userId !== request.user.sub && request.user.role === "agent") {
+    if (
+      !canManageInternalNote({
+        authorId: note.userId,
+        actorId: request.user.sub,
+        actorRole: request.user.role,
+      })
+    ) {
       throw new ForbiddenError("Só o autor pode editar esta nota");
     }
     const updated = await deps.prisma.internalNote.update({
@@ -1277,7 +1284,13 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       where: { id: noteId, conversationId: id, organizationId: request.user.organizationId },
     });
     if (!note) throw new NotFoundError("Nota interna");
-    if (note.userId !== request.user.sub && request.user.role === "agent") {
+    if (
+      !canManageInternalNote({
+        authorId: note.userId,
+        actorId: request.user.sub,
+        actorRole: request.user.role,
+      })
+    ) {
       throw new ForbiddenError("Só o autor pode excluir esta nota");
     }
     await deps.prisma.internalNote.delete({ where: { id: noteId } });

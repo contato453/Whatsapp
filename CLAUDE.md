@@ -594,8 +594,21 @@ nome técnico no código e neste documento.
   etiquetas, notas, histórico, arquivos), `composer-modals.tsx`, `audio-recorder.tsx`,
   `audio-player.tsx`, `status-select.tsx`, `formatted-text.tsx`, `media-lightbox.tsx`
   (mídia ampliada em tela cheia, navegando só entre as mídias já carregadas na janela),
-  `attachment-drop.tsx` (arrastar arquivo para a conversa e colar com Ctrl+V) e
-  `mention-picker.tsx` (o seletor do "@").
+  `attachment-drop.tsx` (arrastar arquivo para a conversa e colar com Ctrl+V),
+  `mention-picker.tsx` (o seletor do "@") e `internal-note.tsx` (a nota interna).
+- **A nota interna se desenha em `components/inbox/internal-note.tsx`**, e não em cada
+  tela: ela aparece em DOIS lugares — o cartão amarelo intercalado no chat
+  (`InternalNoteBubble`) e o item do bloco "Notas internas" do painel lateral
+  (`InternalNotePanelItem`) —, e os dois trazem os mesmos botões de editar e excluir,
+  com o mesmo visual, a mesma confirmação e as mesmas rotas
+  (`PATCH|DELETE /conversations/:id/notes/:noteId`). Os handlers são um só
+  (`internalNoteActions`, criado no `inbox-shell` e passado ao painel), e **não há evento
+  de socket para edição nem para exclusão**: os dois lugares leem a MESMA
+  `detail.notes`, então recarregar o detalhe atualiza os dois na hora — só a criação
+  viaja pelo `note:new`. Quem pode mexer sai de `canManageInternalNote`
+  (`@azvchat/shared`, coberto por `apps/api/test/internal-note.test.ts`): autor sempre,
+  supervisor e admin em nota de terceiro, sessão ainda carregando nega. A rota usa a
+  mesma função — botão que a tela mostra é botão que a API aceita.
 - **Marcação de participantes ("@")** em `components/inbox/mention-picker.tsx`, fora do
   `inbox-shell` — que só guarda a cola: a consulta digitada, o índice ativo e o que fazer
   ao escolher. A mecânica é a **mesma** do autocomplete de "/" (lista sobreposta ao

@@ -41,6 +41,7 @@ import type {
   ConversationDetailDto,
   ConversationFileDto,
   DepartmentDto,
+  NoteDto,
   TagDto,
   UserDirectoryDto,
 } from "@/lib/types";
@@ -49,6 +50,7 @@ import { Badge, Button, Textarea } from "@/components/ui";
 import { appliesToConversation } from "@/components/department-picker";
 import { AzevedoOsCard } from "./azevedo-os-card";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
+import { InternalNotePanelItem, useCanManageNote } from "./internal-note";
 
 /**
  * Telefone de uma conversa individual. O endereço do WhatsApp vem como
@@ -125,12 +127,17 @@ export function ContextPanel({
   departments,
   tags,
   onChanged,
+  onEditNote,
+  onDeleteNote,
 }: {
   detail: ConversationDetailDto;
   users: UserDirectoryDto[];
   departments: DepartmentDto[];
   tags: TagDto[];
   onChanged: () => void;
+  /** Os mesmos handlers do cartão da conversa — nada de segundo fluxo aqui. */
+  onEditNote: (note: NoteDto) => void;
+  onDeleteNote: (note: NoteDto) => void;
 }) {
   const router = useRouter();
   const { user: me } = useAuth();
@@ -141,6 +148,8 @@ export function ContextPanel({
    * ainda carregando (`me` nulo) esconde o campo: o lado seguro do erro.
    */
   const podeTrocarDepartamento = me ? hasRole(me.role, CONVERSATION_DEPARTMENT_MIN_ROLE) : false;
+  // Mesma régua do cartão do chat, vinda de `@azvchat/shared`.
+  const canManageNote = useCanManageNote();
   const [noteText, setNoteText] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -747,12 +756,13 @@ export function ContextPanel({
         </h3>
         <div className="space-y-2">
           {detail.notes.map((note) => (
-            <div key={note.id} className="rounded-lg border-l-2 border-amber-400 bg-amber-50 p-2.5">
-              <p className="whitespace-pre-wrap text-xs text-slate-700">{note.content}</p>
-              <p className="mt-1 text-[10px] text-slate-400">
-                {note.user?.name ?? "—"} · {formatDateTime(note.createdAt)}
-              </p>
-            </div>
+            <InternalNotePanelItem
+              key={note.id}
+              note={note}
+              canManage={canManageNote(note)}
+              onEdit={onEditNote}
+              onDelete={onDeleteNote}
+            />
           ))}
         </div>
         <Textarea
