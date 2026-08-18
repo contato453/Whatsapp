@@ -1485,7 +1485,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
               {/* Editando: o campo passa a ser da mensagem já enviada, e as
                   abas somem — nota interna não se edita por aqui. */}
               {editing && (
-                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-500 bg-slate-50 px-2.5 py-1.5">
+                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-600 bg-slate-50 px-2.5 py-1.5">
                   <Pencil className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-600" />
                   <div className="min-w-0 flex-1">
                     <p className="text-[11px] font-semibold text-slate-700">
@@ -1543,7 +1543,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
 
               {/* Mensagem sendo respondida */}
               {replyTo && composerMode === "message" && (
-                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-500 bg-slate-50 px-2.5 py-1.5">
+                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-600 bg-slate-50 px-2.5 py-1.5">
                   <CornerUpLeft className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-600" />
                   <div className="min-w-0 flex-1">
                     <p className="text-[11px] font-semibold text-slate-700">
@@ -1566,7 +1566,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   chip vira o indicador de progresso: vídeo grande demora e,
                   sem isso, a espera parecia defeito. */}
               {quickReplyMedia?.media && composerMode === "message" && (
-                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-500 bg-slate-50 px-2.5 py-1.5">
+                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-600 bg-slate-50 px-2.5 py-1.5">
                   {sending ? (
                     <Spinner className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-600" />
                   ) : (

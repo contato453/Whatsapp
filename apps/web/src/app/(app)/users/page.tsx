@@ -189,9 +189,13 @@ export default function UsersPage() {
                     )}
                   </div>
 
+                  {/* Chip de marca no tom 100, e não no 50: ele fica colado
+                      no selo "Ativo", que é verde de ESTADO sobre fundo quase
+                      igual ao brand-50. Um degrau a mais de saturação mantém
+                      os dois distinguíveis de relance. */}
                   {user.signMessages && (
                     <Badge
-                      className="bg-brand-50 text-brand-700"
+                      className="bg-brand-100 text-brand-700"
                       title="Mensagens saem assinadas com o nome"
                     >
                       assina

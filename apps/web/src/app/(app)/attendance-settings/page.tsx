@@ -372,7 +372,7 @@ export default function AttendanceSettingsPage() {
                   setTimezone(event.target.value);
                   setSaved(false);
                 }}
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
               >
                 {/* O fuso salvo pode não estar na lista do navegador atual:
                     incluí-lo evita a tela trocar a configuração sem querer. */}

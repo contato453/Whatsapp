@@ -191,7 +191,7 @@ function ProfileCard({
       <label className="flex items-start gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700">
         <input
           type="checkbox"
-          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-600"
           checked={signMessages}
           onChange={(event) => setSignMessages(event.target.checked)}
         />
@@ -296,7 +296,7 @@ function NotificationsCard({
                 type="radio"
                 id={`notification-sound-${option}`}
                 name="notification-sound"
-                className="h-4 w-4 border-slate-300 text-brand-600 focus:ring-brand-500"
+                className="h-4 w-4 border-slate-300 text-brand-600 focus:ring-brand-600"
                 checked={sound === option}
                 onChange={() => setSound(option)}
               />

@@ -120,7 +120,7 @@ export function ConversationListItem({
               /* Coletivo por decisão: ocupa o lugar do responsável, mas com
                  estilo próprio para ninguém ler "@todos" como nome de gente —
                  e para não se confundir com o âmbar de quem está sem dono. */
-              <span className="shrink-0 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
+              <span className="shrink-0 rounded bg-brand-100 px-1.5 py-0.5 text-[10px] font-bold text-brand-700">
                 {ALL_USERS_ASSIGNEE_LABEL}
               </span>
             ) : (

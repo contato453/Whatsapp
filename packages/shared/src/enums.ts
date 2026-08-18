@@ -203,10 +203,15 @@ export const PARTICIPANT_CLIENT_ROLE_LABELS: Record<ParticipantClientRole, strin
 /**
  * Cores propositalmente distantes do âmbar do selo "admin" do WhatsApp: a
  * equipe precisa distinguir de relance papel no cliente de administrador do
- * grupo. Roxo para sócio (decisão), azul para administrativo (operação).
+ * grupo. Azul-marinho para sócio (decisão), azul claro para administrativo
+ * (operação) — dois degraus da mesma família, separados pela luminância.
+ *
+ * O sócio era roxo (`#7c3aed`) e mudou junto com a saída do indigo da
+ * interface. Não virou verde de propósito: verde aqui encostaria no `#16a34a`
+ * de "Aberto"/"conectado", e este marcador é papel de pessoa, não estado.
  */
 export const PARTICIPANT_CLIENT_ROLE_COLORS: Record<ParticipantClientRole, string> = {
-  partner: "#7c3aed",
+  partner: "#102a4c",
   administrative: "#0284c7",
 };
 

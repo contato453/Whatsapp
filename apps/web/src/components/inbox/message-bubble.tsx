@@ -44,12 +44,19 @@ function StatusIcon({ status }: { status: MessageDto["status"] }) {
   return <XCircle className="h-3 w-3 text-red-300" />;
 }
 
-/** Cor determinística por remetente para distinguir participantes do grupo. */
-const SENDER_COLORS = ["#4f46e5", "#0891b2", "#16a34a", "#d97706", "#dc2626", "#9333ea", "#0284c7", "#ca8a04"];
+/**
+ * Cor determinística por remetente para distinguir participantes do grupo.
+ *
+ * É paleta CATEGÓRICA, não a cor da marca: aqui a cor só separa uma pessoa da
+ * outra. Os dois tons roxos que existiam (`#4f46e5` e `#9333ea`) saíram junto
+ * com o indigo do tema e viraram teal e rosa — matizes que continuam
+ * distinguíveis entre si e não puxam a leitura para o verde da marca.
+ */
+const SENDER_COLORS = ["#0f766e", "#0891b2", "#16a34a", "#d97706", "#dc2626", "#be123c", "#0284c7", "#ca8a04"];
 function senderColor(key: string): string {
   let hash = 0;
   for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) | 0;
-  return SENDER_COLORS[Math.abs(hash) % SENDER_COLORS.length] ?? "#4f46e5";
+  return SENDER_COLORS[Math.abs(hash) % SENDER_COLORS.length] ?? "#0f766e";
 }
 
 function MediaContent({
@@ -342,7 +349,7 @@ export function MessageBubble({
           <p
             className={cn(
               "flex items-center gap-1.5 text-sm italic",
-              outbound ? "text-white/70" : "text-slate-400",
+              outbound ? "text-white/80" : "text-slate-400",
             )}
           >
             <Ban className="h-3.5 w-3.5" /> Esta mensagem foi apagada
@@ -385,7 +392,7 @@ export function MessageBubble({
                 </div>
               ))}
             </div>
-            <p className={cn("text-[10px]", outbound ? "text-white/60" : "text-slate-400")}>
+            <p className={cn("text-[10px]", outbound ? "text-white/80" : "text-slate-400")}>
               Os votos aparecem no WhatsApp dos participantes
             </p>
           </div>
@@ -412,10 +419,13 @@ export function MessageBubble({
           </div>
         )}
 
+        {/* Branco a 80%, e não 70%: sobre o verde da marca (brand-600) o 70%
+            dá 4,12:1 e o horário é texto de 10px, que precisa de 4,5:1. Em
+            80% sobe para 4,84:1 e o check de leitura continua legível. */}
         <p
           className={cn(
             "mt-1 flex items-center justify-end gap-1 text-[10px]",
-            outbound ? "text-white/70" : "text-slate-400",
+            outbound ? "text-white/80" : "text-slate-400",
           )}
         >
           {message.editedAt && !message.deletedAt && <span className="italic">editada</span>}

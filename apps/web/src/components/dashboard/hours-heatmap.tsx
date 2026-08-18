@@ -8,6 +8,7 @@ import {
   WEEKDAYS,
   type Weekday,
 } from "@azvchat/shared";
+import { BRAND_HEATMAP_RAMP } from "@/lib/brand";
 import type { DashboardHourlyCellDto } from "@/lib/types";
 import { ChartCard, ChartTable } from "./chart-card";
 
@@ -16,10 +17,11 @@ import { ChartCard, ChartTable } from "./chart-card";
  *
  * Magnitude pede rampa sequencial de **um** tom só, clara para escura — arco-
  * íris aqui faria o leitor procurar significado na cor errada. A rampa é o
- * indigo da marca (400 → 800), conferida no validador: passos monótonos, cada
- * degrau perceptível, e o mais claro ainda separa da superfície branca.
+ * verde da marca, conferida no validador: passos monótonos, cada degrau
+ * perceptível, e o mais claro ainda separa da superfície branca. Os valores
+ * vêm de `lib/brand.ts`, junto com o resto da marca.
  */
-const RAMP = ["#818cf8", "#6366f1", "#4f46e5", "#3730a3"];
+const RAMP = BRAND_HEATMAP_RAMP;
 /** Célula sem nenhuma mensagem: cinza de superfície, não é degrau da rampa. */
 const EMPTY_COLOR = "#f1f5f9";
 

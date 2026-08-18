@@ -284,7 +284,7 @@ export function ContextPanel({
               <div className="flex items-center gap-1">
                 <input
                   autoFocus
-                  className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2 py-1 text-sm font-semibold text-slate-900 focus:border-brand-500 focus:outline-none"
+                  className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2 py-1 text-sm font-semibold text-slate-900 focus:border-brand-600 focus:outline-none"
                   value={nome}
                   placeholder={conversation.whatsappTitle}
                   onChange={(event) => setNome(event.target.value)}
@@ -380,7 +380,7 @@ export function ContextPanel({
                 // pessoa: no banco não existe usuário "@todos", e na tela ele
                 // também não pode passar por um.
                 conversation.assignedToAll
-                  ? "border-indigo-200 bg-indigo-50 font-semibold text-indigo-700"
+                  ? "border-brand-100 bg-brand-50 font-semibold text-brand-700"
                   : "border-slate-200",
               )}
               value={
@@ -419,7 +419,7 @@ export function ContextPanel({
           <p
             className={cn(
               "text-right text-[11px]",
-              conversation.assignedToAll ? "text-indigo-600" : "text-slate-400",
+              conversation.assignedToAll ? "text-brand-600" : "text-slate-400",
             )}
           >
             {ALL_USERS_ASSIGNEE_LABEL}: {ALL_USERS_ASSIGNEE_HINT}
@@ -619,7 +619,7 @@ export function ContextPanel({
                       {renamingParticipant === participant.id ? (
                         <input
                           autoFocus
-                          className="w-full rounded-lg border border-slate-300 px-2 py-0.5 text-xs text-slate-700 focus:border-brand-500 focus:outline-none"
+                          className="w-full rounded-lg border border-slate-300 px-2 py-0.5 text-xs text-slate-700 focus:border-brand-600 focus:outline-none"
                           defaultValue={participant.customName ?? ""}
                           placeholder={participant.whatsappName ?? "Nome do participante"}
                           onBlur={(event) =>

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Pencil, Plus, Tags as TagsIcon, Trash2 } from "lucide-react";
 import { tagsApi } from "@/lib/api";
+import { BRAND_NAVY } from "@/lib/brand";
 import { useAuth } from "@/lib/auth-context";
 import type { TagDto } from "@/lib/types";
 import { Badge, Button, Card, Field, Input, Modal, Spinner, EmptyState } from "@/components/ui";
@@ -13,9 +14,15 @@ import {
   useMyDepartments,
 } from "@/components/department-picker";
 
+/**
+ * Cor inicial de uma etiqueta nova: azul-marinho da marca, não o verde — a
+ * etiqueta convive com o selo de status na conversa, e verde ali disputaria a
+ * leitura com "Aberto". A cor escolhida no cadastro é dado do usuário e não
+ * muda; isto é só o valor de partida do formulário.
+ */
 const EMPTY_FORM = {
   name: "",
-  color: "#6366f1",
+  color: BRAND_NAVY,
   isGeneral: false,
   departmentIds: [] as string[],
 };

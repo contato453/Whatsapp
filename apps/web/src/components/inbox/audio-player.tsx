@@ -88,7 +88,7 @@ export function AudioPlayer({ src, outbound }: { src: string; outbound: boolean 
         )}
       />
 
-      <span className={cn("shrink-0 text-[10px] tabular-nums", outbound ? "text-white/70" : "text-slate-400")}>
+      <span className={cn("shrink-0 text-[10px] tabular-nums", outbound ? "text-white/80" : "text-slate-400")}>
         {formatSeconds(progress)}
       </span>
 
