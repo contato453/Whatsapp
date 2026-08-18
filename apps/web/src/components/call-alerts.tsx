@@ -86,8 +86,20 @@ export function CallAlerts() {
       // Sem responsável, avisa todo mundo para a ligação não passar em branco.
       if (payload.assignedUserId && payload.assignedUserId !== user.id) return;
       const key = `${payload.conversationId}:${payload.at}`;
+      // Durante um deploy a aba nova pode receber evento de uma API ainda
+      // antiga, sem os campos de identidade. Normalizar aqui garante que o
+      // aviso SEMPRE aparece — perder a chamada é pior que perder o detalhe.
+      const alert: CallAlert = {
+        ...payload,
+        callerName: payload.callerName ?? null,
+        callerPhone: payload.callerPhone ?? null,
+        callerGroups: payload.callerGroups ?? [],
+        callerAvatar: payload.callerAvatar ?? null,
+        instanceName: payload.instanceName ?? null,
+        key,
+      };
       setAlerts((current) =>
-        current.some((alert) => alert.key === key) ? current : [...current, { ...payload, key }],
+        current.some((entry) => entry.key === key) ? current : [...current, alert],
       );
       window.setTimeout(() => dismiss(key), ALERT_TTL_MS);
 

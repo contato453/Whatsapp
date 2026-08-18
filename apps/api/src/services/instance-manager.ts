@@ -322,6 +322,11 @@ export class InstanceManager {
           // A identidade é resolvida AQUI, no backend, para a tela receber
           // pronto — nada de consulta de agenda espalhada por componente.
           // São só consultas locais indexadas: não seguram o aviso.
+          //
+          // E falha na resolução NUNCA derruba o aviso: a chamada toca por
+          // poucos segundos, e um aviso anônimo agora vale mais do que um
+          // aviso perfeito que não chega. Sem nome, a tela mostra o rótulo
+          // neutro — que é o degrau "nada encontrado" da própria regra.
           const ref = full ?? conversation;
           const identity = await resolveCallerIdentity(this.prisma, {
             whatsappInstanceId: event.instanceId,
@@ -336,6 +341,15 @@ export class InstanceManager {
             },
             isGroup: event.isGroup,
             contact: caller,
+          }).catch((err) => {
+            // Sem telefone nem conteúdo no log — só o suficiente para achar.
+            this.logger.warn({
+              instanceId: event.instanceId,
+              conversationId: conversation.id,
+              event: "call_identity_failed",
+              error: String(err),
+            });
+            return { name: callerName, phone: event.fromPhone, groups: [], avatar: null };
           });
           const payload: CallIncomingPayload = {
             conversationId: conversation.id,
@@ -353,6 +367,14 @@ export class InstanceManager {
             at: event.timestamp.toISOString(),
           };
           this.io.to(room).emit(RealtimeEvents.CallIncoming, payload);
+          // Rastro para diagnosticar "a chamada tocou e o aviso não veio":
+          // sem telefone e sem nome no log, só o suficiente para achar.
+          this.logger.info({
+            instanceId: event.instanceId,
+            conversationId: conversation.id,
+            event: "call_incoming_emitted",
+            identified: identity.name != null,
+          });
         }
       });
     });
