@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { requireRole } from "../../lib/auth.js";
+import { requirePermission } from "../../lib/permissions.js";
 import type { AppDeps } from "../../types.js";
 
 const listSchema = z.object({
@@ -9,7 +9,7 @@ const listSchema = z.object({
 });
 
 export async function auditRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
-  app.get("/audit-logs", { preHandler: requireRole("supervisor") }, async (request) => {
+  app.get("/audit-logs", { preHandler: requirePermission(deps, "audit.view") }, async (request) => {
     const { limit, offset } = listSchema.parse(request.query);
     const logs = await deps.prisma.auditLog.findMany({
       where: { organizationId: request.user.organizationId },

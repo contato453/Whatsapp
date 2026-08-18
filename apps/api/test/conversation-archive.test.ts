@@ -11,6 +11,7 @@ import { whatsappInstanceRoutes } from "../src/modules/whatsapp-instances/routes
 import { MessageIngestService } from "../src/services/message-ingest.js";
 import type { MediaStorage } from "../src/lib/media-storage.js";
 import type { AppDeps } from "../src/types.js";
+import { rolePermissionStub } from "./helpers/permissions.js";
 
 /**
  * O que estes testes fixam sobre o arquivamento:
@@ -75,6 +76,7 @@ function baseConversation(overrides: Record<string, unknown> = {}) {
 
 function fakeConversationPrisma(conversation: Record<string, unknown> | null): PrismaClient {
   return {
+    rolePermission: rolePermissionStub,
     userWhatsAppInstance: { findMany: async () => [] },
     userDepartment: { findMany: async () => [] },
     conversation: {
@@ -228,6 +230,7 @@ describe("POST /conversations/:id/archive|unarchive", () => {
 describe("mensagem nova em conversa arquivada (ingestão)", () => {
   function ingestHarness(conversation: Record<string, unknown>) {
     const prisma = {
+    rolePermission: rolePermissionStub,
       conversation: {
         findUnique: async (args: Record<string, unknown>) => {
           // Duas buscas possíveis: a do upsert (por chave composta) e não há
@@ -305,6 +308,7 @@ describe("mensagem nova em conversa arquivada (ingestão)", () => {
 describe("número de backup (ingestão e papéis)", () => {
   it("conversa nova no número de backup já nasce arquivada", async () => {
     const prisma = {
+    rolePermission: rolePermissionStub,
       conversation: {
         findUnique: async () => null,
         create: async (args: Record<string, unknown>) => {
@@ -358,6 +362,7 @@ describe("número de backup (ingestão e papéis)", () => {
 
   function instancePrisma(): PrismaClient {
     return {
+      rolePermission: rolePermissionStub,
       userWhatsAppInstance: { findMany: async () => [{ whatsappInstanceId: INSTANCE_ID }] },
       whatsAppInstance: {
         findFirst: async () => ({
@@ -470,6 +475,7 @@ describe("número de backup (ingestão e papéis)", () => {
 describe("GET /search (arquivada continua aparecendo)", () => {
   it("a busca de conversas não filtra por arquivamento", async () => {
     const prisma = {
+    rolePermission: rolePermissionStub,
       userWhatsAppInstance: { findMany: async () => [] },
       userDepartment: { findMany: async () => [] },
       conversation: {

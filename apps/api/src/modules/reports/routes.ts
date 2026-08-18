@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { conversationScope, loadConversationAccess } from "../../lib/access.js";
-import { requireRole } from "../../lib/auth.js";
+import { requirePermission } from "../../lib/permissions.js";
 import { serializeUser } from "../../lib/serialize.js";
 import { computeAgentTotals, type ReportMessage } from "./metrics.js";
 import type { AppDeps } from "../../types.js";
@@ -9,7 +9,8 @@ import type { AppDeps } from "../../types.js";
 /**
  * Relatório de atendimentos por atendente.
  *
- * Restrito a supervisor/admin: são números de desempenho da equipe.
+ * Quem abre é decidido pela chave `reports.view` do catálogo de permissões
+ * (padrão: supervisor para cima) — são números de desempenho da equipe.
  * O recorte de acesso do próprio supervisor continua valendo — ele só
  * enxerga o movimento dos números e departamentos que já enxerga.
  */
@@ -32,7 +33,7 @@ interface QueueByStatus {
 const emptyQueue = (): QueueByStatus => ({ open: 0, waitingClient: 0, waitingInternal: 0 });
 
 export async function reportRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
-  app.get("/reports/agents", { preHandler: requireRole("supervisor") }, async (request) => {
+  app.get("/reports/agents", { preHandler: requirePermission(deps, "reports.view") }, async (request) => {
     const { from, to } = rangeSchema.parse(request.query);
     const start = new Date(from);
     const end = new Date(to);

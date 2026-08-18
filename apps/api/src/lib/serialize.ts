@@ -16,7 +16,9 @@ import {
   type ConnectionStatus,
   type ConversationStatus,
   type ConversationType,
+  type ConfigurableRole,
   type DashboardPeriod,
+  type PermissionAction,
   type UserRole,
 } from "@azvchat/shared";
 
@@ -41,6 +43,39 @@ export function serializeUser(user: User) {
     notificationVolume: user.notificationVolume,
     lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
     createdAt: user.createdAt.toISOString(),
+  };
+}
+
+/**
+ * A sessão: o usuário mais o conjunto de ações que ele pode executar agora.
+ *
+ * As permissões viajam JUNTO com o usuário, e não numa rota à parte, porque
+ * a tela precisa das duas coisas no mesmo instante: sem elas ela deduziria
+ * o que mostrar pelo papel, e toda configuração da tela de Permissões
+ * viraria mentira visual — botão aparecendo para quem a API recusa.
+ */
+export function serializeSessionUser(user: User, permissions: PermissionAction[]) {
+  return { ...serializeUser(user), permissions };
+}
+
+/**
+ * Uma linha da tela de Permissões: a ação do catálogo, o valor efetivo por
+ * papel e quem mudou por último. O catálogo em si não é serializado daqui —
+ * a tela o importa de `@azvchat/shared`, que é a fonte única dos rótulos.
+ */
+export function serializeRolePermission(row: {
+  role: ConfigurableRole;
+  action: string;
+  allowed: boolean;
+  updatedAt: Date;
+  updatedBy: User | null;
+}) {
+  return {
+    role: row.role,
+    action: row.action,
+    allowed: row.allowed,
+    updatedAt: row.updatedAt.toISOString(),
+    updatedBy: row.updatedBy ? serializeUserDirectory(row.updatedBy) : null,
   };
 }
 

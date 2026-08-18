@@ -3,6 +3,7 @@ import { z } from "zod";
 import { quickReplyMediaTypeFromMime } from "@azvchat/shared";
 import { accessibleDepartmentIds, departmentResourceScope } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
+import { loadPermissions, requirePermission } from "../../lib/permissions.js";
 import {
   assertCanManageResource,
   auditDepartmentSnapshot,
@@ -64,15 +65,23 @@ export async function quickReplyRoutes(app: FastifyInstance, deps: AppDeps): Pro
     return { quickReplies: replies.map(serializeQuickReply) };
   });
 
-  app.post("/quick-replies", { preHandler: authenticate }, async (request, reply) => {
+  app.post(
+    "/quick-replies",
+    { preHandler: requirePermission(deps, "quick_reply.manage") },
+    async (request, reply) => {
     const body = quickReplyFieldsSchema.parse(request.body);
     const accessible = await accessibleDepartmentIds(deps.prisma, request.user);
+    // Atalho GERAL vale para a organização inteira, então tem chave própria
+    // no catálogo — criar um restrito ao próprio departamento não depende dela.
+    const permissions = await loadPermissions(deps.prisma, request.user);
+    const canWriteGeneral = permissions.can("quick_reply.create_shared");
     const target = await resolveDepartmentTarget(
       deps.prisma,
       request.user,
       accessible,
       body,
       WRITE_LABELS,
+      { canWriteGeneral },
     );
 
     const existing = await deps.prisma.quickReply.findUnique({
@@ -112,7 +121,10 @@ export async function quickReplyRoutes(app: FastifyInstance, deps: AppDeps): Pro
     return reply.status(201).send({ quickReply: serializeQuickReply(created) });
   });
 
-  app.patch("/quick-replies/:id", { preHandler: authenticate }, async (request) => {
+  app.patch(
+    "/quick-replies/:id",
+    { preHandler: requirePermission(deps, "quick_reply.manage") },
+    async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = quickReplyFieldsSchema.partial().parse(request.body);
     const accessible = await accessibleDepartmentIds(deps.prisma, request.user);
@@ -128,7 +140,9 @@ export async function quickReplyRoutes(app: FastifyInstance, deps: AppDeps): Pro
       isGeneral: existing.isGeneral,
       departmentIds: existing.departments.map((link) => link.departmentId),
     };
-    assertCanManageResource(accessible, current, MANAGE_LABELS);
+    const permissions = await loadPermissions(deps.prisma, request.user);
+    const canWriteGeneral = permissions.can("quick_reply.create_shared");
+    assertCanManageResource(accessible, current, MANAGE_LABELS, { canWriteGeneral });
 
     const target = await resolveDepartmentTarget(
       deps.prisma,
@@ -139,6 +153,7 @@ export async function quickReplyRoutes(app: FastifyInstance, deps: AppDeps): Pro
         departmentIds: body.departmentIds ?? current.departmentIds,
       },
       WRITE_LABELS,
+      { canWriteGeneral },
     );
 
     if (body.shortcut && body.shortcut !== existing.shortcut) {
@@ -188,7 +203,10 @@ export async function quickReplyRoutes(app: FastifyInstance, deps: AppDeps): Pro
     return { quickReply: serializeQuickReply(updated) };
   });
 
-  app.delete("/quick-replies/:id", { preHandler: authenticate }, async (request) => {
+  app.delete(
+    "/quick-replies/:id",
+    { preHandler: requirePermission(deps, "quick_reply.manage") },
+    async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const accessible = await accessibleDepartmentIds(deps.prisma, request.user);
     const existing = await deps.prisma.quickReply.findFirst({
@@ -240,7 +258,10 @@ export async function quickReplyRoutes(app: FastifyInstance, deps: AppDeps): Pro
     return existing;
   }
 
-  app.post("/quick-replies/:id/media", { preHandler: authenticate }, async (request) => {
+  app.post(
+    "/quick-replies/:id/media",
+    { preHandler: requirePermission(deps, "quick_reply.manage") },
+    async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     await findManageableOr404(id, request.user);
 
@@ -284,7 +305,10 @@ export async function quickReplyRoutes(app: FastifyInstance, deps: AppDeps): Pro
     return { quickReply: serializeQuickReply(updated) };
   });
 
-  app.delete("/quick-replies/:id/media", { preHandler: authenticate }, async (request) => {
+  app.delete(
+    "/quick-replies/:id/media",
+    { preHandler: requirePermission(deps, "quick_reply.manage") },
+    async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const existing = await findManageableOr404(id, request.user);
 

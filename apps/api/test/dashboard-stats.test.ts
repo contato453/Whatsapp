@@ -7,6 +7,7 @@ import { registerErrorHandler } from "../src/lib/errors.js";
 import type { AuthTokenPayload } from "../src/lib/auth.js";
 import { dashboardRoutes } from "../src/modules/dashboard/routes.js";
 import type { AppDeps } from "../src/types.js";
+import { rolePermissionStub } from "./helpers/permissions.js";
 
 /**
  * O que estes testes fixam na rota de stats:
@@ -44,6 +45,7 @@ const STATUS_BUCKETS = [
 
 function fakePrisma(): PrismaClient {
   return {
+    rolePermission: rolePermissionStub,
     // Organização sem linha de parâmetros: a rota cai nos padrões de shared.
     attendanceSettings: { findUnique: async () => null },
     userWhatsAppInstance: {

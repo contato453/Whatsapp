@@ -3,6 +3,7 @@ import { z } from "zod";
 import { RealtimeEvents } from "@azvchat/shared";
 import { accessibleInstanceIds, instanceIdScope } from "../../lib/access.js";
 import { authenticate, requireRole } from "../../lib/auth.js";
+import { loadPermissions, requirePermission } from "../../lib/permissions.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
 import { grantInstanceAccess } from "../../realtime/socket.js";
 import {
@@ -107,7 +108,7 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
 
   app.post(
     "/whatsapp-instances",
-    { preHandler: requireRole("supervisor") },
+    { preHandler: requirePermission(deps, "whatsapp_instance.manage") },
     async (request, reply) => {
       const body = createInstanceSchema.parse(request.body);
       await assertDepartmentInOrg(body.departmentId, request.user.organizationId);
@@ -157,11 +158,19 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
 
   app.patch(
     "/whatsapp-instances/:id",
-    { preHandler: requireRole("supervisor") },
+    { preHandler: requirePermission(deps, "whatsapp_instance.manage") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       const body = updateInstanceSchema.parse(request.body);
       const current = await findInstanceOr404(id, request.user);
+      // A recusa é DO CAMPO, não da rota: quem pode editar o número mas não
+      // pode marcá-lo como backup continua editando nome, departamento e
+      // responsável padrão normalmente. Marcar backup muda como toda
+      // conversa futura do número nasce, por isso tem chave própria.
+      if (body.isBackup !== undefined && body.isBackup !== current.isBackup) {
+        const permissions = await loadPermissions(deps.prisma, request.user);
+        permissions.assert("whatsapp_instance.backup");
+      }
       await assertDepartmentInOrg(body.departmentId, request.user.organizationId);
       if (body.defaultAssigneeId) {
         await assertCanBeDefaultAssignee(
@@ -215,7 +224,7 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
    */
   app.get(
     "/whatsapp-instances/:id/archivable-count",
-    { preHandler: requireRole("supervisor") },
+    { preHandler: requirePermission(deps, "whatsapp_instance.manage") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       await findInstanceOr404(id, request.user);
@@ -241,7 +250,7 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
    */
   app.post(
     "/whatsapp-instances/:id/archive-all",
-    { preHandler: requireRole("supervisor") },
+    { preHandler: requirePermission(deps, "whatsapp_instance.manage") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       await findInstanceOr404(id, request.user);
@@ -299,7 +308,7 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
    */
   app.get(
     "/whatsapp-instances/:id/assignees",
-    { preHandler: requireRole("supervisor") },
+    { preHandler: requirePermission(deps, "whatsapp_instance.manage") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       await findInstanceOr404(id, request.user);
@@ -325,7 +334,7 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
    */
   app.post(
     "/whatsapp-instances/:id/apply-default-assignee",
-    { preHandler: requireRole("supervisor") },
+    { preHandler: requirePermission(deps, "whatsapp_instance.manage") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       const instance = await findInstanceOr404(id, request.user);
@@ -415,7 +424,7 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
 
   app.post(
     "/whatsapp-instances/:id/connect",
-    { preHandler: requireRole("supervisor") },
+    { preHandler: requirePermission(deps, "whatsapp_instance.connection") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       const instance = await findInstanceOr404(id, request.user);
@@ -429,7 +438,7 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
 
   app.post(
     "/whatsapp-instances/:id/disconnect",
-    { preHandler: requireRole("supervisor") },
+    { preHandler: requirePermission(deps, "whatsapp_instance.connection") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       await findInstanceOr404(id, request.user);
@@ -447,7 +456,7 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
 
   app.post(
     "/whatsapp-instances/:id/logout",
-    { preHandler: requireRole("supervisor") },
+    { preHandler: requirePermission(deps, "whatsapp_instance.connection") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       await findInstanceOr404(id, request.user);

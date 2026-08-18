@@ -17,6 +17,7 @@ import {
   loadConversationAccess,
 } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
+import { requirePermission } from "../../lib/permissions.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import { extensionFromMime } from "../../lib/media-storage.js";
 import { mentionsSchema, resolveMentionTargets } from "../../lib/mentions.js";
@@ -371,7 +372,10 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
   });
 
   /** Apaga a mensagem para todos (só mensagens enviadas por nós). */
-  app.delete("/messages/:id", { preHandler: authenticate }, async (request) => {
+  app.delete(
+    "/messages/:id",
+    { preHandler: requirePermission(deps, "message.delete_sent") },
+    async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const message = await deps.prisma.message.findFirst({
       where: { id, organizationId: request.user.organizationId },
@@ -410,7 +414,10 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
   });
 
   /** Edita o texto de uma mensagem enviada. */
-  app.patch("/messages/:id", { preHandler: authenticate }, async (request) => {
+  app.patch(
+    "/messages/:id",
+    { preHandler: requirePermission(deps, "message.edit_sent") },
+    async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const { content } = z.object({ content: z.string().min(1).max(65_000) }).parse(request.body);
     const message = await deps.prisma.message.findFirst({

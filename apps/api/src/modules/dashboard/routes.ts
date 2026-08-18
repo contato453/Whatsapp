@@ -8,7 +8,6 @@ import {
   DATE_ONLY_PATTERN,
   FILTER_ALL_USERS,
   FILTER_NONE,
-  hasRole,
   MAX_CUSTOM_RANGE_DAYS,
   type ConnectionStatus,
   type ConversationStatus,
@@ -20,6 +19,7 @@ import {
   unassignedConversationWhere,
 } from "../../lib/conversation-assignment.js";
 import { authenticate } from "../../lib/auth.js";
+import { loadPermissions } from "../../lib/permissions.js";
 import { serializeDashboardStats, type DashboardTopUserRow } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
 import {
@@ -206,7 +206,12 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
 
     // Números de desempenho da equipe são de supervisor para cima, igual ao
     // relatório por atendente. Para quem não é, o bloco nem é consultado.
-    const canSeeTeam = hasRole(request.user.role, "supervisor");
+    // Bloco de carga da equipe: chave do catálogo, não papel. Para quem não
+    // pode, a rota nem consulta — e devolve `null`, que a tela lê como "não
+    // desenha o bloco".
+    const canSeeTeam = (await loadPermissions(deps.prisma, request.user)).can(
+      "dashboard.view_team",
+    );
 
     const [
       statusBuckets,

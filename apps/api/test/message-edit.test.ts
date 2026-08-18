@@ -12,6 +12,7 @@ import { registerErrorHandler } from "../src/lib/errors.js";
 import type { AuthTokenPayload } from "../src/lib/auth.js";
 import { messageRoutes } from "../src/modules/messages/routes.js";
 import type { AppDeps } from "../src/types.js";
+import { rolePermissionStub } from "./helpers/permissions.js";
 
 /**
  * Editar mensagem já enviada. O risco aqui é silencioso: o WhatsApp só
@@ -97,6 +98,7 @@ function buildMessage(overrides: Record<string, unknown> = {}) {
 
 async function buildApp(message: Record<string, unknown> | null): Promise<FastifyInstance> {
   const prisma = {
+    rolePermission: rolePermissionStub,
     userWhatsAppInstance: { findMany: async () => [] },
     userDepartment: { findMany: async () => [] },
     message: {

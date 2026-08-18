@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { PrismaClient } from "@azvchat/database";
-import { CONVERSATION_DEPARTMENT_MIN_ROLE, hasRole } from "@azvchat/shared";
-import { canWriteConversationDepartment } from "../src/lib/conversation-access.js";
+import {
+  PERMISSION_ACTION_KEYS,
+  permissionOverrideKey,
+  type ConfigurableRole,
+} from "@azvchat/shared";
+import { buildPermissions } from "../src/lib/permissions.js";
 import {
   accessibleInstanceIds,
   canWriteGeneralResource,
@@ -15,6 +19,18 @@ import {
   type ConversationAccess,
 } from "../src/lib/access.js";
 import type { AuthTokenPayload } from "../src/lib/auth.js";
+
+/** Permissões efetivas de um papel, sem nenhuma configuração gravada. */
+function permissoes(role: "admin" | ConfigurableRole) {
+  return buildPermissions({ role }, new Map());
+}
+
+/** Configuração que liga (ou desliga) o catálogo inteiro para um papel. */
+function todasAsChaves(role: ConfigurableRole, allowed: boolean): Map<string, boolean> {
+  return new Map(
+    PERMISSION_ACTION_KEYS.map((action) => [permissionOverrideKey(role, action), allowed]),
+  );
+}
 
 function fakePrisma(
   instances: Array<{ whatsappInstanceId: string }>,
@@ -316,24 +332,94 @@ describe("canWriteInAllDepartments (escrita exige todos)", () => {
  * Status e responsável continuam sendo do atendente: a restrição é do
  * campo departamento, não da rota de atendimento.
  */
-describe("canWriteConversationDepartment (quem classifica a conversa)", () => {
-  it("atendente é recusado ao gravar o departamento", () => {
-    expect(canWriteConversationDepartment("agent")).toBe(false);
+describe("quem classifica a conversa (chave conversation.change_department)", () => {
+  it("atendente é recusado ao gravar o departamento, pelo padrão do catálogo", () => {
+    expect(permissoes("agent").can("conversation.change_department")).toBe(false);
   });
 
   it("supervisor grava", () => {
-    expect(canWriteConversationDepartment("supervisor")).toBe(true);
+    expect(permissoes("supervisor").can("conversation.change_department")).toBe(true);
   });
 
-  it("admin grava, pela hierarquia de hasRole", () => {
-    expect(canWriteConversationDepartment("admin")).toBe(true);
+  it("admin grava, porque passa por cima de todo o catálogo", () => {
+    expect(permissoes("admin").can("conversation.change_department")).toBe(true);
   });
 
   it("status e responsável seguem liberados para o atendente", () => {
-    // O papel mínimo dessas duas ações é `agent`, e não se mexeu nele:
-    // a mesma conversa continua sendo atendida por quem a atende.
-    expect(hasRole("agent", "agent")).toBe(true);
-    // E o campo que move a conversa entre times exige supervisão.
-    expect(CONVERSATION_DEPARTMENT_MIN_ROLE).toBe("supervisor");
+    // A restrição é do campo departamento, não da rota de atendimento: a
+    // mesma conversa continua sendo atendida por quem a atende.
+    expect(permissoes("agent").can("conversation.transfer_user")).toBe(true);
+    expect(permissoes("agent").can("conversation.unassign")).toBe(true);
+  });
+});
+
+/**
+ * A INVARIANTE MAIS IMPORTANTE DESTE ARQUIVO.
+ *
+ * PERMISSÃO É AÇÃO, VISIBILIDADE É ALCANCE. O menu de Permissões decide o
+ * que cada perfil pode FAZER; ele não decide, e não pode decidir, QUAIS
+ * conversas cada um enxerga — isso continua saindo inteiro daqui, dos
+ * vínculos de número e departamento.
+ *
+ * O teste abaixo liga TODAS as chaves para um atendente e confere que o
+ * filtro de conversa sai byte a byte igual ao de um atendente sem chave
+ * nenhuma. Se um dia alguém criar uma chave que mexa no recorte, é aqui
+ * que a mentira aparece — antes de virar conversa de cliente na tela de
+ * quem não deveria vê-la.
+ */
+describe("permissão nunca altera visibilidade", () => {
+  const access: ConversationAccess = {
+    instanceIds: ["i1"],
+    departmentIds: ["d1"],
+    ownOnly: true,
+    userId: "u1",
+  };
+
+  it("o filtro de conversa não conhece o catálogo de permissões", () => {
+    const semChave = conversationScope(access);
+    // `conversationScope` é função pura do recorte: ligar chave nenhuma
+    // muda porque nem sequer existe parâmetro de permissão nela.
+    expect(conversationScope(access)).toEqual(semChave);
+    expect(JSON.stringify(semChave)).not.toContain("permission");
+  });
+
+  it("atendente com TODAS as chaves ligadas enxerga exatamente o mesmo", () => {
+    const tudoLigado = todasAsChaves("agent", true);
+    const tudoDesligado = todasAsChaves("agent", false);
+    // As permissões mudam radicalmente...
+    expect(buildPermissions({ role: "agent" }, tudoLigado).allowed().length).toBe(
+      PERMISSION_ACTION_KEYS.length,
+    );
+    expect(buildPermissions({ role: "agent" }, tudoDesligado).allowed()).toEqual([]);
+    // ...e o recorte de conversa continua o mesmo, porque não depende delas.
+    expect(conversationScope(access)).toEqual({
+      AND: [
+        { whatsappInstanceId: { in: ["i1"] } },
+        { OR: [{ departmentId: null }, { departmentId: { in: ["d1"] } }] },
+        { OR: [{ assignedUserId: "u1" }, { assignedUserId: null }] },
+      ],
+    });
+  });
+
+  it("nenhuma chave do catálogo fala de visibilidade", () => {
+    // Guarda-corpo textual: chave nova com estes nomes seria confusão entre
+    // AÇÃO e ALCANCE, e o pedido foi explícito de que ela não deve existir.
+    const proibidos = ["ver_todas", "view_all_conversations", "visibility", "see_all", "scope"];
+    for (const chave of PERMISSION_ACTION_KEYS) {
+      for (const proibido of proibidos) {
+        expect(chave).not.toContain(proibido);
+      }
+    }
+  });
+
+  it("número não vinculado continua invisível mesmo com o catálogo inteiro ligado", () => {
+    const semNumero: ConversationAccess = { ...access, instanceIds: [] };
+    expect(conversationScope(semNumero)).toEqual({
+      AND: [
+        { whatsappInstanceId: { in: [] } },
+        { OR: [{ departmentId: null }, { departmentId: { in: ["d1"] } }] },
+        { OR: [{ assignedUserId: "u1" }, { assignedUserId: null }] },
+      ],
+    });
   });
 });

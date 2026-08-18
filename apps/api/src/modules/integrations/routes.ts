@@ -1,7 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { AZEVEDO_OS_SOURCE, azevedoOsSearchIsValid } from "@azvchat/shared";
-import { authenticate, requireRole } from "../../lib/auth.js";
+import { authenticate } from "../../lib/auth.js";
+import { requireAnyPermission } from "../../lib/permissions.js";
 import { findAccessibleConversation } from "../../lib/conversation-access.js";
 import type { AppDeps } from "../../types.js";
 import { serializeAzevedoOsCompany } from "./serialize.js";
@@ -51,7 +52,10 @@ export async function integrationRoutes(app: FastifyInstance, deps: AppDeps): Pr
    */
   app.get(
     "/integrations/azevedo-os/companies",
-    { preHandler: requireRole("supervisor") },
+    // A pesquisa existe para vincular e para trocar vínculo: quem pode
+    // qualquer um dos dois precisa dela. Quem não pode nenhum não tem o que
+    // fazer aqui — e a busca não pode virar diretório de empresas aberto.
+    { preHandler: requireAnyPermission(deps, ["azevedo_os.link", "azevedo_os.relink"]) },
     async (request) => {
       const query = z
         .object({

@@ -3,7 +3,6 @@ import type { Prisma } from "@azvchat/database";
 import { z } from "zod";
 import {
   AZEVEDO_OS_SOURCE,
-  CONVERSATION_DEPARTMENT_MIN_ROLE,
   CONVERSATION_STATUSES,
   EXTERNAL_REFERENCE_SOURCES,
   FILTER_ALL_USERS,
@@ -19,10 +18,10 @@ import {
   groupScope,
   loadConversationAccess,
 } from "../../lib/access.js";
-import { authenticate, requireRole } from "../../lib/auth.js";
+import { authenticate } from "../../lib/auth.js";
+import { loadPermissions, requirePermission } from "../../lib/permissions.js";
 import {
   accessibleConversationWhere,
-  canWriteConversationDepartment,
 } from "../../lib/conversation-access.js";
 import {
   assignedToAllWhere,
@@ -378,15 +377,19 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     note: z.string().max(500).optional(),
   });
 
-  app.post("/conversations/:id/assign", { preHandler: authenticate }, async (request) => {
+  app.post(
+    "/conversations/:id/assign",
+    { preHandler: requirePermission(deps, "conversation.transfer_user") },
+    async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = assignSchema.parse(request.body);
-    // Atribuir continua sendo do atendente, mas esta rota também aceita
-    // departamento no mesmo corpo — seria a porta lateral para o campo que
-    // decide quem enxerga a conversa. A recusa é do CAMPO, não da rota:
-    // sem `departmentId`, o atendente atribui normalmente.
-    if (body.departmentId && !canWriteConversationDepartment(request.user.role)) {
-      throw new ForbiddenError();
+    // Esta rota também aceita departamento no mesmo corpo — seria a porta
+    // lateral para o campo que decide quem enxerga a conversa. A recusa é do
+    // CAMPO, não da rota: sem `departmentId`, quem pode atribuir atribui
+    // normalmente.
+    if (body.departmentId) {
+      const permissions = await loadPermissions(deps.prisma, request.user);
+      permissions.assert("conversation.change_department");
     }
     const conversation = await findConversationOr404(id, request.user);
 
@@ -458,7 +461,8 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     });
     await emitConversationUpdated(id, request.user.organizationId);
     return { ok: true };
-  });
+    },
+  );
 
   /**
    * Trocar o departamento da conversa é decisão de supervisão, e não de
@@ -466,12 +470,13 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
    * atendente que o alterasse tiraria o atendimento do campo de visão de um
    * time inteiro — inclusive do dele próprio, sem entender o motivo.
    *
-   * `requireRole` já inclui o admin pela hierarquia de `hasRole`. Status e
-   * responsável seguem liberados para o atendente, nas rotas ao lado.
+   * A chave `conversation.change_department` do catálogo decide quem pode
+   * (padrão: supervisor para cima), e o admin passa por cima como sempre.
+   * Status e responsável seguem em rotas e chaves próprias, ao lado.
    */
   app.post(
     "/conversations/:id/transfer-department",
-    { preHandler: requireRole(CONVERSATION_DEPARTMENT_MIN_ROLE) },
+    { preHandler: requirePermission(deps, "conversation.change_department") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       const body = z
@@ -529,7 +534,10 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
    * exigiria não lidas por usuário — outra entrega, e que mexeria em toda a
    * Inbox; aqui fica registrado para ninguém tratar como bug novo.
    */
-  app.post("/conversations/:id/assign-all", { preHandler: authenticate }, async (request) => {
+  app.post(
+    "/conversations/:id/assign-all",
+    { preHandler: requirePermission(deps, "conversation.assign_all") },
+    async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = z.object({ note: z.string().max(500).optional() }).parse(request.body ?? {});
     const conversation = await findConversationOr404(id, request.user);
@@ -565,7 +573,10 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     return { ok: true };
   });
 
-  app.post("/conversations/:id/unassign", { preHandler: authenticate }, async (request) => {
+  app.post(
+    "/conversations/:id/unassign",
+    { preHandler: requirePermission(deps, "conversation.unassign") },
+    async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const conversation = await findConversationOr404(id, request.user);
     // Sair do coletivo tem ação própria: "removeu o responsável" descreveria
@@ -603,7 +614,10 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
    * congela como está e volta a valer no desarquivamento. Papel mínimo:
    * agent, o mesmo que já muda status e atribui — quem enxerga, arquiva.
    */
-  app.post("/conversations/:id/archive", { preHandler: authenticate }, async (request) => {
+  app.post(
+    "/conversations/:id/archive",
+    { preHandler: requirePermission(deps, "conversation.archive") },
+    async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const conversation = await findConversationOr404(id, request.user);
     // Já arquivada: não regrava data nem autor, senão o registro de quem
@@ -632,7 +646,10 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
   });
 
   /** Desarquivar: volta com o status que tinha e volta a contar em tudo. */
-  app.post("/conversations/:id/unarchive", { preHandler: authenticate }, async (request) => {
+  app.post(
+    "/conversations/:id/unarchive",
+    { preHandler: requirePermission(deps, "conversation.archive") },
+    async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const conversation = await findConversationOr404(id, request.user);
     if (!conversation.archivedAt) return { ok: true };
@@ -780,12 +797,14 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       return { ok: true };
     }
 
+    const permissions = await loadPermissions(deps.prisma, request.user);
     const plan = planReferenceUpdate({
       currentReference: conversation.externalReference,
       currentSource: conversation.externalSource,
       nextReference,
       nextSource: body.externalSource,
-      role: request.user.role,
+      canLink: permissions.can("azevedo_os.link"),
+      canRelink: permissions.can("azevedo_os.relink"),
     });
 
     if (plan.verifyCompany && plan.reference) {
@@ -822,7 +841,10 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
    * WhatsApp — assim a sincronização continua atualizando o nome de origem
    * sem nunca apagar o que a equipe definiu.
    */
-  app.patch("/conversations/:id", { preHandler: authenticate }, async (request) => {
+  app.patch(
+    "/conversations/:id",
+    { preHandler: requirePermission(deps, "conversation.rename") },
+    async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = z
       .object({
@@ -860,7 +882,10 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
    * Papel mínimo continua sendo `agent`: quem atende o grupo é quem sabe
    * quem é quem nele.
    */
-  app.patch("/group-participants/:id", { preHandler: authenticate }, async (request) => {
+  app.patch(
+    "/group-participants/:id",
+    { preHandler: requirePermission(deps, "group_participant.rename") },
+    async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = z
       .object({
@@ -1076,8 +1101,10 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       where: { id: noteId, conversationId: id, organizationId: request.user.organizationId },
     });
     if (!note) throw new NotFoundError("Nota interna");
-    if (note.userId !== request.user.sub && request.user.role === "agent") {
-      throw new ForbiddenError("Só o autor pode editar esta nota");
+    if (note.userId !== request.user.sub) {
+      // Nota própria cada um sempre edita; nota de terceiro é chave.
+      const permissions = await loadPermissions(deps.prisma, request.user);
+      permissions.assert("note.delete_other");
     }
     const updated = await deps.prisma.internalNote.update({
       where: { id: noteId },
@@ -1111,8 +1138,9 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       where: { id: noteId, conversationId: id, organizationId: request.user.organizationId },
     });
     if (!note) throw new NotFoundError("Nota interna");
-    if (note.userId !== request.user.sub && request.user.role === "agent") {
-      throw new ForbiddenError("Só o autor pode excluir esta nota");
+    if (note.userId !== request.user.sub) {
+      const permissions = await loadPermissions(deps.prisma, request.user);
+      permissions.assert("note.delete_other");
     }
     await deps.prisma.internalNote.delete({ where: { id: noteId } });
     deps.audit.record({

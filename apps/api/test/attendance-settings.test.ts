@@ -15,6 +15,7 @@ import {
   attendanceSettingsSchema,
 } from "../src/modules/attendance-settings/routes.js";
 import type { AppDeps } from "../src/types.js";
+import { rolePermissionStub } from "./helpers/permissions.js";
 
 /**
  * O que estes testes fixam: quem lê, quem grava e o que a validação recusa.
@@ -87,6 +88,7 @@ function fakePrisma(): PrismaClient {
     },
   };
   return {
+    rolePermission: rolePermissionStub,
     attendanceSettings,
     attendanceBusinessHours,
     attendanceLoginHours,

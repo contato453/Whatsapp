@@ -7,6 +7,7 @@ import type { AuthTokenPayload } from "../src/lib/auth.js";
 import { serializeUser, serializeUserDirectory } from "../src/lib/serialize.js";
 import { authRoutes } from "../src/modules/auth/routes.js";
 import type { AppDeps } from "../src/types.js";
+import { rolePermissionStub } from "./helpers/permissions.js";
 
 /**
  * O que estes testes fixam: som e volume de notificação são preferência
@@ -42,6 +43,7 @@ function fakeUser(): User {
 
 function fakePrisma(): PrismaClient {
   return {
+    rolePermission: rolePermissionStub,
     user: {
       findUnique: async () => stored,
       update: async ({ data }: { data: Partial<User> }) => {

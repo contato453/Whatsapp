@@ -1,9 +1,4 @@
-import {
-  AZEVEDO_OS_SOURCE,
-  canManageAzevedoOsLink,
-  type ExternalReferenceSource,
-  type UserRole,
-} from "@azvchat/shared";
+import { AZEVEDO_OS_SOURCE, type ExternalReferenceSource } from "@azvchat/shared";
 import { ForbiddenError } from "./errors.js";
 
 /**
@@ -14,10 +9,18 @@ import { ForbiddenError } from "./errors.js";
  * (fonte `azevedo-os`). Um endpoint só — `PATCH /conversations/:id/reference`
  * — atende os dois, e é aqui que se decide quem pode o quê.
  *
- * Por que a permissão depende do ESTADO e não só do papel: o campo de
- * cadastro manual é de `agent`, e sem esta regra bastaria digitar qualquer
- * coisa nele para apagar o vínculo com a empresa — uma desvinculação
- * silenciosa feita por quem não tem permissão de desvincular.
+ * Por que a permissão depende do ESTADO e não só das chaves: o campo de
+ * cadastro manual é de atendente, e sem esta regra bastaria digitar
+ * qualquer coisa nele para apagar o vínculo com a empresa — uma
+ * desvinculação silenciosa feita por quem não tem permissão de desvincular.
+ *
+ * Por que VINCULAR e TROCAR são duas chaves separadas do catálogo, e não
+ * uma: preencher empresa em conversa que está SEM empresa é rotina de
+ * classificação, feita por quem atende. Trocar (ou desfazer) vínculo já
+ * existente é mexer na classificação que outra pessoa fez, e errar ali
+ * anexa a conversa ao cliente errado — o mesmo clique, com consequências
+ * de tamanhos muito diferentes. Uma chave só obrigaria o escritório a
+ * escolher entre travar a rotina e liberar o estrago.
  */
 
 export const REFERENCE_AUDIT_ACTIONS = {
@@ -35,7 +38,10 @@ export interface ReferenceUpdateInput {
   nextReference: string | null;
   /** Mecanismo usado pelo pedido — validado por Zod na rota. */
   nextSource: ExternalReferenceSource;
-  role: UserRole;
+  /** Chave `azevedo_os.link`: preencher empresa em conversa SEM empresa. */
+  canLink: boolean;
+  /** Chave `azevedo_os.relink`: trocar ou desfazer vínculo já existente. */
+  canRelink: boolean;
 }
 
 export interface ReferenceUpdatePlan {
@@ -52,13 +58,12 @@ export interface ReferenceUpdatePlan {
 
 export function planReferenceUpdate(input: ReferenceUpdateInput): ReferenceUpdatePlan {
   const linked = input.currentSource === AZEVEDO_OS_SOURCE;
-  const canManage = canManageAzevedoOsLink(input.role);
 
-  // Limpar o campo: em conversa vinculada isso É a desvinculação, e por
-  // isso exige supervisor mesmo o campo manual sendo de `agent`.
+  // Limpar o campo: em conversa vinculada isso É a desvinculação, e por isso
+  // cai na chave de TROCAR, mesmo o campo manual sendo do atendente.
   if (input.nextReference === null) {
-    if (linked && !canManage) {
-      throw new ForbiddenError("Só supervisor ou administrador pode desvincular a empresa");
+    if (linked && !input.canRelink) {
+      throw new ForbiddenError("Seu perfil não tem permissão para desfazer o vínculo com a empresa");
     }
     return {
       reference: null,
@@ -69,8 +74,14 @@ export function planReferenceUpdate(input: ReferenceUpdateInput): ReferenceUpdat
   }
 
   if (input.nextSource === AZEVEDO_OS_SOURCE) {
-    if (!canManage) {
-      throw new ForbiddenError("Só supervisor ou administrador pode vincular a empresa");
+    // Conversa vinculada exige a chave de TROCAR; conversa vazia, a de
+    // VINCULAR. É exatamente aqui que as duas ações se separam.
+    if (linked ? !input.canRelink : !input.canLink) {
+      throw new ForbiddenError(
+        linked
+          ? "Seu perfil não tem permissão para trocar o vínculo de empresa desta conversa"
+          : "Seu perfil não tem permissão para vincular a conversa a uma empresa",
+      );
     }
     return {
       reference: input.nextReference,

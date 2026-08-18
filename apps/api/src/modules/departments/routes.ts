@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { accessibleDepartmentIds } from "../../lib/access.js";
 import { authenticate, requireRole } from "../../lib/auth.js";
+import { requirePermission } from "../../lib/permissions.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
 import { serializeDepartment } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
@@ -94,7 +95,7 @@ export async function departmentRoutes(app: FastifyInstance, deps: AppDeps): Pro
     return { departments: departments.map(serializeDepartment) };
   });
 
-  app.post("/departments", { preHandler: requireRole("supervisor") }, async (request, reply) => {
+  app.post("/departments", { preHandler: requirePermission(deps, "department.manage") }, async (request, reply) => {
     const body = departmentSchema.parse(request.body);
     const existing = await deps.prisma.department.findUnique({
       where: {
@@ -137,7 +138,7 @@ export async function departmentRoutes(app: FastifyInstance, deps: AppDeps): Pro
     return reply.status(201).send({ department: serializeDepartment(department) });
   });
 
-  app.patch("/departments/:id", { preHandler: requireRole("supervisor") }, async (request) => {
+  app.patch("/departments/:id", { preHandler: requirePermission(deps, "department.manage") }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = departmentSchema.partial().parse(request.body);
     const department = await deps.prisma.department.findFirst({

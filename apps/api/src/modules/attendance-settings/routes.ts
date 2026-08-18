@@ -12,7 +12,8 @@ import {
   loadAttendanceSettings,
   minutesOfDay,
 } from "../../lib/attendance-settings.js";
-import { authenticate, requireRole } from "../../lib/auth.js";
+import { authenticate } from "../../lib/auth.js";
+import { requirePermission } from "../../lib/permissions.js";
 import { serializeAttendanceSettings } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
 
@@ -108,15 +109,16 @@ export async function attendanceSettingsRoutes(
   });
 
   /**
-   * Gravação a partir de supervisor — o mesmo papel do item "Parâmetros" no
-   * menu do frontend. Admin passa pela hierarquia de `hasRole`.
+   * Quem grava é decidido pela chave `attendance_settings.manage` do
+   * catálogo de permissões (padrão: supervisor para cima). A leitura acima
+   * fica livre porque o dashboard de qualquer papel depende dela.
    *
    * Alterar o SLA muda o número que a diretoria olha, então a gravação vai
    * para a auditoria com o antes e o depois.
    */
   app.put(
     "/attendance-settings",
-    { preHandler: requireRole("supervisor") },
+    { preHandler: requirePermission(deps, "attendance_settings.manage") },
     async (request) => {
       const input = attendanceSettingsSchema.parse(request.body);
       const organizationId = request.user.organizationId;

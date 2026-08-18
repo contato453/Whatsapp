@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { authenticate } from "../../lib/auth.js";
+import { loadPermissions } from "../../lib/permissions.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
 import { emitScheduledPending } from "../../lib/scheduled-pending.js";
 import { serializeUserDirectory } from "../../lib/serialize.js";
@@ -97,6 +98,14 @@ export async function scheduledMessageRoutes(app: FastifyInstance, deps: AppDeps
       where: { id, organizationId: request.user.organizationId },
     });
     if (!scheduled) throw new NotFoundError("Agendamento");
+    // Cancelar o PRÓPRIO agendamento nunca depende de chave: quem programou
+    // desmarca. O que é configurável é desfazer o compromisso que outra
+    // pessoa assumiu com o cliente. Agendamento sem autor (o autor foi
+    // excluído) conta como de terceiro — é o lado seguro do erro.
+    if (scheduled.createdById !== request.user.sub) {
+      const permissions = await loadPermissions(deps.prisma, request.user);
+      permissions.assert("scheduled_message.cancel_other");
+    }
     if (scheduled.status !== "pending") {
       throw new AppError("Este agendamento já foi processado", 400, "not_pending");
     }

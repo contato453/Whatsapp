@@ -55,6 +55,13 @@ export async function resolveDepartmentTarget(
   accessibleIds: string[] | null,
   input: { isGeneral: boolean; departmentIds: string[] },
   labels: { general: string; foreign: string },
+  /**
+   * Quem pode criar item GERAL. Sem o parâmetro continua sendo só o admin,
+   * como sempre foi — a resposta rápida é o único recurso com chave própria
+   * para isso no catálogo (`quick_reply.create_shared`), e a etiqueta geral
+   * segue exclusiva do administrador.
+   */
+  options?: { canWriteGeneral?: boolean },
 ): Promise<DepartmentTarget> {
   const target = departmentTargetSchema.parse({
     isGeneral: input.isGeneral,
@@ -62,8 +69,8 @@ export async function resolveDepartmentTarget(
   });
 
   if (target.isGeneral) {
-    // Quem cria item geral continua sendo só o admin, como antes do N:N.
-    if (!canWriteGeneralResource(accessibleIds)) throw new ForbiddenError(labels.general);
+    const canWriteGeneral = options?.canWriteGeneral ?? canWriteGeneralResource(accessibleIds);
+    if (!canWriteGeneral) throw new ForbiddenError(labels.general);
     return { isGeneral: true, departmentIds: [] };
   }
 
@@ -94,9 +101,14 @@ export function assertCanManageResource(
   accessibleIds: string[] | null,
   current: { isGeneral: boolean; departmentIds: string[] },
   labels: { general: string; foreign: string; orphan: string },
+  /** Mesma exceção da criação: quem pode criar geral também pode editá-lo. */
+  options?: { canWriteGeneral?: boolean },
 ): void {
   if (accessibleIds === null) return;
-  if (current.isGeneral) throw new ForbiddenError(labels.general);
+  if (current.isGeneral) {
+    if (options?.canWriteGeneral) return;
+    throw new ForbiddenError(labels.general);
+  }
   if (current.departmentIds.length === 0) throw new ForbiddenError(labels.orphan);
   if (!canWriteInAllDepartments(accessibleIds, current.departmentIds)) {
     throw new ForbiddenError(labels.foreign);

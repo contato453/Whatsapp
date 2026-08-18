@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { AZEVEDO_OS_SOURCE, canManageAzevedoOsLink } from "@azvchat/shared";
+import { AZEVEDO_OS_SOURCE, defaultPermission } from "@azvchat/shared";
 import { planReferenceUpdate, REFERENCE_AUDIT_ACTIONS } from "../src/lib/azevedo-os-link.js";
 import { AppError } from "../src/lib/errors.js";
-import type { AuthTokenPayload } from "../src/lib/auth.js";
 
 /**
  * Quem pode mexer no vínculo com a empresa do Azevedo-OS.
@@ -17,23 +16,39 @@ import type { AuthTokenPayload } from "../src/lib/auth.js";
 const EMPRESA = "11111111-1111-4111-8111-111111111111";
 const OUTRA = "22222222-2222-4222-8222-222222222222";
 
-function semVinculo(role: AuthTokenPayload["role"], nextReference: string | null, nextSource: "manual" | typeof AZEVEDO_OS_SOURCE = "manual") {
+/**
+ * As duas chaves do catálogo, traduzidas do papel para facilitar a leitura
+ * dos casos: hoje `azevedo_os.link` é de supervisor para cima e
+ * `azevedo_os.relink` também, mas o motor decide por CHAVE, não por papel —
+ * os casos abaixo passam a chave, não o cargo.
+ */
+type Papel = "admin" | "supervisor" | "agent";
+
+function chaves(role: Papel) {
+  if (role === "admin") return { canLink: true, canRelink: true };
+  return {
+    canLink: defaultPermission("azevedo_os.link", role),
+    canRelink: defaultPermission("azevedo_os.relink", role),
+  };
+}
+
+function semVinculo(role: Papel, nextReference: string | null, nextSource: "manual" | typeof AZEVEDO_OS_SOURCE = "manual") {
   return planReferenceUpdate({
     currentReference: null,
     currentSource: null,
     nextReference,
     nextSource,
-    role,
+    ...chaves(role),
   });
 }
 
-function vinculada(role: AuthTokenPayload["role"], nextReference: string | null, nextSource: "manual" | typeof AZEVEDO_OS_SOURCE = AZEVEDO_OS_SOURCE) {
+function vinculada(role: Papel, nextReference: string | null, nextSource: "manual" | typeof AZEVEDO_OS_SOURCE = AZEVEDO_OS_SOURCE) {
   return planReferenceUpdate({
     currentReference: EMPRESA,
     currentSource: AZEVEDO_OS_SOURCE,
     nextReference,
     nextSource,
-    role,
+    ...chaves(role),
   });
 }
 
@@ -112,10 +127,60 @@ describe("código de cadastro manual continua como era", () => {
   });
 });
 
-describe("hierarquia de papéis do vínculo", () => {
-  it("é a mesma que a tela usa para desenhar os botões", () => {
-    expect(canManageAzevedoOsLink("admin")).toBe(true);
-    expect(canManageAzevedoOsLink("supervisor")).toBe(true);
-    expect(canManageAzevedoOsLink("agent")).toBe(false);
+/**
+ * VINCULAR e TROCAR são duas chaves separadas de propósito: preencher
+ * conversa vazia é rotina; mexer em vínculo já feito por outra pessoa anexa
+ * a conversa ao cliente errado quando dá errado.
+ */
+describe("vincular e trocar são chaves independentes", () => {
+  it("quem só pode vincular preenche conversa vazia", () => {
+    const plan = planReferenceUpdate({
+      currentReference: null,
+      currentSource: null,
+      nextReference: EMPRESA,
+      nextSource: AZEVEDO_OS_SOURCE,
+      canLink: true,
+      canRelink: false,
+    });
+    expect(plan.auditAction).toBe(REFERENCE_AUDIT_ACTIONS.linked);
+  });
+
+  it("quem só pode vincular NÃO troca vínculo existente", () => {
+    expect(() =>
+      planReferenceUpdate({
+        currentReference: EMPRESA,
+        currentSource: AZEVEDO_OS_SOURCE,
+        nextReference: OUTRA,
+        nextSource: AZEVEDO_OS_SOURCE,
+        canLink: true,
+        canRelink: false,
+      }),
+    ).toThrow(AppError);
+  });
+
+  it("quem só pode vincular NÃO desfaz vínculo existente", () => {
+    expect(() =>
+      planReferenceUpdate({
+        currentReference: EMPRESA,
+        currentSource: AZEVEDO_OS_SOURCE,
+        nextReference: null,
+        nextSource: "manual",
+        canLink: true,
+        canRelink: false,
+      }),
+    ).toThrow(AppError);
+  });
+
+  it("quem só pode trocar não preenche conversa vazia", () => {
+    expect(() =>
+      planReferenceUpdate({
+        currentReference: null,
+        currentSource: null,
+        nextReference: EMPRESA,
+        nextSource: AZEVEDO_OS_SOURCE,
+        canLink: false,
+        canRelink: true,
+      }),
+    ).toThrow(AppError);
   });
 });

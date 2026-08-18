@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { accessibleDepartmentIds, departmentResourceScope } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
+import { requirePermission } from "../../lib/permissions.js";
 import {
   assertCanManageResource,
   auditDepartmentSnapshot,
@@ -63,7 +64,10 @@ export async function tagRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
     return { tags: tags.map(serializeTag) };
   });
 
-  app.post("/tags", { preHandler: authenticate }, async (request, reply) => {
+  app.post(
+    "/tags",
+    { preHandler: requirePermission(deps, "tag.manage") },
+    async (request, reply) => {
     const body = tagFieldsSchema.parse(request.body);
     const accessible = await accessibleDepartmentIds(deps.prisma, request.user);
     const target = await resolveDepartmentTarget(
@@ -109,7 +113,10 @@ export async function tagRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
     return reply.status(201).send({ tag: serializeTag(tag) });
   });
 
-  app.patch("/tags/:id", { preHandler: authenticate }, async (request) => {
+  app.patch(
+    "/tags/:id",
+    { preHandler: requirePermission(deps, "tag.manage") },
+    async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = tagFieldsSchema.partial().parse(request.body);
     const accessible = await accessibleDepartmentIds(deps.prisma, request.user);
@@ -181,7 +188,10 @@ export async function tagRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
     return { tag: serializeTag(updated) };
   });
 
-  app.delete("/tags/:id", { preHandler: authenticate }, async (request) => {
+  app.delete(
+    "/tags/:id",
+    { preHandler: requirePermission(deps, "tag.delete") },
+    async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const accessible = await accessibleDepartmentIds(deps.prisma, request.user);
     const tag = await deps.prisma.tag.findFirst({

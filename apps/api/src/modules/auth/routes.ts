@@ -11,7 +11,8 @@ import { authenticate } from "../../lib/auth.js";
 import { AppError, NotFoundError, UnauthorizedError } from "../../lib/errors.js";
 import { checkLoginSchedule } from "../../lib/login-schedule.js";
 import { extensionFromMime } from "../../lib/media-storage.js";
-import { serializeUser } from "../../lib/serialize.js";
+import { loadPermissions } from "../../lib/permissions.js";
+import { serializeSessionUser } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
 
 const loginSchema = z.object({
@@ -95,7 +96,17 @@ export async function authRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
         where: { id: user.id },
         data: { lastLoginAt: new Date() },
       });
-      return { token, user: serializeUser(loggedIn) };
+      // As permissões saem junto com a sessão: a tela decide o que mostrar
+      // por esta lista, nunca deduzindo pelo papel — deduzir faria a
+      // configuração da tela de Permissões virar mentira visual.
+      const permissions = await loadPermissions(deps.prisma, {
+        sub: loggedIn.id,
+        organizationId: loggedIn.organizationId,
+        role: loggedIn.role,
+        name: loggedIn.name,
+        email: loggedIn.email,
+      });
+      return { token, user: serializeSessionUser(loggedIn, permissions.allowed()) };
     },
   );
 
@@ -104,7 +115,8 @@ export async function authRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
     if (!user || user.status !== "active") {
       throw new UnauthorizedError();
     }
-    return { user: serializeUser(user) };
+    const permissions = await loadPermissions(deps.prisma, request.user);
+    return { user: serializeSessionUser(user, permissions.allowed()) };
   });
 
   /**
@@ -162,7 +174,8 @@ export async function authRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
       },
       { expiresIn: deps.config.JWT_EXPIRES_IN },
     );
-    return { token, user: serializeUser(user) };
+    const permissions = await loadPermissions(deps.prisma, request.user);
+    return { token, user: serializeSessionUser(user, permissions.allowed()) };
   });
 
   const changePasswordSchema = z.object({
@@ -254,7 +267,8 @@ export async function authRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
       entityType: "User",
       entityId: user.id,
     });
-    return { user: serializeUser(user) };
+    const permissions = await loadPermissions(deps.prisma, request.user);
+    return { user: serializeSessionUser(user, permissions.allowed()) };
   });
 
   app.delete("/auth/me/avatar", { preHandler: authenticate }, async (request) => {
@@ -262,7 +276,8 @@ export async function authRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
       where: { id: request.user.sub },
       data: { avatarUrl: null },
     });
-    return { user: serializeUser(user) };
+    const permissions = await loadPermissions(deps.prisma, request.user);
+    return { user: serializeSessionUser(user, permissions.allowed()) };
   });
 
   /**

@@ -31,6 +31,7 @@ model Organization {
   quickReplies        QuickReply[]
   scheduledMessages   ScheduledMessage[]
   attendanceSettings  AttendanceSettings?
+  rolePermissions     RolePermission[]
 
   @@map("organizations")
 }
@@ -100,6 +101,7 @@ model User {
   departmentAccess      UserDepartment[]
   defaultForDepartments Department[]                    @relation("DepartmentDefaultAssignee")
   defaultForInstances   WhatsAppInstance[]              @relation("InstanceDefaultAssignee")
+  permissionChanges     RolePermission[]                @relation("RolePermissionUpdatedBy")
 
   @@index([organizationId])
   @@map("users")
@@ -685,6 +687,41 @@ model ScheduledMessage {
 // ============================================================
 // Auditoria
 // ============================================================
+
+/// O que cada perfil PODE FAZER nesta organização, por par (papel, ação).
+///
+/// Só grava o que difere do catálogo: AUSÊNCIA DE LINHA significa o padrão
+/// de `PERMISSION_ACTIONS` (@azvchat/shared). Gravar as ~25 linhas por papel
+/// de saída congelaria os padrões no banco — mudar um padrão no código
+/// deixaria de valer para quem já existe, e o catálogo perderia o sentido.
+///
+/// `admin` nunca tem linha aqui (constraint no banco): administrador passa
+/// por cima de tudo, senão a organização conseguiria se trancar do lado de
+/// fora sem ninguém para religar.
+///
+/// PERMISSÃO É AÇÃO, NUNCA ALCANCE: nada nesta tabela decide quais conversas
+/// alguém enxerga — isso continua saindo de lib/access.ts, pelos vínculos de
+/// número e departamento.
+model RolePermission {
+  id             String   @id @default(uuid())
+  organizationId String
+  role           UserRole
+  /// Nome técnico da ação no catálogo. Texto, e não enum: ação some do
+  /// código sem exigir migration, e a linha órfã é ignorada em silêncio.
+  action         String
+  allowed        Boolean
+  /// Quem mudou por último — a tela mostra ao lado da chave alterada.
+  updatedById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  updatedBy    User?        @relation("RolePermissionUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, role, action])
+  @@index([organizationId])
+  @@map("role_permissions")
+}
 
 model AuditLog {
   id             String   @id @default(uuid())
