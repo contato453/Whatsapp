@@ -467,14 +467,21 @@ nome técnico no código e neste documento.
   `#17BF6B`, tirado do próprio logotipo (`components/logo.tsx` e `app/icon.svg`) — antes
   daqui saía indigo, que não era cor de marca nenhuma. Os nomes são por **papel**, não por
   cor: 50/100 fundo suave, 400 borda leve, 500 o verde exato da marca (detalhe, ícone),
-  **550 o fundo sólido da tela de Conversas** (bolha enviada, aba ativa do composer, badge
-  de não lidas, botão de gravar), **600 o fundo sólido do resto do sistema** (botão
-  primário, hover do 550) e texto de marca sobre claro, 700 hover do primário. O 500 puro
-  dá só 2,41:1 com branco: **fundo sólido nunca usa o 500**, sempre 550 (5,00:1), 600
-  (6,61:1) ou 700 (9,45:1). O 550 existe porque na Inbox o verde cobre área grande e o
-  tom escuro pesava na leitura do chat; ele é o **mais claro possível mantendo texto
-  branco**, e por isso a legenda dentro da bolha sobe para `text-white/95` (4,69:1) —
-  em `/80` cairia para 3,80:1. Nada de hex de marca solto em componente.
+  **550 os controles verdes da tela de Conversas** (aba ativa do composer, badge de não
+  lidas, botão de gravar), **600 o fundo sólido do resto do sistema** (botão primário,
+  hover do 550) e texto de marca sobre claro, 700 hover do primário. O 500 puro dá só
+  2,41:1 com branco: **fundo sólido nunca usa o 500**, sempre 550 (5,00:1), 600 (6,61:1)
+  ou 700 (9,45:1). Nada de hex de marca solto em componente.
+- **A BOLHA ENVIADA não usa a paleta de marca: ela é o verde claro do WhatsApp**, tokens
+  `chat-*` (`CHAT_COLORS` em `lib/brand.ts`) — fundo `#d9fdd3` com **letra escura**
+  (`chat-sent-text`, 15,75:1), e horário, citação, legenda e status em `chat-sent-meta`
+  (4,83:1). É convenção visual do próprio WhatsApp, que a equipe lê há anos como "esta
+  saiu daqui"; trocar a marca não deve repintar o chat, e por isso os dois grupos de
+  token são separados. Dois valores **não** copiam o aplicativo ao pé da letra, porque
+  reprovariam: o cinza dele (`#667781`) dá 4,19:1 e o horário tem 10px, e o azul do check
+  duplo (`#53bdeb`) dá 1,92:1 contra o mínimo de 3:1 de ícone — daí `chat-sent-meta` e
+  `text-sky-600`. Tudo que a bolha enviada desenha por dentro segue essa inversão:
+  player de áudio, enquete, reações, mensagem apagada e o spinner do download.
 - **O DASHBOARD fica no indigo, de propósito, e não consome a paleta de marca.** Os
   acentos (`DASHBOARD_ACCENT` / `_SOFT` em `app/(app)/dashboard/page.tsx`) e a rampa do
   mapa de calor são indigo porque ali os números convivem com o verde de estado e com o
@@ -487,10 +494,7 @@ nome técnico no código e neste documento.
   "como está o atendimento". O de marca responde "de quem é o produto". Fundi-los faria a
   bolha enviada parecer um selo de status. Por isso o `brand-600` é bem mais escuro e
   saturado que o `#16a34a`, e o Dashboard inteiro ficou fora da paleta de marca. **Se um dia os dois chegarem perto demais, escurece-se o de marca — nunca
-  se ajusta o de estado para caber.** O ponto mais curto dessa distância é o `brand-550`
-  da Inbox (1,52 contra o `#16a34a`), e ele se sustenta porque ali o verde é superfície
-  cheia e o estado é pílula clara com texto colorido: são formas diferentes, não só cores
-  diferentes. Chip de marca colado em selo de estado usa
+  se ajusta o de estado para caber.** Chip de marca colado em selo de estado usa
   `bg-brand-100` (e não o 50, que fica quase igual ao fundo do selo verde). Cor de
   etiqueta e de departamento escolhida no cadastro é **dado**, não tema, e não muda; só o
   valor inicial do formulário é de marca (azul-marinho, para não disputar com "Aberto").

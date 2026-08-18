@@ -53,3 +53,26 @@ export const BRAND_COLORS = {
 
 /** Azul-marinho da marca — o "AZV" do logotipo. */
 export const BRAND_NAVY = "#102a4c";
+
+/**
+ * Cores da BOLHA ENVIADA na tela de Conversas — o verde claro do WhatsApp,
+ * pedido explicitamente para o chat: fundo pálido e letra escura, e não fundo
+ * verde forte com letra branca.
+ *
+ * Ficam separadas de `BRAND_COLORS` porque não são a marca: são a convenção
+ * visual do próprio WhatsApp, que o atendente já lê há anos como "esta saiu
+ * daqui". Trocar a marca não deve repintar o chat, e vice-versa.
+ *
+ * O `sent` é o hex do aplicativo. Os outros dois **não** copiam o WhatsApp ao
+ * pé da letra: o cinza dele (`#667781`) dá 4,19:1 sobre esse fundo e o horário
+ * é texto de 10px, que precisa de 4,5:1; o azul do check duplo (`#53bdeb`) dá
+ * 1,92:1, longe do 3:1 de ícone. Escurecemos os dois o mínimo para passarem,
+ * mantendo o tom reconhecível.
+ * - `sent` sobre `sent-text`: 15,75:1
+ * - `sent` sobre `sent-meta` (horário, citação, legenda): 4,83:1
+ */
+export const CHAT_COLORS = {
+  sent: "#d9fdd3",
+  "sent-text": "#111b21",
+  "sent-meta": "#5d6d78",
+} as const;
