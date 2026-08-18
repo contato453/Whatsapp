@@ -105,9 +105,24 @@ export function hasActiveUsersFilters(filters: UsersFilters): boolean {
  * filtra por um chip ou departamento específico. Ele não está vinculado a
  * nenhum, e mostrá-lo em toda resposta faria a lista mentir.
  */
-export function userMatchesFilters(user: UserWithAccessDto, filters: UsersFilters): boolean {
-  if (filters.instanceId && !user.whatsappInstanceIds.includes(filters.instanceId)) return false;
+/**
+ * Aceita o usuário sem os vínculos porque `GET /users` só os devolve para o
+ * administrador: quem abre a lista pela chave `user.deactivate` recebe a
+ * agenda interna, sem números nem departamentos. Ausente conta como lista
+ * vazia — a barra de filtros nem é desenhada nesse caso, e tratar ausência
+ * como "casa com tudo" faria o filtro mentir se um dia ela for.
+ */
+export function userMatchesFilters(
+  user: Pick<UserWithAccessDto, "role"> &
+    Partial<Pick<UserWithAccessDto, "whatsappInstanceIds" | "departmentIds">>,
+  filters: UsersFilters,
+): boolean {
+  if (filters.instanceId && !(user.whatsappInstanceIds ?? []).includes(filters.instanceId)) {
+    return false;
+  }
   if (filters.role && user.role !== filters.role) return false;
-  if (filters.departmentId && !user.departmentIds.includes(filters.departmentId)) return false;
+  if (filters.departmentId && !(user.departmentIds ?? []).includes(filters.departmentId)) {
+    return false;
+  }
   return true;
 }

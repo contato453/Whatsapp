@@ -14,22 +14,38 @@ import {
   userMatchesFilters,
   type UsersFilters,
 } from "@/lib/users-filters";
-import type { DepartmentDto, InstanceDto, UserWithAccessDto } from "@/lib/types";
+import type {
+  DepartmentDto,
+  InstanceDto,
+  UserDirectoryDto,
+  UserWithAccessDto,
+} from "@/lib/types";
+
+/**
+ * A linha da lista em duas versões, porque `GET /users` responde diferente
+ * conforme quem pergunta: o administrador recebe o cadastro completo, e quem
+ * chega pela chave `user.deactivate` recebe só a agenda interna (nome,
+ * papel, status, foto), sem e-mail, último acesso nem vínculos.
+ *
+ * Poder desativar alguém não é motivo para ver o cadastro de todo mundo —
+ * a chave dá uma AÇÃO, não um recorte de dados a mais.
+ */
+type UserRow = UserDirectoryDto & Partial<UserWithAccessDto>;
 import { Badge, Button, Card, EmptyState, Spinner } from "@/components/ui";
 import { UserAvatar } from "@/components/user-avatar";
 import { UsersFilterBar } from "@/components/users/users-filter-bar";
 
 export default function UsersPage() {
   const router = useRouter();
-  const { user: me } = useAuth();
-  const [users, setUsers] = useState<UserWithAccessDto[] | null>(null);
+  const { user: me, can } = useAuth();
+  const [users, setUsers] = useState<UserRow[] | null>(null);
   const [instances, setInstances] = useState<InstanceDto[]>([]);
   const [departments, setDepartments] = useState<DepartmentDto[]>([]);
   /** Só depois das duas listas responderem dá para saber o que sumiu. */
   const [scopeLoaded, setScopeLoaded] = useState(false);
 
   const load = useCallback(() => {
-    api.get<{ users: UserWithAccessDto[] }>("/users").then((data) => setUsers(data.users));
+    api.get<{ users: UserRow[] }>("/users").then((data) => setUsers(data.users));
   }, []);
   useEffect(load, [load]);
 
@@ -95,30 +111,41 @@ export default function UsersPage() {
     });
   }, [scopeLoaded, instanceNames, departmentNames]);
 
+  const isAdmin = me?.role === "admin";
+  // A MESMA chave que a API confere no campo `status` do PATCH. Admin passa
+  // por cima dela, como em todo o catálogo.
+  const podeDesativar = can("user.deactivate");
+
   const visibleUsers = useMemo(
-    () => (users ?? []).filter((user) => userMatchesFilters(user, filters)),
-    [users, filters],
+    // Sem os vínculos na resposta não há o que filtrar, e a barra nem é
+    // desenhada: filtrar por chip uma lista que não os conhece devolveria
+    // vazio sem explicação.
+    () => (users ?? []).filter((user) => (isAdmin ? userMatchesFilters(user, filters) : true)),
+    [users, filters, isAdmin],
   );
 
-  const isAdmin = me?.role === "admin";
-
-  async function toggleStatus(user: UserWithAccessDto) {
+  async function toggleStatus(user: UserRow) {
     await api.patch(`/users/${user.id}`, {
       status: user.status === "active" ? "inactive" : "active",
     });
     load();
   }
 
-  /** Resumo do que o usuário enxerga, na segunda linha do card. */
-  function accessSummary(user: UserWithAccessDto): string {
+  /**
+   * Resumo do que o usuário enxerga, na segunda linha do card. Só existe
+   * para o administrador — é ele quem recebe os vínculos na resposta.
+   */
+  function accessSummary(user: UserRow): string {
     if (user.role === "admin") return "Acesso total";
-    if (user.whatsappInstanceIds.length === 0 || user.departmentIds.length === 0) {
+    const instanceIds = user.whatsappInstanceIds ?? [];
+    const departmentIds = user.departmentIds ?? [];
+    if (instanceIds.length === 0 || departmentIds.length === 0) {
       return "Sem acesso a conversas";
     }
-    const numbers = user.whatsappInstanceIds
+    const numbers = instanceIds
       .map((id) => instanceNames.get(id) ?? "Conexão removida")
       .join(", ");
-    const areas = user.departmentIds
+    const areas = departmentIds
       .map((id) => departmentNames.get(id) ?? "Departamento removido")
       .join(", ");
     return `${numbers} · ${areas}`;
@@ -141,6 +168,7 @@ export default function UsersPage() {
         </div>
       ) : (
         <>
+          {isAdmin && (
           <UsersFilterBar
             filters={filters}
             onChange={(patch) => setFilters((current) => ({ ...current, ...patch }))}
@@ -150,6 +178,7 @@ export default function UsersPage() {
             total={users.length}
             shown={visibleUsers.length}
           />
+          )}
           {visibleUsers.length === 0 ? (
             // A lista existe, o filtro é que não deixou nada passar — dizer
             // "nenhum usuário cadastrado" aqui faria a pessoa procurar um
@@ -173,11 +202,18 @@ export default function UsersPage() {
                   <UserAvatar userId={user.id} name={user.name} hasAvatar={user.hasAvatar} />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-semibold text-slate-900">{user.name}</p>
-                    <p className="truncate text-xs text-slate-500">{user.email}</p>
-                    <p className="mt-0.5 truncate text-xs text-slate-400">{accessSummary(user)}</p>
+                    {isAdmin && (
+                      <>
+                        <p className="truncate text-xs text-slate-500">{user.email}</p>
+                        <p className="mt-0.5 truncate text-xs text-slate-400">
+                          {accessSummary(user)}
+                        </p>
+                      </>
+                    )}
                   </div>
 
                   {/* Último acesso: quem nunca entrou fica marcado, não em branco */}
+                  {isAdmin && (
                   <div className="hidden w-36 shrink-0 text-right md:block">
                     <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
                       Último acesso
@@ -188,6 +224,7 @@ export default function UsersPage() {
                       <p className="text-xs text-slate-400">Nunca entrou</p>
                     )}
                   </div>
+                  )}
 
                   {/* Chip de marca no tom 100, e não no 50: ele fica colado
                       no selo "Ativo", que é verde de ESTADO sobre fundo quase
@@ -216,11 +253,16 @@ export default function UsersPage() {
                       <Pencil className="h-3.5 w-3.5" /> Editar
                     </Button>
                   )}
-                  {isAdmin && user.id !== me?.id && (
-                    <Button size="sm" variant="outline" onClick={() => void toggleStatus(user)}>
-                      {user.status === "active" ? "Desativar" : "Ativar"}
-                    </Button>
-                  )}
+                  {/* Nunca sobre um administrador para quem não é
+                      administrador, e nunca sobre si mesmo: as duas recusas
+                      são as mesmas que a API aplica. */}
+                  {podeDesativar &&
+                    user.id !== me?.id &&
+                    (isAdmin || user.role !== "admin") && (
+                      <Button size="sm" variant="outline" onClick={() => void toggleStatus(user)}>
+                        {user.status === "active" ? "Desativar" : "Ativar"}
+                      </Button>
+                    )}
                 </div>
               ))}
             </Card>

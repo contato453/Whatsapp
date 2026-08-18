@@ -187,7 +187,7 @@ snake_case e id `uuid`.
 - `RolePermission` — o que cada perfil PODE FAZER nesta organização, por par
   (`role`, `action`), único por `(organizationId, role, action)`. **Só grava o que difere do
   catálogo**: ausência de linha significa o padrão de `PERMISSION_ACTIONS`
-  (`packages/shared/src/permissions.ts`) — semear as 25 ações por papel congelaria os padrões
+  (`packages/shared/src/permissions.ts`) — semear as 26 ações por papel congelaria os padrões
   no banco, e mudar um padrão no código deixaria de valer para quem já existe. `action` é
   **texto**, não enum: ação removida do código não exige migration, e a linha órfã é ignorada
   em silêncio pela leitura. Constraint `role_permissions_role_not_admin` impede linha de
@@ -259,7 +259,7 @@ groupScope(access)                     // consultas que partem do grupo (usa `is
 **Papel ≠ visibilidade.** Visibilidade responde "quais conversas"; permissão responde "quais
 ações" — e desde o menu de Permissões **a segunda não é mais tabela de papel: é o catálogo**.
 
-A fonte única é `packages/shared/src/permissions.ts` (`PERMISSION_ACTIONS`): 25 ações com nome
+A fonte única é `packages/shared/src/permissions.ts` (`PERMISSION_ACTIONS`): 26 ações com nome
 técnico, rótulo, explicação, área e o **padrão por papel**. A API decide por
 `apps/api/src/lib/permissions.ts` (`requirePermission` / `loadPermissions().can()`), a tela de
 Permissões é **gerada** a partir da mesma lista, e o admin **sempre pode**, sem chave. Ação
@@ -269,7 +269,8 @@ O que **não** tem chave, e é fixo no código de propósito:
 
 | Ação fixa | Regra |
 | --- | --- |
-| Criar/editar usuário, redefinir senha de terceiro; excluir número; excluir departamento; abrir e gravar a tela de Permissões | `admin` (`requireRole("admin")`) |
+| Criar usuário, editar cadastro (nome, e-mail, papel, vínculos), redefinir senha de terceiro; excluir número; excluir departamento; abrir e gravar a tela de Permissões | `admin` (`requireRole("admin")`) |
+| **Exceção única no cadastro de usuário**: o campo `status` tem chave (`user.deactivate`, padrão não/não) — recusa de CAMPO dentro do `PATCH /users/:id`, e nunca alcança um administrador | catálogo |
 | Nunca deixar a organização sem admin ativo | transação com linhas travadas |
 | Ler conversa, enviar mensagem, mudar status, escrever e editar a **própria** nota | sempre liberado — não existe caminho para trancar o atendente fora do próprio trabalho |
 | Etiqueta **geral** (`isGeneral`) | `admin` (resposta rápida geral, sim, tem chave: `quick_reply.create_shared`) |
@@ -833,6 +834,16 @@ sempre juntos.
   cliente errado (padrão não/sim). Uma chave só obrigaria o escritório a escolher entre travar
   a rotina e liberar o estrago. Quem decide continua sendo `planReferenceUpdate`, que olha o
   ESTADO da conversa antes das chaves.
+- **`user.deactivate` abre UM CAMPO, não a tela de cadastro.** A rota que atende o campo
+  `status` é a mesma que troca papel e redefine senha, então a checagem é de CAMPO: quem não é
+  admin precisa da chave, o corpo tem de trazer `status` e mais nada, e o alvo não pode ser
+  administrador. Sem a conferência do corpo, ligar a chave entregaria o cadastro inteiro —
+  inclusive `role: "admin"` para si mesmo; sem a trava do alvo, um supervisor desligaria a
+  administração toda até sobrar o último (o único que a trava do último admin barra). O item
+  "Usuários" do menu passa a aparecer para quem tem a chave, mas `/users/new` e `/users/:id`
+  seguem exclusivos do admin (`adminOnlySubRoutes` no `NAV`), e `GET /users` só entrega a
+  agenda interna a quem não é admin — com os inativos junto, senão não haveria como reativar
+  ninguém. **A chave dá uma AÇÃO, nunca um recorte de dados a mais.**
 - **Voltar uma chave ao padrão APAGA a linha**, em vez de gravar o mesmo valor. Guardar o
   padrão como linha congelaria o padrão de hoje para aquela organização, e mudá-lo no código
   deixaria de valer para ela.

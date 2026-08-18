@@ -187,6 +187,14 @@ export const PERMISSION_ACTIONS = [
     defaults: { agent: false, supervisor: true },
   },
   {
+    key: "user.deactivate",
+    label: "Desativar e reativar usuário",
+    description:
+      "Tira (ou devolve) o acesso de alguém ao sistema, derrubando a sessão aberta na hora. NÃO permite criar, editar nem redefinir senha, e nunca alcança um administrador.",
+    area: "cadastros",
+    defaults: { agent: false, supervisor: false },
+  },
+  {
     key: "department.manage",
     label: "Criar e editar departamento",
     description:

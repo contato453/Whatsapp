@@ -233,6 +233,7 @@ describe("padrões de fábrica (Usuário / Supervisor)", () => {
     ["tag.delete", false, true],
     ["quick_reply.manage", true, true],
     ["quick_reply.create_shared", false, true],
+    ["user.deactivate", false, false],
     ["department.manage", false, true],
     ["whatsapp_instance.manage", false, true],
     ["whatsapp_instance.connection", false, true],
