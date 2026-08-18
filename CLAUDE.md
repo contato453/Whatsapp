@@ -479,6 +479,22 @@ nome técnico no código e neste documento.
   seria mandada duas vezes). Nada de coluna em `Conversation` nem de rota gravando por tecla —
   é estado de uma máquina, como a barra lateral recolhida. `apps/web/test/drafts.test.ts`
   cobre a regra; é o primeiro teste do frontend (vitest com o alias `@/` do Next).
+- **Filtros da tela de Usuários** (`components/users/users-filter-bar.tsx` + regra pura em
+  `src/lib/users-filters.ts`): chip (número), tipo de usuário e departamento, combinando por
+  E, com contador "8 de 23 usuários" e `EmptyState` quando o filtro não deixa nada passar. A
+  **filtragem é no cliente**, sobre a lista que `GET /users` já devolve inteira — os vínculos
+  de números e departamentos vêm dentro da própria resposta (`whatsappInstanceIds` /
+  `departmentIds`, de `serializeUserWithAccess`), e são algumas dezenas de linhas: parâmetro
+  de consulta e paginação seriam infraestrutura para responder o que o navegador já tem em
+  memória. Chip e departamento casam por **contém** (a pessoa tem vários de cada, e a
+  pergunta é "quem está ligado a este chip?"), então quem não tem vínculo nenhum — o admin de
+  acesso total — aparece sem filtro e some ao filtrar por um chip ou departamento específico.
+  Os rótulos de papel vêm de `USER_ROLE_LABELS`, nunca escritos à mão. A persistência é a
+  mesma mecânica dos filtros da Inbox, com chave própria (`zapdesk.users-filters.<userId>`),
+  porque o caminho normal é clicar em "Editar" e voltar; id de chip ou departamento excluído é
+  podado pela tela (só ela sabe o que ainda existe) e volta para "todos" em silêncio. Nada
+  disso encosta em `access.ts`, em `requireRole` ou na rota: a tela inteira já é de admin, e
+  filtro aqui é recorte visual sobre dado que ele já recebe.
 - Barra lateral recolhível no `layout.tsx`: o botão no topo alterna entre expandida (`w-56`,
   o padrão) e só ícones (`w-16`) e **empurra** o conteúdo; recolhida, o hover (ou o foco por
   teclado) expande **sobrepondo** a página, para a Inbox não remontar a cada passada de

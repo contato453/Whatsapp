@@ -44,8 +44,10 @@ export interface UserDto extends UserDirectoryDto {
 }
 
 /**
- * Usuário na tela de usuários: inclui as conexões de WhatsApp liberadas.
- * Lista vazia = acesso a todas as conexões da organização.
+ * Usuário na tela de usuários: inclui as conexões de WhatsApp e os
+ * departamentos liberados, os dois já dentro da resposta de `GET /users`.
+ * Lista vazia = não enxerga conversa alguma por ali — não existe "sem
+ * marcação = vê tudo" (ver `lib/access.ts` na API).
  */
 export interface UserWithAccessDto extends UserDto {
   whatsappInstanceIds: string[];

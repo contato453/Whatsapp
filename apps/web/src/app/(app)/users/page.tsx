@@ -2,14 +2,22 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Pencil, Plus } from "lucide-react";
+import { Pencil, Plus, Users as UsersIcon } from "lucide-react";
 import { USER_ROLE_LABELS } from "@azvchat/shared";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { formatDateTime } from "@/lib/utils";
+import {
+  EMPTY_USERS_FILTERS,
+  readUsersFilters,
+  saveUsersFilters,
+  userMatchesFilters,
+  type UsersFilters,
+} from "@/lib/users-filters";
 import type { DepartmentDto, InstanceDto, UserWithAccessDto } from "@/lib/types";
-import { Badge, Button, Card, Spinner } from "@/components/ui";
+import { Badge, Button, Card, EmptyState, Spinner } from "@/components/ui";
 import { UserAvatar } from "@/components/user-avatar";
+import { UsersFilterBar } from "@/components/users/users-filter-bar";
 
 export default function UsersPage() {
   const router = useRouter();
@@ -17,6 +25,8 @@ export default function UsersPage() {
   const [users, setUsers] = useState<UserWithAccessDto[] | null>(null);
   const [instances, setInstances] = useState<InstanceDto[]>([]);
   const [departments, setDepartments] = useState<DepartmentDto[]>([]);
+  /** Só depois das duas listas responderem dá para saber o que sumiu. */
+  const [scopeLoaded, setScopeLoaded] = useState(false);
 
   const load = useCallback(() => {
     api.get<{ users: UserWithAccessDto[] }>("/users").then((data) => setUsers(data.users));
@@ -24,15 +34,37 @@ export default function UsersPage() {
   useEffect(load, [load]);
 
   useEffect(() => {
-    api
-      .get<{ instances: InstanceDto[] }>("/whatsapp-instances")
-      .then((data) => setInstances(data.instances))
-      .catch(() => setInstances([]));
-    api
-      .get<{ departments: DepartmentDto[] }>("/departments")
-      .then((data) => setDepartments(data.departments))
-      .catch(() => setDepartments([]));
+    void Promise.all([
+      api
+        .get<{ instances: InstanceDto[] }>("/whatsapp-instances")
+        .then((data) => setInstances(data.instances))
+        .catch(() => setInstances([])),
+      api
+        .get<{ departments: DepartmentDto[] }>("/departments")
+        .then((data) => setDepartments(data.departments))
+        .catch(() => setDepartments([])),
+    ]).then(() => setScopeLoaded(true));
   }, []);
+
+  /**
+   * Os filtros voltam do navegador já na primeira renderização: o caminho
+   * normal aqui é clicar em "Editar" e voltar, e reidratar num efeito
+   * mostraria a lista inteira por um quadro antes de recortar.
+   *
+   * O layout só renderiza a tela com a sessão carregada, então `me` já
+   * existe quando este componente monta — e a chave, como no rascunho e nos
+   * filtros da Inbox, inclui o usuário: máquina compartilhada é o caso
+   * normal do escritório.
+   */
+  const [filters, setFilters] = useState<UsersFilters>(() =>
+    me ? readUsersFilters(me.id) : EMPTY_USERS_FILTERS,
+  );
+
+  const meId = me?.id ?? null;
+
+  useEffect(() => {
+    if (meId) saveUsersFilters(meId, filters);
+  }, [meId, filters]);
 
   const instanceNames = useMemo(
     () => new Map(instances.map((instance) => [instance.id, instance.name])),
@@ -41,6 +73,31 @@ export default function UsersPage() {
   const departmentNames = useMemo(
     () => new Map(departments.map((department) => [department.id, department.name])),
     [departments],
+  );
+
+  // Chip ou departamento excluído depois de virar filtro volta para "todos"
+  // em silêncio. Sem esta poda o seletor guardaria um id que não está mais
+  // na lista de opções: o campo apareceria sem valor e a lista viria vazia
+  // sem explicação nenhuma.
+  useEffect(() => {
+    if (!scopeLoaded) return;
+    setFilters((current) => {
+      const instanceId =
+        current.instanceId && !instanceNames.has(current.instanceId) ? "" : current.instanceId;
+      const departmentId =
+        current.departmentId && !departmentNames.has(current.departmentId)
+          ? ""
+          : current.departmentId;
+      if (instanceId === current.instanceId && departmentId === current.departmentId) {
+        return current;
+      }
+      return { ...current, instanceId, departmentId };
+    });
+  }, [scopeLoaded, instanceNames, departmentNames]);
+
+  const visibleUsers = useMemo(
+    () => (users ?? []).filter((user) => userMatchesFilters(user, filters)),
+    [users, filters],
   );
 
   const isAdmin = me?.role === "admin";
@@ -83,59 +140,88 @@ export default function UsersPage() {
           <Spinner className="h-8 w-8" />
         </div>
       ) : (
-        <Card className="divide-y divide-slate-100">
-          {users.map((user) => (
-            <div key={user.id} className="flex items-center gap-3 px-5 py-3.5">
-              <UserAvatar userId={user.id} name={user.name} hasAvatar={user.hasAvatar} />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-slate-900">{user.name}</p>
-                <p className="truncate text-xs text-slate-500">{user.email}</p>
-                <p className="mt-0.5 truncate text-xs text-slate-400">{accessSummary(user)}</p>
-              </div>
-
-              {/* Último acesso: quem nunca entrou fica marcado, não em branco */}
-              <div className="hidden w-36 shrink-0 text-right md:block">
-                <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                  Último acesso
-                </p>
-                {user.lastLoginAt ? (
-                  <p className="text-xs text-slate-600">{formatDateTime(user.lastLoginAt)}</p>
-                ) : (
-                  <p className="text-xs text-slate-400">Nunca entrou</p>
-                )}
-              </div>
-
-              {user.signMessages && (
-                <Badge
-                  className="bg-brand-50 text-brand-700"
-                  title="Mensagens saem assinadas com o nome"
-                >
-                  assina
-                </Badge>
-              )}
-              <Badge className="bg-slate-100 text-slate-600">
-                {USER_ROLE_LABELS[user.role]}
-              </Badge>
-              <Badge color={user.status === "active" ? "#16a34a" : "#94a3b8"}>
-                {user.status === "active" ? "Ativo" : "Inativo"}
-              </Badge>
-              {isAdmin && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => router.push(`/users/${user.id}`)}
-                >
-                  <Pencil className="h-3.5 w-3.5" /> Editar
+        <>
+          <UsersFilterBar
+            filters={filters}
+            onChange={(patch) => setFilters((current) => ({ ...current, ...patch }))}
+            onClear={() => setFilters(EMPTY_USERS_FILTERS)}
+            instances={instances}
+            departments={departments}
+            total={users.length}
+            shown={visibleUsers.length}
+          />
+          {visibleUsers.length === 0 ? (
+            // A lista existe, o filtro é que não deixou nada passar — dizer
+            // "nenhum usuário cadastrado" aqui faria a pessoa procurar um
+            // problema no cadastro que não existe.
+            <Card>
+              <EmptyState
+                icon={<UsersIcon className="h-8 w-8" />}
+                title="Nenhum usuário com esses filtros"
+                description="Ninguém está vinculado a essa combinação de chip, tipo de usuário e departamento."
+              />
+              <div className="flex justify-center pb-8">
+                <Button variant="outline" size="sm" onClick={() => setFilters(EMPTY_USERS_FILTERS)}>
+                  Limpar filtros
                 </Button>
-              )}
-              {isAdmin && user.id !== me?.id && (
-                <Button size="sm" variant="outline" onClick={() => void toggleStatus(user)}>
-                  {user.status === "active" ? "Desativar" : "Ativar"}
-                </Button>
-              )}
-            </div>
-          ))}
-        </Card>
+              </div>
+            </Card>
+          ) : (
+            <Card className="divide-y divide-slate-100">
+              {visibleUsers.map((user) => (
+                <div key={user.id} className="flex items-center gap-3 px-5 py-3.5">
+                  <UserAvatar userId={user.id} name={user.name} hasAvatar={user.hasAvatar} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-slate-900">{user.name}</p>
+                    <p className="truncate text-xs text-slate-500">{user.email}</p>
+                    <p className="mt-0.5 truncate text-xs text-slate-400">{accessSummary(user)}</p>
+                  </div>
+
+                  {/* Último acesso: quem nunca entrou fica marcado, não em branco */}
+                  <div className="hidden w-36 shrink-0 text-right md:block">
+                    <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                      Último acesso
+                    </p>
+                    {user.lastLoginAt ? (
+                      <p className="text-xs text-slate-600">{formatDateTime(user.lastLoginAt)}</p>
+                    ) : (
+                      <p className="text-xs text-slate-400">Nunca entrou</p>
+                    )}
+                  </div>
+
+                  {user.signMessages && (
+                    <Badge
+                      className="bg-brand-50 text-brand-700"
+                      title="Mensagens saem assinadas com o nome"
+                    >
+                      assina
+                    </Badge>
+                  )}
+                  <Badge className="bg-slate-100 text-slate-600">
+                    {USER_ROLE_LABELS[user.role]}
+                  </Badge>
+                  <Badge color={user.status === "active" ? "#16a34a" : "#94a3b8"}>
+                    {user.status === "active" ? "Ativo" : "Inativo"}
+                  </Badge>
+                  {isAdmin && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => router.push(`/users/${user.id}`)}
+                    >
+                      <Pencil className="h-3.5 w-3.5" /> Editar
+                    </Button>
+                  )}
+                  {isAdmin && user.id !== me?.id && (
+                    <Button size="sm" variant="outline" onClick={() => void toggleStatus(user)}>
+                      {user.status === "active" ? "Desativar" : "Ativar"}
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </Card>
+          )}
+        </>
       )}
     </div>
   );
