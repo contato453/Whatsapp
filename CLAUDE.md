@@ -463,23 +463,34 @@ interface, a tela se chama "Conversas" (ou "lista de conversas"); "Inbox" segue 
 nome técnico no código e neste documento.
 
 - **Cor de marca: tokens `brand-*`, fonte única em `src/lib/brand.ts`** (`BRAND_COLORS`,
-  `BRAND_NAVY`, `BRAND_HEATMAP_RAMP`), de onde o `tailwind.config.ts` monta as classes
-  `*-brand-*`. O verde é `#17BF6B`, tirado do próprio logotipo (`components/logo.tsx` e
-  `app/icon.svg`) — antes daqui saía indigo, que não era cor de marca nenhuma. Os nomes
-  são por **papel**, não por cor: 50/100 fundo suave, 400 borda leve, 500 o verde exato da
-  marca (detalhe, ícone), **600 todo fundo sólido com texto branco** (bolha enviada, botão
-  primário, aba ativa do composer), 700 hover e texto de marca sobre claro. O 500 puro dá
-  só 2,41:1 com branco: **fundo sólido nunca usa o 500**, sempre 600 (6,61:1) ou 700
-  (9,45:1). Nada de hex de marca solto em componente — quem precisa do valor cru (acentos
-  do dashboard, cor inicial de departamento e etiqueta) importa de `lib/brand.ts`.
+  `BRAND_NAVY`), de onde o `tailwind.config.ts` monta as classes `*-brand-*`. O verde é
+  `#17BF6B`, tirado do próprio logotipo (`components/logo.tsx` e `app/icon.svg`) — antes
+  daqui saía indigo, que não era cor de marca nenhuma. Os nomes são por **papel**, não por
+  cor: 50/100 fundo suave, 400 borda leve, 500 o verde exato da marca (detalhe, ícone),
+  **550 o fundo sólido da tela de Conversas** (bolha enviada, aba ativa do composer, badge
+  de não lidas, botão de gravar), **600 o fundo sólido do resto do sistema** (botão
+  primário, hover do 550) e texto de marca sobre claro, 700 hover do primário. O 500 puro
+  dá só 2,41:1 com branco: **fundo sólido nunca usa o 500**, sempre 550 (5,00:1), 600
+  (6,61:1) ou 700 (9,45:1). O 550 existe porque na Inbox o verde cobre área grande e o
+  tom escuro pesava na leitura do chat; ele é o **mais claro possível mantendo texto
+  branco**, e por isso a legenda dentro da bolha sobe para `text-white/95` (4,69:1) —
+  em `/80` cairia para 3,80:1. Nada de hex de marca solto em componente.
+- **O DASHBOARD fica no indigo, de propósito, e não consome a paleta de marca.** Os
+  acentos (`DASHBOARD_ACCENT` / `_SOFT` em `app/(app)/dashboard/page.tsx`) e a rampa do
+  mapa de calor são indigo porque ali os números convivem com o verde de estado e com o
+  verde das barras de recebidas: acento de marca verde ao lado deles viraria um degradê de
+  verdes sem hierarquia. Os hexes ficam na própria tela, fora de `lib/brand.ts`, para o
+  Dashboard **não** mudar junto na próxima troca de marca.
 - **Verde de MARCA e verde de ESTADO são coisas separadas, e não se misturam.** O de
   estado é `#16a34a` e mora em `@azvchat/shared` (`CONVERSATION_STATUS_COLORS.open`,
   `CONNECTION_STATUS_COLORS.connected`, e o mesmo hex no selo "Ativo"): ele responde
   "como está o atendimento". O de marca responde "de quem é o produto". Fundi-los faria a
   bolha enviada parecer um selo de status. Por isso o `brand-600` é bem mais escuro e
-  saturado que o `#16a34a`, e a rampa do mapa de calor foi escurecida até ficar inteira
-  abaixo dele. **Se um dia os dois chegarem perto demais, escurece-se o de marca — nunca
-  se ajusta o de estado para caber.** Chip de marca colado em selo de estado usa
+  saturado que o `#16a34a`, e o Dashboard inteiro ficou fora da paleta de marca. **Se um dia os dois chegarem perto demais, escurece-se o de marca — nunca
+  se ajusta o de estado para caber.** O ponto mais curto dessa distância é o `brand-550`
+  da Inbox (1,52 contra o `#16a34a`), e ele se sustenta porque ali o verde é superfície
+  cheia e o estado é pílula clara com texto colorido: são formas diferentes, não só cores
+  diferentes. Chip de marca colado em selo de estado usa
   `bg-brand-100` (e não o 50, que fica quase igual ao fundo do selo verde). Cor de
   etiqueta e de departamento escolhida no cadastro é **dado**, não tema, e não muda; só o
   valor inicial do formulário é de marca (azul-marinho, para não disputar com "Aberto").
@@ -836,9 +847,9 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   acessível, e o valor exato de um dia não pode depender de acertar o mouse na barra. As
   cores saem do validador de paleta, não do olho: o par recebidas/enviadas é o mesmo dos
   cards (ΔE 16,1 sob deuteranopia) e o mapa de calor usa **uma** rampa de um tom só
-  (`BRAND_HEATMAP_RAMP`, na matiz da marca), porque magnitude não se pinta com arco-íris.
-  A rampa fica inteira **abaixo** da luminância do `#16a34a` de estado, que aparece nas
-  barras de recebidas do card ao lado: é rampa de magnitude, não de status.
+  (indigo 400→800), porque magnitude não se pinta com arco-íris. Indigo e não verde: no
+  card ao lado as barras de recebidas são o `#16a34a` de estado, e uma rampa verde faria
+  magnitude e status parecerem a mesma escala.
 - **O mapa dia × hora é o único bloco que ignora o período**: ele usa sempre os últimos
   `DASHBOARD_HEATMAP_DAYS` (30) dias, porque padrão de horário só aparece com repetição e
   "hoje" mostraria um dia em vez do hábito do cliente. Os filtros de número, departamento e

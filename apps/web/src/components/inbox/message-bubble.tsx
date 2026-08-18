@@ -309,7 +309,7 @@ export function MessageBubble({
         className={cn(
           "max-w-[75%] overflow-hidden rounded-2xl px-3.5 py-2 shadow-sm",
           outbound
-            ? "rounded-br-md bg-brand-600 text-white"
+            ? "rounded-br-md bg-brand-550 text-white"
             : "rounded-bl-md border border-slate-200 bg-white text-slate-900",
         )}
       >
@@ -327,7 +327,7 @@ export function MessageBubble({
           </p>
         )}
         {outbound && message.senderName && showSender && (
-          <p className="mb-0.5 text-xs font-semibold text-white/80">{message.senderName}</p>
+          <p className="mb-0.5 text-xs font-semibold text-white/95">{message.senderName}</p>
         )}
 
         {/* Pré-visualização da mensagem citada */}
@@ -335,7 +335,7 @@ export function MessageBubble({
           <div
             className={cn(
               "mb-1.5 border-l-2 py-0.5 pl-2 text-xs",
-              outbound ? "border-white/50 text-white/80" : "border-brand-400 text-slate-500",
+              outbound ? "border-white/60 text-white/95" : "border-brand-400 text-slate-500",
             )}
           >
             <p className="font-semibold">{message.quoted.senderName ?? "Mensagem"}</p>
@@ -349,7 +349,7 @@ export function MessageBubble({
           <p
             className={cn(
               "flex items-center gap-1.5 text-sm italic",
-              outbound ? "text-white/80" : "text-slate-400",
+              outbound ? "text-white/95" : "text-slate-400",
             )}
           >
             <Ban className="h-3.5 w-3.5" /> Esta mensagem foi apagada
@@ -392,7 +392,7 @@ export function MessageBubble({
                 </div>
               ))}
             </div>
-            <p className={cn("text-[10px]", outbound ? "text-white/80" : "text-slate-400")}>
+            <p className={cn("text-[10px]", outbound ? "text-white/95" : "text-slate-400")}>
               Os votos aparecem no WhatsApp dos participantes
             </p>
           </div>
@@ -419,13 +419,14 @@ export function MessageBubble({
           </div>
         )}
 
-        {/* Branco a 80%, e não 70%: sobre o verde da marca (brand-600) o 70%
-            dá 4,12:1 e o horário é texto de 10px, que precisa de 4,5:1. Em
-            80% sobe para 4,84:1 e o check de leitura continua legível. */}
+        {/* Branco a 95%: a bolha usa o `brand-550`, um degrau mais claro que
+            o resto do sistema, e nele o branco a 80% cai para 3,80:1 — abaixo
+            do 4,5:1 que o horário, de 10px, precisa. Em 95% dá 4,69:1 e o
+            check de leitura continua legível. */}
         <p
           className={cn(
             "mt-1 flex items-center justify-end gap-1 text-[10px]",
-            outbound ? "text-white/80" : "text-slate-400",
+            outbound ? "text-white/95" : "text-slate-400",
           )}
         >
           {message.editedAt && !message.deletedAt && <span className="italic">editada</span>}

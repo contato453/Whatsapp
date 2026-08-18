@@ -48,7 +48,6 @@ import {
   type DashboardPeriod,
 } from "@azvchat/shared";
 import { api, dashboardApi, type DashboardFilters } from "@/lib/api";
-import { BRAND_COLORS } from "@/lib/brand";
 import { useAuth } from "@/lib/auth-context";
 import type {
   DashboardRankingRowDto,
@@ -78,6 +77,22 @@ const LEGACY_PERIOD_KEY = "zapdesk.dashboard-period";
 const DEFAULT_FILTERS: DashboardFilters = { period: "today" };
 
 /** A cada quanto a tela se recarrega sozinha — ver o efeito na página. */
+/**
+ * O Dashboard fica no INDIGO de propósito, fora da paleta de marca.
+ *
+ * Ele é a tela de leitura da operação: os números convivem com o verde de
+ * estado ("Aberto", "conectado") e com o verde das barras de recebidas, e um
+ * acento de marca verde ao lado deles faria a tela inteira virar um degradê
+ * de verdes sem hierarquia. O indigo é neutro em relação ao semáforo do
+ * atendimento — não diz nada sobre o status, só emoldura o bloco.
+ *
+ * Por isso estes hexes não saem de `lib/brand.ts`: não são cor de marca, e
+ * puxá-los de lá faria o Dashboard mudar junto na próxima troca de marca.
+ */
+const DASHBOARD_ACCENT = "#4f46e5";
+/** Um degrau mais claro, para o card que não pede a mesma ênfase. */
+const DASHBOARD_ACCENT_SOFT = "#6366f1";
+
 const AUTO_REFRESH_MS = 60_000;
 
 /** As duas cores das mensagens — o mesmo par validado dos gráficos. */
@@ -345,7 +360,7 @@ function StatCard({
   return (
     <Link
       href={href}
-      className="block rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
+      className="block rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40"
     >
       {card}
     </Link>
@@ -357,7 +372,7 @@ function ShareBar({ share }: { share: number }) {
   return (
     <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-slate-100">
       <div
-        className="h-full rounded-full bg-brand-600 transition-[width] duration-300 motion-reduce:transition-none"
+        className="h-full rounded-full bg-indigo-500/70 transition-[width] duration-300 motion-reduce:transition-none"
         style={{ width: `${share}%` }}
       />
     </div>
@@ -415,7 +430,7 @@ function RankingRow({
             {row.assignee ? (
               <span className="truncate text-slate-600">{row.assignee.name}</span>
             ) : row.assignedToAll ? (
-              <span className="shrink-0 rounded bg-brand-100 px-1.5 py-0.5 text-[10px] font-bold text-brand-700">
+              <span className="shrink-0 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
                 {ALL_USERS_ASSIGNEE_LABEL}
               </span>
             ) : (
@@ -499,7 +514,7 @@ function FilterSelect({
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+        className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
       >
         {children}
       </select>
@@ -690,7 +705,7 @@ export default function DashboardPage() {
       <Card className="mt-4 p-3">
         <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
           <span className="inline-flex items-center gap-1.5 self-center pb-0.5 pr-1 text-sm font-semibold text-slate-700">
-            <SlidersHorizontal className="h-4 w-4 text-brand-600" aria-hidden />
+            <SlidersHorizontal className="h-4 w-4 text-indigo-600" aria-hidden />
             Filtros
           </span>
           <span aria-hidden className="hidden self-stretch border-l border-slate-200 sm:block" />
@@ -717,7 +732,7 @@ export default function DashboardPage() {
                     value={filters.from ?? ""}
                     max={filters.to}
                     onChange={(event) => apply({ ...filters, from: event.target.value })}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+                    className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                   />
                 </label>
                 <label className="flex min-w-0 flex-col gap-1">
@@ -729,7 +744,7 @@ export default function DashboardPage() {
                     value={filters.to ?? ""}
                     min={filters.from}
                     onChange={(event) => apply({ ...filters, to: event.target.value })}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+                    className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                   />
                 </label>
               </>
@@ -821,7 +836,7 @@ export default function DashboardPage() {
           sublabel={phrase}
           value={stats?.conversations.active ?? 0}
           icon={<TrendingUp className="h-5 w-5" />}
-          accent={BRAND_COLORS[600]}
+          accent={DASHBOARD_ACCENT}
           hint="Conversas com ao menos uma mensagem no período, agrupadas pelo status atual."
           pending={initialPending}
         />
@@ -863,14 +878,11 @@ export default function DashboardPage() {
         />
         {/* Fora da soma de ativas de propósito: arquivada não é atendimento.
             Visual neutro — arquivar é ação deliberada, não problema. */}
-        {/* Acento 700, e não o 500 da marca: ele também pinta o ícone, e o
-            verde puro sobre o próprio tom claro daria 2,4:1 — abaixo do
-            mínimo de 3:1 para ícone. */}
         <StatCard
           label="Conversas arquivadas"
           value={stats?.conversations.archived ?? 0}
           icon={<Archive className="h-5 w-5" />}
-          accent={BRAND_COLORS[700]}
+          accent={DASHBOARD_ACCENT_SOFT}
           hint="Estado agora, sem filtro de período. Fora de todos os demais números."
           pending={initialPending}
           href={archivedInboxHref(filters)}
@@ -881,7 +893,7 @@ export default function DashboardPage() {
         <div className="border-b border-slate-100 px-5 py-4">
           <BlockHeader
             icon={<ListFilter className="h-4 w-4" />}
-            accent={BRAND_COLORS[600]}
+            accent={DASHBOARD_ACCENT}
             title="Fluxo de atendimento"
             subtitle="Distribuição das conversas por status atual"
           />
@@ -940,7 +952,7 @@ export default function DashboardPage() {
         <Card className="p-5">
           <BlockHeader
             icon={<Mail className="h-4 w-4" />}
-            accent={BRAND_COLORS[600]}
+            accent={DASHBOARD_ACCENT}
             title="Mensagens"
             subtitle={`Atividade de mensagens ${phrase}`}
           />
@@ -967,7 +979,7 @@ export default function DashboardPage() {
         <Card className="p-5">
           <BlockHeader
             icon={<Database className="h-4 w-4" />}
-            accent={BRAND_COLORS[600]}
+            accent={DASHBOARD_ACCENT}
             title="Infraestrutura"
             subtitle="Conectividade e disponibilidade dos números"
           />

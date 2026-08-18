@@ -1513,7 +1513,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   className={cn(
                     "shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
                     composerMode === "message"
-                      ? "bg-brand-600 text-white"
+                      ? "bg-brand-550 text-white"
                       : "bg-slate-100 text-slate-600 hover:bg-slate-200",
                   )}
                 >
