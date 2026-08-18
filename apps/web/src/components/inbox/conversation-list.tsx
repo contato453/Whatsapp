@@ -10,16 +10,24 @@ import {
   CONVERSATION_STATUS_LABELS,
 } from "@azvchat/shared";
 import { cn, formatDateTime, formatTime } from "@/lib/utils";
+import { formatUnreadBadge } from "@/lib/unread";
 import type { ConversationDto } from "@/lib/types";
 import { Badge } from "@/components/ui";
 import { ConversationAvatar } from "./conversation-avatar";
 
 export function ConversationListItem({
   conversation,
+  unreadCount,
   active,
   onClick,
 }: {
   conversation: ConversationDto;
+  /**
+   * Não lidas DESTA pessoa. Vem de fora porque o contador é por usuário e
+   * não viaja no DTO da conversa — que é publicado para todo mundo que
+   * enxerga a conversa.
+   */
+  unreadCount: number;
   active: boolean;
   onClick: () => void;
 }) {
@@ -60,9 +68,9 @@ export function ConversationListItem({
             <p className="truncate text-xs text-slate-500">
               {conversation.lastMessagePreview ?? "Sem mensagens"}
             </p>
-            {conversation.unreadCount > 0 && (
-              <span className="flex h-4.5 min-w-[18px] shrink-0 items-center justify-center rounded-full bg-brand-600 px-1 text-[10px] font-bold text-white">
-                {conversation.unreadCount > 99 ? "99+" : conversation.unreadCount}
+            {unreadCount > 0 && (
+              <span className="flex h-4.5 min-w-[18px] shrink-0 items-center justify-center rounded-full bg-brand-550 px-1 text-[10px] font-bold text-white">
+                {formatUnreadBadge(unreadCount)}
               </span>
             )}
           </div>
@@ -120,7 +128,7 @@ export function ConversationListItem({
               /* Coletivo por decisão: ocupa o lugar do responsável, mas com
                  estilo próprio para ninguém ler "@todos" como nome de gente —
                  e para não se confundir com o âmbar de quem está sem dono. */
-              <span className="shrink-0 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
+              <span className="shrink-0 rounded bg-brand-100 px-1.5 py-0.5 text-[10px] font-bold text-brand-700">
                 {ALL_USERS_ASSIGNEE_LABEL}
               </span>
             ) : (

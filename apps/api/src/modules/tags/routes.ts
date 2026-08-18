@@ -29,10 +29,16 @@ const withDepartments = { departments: { include: { department: true } } } as co
 
 const tagFieldsSchema = z.object({
   name: z.string().min(1).max(50),
+  // Cor de partida quando o corpo não manda nenhuma: azul-marinho da marca,
+  // o mesmo valor inicial do formulário. Era o indigo `#6366f1`, que saiu com
+  // o resto do roxo da interface. Não é verde de propósito — a etiqueta fica
+  // ao lado do selo de status na conversa, e verde ali disputaria a leitura
+  // com "Aberto". O `@default` da coluna no Prisma continua no valor antigo:
+  // mudá-lo pediria migration, e este default aqui sempre vence.
   color: z
     .string()
     .regex(/^#[0-9a-fA-F]{6}$/)
-    .default("#6366f1"),
+    .default("#102a4c"),
   /** Vale para todos os departamentos. Ligada, `departmentIds` fica vazio. */
   isGeneral: z.boolean().default(false),
   departmentIds: z.array(z.string().uuid()).default([]),

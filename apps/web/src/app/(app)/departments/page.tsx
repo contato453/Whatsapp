@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Building2, ChevronDown, Info, Pencil, Plus, Trash2, UserRound } from "lucide-react";
 import { api } from "@/lib/api";
+import { BRAND_NAVY } from "@/lib/brand";
 import { useAuth } from "@/lib/auth-context";
 import type { DepartmentDto, UserWithAccessDto } from "@/lib/types";
 import { Button, Card, Field, Input, Modal, Spinner } from "@/components/ui";
@@ -14,10 +15,19 @@ interface DepartmentForm {
   defaultAssigneeId: string;
 }
 
+/**
+ * Cor inicial de um departamento novo, e a que aparece quando o cadastro está
+ * sem cor. É o azul-marinho da marca, e não o verde: o chip do departamento
+ * fica lado a lado com o selo de status na lista de conversas, e um verde ali
+ * disputaria a leitura com o verde de "Aberto". Cor escolhida no cadastro é
+ * dado do usuário e continua intocada — isto aqui é só o valor de partida.
+ */
+const DEFAULT_ENTITY_COLOR = BRAND_NAVY;
+
 const EMPTY_FORM: DepartmentForm = {
   name: "",
   description: "",
-  color: "#6366f1",
+  color: DEFAULT_ENTITY_COLOR,
   defaultAssigneeId: "",
 };
 
@@ -89,7 +99,7 @@ function DepartmentRules() {
               <ul className="mt-2 space-y-1.5">
                 {group.rules.map((rule) => (
                   <li key={rule} className="flex gap-2 text-xs leading-relaxed text-slate-600">
-                    <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-brand-500" />
+                    <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-brand-600" />
                     <span>{rule}</span>
                   </li>
                 ))}
@@ -130,7 +140,7 @@ function DepartmentTeam({
           {supervisors.map((member) => (
             <span
               key={member.id}
-              className="rounded-full bg-brand-50 px-2 py-0.5 text-[11px] font-medium text-brand-700"
+              className="rounded-full bg-brand-100 px-2 py-0.5 text-[11px] font-medium text-brand-700"
             >
               {member.name}
             </span>
@@ -209,7 +219,7 @@ export default function DepartmentsPage() {
     setForm({
       name: department.name,
       description: department.description ?? "",
-      color: department.color ?? "#6366f1",
+      color: department.color ?? DEFAULT_ENTITY_COLOR,
       defaultAssigneeId: department.defaultAssigneeId ?? "",
     });
     setError(null);
@@ -335,8 +345,8 @@ export default function DepartmentsPage() {
                 <div
                   className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
                   style={{
-                    backgroundColor: `${department.color ?? "#6366f1"}1a`,
-                    color: department.color ?? "#6366f1",
+                    backgroundColor: `${department.color ?? DEFAULT_ENTITY_COLOR}1a`,
+                    color: department.color ?? DEFAULT_ENTITY_COLOR,
                   }}
                 >
                   <Building2 className="h-5 w-5" />

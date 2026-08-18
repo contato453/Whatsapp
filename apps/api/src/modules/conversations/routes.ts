@@ -3,6 +3,8 @@ import type { Prisma } from "@azvchat/database";
 import { z } from "zod";
 import {
   AZEVEDO_OS_SOURCE,
+  azevedoOsFacetValueIsValid,
+  canManageInternalNote,
   CONVERSATION_STATUSES,
   EXTERNAL_REFERENCE_SOURCES,
   FILTER_ALL_USERS,
@@ -11,6 +13,12 @@ import {
   RealtimeEvents,
 } from "@azvchat/shared";
 import { planReferenceUpdate } from "../../lib/azevedo-os-link.js";
+import {
+  companyReferenceWhere,
+  resolveCompanyIds,
+  unlinkedCompanyWhere,
+} from "../../lib/azevedo-os-company-filter.js";
+import { AzevedoOsError } from "../../services/azevedo-os-client.js";
 import {
   accessibleDepartmentIds,
   conversationScope,
@@ -30,6 +38,14 @@ import {
   clearAssignmentData,
   unassignedConversationWhere,
 } from "../../lib/conversation-assignment.js";
+import {
+  fullyReadConversationIds,
+  loadUnreadCount,
+  loadUnreadCounts,
+  markConversationRead,
+  markConversationUnread,
+  unreadConversationWhere,
+} from "../../lib/conversation-reads.js";
 import { canApplyToConversation } from "../../lib/department-resource.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import {
@@ -44,7 +60,7 @@ import {
   emitConversationUpdated as publishConversationUpdated,
 } from "../../lib/conversation-events.js";
 import { resolveContacts, type SenderInfo } from "../../lib/sender-directory.js";
-import { conversationAudience } from "../../realtime/socket.js";
+import { conversationAudience, userRoom } from "../../realtime/socket.js";
 import type { AppDeps } from "../../types.js";
 
 const listQuerySchema = z.object({
@@ -63,9 +79,32 @@ const listQuerySchema = z.object({
    */
   archived: z.coerce.boolean().default(false),
   q: z.string().max(120).optional(),
+  /**
+   * Recorte por característica do cliente no Azevedo-OS. O valor é a chave
+   * do enum de lá; `none` é o sentinela de cadastro em branco.
+   *
+   * A validação é de FORMATO, e não contra uma lista de valores: copiar os
+   * valores do Azevedo-OS para cá criaria o dicionário duplicado que a
+   * integração existe para evitar, e ele envelheceria calado no dia em que
+   * um regime novo fosse cadastrado lá. Valor bem formado que não existe no
+   * portal devolve zero conversas, que é resultado e não erro.
+   */
+  taxRegime: z.string().trim().refine(azevedoOsFacetValueIsValid).optional(),
+  payroll: z.string().trim().refine(azevedoOsFacetValueIsValid).optional(),
+  /**
+   * Só as conversas SEM empresa vinculada. É o atalho do aviso "N ficaram de
+   * fora", e o caminho natural para a equipe ir vinculando o que falta.
+   */
+  unlinked: z.coerce.boolean().optional(),
   limit: z.coerce.number().min(1).max(100).default(50),
   offset: z.coerce.number().min(0).default(0),
-});
+})
+  // Pedir "sem empresa" e "regime X" ao mesmo tempo é contradição: a conversa
+  // sem vínculo não tem regime nenhum. Recusar é melhor do que devolver a
+  // lista sempre vazia que essa combinação produziria.
+  .refine((query) => !(query.unlinked && (query.taxRegime || query.payroll)), {
+    message: "O filtro de conversas sem empresa não combina com regime ou folha.",
+  });
 
 export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
   /**
@@ -101,7 +140,6 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       ...(query.type ? { type: query.type } : {}),
       ...(query.departmentId ? { departmentId: query.departmentId } : {}),
       ...(query.instanceId ? { whatsappInstanceId: query.instanceId } : {}),
-      ...(query.unread ? { unreadCount: { gt: 0 } } : {}),
       // Arquivamento é um filtro POR CIMA do escopo de acesso, nunca no
       // lugar dele: `conversationScope` continua valendo inteiro acima.
       archivedAt: query.archived ? { not: null } : null,
@@ -117,6 +155,14 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
           }
         : {}),
     };
+    if (query.unread) {
+      // "Não lidas" passou a ser pergunta pessoal: o que ESTE usuário ainda
+      // não leu. Vai por cima do escopo de acesso, nunca no lugar dele.
+      Object.assign(
+        where,
+        unreadConversationWhere(await fullyReadConversationIds(deps.prisma, request.user.sub)),
+      );
+    }
     if (query.assigned === "me") {
       where.assignedUserId = request.user.sub;
     } else if (query.assigned === FILTER_NONE) {
@@ -129,6 +175,67 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       where.assignedUserId = query.assigned;
     }
 
+    /**
+     * Recorte por característica do cliente (regime tributário e folha), que
+     * moram no Azevedo-OS. Ele é montado por ÚLTIMO e entra por cima: `where`
+     * já carrega `conversationScope(access)` e os demais filtros, e o recorte
+     * por empresa só sabe TIRAR conversa da lista, nunca trazer uma que a
+     * pessoa não enxergaria. Filtrar pelo regime de uma conversa de outro
+     * atendente não a revela: o escopo continua valendo inteiro acima.
+     *
+     * Vai em `AND`, e não espalhado no objeto, porque o filtro de conversa
+     * sem empresa é um `OR` e a busca por texto também: fundir os dois no
+     * mesmo nível faria um sobrescrever o outro em silêncio.
+     */
+    const criteria = {
+      ...(query.taxRegime ? { taxRegime: query.taxRegime } : {}),
+      ...(query.payroll ? { payroll: query.payroll } : {}),
+    };
+    const companyFilterActive = Object.keys(criteria).length > 0;
+    /**
+     * O escopo de acesso JÁ OCUPA o `AND` do `where`: `conversationScope`
+     * devolve `{ AND: [...] }` com o recorte de números, departamentos e
+     * "só as minhas". Atribuir um `AND` novo aqui apagaria esse recorte, e o
+     * filtro por regime passaria a revelar ao atendente a conversa de outra
+     * pessoa — o filtro viraria uma porta de saída do controle de acesso.
+     * Por isso o recorte por empresa é ACRESCENTADO à lista existente, nunca
+     * posto no lugar dela. Há teste fixando exatamente isso.
+     */
+    const scopeAnd = Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : [];
+    const baseWhere: Prisma.ConversationWhereInput = { ...where };
+    const extras: Prisma.ConversationWhereInput[] = [];
+    let unavailable = false;
+    let truncated = false;
+    let unlinkedExcluded = 0;
+
+    if (query.unlinked) {
+      extras.push(unlinkedCompanyWhere());
+    } else if (companyFilterActive) {
+      try {
+        const resolved = await resolveCompanyIds(deps.azevedoOs, criteria);
+        truncated = resolved.truncated;
+        extras.push(companyReferenceWhere(resolved.ids));
+        // Quantas o recorte deixou de fora por não terem empresa vinculada.
+        // Sem esse número a lista encurta sem explicação e o filtro parece
+        // quebrado — e é ele que vira o atalho para a equipe ir vinculando.
+        unlinkedExcluded = await deps.prisma.conversation.count({
+          where: { ...baseWhere, AND: [...scopeAnd, unlinkedCompanyWhere()] },
+        });
+      } catch (err) {
+        // Azevedo-OS fora do ar não derruba a Inbox: a lista volta SEM o
+        // recorte e a tela avisa, em letras suficientes para ninguém ler uma
+        // lista completa achando que ela está filtrada. Erro que não seja da
+        // integração continua subindo — engolir tudo esconderia defeito nosso.
+        if (!(err instanceof AzevedoOsError)) throw err;
+        unavailable = true;
+        deps.logger.warn(
+          { event: "conversation_company_filter_unavailable" },
+          "conversation_company_filter_unavailable",
+        );
+      }
+    }
+    if (extras.length > 0) where.AND = [...scopeAnd, ...extras];
+
     const [conversations, total] = await Promise.all([
       deps.prisma.conversation.findMany({
         where,
@@ -139,7 +246,21 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       }),
       deps.prisma.conversation.count({ where }),
     ]);
-    return { conversations: conversations.map(serializeConversation), total };
+    // O contador vai num mapa à parte, e não dentro do DTO: o mesmo DTO é
+    // publicado por socket para a audiência inteira da conversa, e um número
+    // pessoal ali vazaria de uma pessoa para a outra. Uma consulta só para a
+    // página inteira — nunca uma por linha.
+    const unread = await loadUnreadCounts(
+      deps.prisma,
+      request.user.sub,
+      conversations.map((conversation) => conversation.id),
+    );
+    return {
+      conversations: conversations.map(serializeConversation),
+      total,
+      unread: Object.fromEntries(unread),
+      companyFilter: companyFilterActive ? { unavailable, truncated, unlinkedExcluded } : null,
+    };
   });
 
   app.get("/conversations/:id", { preHandler: authenticate }, async (request) => {
@@ -361,12 +482,59 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     return { updated };
   });
 
+  /**
+   * Avisa as outras abas DESTA pessoa que a leitura mudou. Vai para a sala
+   * pessoal, e não para a audiência da conversa: mandar leitura para a
+   * audiência zeraria o aviso de quem não leu — o defeito que esta entrega
+   * conserta. Por isso também não há `conversation:updated` aqui: o DTO da
+   * conversa não mudou em nada para os outros.
+   */
+  async function emitConversationRead(
+    userId: string,
+    conversationId: string,
+    unreadCount: number,
+  ): Promise<void> {
+    deps.io.to(userRoom(userId)).emit(RealtimeEvents.ConversationRead, {
+      conversationId,
+      unreadCount,
+    });
+  }
+
+  /**
+   * Marca a conversa como lida SÓ PARA QUEM ABRIU. A marca avança até a
+   * última mensagem e nunca retrocede sozinha — rolar para cima e reler
+   * mensagens antigas não faz a conversa voltar a ter não lidas.
+   */
   app.post("/conversations/:id/read", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     await findConversationOr404(id, request.user);
-    await deps.prisma.conversation.update({ where: { id }, data: { unreadCount: 0 } });
-    await emitConversationUpdated(id, request.user.organizationId);
-    return { ok: true };
+    await markConversationRead(deps.prisma, {
+      organizationId: request.user.organizationId,
+      conversationId: id,
+      userId: request.user.sub,
+    });
+    const unreadCount = await loadUnreadCount(deps.prisma, request.user.sub, id);
+    await emitConversationRead(request.user.sub, id, unreadCount);
+    return { ok: true, unreadCount };
+  });
+
+  /**
+   * "Marcar como não lida": recua a marca de propósito, para a pessoa
+   * reservar a conversa para depois. Vale só para ela — ninguém mais vê o
+   * aviso voltar. Sem auditoria: leitura é estado pessoal de interface, e
+   * registrar cada abertura de conversa geraria volume sem valor.
+   */
+  app.post("/conversations/:id/unread", { preHandler: authenticate }, async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    await findConversationOr404(id, request.user);
+    await markConversationUnread(deps.prisma, {
+      organizationId: request.user.organizationId,
+      conversationId: id,
+      userId: request.user.sub,
+    });
+    const unreadCount = await loadUnreadCount(deps.prisma, request.user.sub, id);
+    await emitConversationRead(request.user.sub, id, unreadCount);
+    return { ok: true, unreadCount };
   });
 
   // ---------------- Atribuição de atendimento ----------------
@@ -528,11 +696,9 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
    * departamento, "todos" são todos os que enxergam aquele número — que é
    * exatamente o alcance que a conversa órfã já tinha.
    *
-   * **Limitação conhecida e aceita:** o não lido é da conversa, e não por
-   * pessoa (`Conversation.unreadCount` é uma coluna só). Numa conversa
-   * coletiva, quem abrir primeiro zera o badge para todo mundo. Resolver isso
-   * exigiria não lidas por usuário — outra entrega, e que mexeria em toda a
-   * Inbox; aqui fica registrado para ninguém tratar como bug novo.
+   * O não lido da conversa coletiva é de cada pessoa, como em qualquer
+   * outra: quem abrir não apaga o aviso dos colegas (ver
+   * `lib/conversation-reads.ts`).
    */
   app.post(
     "/conversations/:id/assign-all",
@@ -629,9 +795,10 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       data: {
         archivedAt: new Date(),
         archivedByUserId: request.user.sub,
-        // Arquivada não deve pesar em contador nenhum — inclusive o badge
-        // de não lidas da linha, que voltaria junto no desarquivamento.
-        unreadCount: 0,
+        // Não lidas não são mais zeradas aqui: elas são por usuário e a
+        // conversa arquivada já não conta para ninguém (a contagem descarta
+        // arquivada). Zerar a marca de cada pessoa, além de caro, faria o
+        // desarquivamento voltar sem aviso nenhum.
       },
     });
     deps.audit.record({
@@ -1101,9 +1268,17 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       where: { id: noteId, conversationId: id, organizationId: request.user.organizationId },
     });
     if (!note) throw new NotFoundError("Nota interna");
-    if (note.userId !== request.user.sub) {
-      // Nota própria cada um sempre edita; nota de terceiro é chave.
-      const permissions = await loadPermissions(deps.prisma, request.user);
+    // Nota própria cada um sempre edita — isso é código, não chave, e é o
+    // que garante que nenhuma configuração tranque a pessoa fora do próprio
+    // trabalho. Nota de TERCEIRO depende de `note.delete_other`.
+    const permissions = await loadPermissions(deps.prisma, request.user);
+    if (
+      !canManageInternalNote({
+        authorId: note.userId,
+        actorId: request.user.sub,
+        canManageOthers: permissions.can("note.delete_other"),
+      })
+    ) {
       permissions.assert("note.delete_other");
     }
     const updated = await deps.prisma.internalNote.update({
@@ -1138,8 +1313,17 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       where: { id: noteId, conversationId: id, organizationId: request.user.organizationId },
     });
     if (!note) throw new NotFoundError("Nota interna");
-    if (note.userId !== request.user.sub) {
-      const permissions = await loadPermissions(deps.prisma, request.user);
+    // Nota própria cada um sempre edita — isso é código, não chave, e é o
+    // que garante que nenhuma configuração tranque a pessoa fora do próprio
+    // trabalho. Nota de TERCEIRO depende de `note.delete_other`.
+    const permissions = await loadPermissions(deps.prisma, request.user);
+    if (
+      !canManageInternalNote({
+        authorId: note.userId,
+        actorId: request.user.sub,
+        canManageOthers: permissions.can("note.delete_other"),
+      })
+    ) {
       permissions.assert("note.delete_other");
     }
     await deps.prisma.internalNote.delete({ where: { id: noteId } });

@@ -814,7 +814,11 @@ export class InstanceManager {
           status: "open",
           // Número de backup: a carga inicial de chats também nasce
           // arquivada, senão a primeira conexão do chip encheria a Inbox.
-          ...(isBackup ? { archivedAt: new Date(), unreadCount: 0 } : { unreadCount: chat.unreadCount }),
+          ...(isBackup ? { archivedAt: new Date() } : {}),
+          // O não lido que vem do WhatsApp não é copiado: aqui a leitura é
+          // por usuário, e um número do celular de outra pessoa não diz o que
+          // cada atendente já leu. Conversa sincronizada nasce por ler para
+          // todo mundo, que é o estado seguro.
           lastMessageAt: chat.lastMessageAt,
         },
       });

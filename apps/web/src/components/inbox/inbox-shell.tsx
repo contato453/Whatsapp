@@ -9,12 +9,12 @@ import {
   History,
   Inbox as InboxIcon,
   Info,
+  Mail,
   Paperclip,
   Pencil,
   Search,
   Send,
   StickyNote,
-  Trash2,
   Users2,
   X,
   Zap,
@@ -33,14 +33,25 @@ import {
   mentionTrigger,
   type DraftMention,
   type ScheduledPendingPayload,
+  AZEVEDO_OS_FACET_NONE,
+  type AzevedoOsFacetsDto,
 } from "@azvchat/shared";
-import { api, conversationMediaApi, messagesApi, quickRepliesApi } from "@/lib/api";
+import {
+  api,
+  azevedoOsApi,
+  conversationMediaApi,
+  conversationReadApi,
+  messagesApi,
+  quickRepliesApi,
+} from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { useAuth } from "@/lib/auth-context";
 import { pruneDrafts, readDraft, saveDraft, type Draft, type DraftMode } from "@/lib/drafts";
 import {
   EMPTY_INBOX_FILTERS,
   conversationMatchesFilters,
+  hasCompanyFilter,
+  mergeInboxFilters,
   hasActiveInboxFilters,
   readInboxFilters,
   saveInboxFilters,
@@ -49,6 +60,7 @@ import {
 } from "@/lib/inbox-filters";
 import { cn, formatDateTime, formatDayLabel } from "@/lib/utils";
 import type {
+  CompanyFilterStateDto,
   ConversationDetailDto,
   ConversationDto,
   DepartmentDto,
@@ -63,6 +75,7 @@ import { Avatar, Button, EmptyState, Input, Modal, Spinner, Textarea } from "@/c
 import { appliesToConversation } from "@/components/department-picker";
 import { ArchivedBanner } from "./archived-banner";
 import { ConversationListItem } from "./conversation-list";
+import { useUnreadCounts } from "./use-unread-counts";
 import { FilterBar } from "./filter-bar";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
 import { MentionPicker, mentionOptions, type MentionOption } from "./mention-picker";
@@ -76,58 +89,13 @@ import { ScheduleModal } from "./composer-modals";
 import { MediaLightbox } from "./media-lightbox";
 import { MessageBubble } from "./message-bubble";
 import { ContextPanel } from "./context-panel";
+import {
+  InternalNoteBubble,
+  internalNoteActions,
+  useCanManageNote,
+} from "./internal-note";
 import { StatusSelect } from "./status-select";
 
-/** Nota interna exibida dentro da conversa — nunca vai para o WhatsApp. */
-function InternalNoteItem({
-  note,
-  canManage,
-  onEdit,
-  onDelete,
-}: {
-  note: NoteDto;
-  canManage: boolean;
-  onEdit: (note: NoteDto) => void;
-  onDelete: (note: NoteDto) => void;
-}) {
-  return (
-    <div className="group flex justify-center py-1">
-      <div className="relative max-w-[80%] rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 shadow-sm">
-        <p className="mb-0.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
-          <StickyNote className="h-3 w-3" /> Nota interna
-        </p>
-        <p className="whitespace-pre-wrap break-words text-sm text-slate-700">{note.content}</p>
-        <p className="mt-1 text-[10px] text-amber-600/80">
-          {note.user?.name ?? "—"} ·{" "}
-          {new Date(note.createdAt).toLocaleString("pt-BR", {
-            day: "2-digit",
-            month: "2-digit",
-            hour: "2-digit",
-            minute: "2-digit",
-          })}
-        </p>
-        {canManage && (
-          <div className="absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-            <button
-              onClick={() => onEdit(note)}
-              title="Editar nota"
-              className="rounded p-1 text-amber-600/70 hover:bg-amber-100 hover:text-amber-800"
-            >
-              <Pencil className="h-3 w-3" />
-            </button>
-            <button
-              onClick={() => onDelete(note)}
-              title="Apagar nota"
-              className="rounded p-1 text-amber-600/70 hover:bg-red-50 hover:text-red-600"
-            >
-              <Trash2 className="h-3 w-3" />
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 /** Status que a Inbox aceita receber pela URL — os mesmos do atendimento. */
 const STATUS_QUICK_FILTERS: QuickFilter[] = [
   "open",
@@ -147,9 +115,22 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const socket = useSocket();
-  const { user: me, can } = useAuth();
+  const { user: me } = useAuth();
 
   const [conversations, setConversations] = useState<ConversationDto[] | null>(null);
+  /**
+   * Não lidas DESTA pessoa, por conversa. Vem em separado do DTO da conversa
+   * de propósito: aquele payload é publicado para todo mundo que enxerga a
+   * conversa, e um contador ali seria o mesmo número para o supervisor e para
+   * quem atende — o defeito que a leitura por usuário conserta.
+   */
+  const {
+    counts: unreadCounts,
+    countsRef: unreadCountsRef,
+    replaceAll: replaceUnreadCounts,
+    bump: bumpUnreadCount,
+    set: setUnreadCount,
+  } = useUnreadCounts();
   /**
    * Filtros da lista, num objeto só, reidratados do navegador já na
    * montagem. Este componente vive no layout da rota (`inbox/layout.tsx`)
@@ -173,10 +154,19 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
 
   /** Toda mudança de filtro passa por aqui — a persistência vem no efeito. */
   const applyFilters = useCallback((patch: Partial<InboxFilters>) => {
-    setFilters((current) => ({ ...current, ...patch }));
+    setFilters((current) => mergeInboxFilters(current, patch));
   }, []);
 
   const meId = me?.id ?? null;
+
+  /**
+   * Opções dos dois seletores de característica do cliente e o resultado do
+   * último recorte. Nulo em `facets` é integração desligada (os seletores não
+   * existem); `facetsUnavailable` é o portal mudo (existem, avisando).
+   */
+  const [facets, setFacets] = useState<AzevedoOsFacetsDto | null>(null);
+  const [facetsUnavailable, setFacetsUnavailable] = useState(false);
+  const [companyFilter, setCompanyFilter] = useState<CompanyFilterStateDto | null>(null);
 
   // Grava toda mudança (mão, URL do dashboard, poda de id extinto): o F5
   // com uma conversa aberta volta exatamente ao que estava na tela. Sem
@@ -255,8 +245,6 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
 
   /** Supervisor e admin enxergam vários números/departamentos; usuário, não. */
   const canFilterScope = me?.role === "admin" || me?.role === "supervisor";
-  /** Chave do catálogo, resolvida uma vez — o histórico repete por nota. */
-  const canManageOtherNotes = can("note.delete_other");
 
   /**
    * Filtro vindo da URL — é assim que os cards do dashboard abrem a Inbox já
@@ -354,6 +342,27 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       })
       .catch(() => undefined);
     quickRepliesApi.list().then(setQuickReplies).catch(() => undefined);
+    // Opções de regime e folha. A poda segue a mesma regra dos outros
+    // filtros: valor guardado que não existe mais no Azevedo-OS volta para
+    // "todos" em silêncio, em vez de deixar a lista vazia sem explicação.
+    azevedoOsApi
+      .facets()
+      .then((data) => {
+        setFacets(data.facets);
+        setFacetsUnavailable(data.unavailable);
+        if (!data.facets) return;
+        const valido = (field: { options: Array<{ value: string }>; hasNone: boolean }, value: string) =>
+          value === "" ||
+          (value === AZEVEDO_OS_FACET_NONE ? field.hasNone : field.options.some((o) => o.value === value));
+        setFilters((current) => {
+          const taxRegime = valido(data.facets!.taxRegime, current.taxRegime) ? current.taxRegime : "";
+          const payroll = valido(data.facets!.payroll, current.payroll) ? current.payroll : "";
+          return taxRegime === current.taxRegime && payroll === current.payroll
+            ? current
+            : { ...current, taxRegime, payroll };
+        });
+      })
+      .catch(() => undefined);
   }, []);
 
   // ---------- Lista de conversas ----------
@@ -376,12 +385,30 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     if (filters.instanceId) params.set("instanceId", filters.instanceId);
     if (filters.tagId) params.set("tagId", filters.tagId);
     if (filters.search.trim().length >= 2) params.set("q", filters.search.trim());
+    // O recorte por característica do cliente é resolvido no SERVIDOR: ele
+    // pede ao Azevedo-OS os identificadores das empresas que batem e corta a
+    // consulta por eles. Trazer tudo e filtrar aqui exigiria o cadastro
+    // inteiro no navegador, que é justamente o que a integração não faz.
+    if (filters.taxRegime) params.set("taxRegime", filters.taxRegime);
+    if (filters.payroll) params.set("payroll", filters.payroll);
+    if (filters.unlinked) params.set("unlinked", "true");
     params.set("limit", "80");
     api
-      .get<{ conversations: ConversationDto[] }>(`/conversations?${params.toString()}`)
-      .then((data) => setConversations(data.conversations))
+      .get<{
+        conversations: ConversationDto[];
+        unread: Record<string, number>;
+        companyFilter: CompanyFilterStateDto | null;
+      }>(
+        `/conversations?${params.toString()}`,
+      )
+      .then((data) => {
+        setConversations(data.conversations);
+        setCompanyFilter(data.companyFilter);
+        // O mapa vem calculado para a página inteira, numa consulta só.
+        replaceUnreadCounts(data.unread ?? {});
+      })
       .catch(() => undefined);
-  }, [filters]);
+  }, [filters, replaceUnreadCounts]);
 
   useEffect(() => {
     const timer = setTimeout(loadConversations, filters.search ? 300 : 0);
@@ -399,6 +426,17 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       })
       .catch(() => setDetail(null));
   }, [conversationId]);
+
+  /**
+   * Editar e excluir nota: a MESMA implementação para o cartão do chat e para
+   * o item do painel lateral. Ela recarrega o detalhe, e como os dois leem
+   * `detail.notes`, mexer num lugar atualiza o outro na hora.
+   */
+  const noteActions = useMemo(
+    () => internalNoteActions(conversationId, loadDetail),
+    [conversationId, loadDetail],
+  );
+  const canManageNote = useCanManageNote();
 
   useEffect(() => {
     setDetail(null);
@@ -437,8 +475,14 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         setHasMore(data.hasMore);
       })
       .catch(() => setMessages([]));
-    void api.post(`/conversations/${conversationId}/read`).catch(() => undefined);
-  }, [conversationId, loadDetail, me]);
+    // Abrir marca como lida SÓ para quem abriu — o gatilho é o mesmo de
+    // sempre, o que mudou é o alcance. A resposta traz o contador já
+    // recalculado; as outras abas desta pessoa recebem pelo socket.
+    void conversationReadApi
+      .read(conversationId)
+      .then((data) => setUnreadCount(conversationId, data.unreadCount))
+      .catch(() => undefined);
+  }, [conversationId, loadDetail, me, setUnreadCount]);
 
   // Busca dentro da conversa (com atraso para não consultar a cada tecla)
   useEffect(() => {
@@ -508,18 +552,42 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         // O tempo real respeita o filtro ativo: conversa fora do recorte não
         // é forçada para dentro da lista, e a que deixou de casar sai — mas
         // a aberta continua aberta no chat, filtro nunca fecha conversa.
-        if (!conversationMatchesFilters(payload.conversation, filters, meId)) {
+        const count =
+          (unreadCountsRef.current[payload.conversation.id] ?? 0) +
+          (payload.message.direction === "inbound" &&
+          payload.message.conversationId !== conversationId
+            ? 1
+            : 0);
+        if (!conversationMatchesFilters(payload.conversation, filters, meId, count)) {
           return rest.length === current.length ? current : rest;
         }
+        // Com o recorte por empresa ligado, linha que ainda não estava na
+        // lista NÃO entra: só o servidor sabe o regime do cliente, e chutar
+        // que ela casa mostraria conversa de outro regime até o próximo F5.
+        // Linha que já veio do servidor continua sendo atualizada.
+        const jaEstava = rest.length !== current.length;
+        if (!jaEstava && hasCompanyFilter(filters)) return current;
         return [payload.conversation, ...rest];
       });
+      // Contador de cada um sobe sozinho na aba de cada um. A conversa
+      // ABERTA não sobe: ela é marcada como lida logo abaixo, exatamente
+      // como já acontecia antes desta mudança.
+      if (
+        payload.message.direction === "inbound" &&
+        payload.message.conversationId !== conversationId
+      ) {
+        bumpUnreadCount(payload.message.conversationId);
+      }
       if (payload.message.conversationId === conversationId) {
         setMessages((current) => {
           if (!current) return current;
           if (current.some((message) => message.id === payload.message.id)) return current;
           return [...current, payload.message];
         });
-        void api.post(`/conversations/${conversationId}/read`).catch(() => undefined);
+        void conversationReadApi
+          .read(conversationId)
+          .then((data) => setUnreadCount(conversationId, data.unreadCount))
+          .catch(() => undefined);
       }
     };
     const onConversationUpdated = (payload: ConversationDto) => {
@@ -529,7 +597,14 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         // Atribuição, status, departamento ou etiqueta mudou e a linha
         // deixou de casar com o filtro ativo: sai da lista sem recarregar
         // tudo. A conversa aberta no chat não é fechada por isso.
-        if (!conversationMatchesFilters(payload, filters, meId)) {
+        if (
+          !conversationMatchesFilters(
+            payload,
+            filters,
+            meId,
+            unreadCountsRef.current[payload.id] ?? 0,
+          )
+        ) {
           return current.filter((conversation) => conversation.id !== payload.id);
         }
         return current.map((conversation) => (conversation.id === payload.id ? payload : conversation));
@@ -637,7 +712,16 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     // `filters`/`meId` entram nas dependências porque os handlers casam a
     // conversa com o filtro ativo — reassinar os listeners é barato e a
     // lista de dependências continua honesta.
-  }, [socket, conversationId, loadDetail, filters, meId]);
+  }, [
+    socket,
+    conversationId,
+    loadDetail,
+    filters,
+    meId,
+    unreadCountsRef,
+    bumpUnreadCount,
+    setUnreadCount,
+  ]);
 
   /**
    * Toda escrita no composer passa por aqui, e grava na hora.
@@ -898,29 +982,6 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     } catch (err) {
       window.alert(err instanceof Error ? err.message : "Falha ao reagir");
       loadDetail();
-    }
-  }
-
-  async function handleEditNote(note: NoteDto) {
-    const next = window.prompt("Editar nota interna:", note.content);
-    if (next === null) return;
-    const content = next.trim();
-    if (!content || content === note.content) return;
-    try {
-      await api.patch(`/conversations/${conversationId}/notes/${note.id}`, { content });
-      loadDetail();
-    } catch (err) {
-      window.alert(err instanceof Error ? err.message : "Falha ao editar nota");
-    }
-  }
-
-  async function handleDeleteNote(note: NoteDto) {
-    if (!window.confirm("Apagar esta nota interna?")) return;
-    try {
-      await api.delete(`/conversations/${conversationId}/notes/${note.id}`);
-      loadDetail();
-    } catch (err) {
-      window.alert(err instanceof Error ? err.message : "Falha ao apagar nota");
     }
   }
 
@@ -1231,6 +1292,9 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
             instances={instances}
             departments={departments}
             tags={tags}
+            facets={facets}
+            facetsUnavailable={facetsUnavailable}
+            companyFilter={companyFilter}
           />
         </div>
         <div className="thin-scroll flex-1 overflow-y-auto">
@@ -1243,9 +1307,18 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
               icon={<InboxIcon className="h-10 w-10" />}
               title="Nenhuma conversa encontrada"
               description={
-                hasActiveInboxFilters(filters)
-                  ? "Nenhuma conversa casa com os filtros ativos. Limpe os filtros para ver tudo."
-                  : "Conecte um WhatsApp e as conversas aparecerão aqui automaticamente."
+                hasCompanyFilter(filters)
+                  ? "Nenhuma conversa casa com os filtros ativos. O recorte por característica do cliente só alcança conversas com empresa vinculada ao Azevedo-OS."
+                  : hasActiveInboxFilters(filters)
+                    ? "Nenhuma conversa casa com os filtros ativos. Limpe os filtros para ver tudo."
+                    : "Conecte um WhatsApp e as conversas aparecerão aqui automaticamente."
+              }
+              action={
+                hasActiveInboxFilters(filters) ? (
+                  <Button variant="outline" size="sm" onClick={() => setFilters(EMPTY_INBOX_FILTERS)}>
+                    Limpar filtros
+                  </Button>
+                ) : undefined
               }
             />
           ) : (
@@ -1253,6 +1326,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
               <ConversationListItem
                 key={entry.id}
                 conversation={entry}
+                unreadCount={unreadCounts[entry.id] ?? 0}
                 active={entry.id === conversationId}
                 onClick={() => router.push(`/inbox/${entry.id}`)}
               />
@@ -1347,6 +1421,22 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   }}
                 >
                   <Search className="h-4 w-4" />
+                </Button>
+                {/* Reservar a conversa para depois: recua a marca de leitura
+                    DESTA pessoa e fecha o chat. Ninguém mais vê o aviso
+                    voltar, e sair da conversa evita que a leitura volte a
+                    avançar na próxima mensagem que chegar aqui. */}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  title="Marcar como não lida"
+                  onClick={async () => {
+                    const data = await conversationReadApi.unread(conversation.id);
+                    setUnreadCount(conversation.id, data.unreadCount);
+                    router.push("/inbox");
+                  }}
+                >
+                  <Mail className="h-4 w-4" />
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setShowPanel((value) => !value)}>
                   <Info className="h-4 w-4" />
@@ -1461,14 +1551,14 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                     />
                     </div>
                   ) : (
-                    <InternalNoteItem
+                    <InternalNoteBubble
                       key={`note-${item.note.id}`}
                       note={item.note}
-                      // Nota própria cada um sempre edita; nota de terceiro é
-                      // a MESMA chave que a API confere.
-                      canManage={item.note.user?.id === me?.id || canManageOtherNotes}
-                      onEdit={(note) => void handleEditNote(note)}
-                      onDelete={(note) => void handleDeleteNote(note)}
+                      // `useCanManageNote` já decide pela chave do catálogo:
+                      // nota própria sempre, nota de terceiro por permissão.
+                      canManage={canManageNote(item.note)}
+                      onEdit={noteActions.edit}
+                      onDelete={noteActions.delete}
                     />
                   ),
                 )
@@ -1487,7 +1577,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
               {/* Editando: o campo passa a ser da mensagem já enviada, e as
                   abas somem — nota interna não se edita por aqui. */}
               {editing && (
-                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-500 bg-slate-50 px-2.5 py-1.5">
+                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-600 bg-slate-50 px-2.5 py-1.5">
                   <Pencil className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-600" />
                   <div className="min-w-0 flex-1">
                     <p className="text-[11px] font-semibold text-slate-700">
@@ -1515,7 +1605,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   className={cn(
                     "shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
                     composerMode === "message"
-                      ? "bg-brand-600 text-white"
+                      ? "bg-brand-550 text-white"
                       : "bg-slate-100 text-slate-600 hover:bg-slate-200",
                   )}
                 >
@@ -1545,7 +1635,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
 
               {/* Mensagem sendo respondida */}
               {replyTo && composerMode === "message" && (
-                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-500 bg-slate-50 px-2.5 py-1.5">
+                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-600 bg-slate-50 px-2.5 py-1.5">
                   <CornerUpLeft className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-600" />
                   <div className="min-w-0 flex-1">
                     <p className="text-[11px] font-semibold text-slate-700">
@@ -1568,7 +1658,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   chip vira o indicador de progresso: vídeo grande demora e,
                   sem isso, a espera parecia defeito. */}
               {quickReplyMedia?.media && composerMode === "message" && (
-                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-500 bg-slate-50 px-2.5 py-1.5">
+                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-600 bg-slate-50 px-2.5 py-1.5">
                   {sending ? (
                     <Spinner className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-600" />
                   ) : (
@@ -1937,6 +2027,8 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
             departments={departments}
             tags={tags}
             onChanged={loadDetail}
+            onEditNote={noteActions.edit}
+            onDeleteNote={noteActions.delete}
           />
         </div>
       )}

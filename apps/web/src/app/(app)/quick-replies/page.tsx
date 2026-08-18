@@ -238,7 +238,7 @@ export default function QuickRepliesPage() {
               className={cn(
                 "rounded-lg border px-2 py-1.5 text-sm",
                 departmentFilter
-                  ? "border-brand-500 font-medium text-brand-700"
+                  ? "border-brand-600 font-medium text-brand-700"
                   : "border-slate-200 text-slate-600",
               )}
             >

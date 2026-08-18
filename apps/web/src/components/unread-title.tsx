@@ -24,9 +24,10 @@ const BLINK_MS = 1_200;
  * Conta **conversas**, não mensagens: dez mensagens do mesmo grupo são um
  * assunto só, e "(1)" descreve melhor o que espera a pessoa do que "(10)".
  *
- * O número é do que chegou desde a última passada pela Inbox, não o
- * `unreadCount` do banco — saber esse exigiria consulta nova a cada
- * carregamento para dizer o que a lista da Inbox já diz.
+ * O número é do que chegou desde a última passada pela Inbox, e não a soma
+ * das não lidas de verdade (que hoje são por usuário, em `ConversationRead`)
+ * — saber essa exigiria consulta nova a cada carregamento para dizer o que a
+ * lista da Inbox já diz.
  */
 export function UnreadTitle() {
   const socket = useSocket();

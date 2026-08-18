@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   EMPTY_INBOX_FILTERS,
   conversationMatchesFilters,
+  countActiveInboxFilters,
   hasActiveInboxFilters,
+  hasCompanyFilter,
+  mergeInboxFilters,
   readInboxFilters,
   saveInboxFilters,
   type InboxFilters,
@@ -43,6 +46,9 @@ const FILTRADO: InboxFilters = {
   departmentId: "depto-comercial",
   tagId: "etiqueta-urgente",
   search: "empresa",
+  taxRegime: "simples",
+  payroll: "folha_fixa",
+  unlinked: false,
 };
 
 function conversa(overrides: Partial<ConversationDto> = {}): ConversationDto {
@@ -62,7 +68,6 @@ function conversa(overrides: Partial<ConversationDto> = {}): ConversationDto {
     assignedToAll: false,
     department: null,
     tags: [],
-    unreadCount: 0,
     archivedAt: null,
     archivedBy: null,
     lastMessageAt: null,
@@ -146,10 +151,12 @@ describe("casamento de conversa com o filtro ativo (tempo real)", () => {
       conversationMatchesFilters(conversa({ type: "individual" }), { ...EMPTY_INBOX_FILTERS, quick: "groups" }, ANA),
     ).toBe(false);
     expect(
-      conversationMatchesFilters(conversa({ unreadCount: 3 }), { ...EMPTY_INBOX_FILTERS, quick: "unread" }, ANA),
+      // Não lidas é por usuário e chega de fora do DTO — o mesmo DTO com
+      // contador diferente é o caso normal (supervisor e atendente).
+      conversationMatchesFilters(conversa(), { ...EMPTY_INBOX_FILTERS, quick: "unread" }, ANA, 3),
     ).toBe(true);
     expect(
-      conversationMatchesFilters(conversa({ unreadCount: 0 }), { ...EMPTY_INBOX_FILTERS, quick: "unread" }, ANA),
+      conversationMatchesFilters(conversa(), { ...EMPTY_INBOX_FILTERS, quick: "unread" }, ANA, 0),
     ).toBe(false);
   });
 
@@ -231,5 +238,81 @@ describe("@todos nos filtros da lista", () => {
     const filtro: InboxFilters = { ...EMPTY_INBOX_FILTERS, quick: "all_users" };
     expect(conversationMatchesFilters(conversa({ assignedToAll: true }), filtro, ANA)).toBe(true);
     expect(conversationMatchesFilters(conversa(), filtro, ANA)).toBe(false);
+  });
+});
+
+describe("recorte por característica do cliente (Azevedo-OS)", () => {
+  it("persiste junto com os demais, na mesma entrada do usuário", () => {
+    saveInboxFilters(ANA, { ...EMPTY_INBOX_FILTERS, taxRegime: "simples", payroll: "folha_fixa" });
+    const lido = readInboxFilters(ANA);
+    expect(lido.taxRegime).toBe("simples");
+    expect(lido.payroll).toBe("folha_fixa");
+    // Sem mecanismo próprio: é a mesma chave dos outros filtros.
+    expect(readInboxFilters(BRUNO).taxRegime).toBe("");
+  });
+
+  it("valor corrompido no storage vira o padrão, sem derrubar o resto", () => {
+    window.localStorage.setItem(
+      `zapdesk.inbox-filters.${ANA}`,
+      JSON.stringify({ quick: "mine", taxRegime: 42, unlinked: "sim" }),
+    );
+    const lido = readInboxFilters(ANA);
+    expect(lido.quick).toBe("mine");
+    expect(lido.taxRegime).toBe("");
+    expect(lido.unlinked).toBe(false);
+  });
+
+  it("conta como filtro ativo e some do storage quando limpo", () => {
+    const comRegime = { ...EMPTY_INBOX_FILTERS, taxRegime: "simples" };
+    expect(hasActiveInboxFilters(comRegime)).toBe(true);
+    expect(countActiveInboxFilters(comRegime)).toBe(1);
+    saveInboxFilters(ANA, comRegime);
+    saveInboxFilters(ANA, EMPTY_INBOX_FILTERS);
+    expect(window.localStorage.getItem(`zapdesk.inbox-filters.${ANA}`)).toBeNull();
+  });
+
+  it("os três somam com os antigos, nunca no lugar deles", () => {
+    expect(countActiveInboxFilters(FILTRADO)).toBe(7);
+  });
+
+  it("'sem empresa' e o recorte por regime se excluem — o último vence", () => {
+    // A API recusa a combinação (conversa sem vínculo não tem regime), então
+    // o clique tem que desligar o outro em vez de não fazer nada.
+    const comRegime = mergeInboxFilters(EMPTY_INBOX_FILTERS, { taxRegime: "simples" });
+    const semVinculo = mergeInboxFilters(comRegime, { unlinked: true });
+    expect(semVinculo.unlinked).toBe(true);
+    expect(semVinculo.taxRegime).toBe("");
+
+    const deVolta = mergeInboxFilters(semVinculo, { payroll: "folha_fixa" });
+    expect(deVolta.unlinked).toBe(false);
+    expect(deVolta.payroll).toBe("folha_fixa");
+  });
+
+  it("mudança que não é de empresa não mexe no recorte já escolhido", () => {
+    const atual = { ...EMPTY_INBOX_FILTERS, taxRegime: "simples" };
+    expect(mergeInboxFilters(atual, { search: "azevedo" })).toEqual({
+      ...atual,
+      search: "azevedo",
+    });
+  });
+
+  it("hasCompanyFilter reconhece os três estados", () => {
+    expect(hasCompanyFilter(EMPTY_INBOX_FILTERS)).toBe(false);
+    expect(hasCompanyFilter({ ...EMPTY_INBOX_FILTERS, taxRegime: "simples" })).toBe(true);
+    expect(hasCompanyFilter({ ...EMPTY_INBOX_FILTERS, payroll: "none" })).toBe(true);
+    expect(hasCompanyFilter({ ...EMPTY_INBOX_FILTERS, unlinked: true })).toBe(true);
+  });
+
+  it("o casamento no cliente ignora regime e folha — só o servidor sabe", () => {
+    // A conversa que chega pelo socket não carrega o regime do cliente: ele
+    // mora no outro banco. Se esta regra passasse a "não casa", o tempo real
+    // apagaria da lista filtrada linha que o servidor tinha devolvido.
+    const conversa1 = conversa();
+    expect(
+      conversationMatchesFilters(conversa1, { ...EMPTY_INBOX_FILTERS, taxRegime: "simples" }, null),
+    ).toBe(true);
+    expect(
+      conversationMatchesFilters(conversa1, { ...EMPTY_INBOX_FILTERS, unlinked: true }, null),
+    ).toBe(true);
   });
 });

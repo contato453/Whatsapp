@@ -62,7 +62,7 @@ export function AudioPlayer({ src, outbound }: { src: string; outbound: boolean 
         onClick={toggle}
         className={cn(
           "flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors",
-          outbound ? "bg-white/20 hover:bg-white/30" : "bg-slate-100 hover:bg-slate-200",
+          outbound ? "bg-white/60 hover:bg-white/90" : "bg-slate-100 hover:bg-slate-200",
         )}
         aria-label={playing ? "Pausar" : "Reproduzir"}
       >
@@ -84,11 +84,11 @@ export function AudioPlayer({ src, outbound }: { src: string; outbound: boolean 
         }}
         className={cn(
           "h-1 flex-1 cursor-pointer appearance-none rounded-full",
-          outbound ? "bg-white/30 accent-white" : "bg-slate-200 accent-brand-600",
+          outbound ? "bg-black/10 accent-brand-600" : "bg-slate-200 accent-brand-600",
         )}
       />
 
-      <span className={cn("shrink-0 text-[10px] tabular-nums", outbound ? "text-white/70" : "text-slate-400")}>
+      <span className={cn("shrink-0 text-[10px] tabular-nums", outbound ? "text-chat-sent-meta" : "text-slate-400")}>
         {formatSeconds(progress)}
       </span>
 
@@ -98,7 +98,7 @@ export function AudioPlayer({ src, outbound }: { src: string; outbound: boolean 
         className={cn(
           "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold transition-colors",
           outbound
-            ? "bg-white/20 text-white hover:bg-white/30"
+            ? "bg-white/60 text-slate-700 hover:bg-white/90"
             : "bg-slate-100 text-slate-600 hover:bg-slate-200",
         )}
       >

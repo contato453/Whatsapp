@@ -273,7 +273,8 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
           data: {
             archivedAt: new Date(),
             archivedByUserId: request.user.sub,
-            unreadCount: 0,
+            // Não lidas são por usuário e conversa arquivada não conta para
+            // ninguém — não há contador de conversa para zerar aqui.
           },
         });
         archived += batch.length;

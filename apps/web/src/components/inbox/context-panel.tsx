@@ -38,6 +38,7 @@ import type {
   ConversationDetailDto,
   ConversationFileDto,
   DepartmentDto,
+  NoteDto,
   TagDto,
   UserDirectoryDto,
 } from "@/lib/types";
@@ -46,6 +47,7 @@ import { Badge, Button, Textarea } from "@/components/ui";
 import { appliesToConversation } from "@/components/department-picker";
 import { AzevedoOsCard } from "./azevedo-os-card";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
+import { InternalNotePanelItem, useCanManageNote } from "./internal-note";
 
 /**
  * Telefone de uma conversa individual. O endereço do WhatsApp vem como
@@ -122,12 +124,17 @@ export function ContextPanel({
   departments,
   tags,
   onChanged,
+  onEditNote,
+  onDeleteNote,
 }: {
   detail: ConversationDetailDto;
   users: UserDirectoryDto[];
   departments: DepartmentDto[];
   tags: TagDto[];
   onChanged: () => void;
+  /** Os mesmos handlers do cartão da conversa — nada de segundo fluxo aqui. */
+  onEditNote: (note: NoteDto) => void;
+  onDeleteNote: (note: NoteDto) => void;
 }) {
   const router = useRouter();
   const { can } = useAuth();
@@ -140,6 +147,9 @@ export function ContextPanel({
    * `false` — o lado seguro do erro.
    */
   const podeTrocarDepartamento = can("conversation.change_department");
+  // Mesma régua do cartão do chat: `useCanManageNote` já decide pela chave
+  // `note.delete_other` do catálogo.
+  const canManageNote = useCanManageNote();
   const [noteText, setNoteText] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -283,7 +293,7 @@ export function ContextPanel({
               <div className="flex items-center gap-1">
                 <input
                   autoFocus
-                  className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2 py-1 text-sm font-semibold text-slate-900 focus:border-brand-500 focus:outline-none"
+                  className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2 py-1 text-sm font-semibold text-slate-900 focus:border-brand-600 focus:outline-none"
                   value={nome}
                   placeholder={conversation.whatsappTitle}
                   onChange={(event) => setNome(event.target.value)}
@@ -379,7 +389,7 @@ export function ContextPanel({
                 // pessoa: no banco não existe usuário "@todos", e na tela ele
                 // também não pode passar por um.
                 conversation.assignedToAll
-                  ? "border-indigo-200 bg-indigo-50 font-semibold text-indigo-700"
+                  ? "border-brand-100 bg-brand-50 font-semibold text-brand-700"
                   : "border-slate-200",
               )}
               value={
@@ -418,7 +428,7 @@ export function ContextPanel({
           <p
             className={cn(
               "text-right text-[11px]",
-              conversation.assignedToAll ? "text-indigo-600" : "text-slate-400",
+              conversation.assignedToAll ? "text-brand-600" : "text-slate-400",
             )}
           >
             {ALL_USERS_ASSIGNEE_LABEL}: {ALL_USERS_ASSIGNEE_HINT}
@@ -623,7 +633,7 @@ export function ContextPanel({
                       {renamingParticipant === participant.id ? (
                         <input
                           autoFocus
-                          className="w-full rounded-lg border border-slate-300 px-2 py-0.5 text-xs text-slate-700 focus:border-brand-500 focus:outline-none"
+                          className="w-full rounded-lg border border-slate-300 px-2 py-0.5 text-xs text-slate-700 focus:border-brand-600 focus:outline-none"
                           defaultValue={participant.customName ?? ""}
                           placeholder={participant.whatsappName ?? "Nome do participante"}
                           onBlur={(event) =>
@@ -751,12 +761,13 @@ export function ContextPanel({
         </h3>
         <div className="space-y-2">
           {detail.notes.map((note) => (
-            <div key={note.id} className="rounded-lg border-l-2 border-amber-400 bg-amber-50 p-2.5">
-              <p className="whitespace-pre-wrap text-xs text-slate-700">{note.content}</p>
-              <p className="mt-1 text-[10px] text-slate-400">
-                {note.user?.name ?? "—"} · {formatDateTime(note.createdAt)}
-              </p>
-            </div>
+            <InternalNotePanelItem
+              key={note.id}
+              note={note}
+              canManage={canManageNote(note)}
+              onEdit={onEditNote}
+              onDelete={onDeleteNote}
+            />
           ))}
         </div>
         <Textarea

@@ -1,4 +1,10 @@
-import type { AzevedoOsCompany, AzevedoOsCompanyDto } from "@azvchat/shared";
+import type {
+  AzevedoOsCompany,
+  AzevedoOsCompanyDto,
+  AzevedoOsFacetsDto,
+  AzevedoOsFieldFacets,
+} from "@azvchat/shared";
+import type { AzevedoOsCompanyFacets } from "../../services/azevedo-os-client.js";
 
 /**
  * DTO da empresa do Azevedo-OS.
@@ -34,4 +40,21 @@ export function serializeAzevedoOsCompany(
     })),
     webUrl,
   };
+}
+
+/**
+ * DTO das facetas que alimentam os dois seletores da Inbox.
+ *
+ * **A contagem do Azevedo-OS não atravessa.** Ele manda quantas empresas há
+ * em cada valor, e é útil — mas do lado de cá o número seria lido como
+ * quantidade de conversas, e "Simples (191)" ao lado de uma lista com doze
+ * linhas faria a equipe achar que o filtro está quebrado. A contagem é usada
+ * aqui mesmo, e só para uma decisão: oferecer ou não o "Sem informação".
+ */
+export function serializeAzevedoOsFacets(facets: AzevedoOsCompanyFacets): AzevedoOsFacetsDto {
+  const field = (raw: AzevedoOsCompanyFacets["taxRegime"]): AzevedoOsFieldFacets => ({
+    options: raw.options.map((option) => ({ value: option.value, label: option.label })),
+    hasNone: raw.noneCount > 0,
+  });
+  return { taxRegime: field(facets.taxRegime), payroll: field(facets.payroll) };
 }

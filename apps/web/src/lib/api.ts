@@ -4,6 +4,7 @@ import { AZEVEDO_OS_SOURCE } from "@azvchat/shared";
 import type {
   AttendanceSettings,
   AzevedoOsCompanyDto,
+  AzevedoOsFacetsDto,
   ConfigurableRole,
   ConversationStatus,
   DashboardPeriod,
@@ -259,6 +260,18 @@ export const messagesApi = {
  * para o mesmo campo seria pedir para eles divergirem.
  */
 export const azevedoOsApi = {
+  /**
+   * Valores dos dois seletores de característica do cliente (regime e folha).
+   *
+   * `facets` nulo com `unavailable` falso é integração desligada, e a tela
+   * nem desenha os seletores; nulo com `unavailable` verdadeiro é o portal
+   * mudo, e aí eles aparecem avisando. A rota nunca devolve erro justamente
+   * para a Inbox abrir igual nos dois casos.
+   */
+  facets: () =>
+    api.get<{ facets: AzevedoOsFacetsDto | null; unavailable: boolean }>(
+      "/integrations/azevedo-os/company-facets",
+    ),
   /** Empresa vinculada; `null` quando a conversa não tem vínculo. */
   company: (conversationId: string) =>
     api
@@ -293,6 +306,21 @@ export const conversationArchiveApi = {
     api.post<{ ok: boolean }>(`/conversations/${conversationId}/archive`),
   unarchive: (conversationId: string) =>
     api.post<{ ok: boolean }>(`/conversations/${conversationId}/unarchive`),
+};
+
+/**
+ * Leitura da conversa — POR USUÁRIO, sempre.
+ *
+ * `read` avança a marca de quem chamou até a última mensagem; `unread` recua
+ * de propósito, para a pessoa reservar a conversa para depois. Nenhuma das
+ * duas mexe no aviso de ninguém mais, e as outras abas desta mesma pessoa
+ * são avisadas pelo evento `conversation:read`.
+ */
+export const conversationReadApi = {
+  read: (conversationId: string) =>
+    api.post<{ ok: boolean; unreadCount: number }>(`/conversations/${conversationId}/read`),
+  unread: (conversationId: string) =>
+    api.post<{ ok: boolean; unreadCount: number }>(`/conversations/${conversationId}/unread`),
 };
 
 /**

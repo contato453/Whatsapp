@@ -30,6 +30,7 @@ model Organization {
   auditLogs           AuditLog[]
   quickReplies        QuickReply[]
   scheduledMessages   ScheduledMessage[]
+  conversationReads   ConversationRead[]
   attendanceSettings  AttendanceSettings?
   rolePermissions     RolePermission[]
 
@@ -102,6 +103,7 @@ model User {
   defaultForDepartments Department[]                    @relation("DepartmentDefaultAssignee")
   defaultForInstances   WhatsAppInstance[]              @relation("InstanceDefaultAssignee")
   permissionChanges     RolePermission[]                @relation("RolePermissionUpdatedBy")
+  conversationReads     ConversationRead[]
 
   @@index([organizationId])
   @@map("users")
@@ -345,6 +347,11 @@ model Conversation {
   /// Constraint no banco garante que marcação e responsável nunca coexistem.
   assignedToAll      Boolean            @default(false)
   departmentId       String?
+  /// APOSENTADA. O não lido passou a ser POR USUÁRIO (`ConversationRead`):
+  /// esta coluna não é mais lida nem escrita por nenhum caminho do sistema.
+  /// Fica no banco com o dado histórico até a nova lógica provar que está de
+  /// pé; a remoção é uma migration futura. Não volte a usá-la: um contador
+  /// único é exatamente o bug que a leitura por usuário veio consertar.
   unreadCount        Int                @default(0)
   /// Arquivamento: a data responde "está arquivada?" (nulo = não). É
   /// ORTOGONAL ao status — não existe quinto status, e ao desarquivar a
@@ -371,6 +378,7 @@ model Conversation {
   tags              ConversationTag[]
   assignmentHistory ConversationAssignmentHistory[]
   scheduledMessages ScheduledMessage[]
+  reads             ConversationRead[]
 
   @@unique([whatsappInstanceId, externalChatId])
   @@index([organizationId, status])
@@ -382,6 +390,41 @@ model Conversation {
   /// o archivedAt vem antes para o filtro "IS NULL" usar o mesmo índice.
   @@index([organizationId, archivedAt, lastMessageAt])
   @@map("conversations")
+}
+
+/// Até onde CADA PESSOA leu uma conversa.
+///
+/// Guardamos a marca (o instante da última mensagem lida), e não um contador
+/// por pessoa: contador exigiria escrever uma linha por usuário a cada
+/// mensagem recebida — num grupo visível para dez atendentes, dez escritas
+/// por mensagem. Com a marca, ler custa uma escrita só de quem leu, e o
+/// número de não lidas é DERIVADO na consulta.
+///
+/// Linha ausente significa "nunca leu": nada é semeado, e conversa que
+/// ninguém abriu aparece inteira como não lida — que é o estado seguro.
+model ConversationRead {
+  id                String   @id @default(uuid())
+  organizationId    String
+  conversationId    String
+  userId            String
+  /// Instante da última mensagem lida. Só avança sozinho — se a pessoa rolar
+  /// para cima e reler mensagens antigas, a marca não recua e a conversa não
+  /// volta a ter não lidas. Recuar é ação explícita ("marcar como não lida").
+  lastReadAt        DateTime
+  /// Onde a marca parou, para referência. Opcional de propósito: quem decide
+  /// a contagem é o instante, e a mensagem pode ser apagada depois.
+  lastReadMessageId String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastReadMessage Message?     @relation(fields: [lastReadMessageId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, conversationId])
+  @@index([conversationId])
+  @@map("conversation_reads")
 }
 
 // ============================================================
@@ -442,14 +485,19 @@ model Message {
   metadata          Json?
   createdAt         DateTime         @default(now())
 
-  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  conversation Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sentByUser   User?             @relation(fields: [sentByUserId], references: [id], onDelete: SetNull)
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation Conversation       @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sentByUser   User?              @relation(fields: [sentByUserId], references: [id], onDelete: SetNull)
   reactions    MessageReaction[]
+  readMarks    ConversationRead[]
 
   @@unique([conversationId, externalMessageId])
   @@index([conversationId, timestamp])
   @@index([organizationId, timestamp])
+  /// Contagem de não lidas por usuário: mensagens RECEBIDAS de uma conversa
+  /// acima de um instante. Sem a direção na chave, a varredura teria de ler
+  /// também tudo o que a equipe enviou.
+  @@index([conversationId, direction, timestamp])
   @@map("messages")
 }
 
@@ -601,7 +649,7 @@ model ConversationAssignmentHistory {
 // ============================================================
 
 model QuickReply {
-  id             String   @id @default(uuid())
+  id             String    @id @default(uuid())
   organizationId String
   /// Atalho digitado após a barra, ex.: "bomdia" -> /bomdia
   shortcut       String
@@ -610,7 +658,7 @@ model QuickReply {
   /// Vale para a organização inteira. Mesma regra da etiqueta: com ela
   /// ligada não existe vínculo em `departments`; desligada, precisa de pelo
   /// menos um.
-  isGeneral      Boolean  @default(false)
+  isGeneral      Boolean   @default(false)
   /// Mídia opcional (imagem, áudio ou vídeo) que sai junto com o texto.
   /// `mediaUrl` é a chave no MediaStorage — mesmo esquema da Message; a
   /// imagem nunca sai por URL pública, só por rota autenticada.
@@ -622,8 +670,8 @@ model QuickReply {
   /// ninguém usa mais. Null = nunca usada desde que a coluna existe.
   lastUsedAt     DateTime?
   createdById    String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   departments  QuickReplyDepartment[]
@@ -753,19 +801,19 @@ model AuditLog {
 /// para a organização: no dia em que existir parâmetro por departamento,
 /// basta uma nova linha aqui. Nenhuma coluna de departamento agora.
 model AttendanceSettings {
-  id                   String   @id @default(uuid())
-  organizationId       String   @unique
+  id                      String   @id @default(uuid())
+  organizationId          String   @unique
   /// Minutos sem resposta, contados só dentro do expediente, para o
   /// atendimento entrar como atrasado.
-  responseLimitMinutes Int      @default(30)
+  responseLimitMinutes    Int      @default(30)
   /// Fuso do escritório. Todo corte de data do dashboard usa este fuso,
   /// nunca o UTC do servidor.
-  timezone             String   @default("America/Sao_Paulo")
+  timezone                String   @default("America/Sao_Paulo")
   /// Liga a restrição de horário de login. Desligada por padrão: ligada de
   /// saída, um deploy trancaria do lado de fora quem já estava trabalhando.
-  loginRestrictionEnabled Boolean @default(false)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  loginRestrictionEnabled Boolean  @default(false)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
 
   organization  Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   businessHours AttendanceBusinessHours[]

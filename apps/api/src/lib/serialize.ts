@@ -368,7 +368,12 @@ export function serializeConversation(conversation: ConversationWithRelations) {
     assignedToAll: conversation.assignedToAll,
     department: conversation.department ? serializeDepartment(conversation.department) : null,
     tags: conversation.tags?.map((entry) => serializeTag(entry.tag)) ?? [],
-    unreadCount: conversation.unreadCount,
+    // Não lidas NÃO saem daqui: elas são por usuário, e este DTO é publicado
+    // para a audiência inteira da conversa (`conversation:updated`,
+    // `message:new`). Um número pessoal neste payload chegaria à tela de
+    // todo mundo — o defeito que a leitura por usuário veio consertar. Quem
+    // conta é `lib/conversation-reads.ts`, e o número viaja na resposta da
+    // lista e no evento `conversation:read`, dirigido a uma pessoa só.
     // Nulo = não arquivada. Vai na lista e no evento de conversa: é como o
     // frontend sabe tirar (ou manter) a linha da visão certa sem reload.
     archivedAt: conversation.archivedAt?.toISOString() ?? null,
