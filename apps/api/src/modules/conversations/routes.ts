@@ -21,12 +21,14 @@ import {
 import { AzevedoOsError } from "../../services/azevedo-os-client.js";
 import {
   accessibleDepartmentIds,
+  canAssignBeyondConversationReach,
+  conversationAssigneeWhere,
   conversationScope,
   departmentResourceScope,
   groupScope,
   loadConversationAccess,
 } from "../../lib/access.js";
-import { authenticate } from "../../lib/auth.js";
+import { authenticate, type AuthTokenPayload } from "../../lib/auth.js";
 import { loadPermissions, requirePermission } from "../../lib/permissions.js";
 import {
   accessibleConversationWhere,
@@ -545,6 +547,85 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     note: z.string().max(500).optional(),
   });
 
+  /**
+   * Os candidatos a responsável desta conversa: quem enxerga o número e,
+   * quando ela está classificada, atua no departamento dela.
+   *
+   * A tela oferece exatamente o que a API aceita — mas a lista existe para
+   * a pessoa escolher bem, e não para controlar acesso: a recusa de verdade
+   * está no `POST .../assign`, logo abaixo, porque chamar a rota direto com
+   * um id de fora é trivial.
+   *
+   * Para supervisor e admin a resposta traz também `others`: os ativos que
+   * NÃO enxergam esta conversa. Eles podem transferir para lá (é decisão de
+   * supervisão), e a tela usa a separação para confirmar antes de gravar,
+   * em vez de deixar a conversa virar órfã em silêncio.
+   */
+  app.get(
+    "/conversations/:id/assignees",
+    { preHandler: requirePermission(deps, "conversation.transfer_user") },
+    async (request) => {
+      const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+      const conversation = await findConversationOr404(id, request.user);
+      const candidates = await deps.prisma.user.findMany({
+        where: conversationAssigneeWhere(request.user.organizationId, conversation),
+        orderBy: { name: "asc" },
+      });
+      const beyondReach = canAssignBeyondConversationReach(request.user.role);
+      const others = beyondReach
+        ? await deps.prisma.user.findMany({
+            where: {
+              organizationId: request.user.organizationId,
+              status: "active",
+              id: { notIn: candidates.map((candidate) => candidate.id) },
+            },
+            orderBy: { name: "asc" },
+          })
+        : [];
+      return {
+        users: candidates.map(serializeUserDirectory),
+        others: others.map(serializeUserDirectory),
+        canAssignBeyondReach: beyondReach,
+      };
+    },
+  );
+
+  /**
+   * Recusa a transferência para quem não enxergaria a conversa.
+   *
+   * Vale só para o atendente: supervisor e admin passam, porque a tela já
+   * pediu confirmação explícita ("esta pessoa não vai ver a conversa") e a
+   * decisão é deles.
+   *
+   * O departamento avaliado é o do ESTADO FINAL da conversa — a mesma rota
+   * aceita `departmentId` no corpo, e conferir contra o departamento antigo
+   * validaria um cenário que não vai existir depois da gravação.
+   *
+   * Conversa cujo departamento mudou depois de atribuída NÃO é desfeita por
+   * aqui: o responsável atual continua onde está, e a regra só vale para
+   * transferências novas. Desatribuir sozinho tiraria o atendimento de quem
+   * já estava conversando com o cliente, sem ninguém pedir.
+   */
+  async function assertAssignable(
+    user: AuthTokenPayload,
+    conversation: { whatsappInstanceId: string; departmentId: string | null },
+    targetUserId: string,
+  ) {
+    if (canAssignBeyondConversationReach(user.role)) return;
+    const target = await deps.prisma.user.findFirst({
+      where: {
+        id: targetUserId,
+        ...conversationAssigneeWhere(user.organizationId, conversation),
+      },
+      select: { id: true },
+    });
+    if (!target) {
+      throw new ForbiddenError(
+        "Esta pessoa não atende esta conversa: transfira para alguém do departamento da conversa que também tenha este número.",
+      );
+    }
+  }
+
   app.post(
     "/conversations/:id/assign",
     { preHandler: requirePermission(deps, "conversation.transfer_user") },
@@ -563,6 +644,16 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
 
     // Sem corpo: o próprio usuário assume o atendimento.
     const targetUserId = body.userId ?? request.user.sub;
+    await assertAssignable(
+      request.user,
+      {
+        whatsappInstanceId: conversation.whatsappInstanceId,
+        // Estado final: se o corpo troca o departamento, é ele que decide
+        // quem passa a enxergar a conversa.
+        departmentId: body.departmentId ?? conversation.departmentId,
+      },
+      targetUserId,
+    );
     const isTransfer = conversation.assignedUserId != null && conversation.assignedUserId !== targetUserId;
 
     /**

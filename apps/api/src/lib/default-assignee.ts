@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "@azvchat/database";
+import { conversationAssigneeWhere } from "./access.js";
 
 /**
  * Responsável padrão: quem recebe automaticamente a conversa que chega sem
@@ -22,9 +23,10 @@ import type { Prisma, PrismaClient } from "@azvchat/database";
  * Filtro de usuário elegível a receber uma conversa deste número.
  *
  * Não basta estar ativo: quem recebe precisa **enxergar** a conversa, senão
- * a atribuição existe só no banco. Pelas regras de `lib/access.ts` isso
- * significa ter o número vinculado e, quando a conversa tem departamento,
- * atuar nele. Admin enxerga a organização inteira e não depende de vínculo.
+ * a atribuição existe só no banco. A regra em si é a mesma da transferência
+ * manual e mora em `lib/access.ts` (`conversationAssigneeWhere`) — aqui só
+ * se acrescenta o id da pessoa. Duplicar o critério é como o responsável
+ * padrão e o seletor de responsável acabariam divergindo em silêncio.
  */
 export function eligibleAssigneeWhere(input: {
   userId: string;
@@ -35,17 +37,10 @@ export function eligibleAssigneeWhere(input: {
 }): Prisma.UserWhereInput {
   return {
     id: input.userId,
-    organizationId: input.organizationId,
-    status: "active",
-    OR: [
-      { role: "admin" },
-      {
-        whatsappAccess: { some: { whatsappInstanceId: input.whatsappInstanceId } },
-        ...(input.departmentId
-          ? { departmentAccess: { some: { departmentId: input.departmentId } } }
-          : {}),
-      },
-    ],
+    ...conversationAssigneeWhere(input.organizationId, {
+      whatsappInstanceId: input.whatsappInstanceId,
+      departmentId: input.departmentId ?? null,
+    }),
   };
 }
 
