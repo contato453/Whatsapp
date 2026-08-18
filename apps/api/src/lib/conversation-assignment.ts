@@ -1,4 +1,5 @@
 import type { Prisma } from "@azvchat/database";
+import type { ParsedAssignment } from "@azvchat/shared";
 
 /**
  * Atribuição de conversa: pessoa, coletivo ("@todos") ou ninguém.
@@ -51,4 +52,36 @@ export function unassignedConversationWhere(): Prisma.ConversationWhereInput {
 /** Filtro das conversas em atendimento coletivo. */
 export function assignedToAllWhere(): Prisma.ConversationWhereInput {
   return { assignedToAll: true };
+}
+
+/**
+ * O filtro unificado de departamento e responsável, montado a partir dos
+ * tokens marcados na tela.
+ *
+ * **Tudo que está marcado SOMA (OU), atravessando os três blocos da lista.**
+ * Marcar o Contábil junto com uma pessoa de outro departamento devolve as
+ * conversas do Contábil MAIS as dela, e não a interseção (que seria vazia na
+ * maioria das vezes, e foi exatamente o motivo de os dois filtros virarem um
+ * só). O cruzamento por E acontece entre filtros DIFERENTES, um nível acima,
+ * onde este `where` entra como mais um item do `AND`.
+ *
+ * `OR` sobre a mesma tabela não repete linha: a conversa que casa com dois
+ * ramos marcados (o departamento dela e o responsável dela) aparece uma vez
+ * só, sem precisar de `distinct`.
+ *
+ * Devolve `null` quando nada está marcado — filtro vazio é "todos", nunca
+ * "nenhum".
+ */
+export function assignmentFilterWhere(parsed: ParsedAssignment): Prisma.ConversationWhereInput | null {
+  const ramos: Prisma.ConversationWhereInput[] = [];
+  if (parsed.unassigned) ramos.push(unassignedConversationWhere());
+  if (parsed.allUsers) ramos.push(assignedToAllWhere());
+  // Conversa sem departamento existe quando o número não tem departamento
+  // padrão, e é a única que some de um recorte por departamento — por isso
+  // ela tem um item próprio em vez de depender de "desmarcar tudo".
+  if (parsed.noDepartment) ramos.push({ departmentId: null });
+  if (parsed.departmentIds.length > 0) ramos.push({ departmentId: { in: parsed.departmentIds } });
+  if (parsed.userIds.length > 0) ramos.push({ assignedUserId: { in: parsed.userIds } });
+  if (ramos.length === 0) return null;
+  return ramos.length === 1 ? (ramos[0] as Prisma.ConversationWhereInput) : { OR: ramos };
 }

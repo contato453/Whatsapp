@@ -357,6 +357,13 @@ POST   /whatsapp-instances/:id/archive-all       (supervisor; arquiva todas as c
 GET    /conversations                     GET /conversations/:id
        (a lista EXCLUI arquivadas por padrão; `?archived=true` traz só elas —
         não existe "todas misturadas")
+       TODO filtro aceita LISTA (parâmetro repetido ou separado por vírgula):
+       [&status=][&type=][&assignment=][&instanceId=][&tagId=][&taxRegime=][&payroll=]
+       (OU dentro do filtro, E entre filtros; lista vazia = "todos". Item
+        inválido é RECUSADO com 400, nunca ignorado. `assignment` é o filtro
+        UNIFICADO de departamento e responsável, em tokens: `none`,
+        `all_users`, `no_department`, `dept:<uuid>`, `user:<uuid>` — ver a
+        seção 13. A resposta traz `total`, que a barra mostra sempre)
        [&taxRegime=<valor|none>][&payroll=<valor|none>][&unlinked=true]
        (recorte por característica do cliente no Azevedo-OS; `none` é "sem
         informação" e `unlinked` são as conversas sem empresa vinculada, que
@@ -568,8 +575,17 @@ nome técnico no código e neste documento.
   o método em `api.ts`.
 - `src/lib/auth-context.tsx` e `src/lib/socket-context.tsx` — sessão e socket.
 - `src/components/ui.tsx` — kit da casa: `Button`, `Input`, `Textarea`, `Field`, `Badge`,
-  `Card`, `Avatar`, `Modal`, `Tooltip`, `Spinner`, `EmptyState`. **Reuse antes de criar
-  componente novo.** `Tooltip` é só CSS (hover + `focus-within`), sem biblioteca.
+  `Card`, `Avatar`, `Modal`, `Tooltip`, `Spinner`, `EmptyState`, `MultiSelect`. **Reuse
+  antes de criar componente novo.** `Tooltip` é só CSS (hover + `focus-within`), sem
+  biblioteca.
+- **`MultiSelect` é o único componente de seleção múltipla**, e todos os filtros da Inbox
+  passam por ele (atendimento, tipo, conexão, etiqueta, folha e regime). Aceita blocos com
+  cabeçalho e um campo de busca que filtra os blocos ao mesmo tempo; fecha por clique fora
+  e por `Esc`, nunca por `blur` (clicar numa caixa de seleção tira o foco do botão e
+  fecharia a lista no primeiro clique). Sem biblioteca de select. Quatro implementações
+  separadas divergiriam no teclado e no clique fora, e a equipe sentiria sem saber nomear.
+  O rótulo fechado mostra "Contábil +2" e é cortado por CSS: marcar dez itens não pode
+  empurrar a barra para fora da coluna.
 - **Não lidas no frontend** (`src/lib/unread.ts` + `components/inbox/use-unread-counts.ts`):
   o contador é por usuário e **não vive no `ConversationDto`** — o mesmo DTO chega por
   socket a todo mundo que enxerga a conversa. A tela guarda um mapa `id → contador`,
@@ -1056,6 +1072,38 @@ sempre juntos.
   `readMessages`), e agora há um motivo a mais para continuar assim: com leitura por
   usuário, um supervisor espiando faria o cliente ver o visto azul de um atendimento
   que ninguém começou.
+- **OU DENTRO do filtro, E ENTRE filtros. É a regra que alguém vai inverter.** Todo filtro
+  da Inbox aceita vários valores: os marcados dentro de um filtro SOMAM, e filtros
+  diferentes CRUZAM. Marcar Contábil e Fiscal mostra os dois; marcar Contábil e o status
+  "Aberto" mostra só as abertas do Contábil; filtro sem nada marcado é "todos", nunca
+  "nenhum". Invertida, a Inbox devolve lista vazia em quase toda marcação múltipla (uma
+  conversa não está em dois departamentos ao mesmo tempo), e o defeito parece "o filtro não
+  acha nada" em vez de "a regra está trocada". A regra mora em três lugares que precisam
+  concordar: `shared/inbox-filters.ts` (o contrato), o `AND` de `GET /conversations` (cada
+  filtro é UM item da lista, e dentro dele o `in` ou o `OR`) e `web/lib/inbox-filters.ts`
+  (o espelho que o tempo real usa). Há teste que fica vermelho ao trocar o `OR` por `AND`.
+- **Departamento e responsável são UM filtro só, e somam.** O caso normal do escritório é
+  "quero ver o Contábil inteiro MAIS a fulana", e ela costuma ser de outro departamento:
+  com dois filtros separados isso cruzaria por E e voltaria vazio. Juntos num `assignment`
+  de tokens (`none`, `all_users`, `no_department`, `dept:<id>`, `user:<id>`), tudo que está
+  marcado entra num `OR` só — é o comportamento do programa antigo que a equipe usava, e a
+  diferença entre somar e cruzar é o motivo de eles terem virado um. `OR` sobre a mesma
+  tabela **não repete linha**: a conversa do Contábil atribuída à fulana casa com dois
+  ramos e aparece uma vez só, sem `distinct`. Quem monta é
+  `assignmentFilterWhere` (`lib/conversation-assignment.ts`), a mesma fonte única que já
+  respondia por atribuição.
+- **Id de filtro que não existe é RECUSADO, não ignorado** (`lib/conversation-filters.ts`).
+  Ignorar em silêncio devolveria uma lista plausível recortada por um critério diferente do
+  que a pessoa marcou, e ela leria a tela achando ver "Contábil mais Fiscal" com o Fiscal
+  descartado. Isso não briga com a poda silenciosa da tela: lá o item extinto sai do estado
+  guardado ANTES de virar consulta, justamente para o atendente nunca ver esse 400. A
+  mensagem diz qual filtro tem o problema, nunca o id.
+- **O formato antigo dos filtros guardados, de valor único, é CONVERTIDO e não descartado**
+  (`readLegacy`, em `web/lib/inbox-filters.ts`). Cada valor vira lista de um item e o antigo
+  seletor `quick` é traduzido para o campo que passou a responder por ele. Só `mine` abre a
+  lista inteira: a leitura do storage não sabe quem está logado, e abrir a lista de outra
+  pessoa seria pior. É código de transição e pode sair quando ninguém mais tiver o formato
+  velho no navegador.
 - **Os filtros de regime tributário e folha dependem do Azevedo-OS, e degradam sozinhos.**
   Os dois campos não existem neste banco: quem responde "quais empresas são do Simples" é
   o portal, e a API usa a lista de identificadores que voltou para recortar as conversas

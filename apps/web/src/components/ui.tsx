@@ -1,7 +1,16 @@
 "use client";
 
-import { forwardRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes } from "react";
-import { X } from "lucide-react";
+import {
+  forwardRef,
+  useEffect,
+  useRef,
+  useState,
+  type ButtonHTMLAttributes,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type TextareaHTMLAttributes,
+} from "react";
+import { ChevronDown, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ---------- Button ----------
@@ -272,6 +281,176 @@ export function EmptyState({
       <p className="text-sm font-medium text-slate-600">{title}</p>
       {description && <p className="max-w-sm text-xs text-slate-400">{description}</p>}
       {action && <div className="pt-1">{action}</div>}
+    </div>
+  );
+}
+
+// ---------- MultiSelect ----------
+
+export interface MultiSelectOption {
+  value: string;
+  label: string;
+  /** Segunda linha discreta (papel do usuário, cor do departamento...). */
+  hint?: string;
+}
+
+export interface MultiSelectGroup {
+  /** Nulo desenha o bloco sem cabeçalho — lista de um assunto só. */
+  label: string | null;
+  options: MultiSelectOption[];
+}
+
+/**
+ * Seletor de VÁRIOS valores, com caixa de seleção e busca opcional.
+ *
+ * É o único componente de multisseleção da casa, usado pelos quatro filtros
+ * da Inbox (atendimento, conexão, etiqueta, característica do cliente).
+ * Quatro implementações separadas divergiriam no comportamento do teclado e
+ * do clique fora, e a equipe sentiria a diferença sem saber nomear.
+ *
+ * **Os valores marcados aqui SOMAM entre si** (é um OU): quem consome decide
+ * o que fazer com a lista, mas a leitura da tela é essa, e a caixa de seleção
+ * é justamente o sinal de que dá para marcar mais de um.
+ *
+ * Sem biblioteca: a lista é um `div` posicionado, fechado por clique fora,
+ * por `Esc` e por perda de foco. `blur` sozinho não serve, porque clicar numa
+ * caixa de seleção tira o foco do botão e fecharia a lista no primeiro clique.
+ */
+export function MultiSelect({
+  label,
+  groups,
+  selected,
+  onChange,
+  searchPlaceholder,
+  emptyLabel,
+  disabled,
+  className,
+}: {
+  /** Texto do botão quando nada está marcado. */
+  label: string;
+  groups: MultiSelectGroup[];
+  selected: string[];
+  onChange: (selected: string[]) => void;
+  /** Presente = desenha o campo de busca no topo da lista. */
+  searchPlaceholder?: string;
+  /** Texto quando a busca não encontra nada. */
+  emptyLabel?: string;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [term, setTerm] = useState("");
+  const boxRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (event: MouseEvent) => {
+      if (!boxRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  // Fechar zera a busca: reabrir com o termo antigo esconderia metade da
+  // lista e pareceria que os itens sumiram.
+  useEffect(() => {
+    if (!open) setTerm("");
+  }, [open]);
+
+  const busca = term.trim().toLowerCase();
+  const visiveis = groups
+    .map((group) => ({
+      ...group,
+      options: busca
+        ? group.options.filter((option) => option.label.toLowerCase().includes(busca))
+        : group.options,
+    }))
+    // A busca vale para os três blocos ao mesmo tempo, e bloco que ficou sem
+    // nenhum item sai da lista em vez de virar um cabeçalho órfão.
+    .filter((group) => group.options.length > 0);
+
+  const rotulos = groups
+    .flatMap((group) => group.options)
+    .filter((option) => selected.includes(option.value))
+    .map((option) => option.label);
+  const resumo = rotulos.length === 0 ? label : rotulos.length === 1 ? rotulos[0] : `${rotulos[0]} +${rotulos.length - 1}`;
+
+  function alternar(value: string) {
+    onChange(selected.includes(value) ? selected.filter((item) => item !== value) : [...selected, value]);
+  }
+
+  return (
+    <div ref={boxRef} className={cn("relative", className)}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((atual) => !atual)}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        className={cn(
+          "flex w-full items-center justify-between gap-1 rounded-lg border px-1.5 py-1 text-left text-[11px] disabled:cursor-not-allowed disabled:opacity-60",
+          rotulos.length > 0 ? "border-brand-500 font-medium text-brand-700" : "border-slate-200 text-slate-600",
+        )}
+      >
+        {/* O rótulo é cortado por CSS: marcar dez itens não pode empurrar a
+            barra de filtros para fora da coluna. */}
+        <span className="truncate">{resumo}</span>
+        <ChevronDown className={cn("h-3 w-3 shrink-0 transition-transform", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div
+          role="listbox"
+          aria-multiselectable
+          className="absolute z-30 mt-1 max-h-72 w-full min-w-[13rem] overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+        >
+          {searchPlaceholder && (
+            <div className="px-1.5 pb-1">
+              <input
+                autoFocus
+                value={term}
+                onChange={(event) => setTerm(event.target.value)}
+                placeholder={searchPlaceholder}
+                className="w-full rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-700 placeholder:text-slate-400 focus:border-brand-500 focus:outline-none"
+              />
+            </div>
+          )}
+          {visiveis.length === 0 ? (
+            <p className="px-2.5 py-2 text-[11px] text-slate-400">{emptyLabel ?? "Nada encontrado."}</p>
+          ) : (
+            visiveis.map((group) => (
+              <div key={group.label ?? "sem-bloco"}>
+                {group.label && (
+                  <p className="px-2.5 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                    {group.label}
+                  </p>
+                )}
+                {group.options.map((option) => (
+                  <label
+                    key={option.value}
+                    className="flex cursor-pointer items-center gap-2 px-2.5 py-1 text-[11px] text-slate-700 hover:bg-slate-50"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected.includes(option.value)}
+                      onChange={() => alternar(option.value)}
+                      className="h-3.5 w-3.5 shrink-0 accent-brand-600"
+                    />
+                    <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                    {option.hint && <span className="shrink-0 text-[10px] text-slate-400">{option.hint}</span>}
+                  </label>
+                ))}
+              </div>
+            ))
+          )}
+        </div>
+      )}
     </div>
   );
 }

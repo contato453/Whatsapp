@@ -86,8 +86,14 @@ export function clearAzevedoOsFilterCache(): void {
   facetsCache.clear();
 }
 
+/**
+ * A chave ordena os valores antes de juntar: marcar Simples e depois MEI
+ * é a mesma pergunta que marcar MEI e depois Simples, e sem a ordenação
+ * cada ordem de clique viraria uma viagem nova ao portal.
+ */
 export function criteriaCacheKey(criteria: AzevedoOsCompanyCriteria): string {
-  return `${criteria.taxRegime ?? ""}|${criteria.payroll ?? ""}`;
+  const chave = (valores: string[] | undefined) => [...(valores ?? [])].sort().join(",");
+  return `${chave(criteria.taxRegime)}|${chave(criteria.payroll)}`;
 }
 
 export async function resolveCompanyIds(

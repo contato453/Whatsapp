@@ -3,12 +3,13 @@ import type { Prisma } from "@azvchat/database";
 import { z } from "zod";
 import {
   AZEVEDO_OS_SOURCE,
+  assignmentTokenIsValid,
   azevedoOsFacetValueIsValid,
+  CONVERSATION_TYPE_FILTERS,
+  parseAssignmentTokens,
   canManageInternalNote,
   CONVERSATION_STATUSES,
   EXTERNAL_REFERENCE_SOURCES,
-  FILTER_ALL_USERS,
-  FILTER_NONE,
   PARTICIPANT_CLIENT_ROLES,
   RealtimeEvents,
 } from "@azvchat/shared";
@@ -32,11 +33,10 @@ import {
   accessibleConversationWhere,
 } from "../../lib/conversation-access.js";
 import {
-  assignedToAllWhere,
+  assignmentFilterWhere,
   assignToAllData,
   assignToUserData,
   clearAssignmentData,
-  unassignedConversationWhere,
 } from "../../lib/conversation-assignment.js";
 import {
   fullyReadConversationIds,
@@ -46,6 +46,7 @@ import {
   markConversationUnread,
   unreadConversationWhere,
 } from "../../lib/conversation-reads.js";
+import { assertKnownFilterIds } from "../../lib/conversation-filters.js";
 import { canApplyToConversation } from "../../lib/department-resource.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import {
@@ -63,19 +64,55 @@ import { resolveContacts, type SenderInfo } from "../../lib/sender-directory.js"
 import { conversationAudience, userRoom } from "../../realtime/socket.js";
 import type { AppDeps } from "../../types.js";
 
+/**
+ * Um parâmetro de filtro que aceita LISTA. A tela manda o mesmo nome
+ * repetido (`?tagId=a&tagId=b`), e aceitamos também separado por vírgula
+ * porque é o que um link colado à mão costuma trazer. Ausente ou vazio vira
+ * lista vazia, que significa "todos" — nunca "nenhum".
+ */
+function listaDe<T extends z.ZodTypeAny>(item: T) {
+  return z.preprocess((valor) => {
+    if (valor === undefined || valor === null || valor === "") return [];
+    const bruto = Array.isArray(valor) ? valor : [valor];
+    return bruto
+      .flatMap((entrada) => String(entrada).split(","))
+      .map((entrada) => entrada.trim())
+      .filter((entrada) => entrada.length > 0);
+  }, z.array(item)).default([]);
+}
+
+/**
+ * Filtros da lista de conversas.
+ *
+ * **OU dentro do filtro, E entre filtros** (a regra completa e o porquê estão
+ * em `@azvchat/shared/inbox-filters`). Cada campo abaixo é uma lista de
+ * valores que somam entre si, e as listas cruzam umas com as outras.
+ *
+ * Item inválido é RECUSADO, não ignorado: uuid torto ou status fora do enum
+ * derruba a requisição com 400. Ignorar em silêncio devolveria uma lista
+ * plausível recortada por um critério diferente do que a pessoa marcou, que
+ * é pior do que um erro.
+ */
 const listQuerySchema = z.object({
-  status: z.enum(CONVERSATION_STATUSES).optional(),
-  type: z.enum(["individual", "group"]).optional(),
-  assigned: z.string().optional(), // "me" | "none" | "all_users" | userId
-  departmentId: z.string().uuid().optional(),
-  instanceId: z.string().uuid().optional(),
-  tagId: z.string().uuid().optional(),
+  status: listaDe(z.enum(CONVERSATION_STATUSES)),
+  type: listaDe(z.enum(CONVERSATION_TYPE_FILTERS)),
+  /**
+   * O filtro unificado de departamento e responsável. Os tokens (`none`,
+   * `all_users`, `no_department`, `dept:<uuid>`, `user:<uuid>`) somam entre
+   * si, atravessando os três blocos da lista: marcar o Contábil junto com
+   * uma pessoa de outro departamento mostra os dois conjuntos, e não a
+   * interseção deles. É por isso que os dois filtros viraram um só.
+   */
+  assignment: listaDe(z.string().refine(assignmentTokenIsValid, "filtro de atendimento inválido")),
+  instanceId: listaDe(z.string().uuid()),
+  tagId: listaDe(z.string().uuid()),
   unread: z.coerce.boolean().optional(),
   /**
    * `false` (padrão) lista só as não arquivadas; `true`, só as arquivadas.
    * Não existe "todas misturadas" de propósito: a lista da Inbox e a visão
    * de arquivadas são recortes disjuntos, e misturar traria a conversa
-   * arquivada de volta pela porta dos fundos.
+   * arquivada de volta pela porta dos fundos. Por isso este continua sendo
+   * um booleano, e não uma lista.
    */
   archived: z.coerce.boolean().default(false),
   q: z.string().max(120).optional(),
@@ -89,8 +126,8 @@ const listQuerySchema = z.object({
    * um regime novo fosse cadastrado lá. Valor bem formado que não existe no
    * portal devolve zero conversas, que é resultado e não erro.
    */
-  taxRegime: z.string().trim().refine(azevedoOsFacetValueIsValid).optional(),
-  payroll: z.string().trim().refine(azevedoOsFacetValueIsValid).optional(),
+  taxRegime: listaDe(z.string().refine(azevedoOsFacetValueIsValid, "valor de filtro inválido")),
+  payroll: listaDe(z.string().refine(azevedoOsFacetValueIsValid, "valor de filtro inválido")),
   /**
    * Só as conversas SEM empresa vinculada. É o atalho do aviso "N ficaram de
    * fora", e o caminho natural para a equipe ir vinculando o que falta.
@@ -102,7 +139,7 @@ const listQuerySchema = z.object({
   // Pedir "sem empresa" e "regime X" ao mesmo tempo é contradição: a conversa
   // sem vínculo não tem regime nenhum. Recusar é melhor do que devolver a
   // lista sempre vazia que essa combinação produziria.
-  .refine((query) => !(query.unlinked && (query.taxRegime || query.payroll)), {
+  .refine((query) => !(query.unlinked && (query.taxRegime.length > 0 || query.payroll.length > 0)), {
     message: "O filtro de conversas sem empresa não combina com regime ou folha.",
   });
 
@@ -129,21 +166,25 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
   app.get("/conversations", { preHandler: authenticate }, async (request) => {
     const query = listQuerySchema.parse(request.query);
     const access = await loadConversationAccess(deps.prisma, request.user);
-    // Filtro por um número ao qual o usuário não tem acesso: lista vazia.
-    if (query.instanceId && access.instanceIds && !access.instanceIds.includes(query.instanceId)) {
-      return { conversations: [], total: 0 };
-    }
+    const assignment = parseAssignmentTokens(query.assignment);
+
+    // Id que não existe na organização é RECUSADO, não ignorado: ignorar
+    // devolveria uma lista plausível recortada por um critério diferente do
+    // que a pessoa marcou. A tela poda o item extinto antes de mandar, então
+    // chegar aqui um id desconhecido significa link torto ou estado corrompido.
+    await assertKnownFilterIds(deps.prisma, request.user.organizationId, {
+      departmentIds: assignment.departmentIds,
+      userIds: assignment.userIds,
+      tagIds: query.tagId,
+      instanceIds: query.instanceId,
+    });
+
     const where: Prisma.ConversationWhereInput = {
       organizationId: request.user.organizationId,
       ...conversationScope(access),
-      ...(query.status ? { status: query.status } : {}),
-      ...(query.type ? { type: query.type } : {}),
-      ...(query.departmentId ? { departmentId: query.departmentId } : {}),
-      ...(query.instanceId ? { whatsappInstanceId: query.instanceId } : {}),
       // Arquivamento é um filtro POR CIMA do escopo de acesso, nunca no
       // lugar dele: `conversationScope` continua valendo inteiro acima.
       archivedAt: query.archived ? { not: null } : null,
-      ...(query.tagId ? { tags: { some: { tagId: query.tagId } } } : {}),
       // Busca pelo nome ou pelo código do cadastro ("EMPRESA 001")
       ...(query.q
         ? {
@@ -163,17 +204,30 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
         unreadConversationWhere(await fullyReadConversationIds(deps.prisma, request.user.sub)),
       );
     }
-    if (query.assigned === "me") {
-      where.assignedUserId = request.user.sub;
-    } else if (query.assigned === FILTER_NONE) {
-      // "Sem responsável" é a fila de quem precisa de dono: a conversa
-      // coletiva tem `assignedUserId` nulo mas já tem destino, e some daqui.
-      Object.assign(where, unassignedConversationWhere());
-    } else if (query.assigned === FILTER_ALL_USERS) {
-      Object.assign(where, assignedToAllWhere());
-    } else if (query.assigned) {
-      where.assignedUserId = query.assigned;
-    }
+
+    /**
+     * **OU dentro de cada filtro, E entre filtros diferentes.**
+     *
+     * Cada item desta lista é um filtro inteiro, e eles entram todos no mesmo
+     * `AND`: por isso departamento e status cruzam. Dentro de um item os
+     * valores marcados somam, seja pelo `in` (status, tipo, número, etiqueta)
+     * seja pelo `OR` do filtro unificado de atendimento. Lista vazia não gera
+     * item nenhum, que é o "todos" daquele filtro.
+     *
+     * Inverter isso para E dentro do filtro deixaria a Inbox vazia em quase
+     * toda marcação múltipla, porque uma conversa não está em dois
+     * departamentos ao mesmo tempo. É o erro que este comentário existe para
+     * impedir.
+     */
+    const filtros: Prisma.ConversationWhereInput[] = [];
+    if (query.status.length > 0) filtros.push({ status: { in: query.status } });
+    if (query.type.length > 0) filtros.push({ type: { in: query.type } });
+    if (query.instanceId.length > 0) filtros.push({ whatsappInstanceId: { in: query.instanceId } });
+    // A etiqueta é N:N, então o `some` já é o OU: a conversa entra se tiver
+    // QUALQUER uma das marcadas.
+    if (query.tagId.length > 0) filtros.push({ tags: { some: { tagId: { in: query.tagId } } } });
+    const atendimento = assignmentFilterWhere(assignment);
+    if (atendimento) filtros.push(atendimento);
 
     /**
      * Recorte por característica do cliente (regime tributário e folha), que
@@ -188,8 +242,8 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
      * mesmo nível faria um sobrescrever o outro em silêncio.
      */
     const criteria = {
-      ...(query.taxRegime ? { taxRegime: query.taxRegime } : {}),
-      ...(query.payroll ? { payroll: query.payroll } : {}),
+      ...(query.taxRegime.length > 0 ? { taxRegime: query.taxRegime } : {}),
+      ...(query.payroll.length > 0 ? { payroll: query.payroll } : {}),
     };
     const companyFilterActive = Object.keys(criteria).length > 0;
     /**
@@ -219,7 +273,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
         // Sem esse número a lista encurta sem explicação e o filtro parece
         // quebrado — e é ele que vira o atalho para a equipe ir vinculando.
         unlinkedExcluded = await deps.prisma.conversation.count({
-          where: { ...baseWhere, AND: [...scopeAnd, unlinkedCompanyWhere()] },
+          where: { ...baseWhere, AND: [...scopeAnd, ...filtros, unlinkedCompanyWhere()] },
         });
       } catch (err) {
         // Azevedo-OS fora do ar não derruba a Inbox: a lista volta SEM o
@@ -234,7 +288,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
         );
       }
     }
-    if (extras.length > 0) where.AND = [...scopeAnd, ...extras];
+    where.AND = [...scopeAnd, ...filtros, ...extras];
 
     const [conversations, total] = await Promise.all([
       deps.prisma.conversation.findMany({

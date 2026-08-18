@@ -2,6 +2,7 @@ export * from "./attachments.js";
 export * from "./attendance.js";
 export * from "./azevedo-os.js";
 export * from "./enums.js";
+export * from "./inbox-filters.js";
 export * from "./internal-note.js";
 export * from "./mentions.js";
 export * from "./message-edit.js";

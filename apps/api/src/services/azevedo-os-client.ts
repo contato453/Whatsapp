@@ -216,10 +216,15 @@ export interface AzevedoOsCompanyIds {
   truncated: boolean;
 }
 
-/** Critério do recorte. Pelo menos um dos dois vem preenchido. */
+/**
+ * Critério do recorte. Pelo menos um dos dois vem preenchido, e cada um
+ * aceita VÁRIOS valores: o filtro da Inbox é multisseleção, e os valores
+ * marcados somam entre si. O Azevedo-OS recebe a lista separada por vírgula,
+ * que é o formato que o endpoint de lá já aceita.
+ */
 export interface AzevedoOsCompanyCriteria {
-  taxRegime?: string;
-  payroll?: string;
+  taxRegime?: string[];
+  payroll?: string[];
 }
 
 /**
@@ -380,8 +385,8 @@ export function createAzevedoOsClient(options: AzevedoOsClientOptions): AzevedoO
 
     async companyIds(criteria) {
       const params = new URLSearchParams();
-      if (criteria.taxRegime) params.set("taxRegime", criteria.taxRegime);
-      if (criteria.payroll) params.set("payroll", criteria.payroll);
+      if (criteria.taxRegime?.length) params.set("taxRegime", criteria.taxRegime.join(","));
+      if (criteria.payroll?.length) params.set("payroll", criteria.payroll.join(","));
       // Chamar sem critério nenhum pediria a base inteira, e o Azevedo-OS
       // recusa com 400. Barrar aqui evita gastar a viagem para descobrir isso.
       if ([...params.keys()].length === 0) return { ids: [], truncated: false };

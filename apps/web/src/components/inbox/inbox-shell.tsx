@@ -21,8 +21,6 @@ import {
 } from "lucide-react";
 import {
   AZEVEDO_OS_SOURCE,
-  FILTER_ALL_USERS,
-  FILTER_NONE,
   QUICK_REPLY_MEDIA_TYPE_LABELS,
   RealtimeEvents,
   MENTION_ALL_TOKEN,
@@ -34,7 +32,10 @@ import {
   type DraftMention,
   type ScheduledPendingPayload,
   AZEVEDO_OS_FACET_NONE,
+  conversationStatusIsValid,
+  departmentAssignmentToken,
   type AzevedoOsFacetsDto,
+  type ConversationStatus,
 } from "@azvchat/shared";
 import {
   api,
@@ -56,7 +57,6 @@ import {
   readInboxFilters,
   saveInboxFilters,
   type InboxFilters,
-  type QuickFilter,
 } from "@/lib/inbox-filters";
 import { cn, formatDateTime, formatDayLabel } from "@/lib/utils";
 import type {
@@ -96,16 +96,9 @@ import {
 } from "./internal-note";
 import { StatusSelect } from "./status-select";
 
-/** Status que a Inbox aceita receber pela URL — os mesmos do atendimento. */
-const STATUS_QUICK_FILTERS: QuickFilter[] = [
-  "open",
-  "waiting_client",
-  "waiting_internal",
-  "resolved",
-];
-
-function isStatusQuickFilter(value: string | null): value is QuickFilter {
-  return value !== null && (STATUS_QUICK_FILTERS as string[]).includes(value);
+/** Status que a Inbox aceita receber pela URL, vindo dos cards do dashboard. */
+function isStatusParam(value: string | null): value is ConversationStatus {
+  return value !== null && conversationStatusIsValid(value);
 }
 
 /** Grupo ainda não carregado ou conversa individual — sempre a mesma lista vazia. */
@@ -167,6 +160,8 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const [facets, setFacets] = useState<AzevedoOsFacetsDto | null>(null);
   const [facetsUnavailable, setFacetsUnavailable] = useState(false);
   const [companyFilter, setCompanyFilter] = useState<CompanyFilterStateDto | null>(null);
+  /** Quantas o recorte devolveu. Nulo enquanto a primeira consulta não volta. */
+  const [total, setTotal] = useState<number | null>(null);
 
   // Grava toda mudança (mão, URL do dashboard, poda de id extinto): o F5
   // com uma conversa aberta volta exatamente ao que estava na tela. Sem
@@ -264,15 +259,18 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   // É assim que o card de arquivadas do dashboard abre a visão certa.
   const archivedParam = searchParams.get("archived");
 
+  // O card do dashboard semeia UM status, então ele entra como lista de um
+  // item. Quem já tinha outros marcados perde a marcação, e é o certo: a
+  // pessoa clicou num card pedindo aquele recorte específico.
   useEffect(() => {
-    if (isStatusQuickFilter(statusParam)) {
-      setFilters((current) => ({ ...current, quick: statusParam }));
+    if (isStatusParam(statusParam)) {
+      setFilters((current) => ({ ...current, statuses: [statusParam] }));
     }
   }, [statusParam]);
 
   useEffect(() => {
     if (archivedParam === "true" || archivedParam === "1") {
-      setFilters((current) => ({ ...current, quick: "archived" }));
+      setFilters((current) => ({ ...current, view: "archived" }));
     }
   }, [archivedParam]);
 
@@ -281,8 +279,11 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     if (!departmentParam && !instanceParam) return;
     setFilters((current) => ({
       ...current,
-      ...(departmentParam ? { departmentId: departmentParam } : {}),
-      ...(instanceParam ? { instanceId: instanceParam } : {}),
+      // O departamento vindo da URL entra no filtro unificado, como token.
+      ...(departmentParam
+        ? { assignment: [...current.assignment, departmentAssignmentToken(departmentParam)] }
+        : {}),
+      ...(instanceParam ? { instanceIds: [...current.instanceIds, instanceParam] } : {}),
     }));
   }, [canFilterScope, departmentParam, instanceParam]);
 
@@ -307,38 +308,61 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   // em silêncio: aquele campo volta para "todos", em vez de deixar a lista
   // vazia sem explicação.
   useEffect(() => {
-    api.get<{ users: UserDirectoryDto[] }>("/users").then((data) => setUsers(data.users)).catch(() => undefined);
+    /** Poda genérica: some da lista o que não existe mais, mantendo o resto. */
+    const podar = (guardados: string[], existe: (id: string) => boolean) => {
+      const sobrou = guardados.filter(existe);
+      return sobrou.length === guardados.length ? null : sobrou;
+    };
+    api
+      .get<{ users: UserDirectoryDto[] }>("/users")
+      .then((data) => {
+        setUsers(data.users);
+        // Pessoa desativada ou excluída sai do filtro unificado, e só ela: os
+        // departamentos e as demais pessoas marcadas continuam valendo.
+        setFilters((current) => {
+          const sobrou = podar(current.assignment, (token) => {
+            if (!token.startsWith("user:")) return true;
+            const id = token.slice("user:".length);
+            return data.users.some((user) => user.id === id && user.status === "active");
+          });
+          return sobrou ? { ...current, assignment: sobrou } : current;
+        });
+      })
+      .catch(() => undefined);
     api
       .get<{ departments: DepartmentDto[] }>("/departments")
       .then((data) => {
         setDepartments(data.departments);
-        setFilters((current) =>
-          current.departmentId && !data.departments.some((department) => department.id === current.departmentId)
-            ? { ...current, departmentId: "" }
-            : current,
-        );
+        setFilters((current) => {
+          const sobrou = podar(current.assignment, (token) => {
+            if (!token.startsWith("dept:")) return true;
+            const id = token.slice("dept:".length);
+            return data.departments.some((department) => department.id === id);
+          });
+          return sobrou ? { ...current, assignment: sobrou } : current;
+        });
       })
       .catch(() => undefined);
     api
       .get<{ tags: TagDto[] }>("/tags")
       .then((data) => {
         setTags(data.tags);
-        setFilters((current) =>
-          current.tagId && !data.tags.some((tag) => tag.id === current.tagId)
-            ? { ...current, tagId: "" }
-            : current,
-        );
+        setFilters((current) => {
+          const sobrou = podar(current.tagIds, (id) => data.tags.some((tag) => tag.id === id));
+          return sobrou ? { ...current, tagIds: sobrou } : current;
+        });
       })
       .catch(() => undefined);
     api
       .get<{ instances: InstanceDto[] }>("/whatsapp-instances")
       .then((data) => {
         setInstances(data.instances);
-        setFilters((current) =>
-          current.instanceId && !data.instances.some((instance) => instance.id === current.instanceId)
-            ? { ...current, instanceId: "" }
-            : current,
-        );
+        setFilters((current) => {
+          const sobrou = podar(current.instanceIds, (id) =>
+            data.instances.some((instance) => instance.id === id),
+          );
+          return sobrou ? { ...current, instanceIds: sobrou } : current;
+        });
       })
       .catch(() => undefined);
     quickRepliesApi.list().then(setQuickReplies).catch(() => undefined);
@@ -351,13 +375,13 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         setFacets(data.facets);
         setFacetsUnavailable(data.unavailable);
         if (!data.facets) return;
+        const facetas = data.facets;
         const valido = (field: { options: Array<{ value: string }>; hasNone: boolean }, value: string) =>
-          value === "" ||
-          (value === AZEVEDO_OS_FACET_NONE ? field.hasNone : field.options.some((o) => o.value === value));
+          value === AZEVEDO_OS_FACET_NONE ? field.hasNone : field.options.some((o) => o.value === value);
         setFilters((current) => {
-          const taxRegime = valido(data.facets!.taxRegime, current.taxRegime) ? current.taxRegime : "";
-          const payroll = valido(data.facets!.payroll, current.payroll) ? current.payroll : "";
-          return taxRegime === current.taxRegime && payroll === current.payroll
+          const taxRegime = current.taxRegime.filter((valor) => valido(facetas.taxRegime, valor));
+          const payroll = current.payroll.filter((valor) => valido(facetas.payroll, valor));
+          return taxRegime.length === current.taxRegime.length && payroll.length === current.payroll.length
             ? current
             : { ...current, taxRegime, payroll };
         });
@@ -367,42 +391,43 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
 
   // ---------- Lista de conversas ----------
   const loadConversations = useCallback(() => {
+    /**
+     * Cada filtro vira um parâmetro REPETIDO (`?tagId=a&tagId=b`), porque a
+     * rota lê lista. O que está marcado dentro de um filtro soma (OU) e os
+     * filtros cruzam entre si (E): quem decide isso é o servidor, aqui só
+     * viaja o que a pessoa marcou.
+     */
     const params = new URLSearchParams();
-    const quick = filters.quick;
-    if (quick === "mine") params.set("assigned", "me");
-    if (quick === "unassigned") params.set("assigned", FILTER_NONE);
-    if (quick === "all_users") params.set("assigned", FILTER_ALL_USERS);
-    if (quick === "groups") params.set("type", "group");
-    if (quick === "individual") params.set("type", "individual");
-    if (quick === "unread") params.set("unread", "true");
+    const lista = (nome: string, valores: readonly string[]) => {
+      for (const valor of valores) params.append(nome, valor);
+    };
+    if (filters.view === "unread") params.set("unread", "true");
     // Sem o parâmetro a API já exclui arquivadas; com ele, lista só elas.
-    if (quick === "archived") params.set("archived", "true");
-    if (quick === "open") params.set("status", "open");
-    if (quick === "waiting_client") params.set("status", "waiting_client");
-    if (quick === "waiting_internal") params.set("status", "waiting_internal");
-    if (quick === "resolved") params.set("status", "resolved");
-    if (filters.departmentId) params.set("departmentId", filters.departmentId);
-    if (filters.instanceId) params.set("instanceId", filters.instanceId);
-    if (filters.tagId) params.set("tagId", filters.tagId);
+    if (filters.view === "archived") params.set("archived", "true");
+    lista("status", filters.statuses);
+    lista("type", filters.types);
+    lista("assignment", filters.assignment);
+    lista("instanceId", filters.instanceIds);
+    lista("tagId", filters.tagIds);
     if (filters.search.trim().length >= 2) params.set("q", filters.search.trim());
     // O recorte por característica do cliente é resolvido no SERVIDOR: ele
     // pede ao Azevedo-OS os identificadores das empresas que batem e corta a
     // consulta por eles. Trazer tudo e filtrar aqui exigiria o cadastro
     // inteiro no navegador, que é justamente o que a integração não faz.
-    if (filters.taxRegime) params.set("taxRegime", filters.taxRegime);
-    if (filters.payroll) params.set("payroll", filters.payroll);
+    lista("taxRegime", filters.taxRegime);
+    lista("payroll", filters.payroll);
     if (filters.unlinked) params.set("unlinked", "true");
     params.set("limit", "80");
     api
       .get<{
         conversations: ConversationDto[];
+        total: number;
         unread: Record<string, number>;
         companyFilter: CompanyFilterStateDto | null;
-      }>(
-        `/conversations?${params.toString()}`,
-      )
+      }>(`/conversations?${params.toString()}`)
       .then((data) => {
         setConversations(data.conversations);
+        setTotal(data.total);
         setCompanyFilter(data.companyFilter);
         // O mapa vem calculado para a página inteira, numa consulta só.
         replaceUnreadCounts(data.unread ?? {});
@@ -1292,9 +1317,11 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
             instances={instances}
             departments={departments}
             tags={tags}
+            users={users}
             facets={facets}
             facetsUnavailable={facetsUnavailable}
             companyFilter={companyFilter}
+            total={total}
           />
         </div>
         <div className="thin-scroll flex-1 overflow-y-auto">

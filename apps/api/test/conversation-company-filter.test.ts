@@ -56,6 +56,11 @@ function fakePrisma(): PrismaClient {
   return {
     userWhatsAppInstance: { findMany: async () => [{ whatsappInstanceId: INSTANCIA }] },
     userDepartment: { findMany: async () => [{ departmentId: DEPTO }] },
+    // Catálogos que a validação de id do filtro consulta.
+    department: { findMany: async () => [{ id: DEPTO }] },
+    user: { findMany: async () => [] },
+    tag: { findMany: async () => [] },
+    whatsAppInstance: { findMany: async () => [{ id: INSTANCIA }] },
     conversation: {
       findMany: async (args: Record<string, unknown>) => {
         gravado.findManyWhere.push(args.where as Record<string, unknown>);
@@ -170,12 +175,14 @@ describe("GET /conversations — o recorte por empresa vem DEPOIS do acesso", ()
 
   it("combina por E com departamento e status, sem desligá-los", async () => {
     const app = await buildApp();
-    await listar(app, `?taxRegime=simples&status=open&departmentId=${DEPTO}`);
+    await listar(app, `?taxRegime=simples&status=open&assignment=dept:${DEPTO}`);
     const where = gravado.findManyWhere[0] ?? {};
-    expect(where.status).toBe("open");
-    expect(where.departmentId).toBe(DEPTO);
     expect(where.archivedAt).toBeNull();
-    expect(fragmentos(where)).toContainEqual(companyReferenceWhere([EMPRESA_A, EMPRESA_B]));
+    // Os três somam por E, cada um como um item do mesmo `AND`.
+    const partes = fragmentos(where);
+    expect(partes).toContainEqual({ status: { in: ["open"] } });
+    expect(partes).toContainEqual({ departmentId: { in: [DEPTO] } });
+    expect(partes).toContainEqual(companyReferenceWhere([EMPRESA_A, EMPRESA_B]));
     await app.close();
   });
 
@@ -325,7 +332,7 @@ describe("recorte por empresa (regras puras)", () => {
     });
     // A rota nunca chega aqui sem critério, mas o guarda vale: um `in` com a
     // base inteira seria o oposto de um filtro.
-    const resultado = await resolveCompanyIds(client, { taxRegime: "simples" });
+    const resultado = await resolveCompanyIds(client, { taxRegime: ["simples"] });
     expect(chamou).toBe(true);
     expect(resultado.ids).toEqual([]);
   });
