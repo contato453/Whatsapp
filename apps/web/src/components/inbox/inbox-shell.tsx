@@ -37,7 +37,7 @@ import {
 import { api, conversationMediaApi, messagesApi, quickRepliesApi } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { useAuth } from "@/lib/auth-context";
-import { pruneDrafts, readDraft, saveDraft, type DraftMode } from "@/lib/drafts";
+import { pruneDrafts, readDraft, saveDraft, type Draft, type DraftMode } from "@/lib/drafts";
 import {
   EMPTY_INBOX_FILTERS,
   conversationMatchesFilters,
@@ -207,6 +207,15 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   /** "message" envia ao WhatsApp; "note" grava nota interna da equipe. */
   const [composerMode, setComposerMode] = useState<"message" | "note">("message");
   const [replyTo, setReplyTo] = useState<MessageDto | null>(null);
+  /**
+   * Mensagem sendo editada no composer, no lugar do `prompt` do navegador —
+   * é assim que o WhatsApp faz, e o texto longo precisa do mesmo campo em
+   * que foi escrito. O rascunho que estava no campo é guardado à parte e
+   * volta ao cancelar ou ao salvar: entrar em edição não pode custar o que a
+   * pessoa já tinha digitado.
+   */
+  const [editing, setEditing] = useState<MessageDto | null>(null);
+  const [draftBeforeEdit, setDraftBeforeEdit] = useState<Draft | null>(null);
   const [forwarding, setForwarding] = useState<MessageDto | null>(null);
   const [forwardSearch, setForwardSearch] = useState("");
   const [scheduleOpen, setScheduleOpen] = useState(false);
@@ -648,6 +657,10 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     setDraft(text);
     setComposerMode(mode);
     setMentions(alive);
+    // Editando, o campo é da mensagem já enviada — não é rascunho de nada.
+    // Gravar aqui faria o texto antigo reaparecer no composer no próximo
+    // login, pronto para ser mandado de novo ao cliente.
+    if (editing) return;
     if (conversationId && me) saveDraft(me.id, conversationId, { text, mode, mentions: alive });
   }
 
@@ -666,7 +679,8 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
    * falando de algo que ele não pode ler. Marcar colega de equipe é outra
    * funcionalidade, com outra lista de gente.
    */
-  const mentionsEnabled = detail?.conversation.type === "group" && composerMode === "message";
+  const mentionsEnabled =
+    detail?.conversation.type === "group" && composerMode === "message" && !editing;
   // Referência estável: `?? []` criaria um array novo a cada render e
   // invalidaria os memos abaixo sem nenhum motivo.
   const groupParticipants = detail?.group?.participants ?? NO_PARTICIPANTS;
@@ -908,20 +922,44 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     }
   }
 
-  async function handleEdit(message: MessageDto) {
-    const next = window.prompt("Editar mensagem:", message.content ?? "");
-    if (next === null) return;
-    const content = next.trim();
-    if (!content || content === message.content) return;
+  /** Abre a edição no composer. O rascunho atual fica guardado. */
+  function startEdit(message: MessageDto) {
+    setDraftBeforeEdit({ text: draft, mode: composerMode, mentions });
+    setReplyTo(null);
+    setEditing(message);
+    // A edição é sempre do texto que foi para o cliente — nunca de nota.
+    updateDraft(message.content ?? "", "message", []);
+    window.requestAnimationFrame(() => composerRef.current?.focus());
+  }
+
+  /** Sai da edição devolvendo ao campo o que estava sendo escrito antes. */
+  function cancelEdit() {
+    const anterior = draftBeforeEdit;
+    setEditing(null);
+    setDraftBeforeEdit(null);
+    updateDraft(anterior?.text ?? "", anterior?.mode ?? "message", anterior?.mentions ?? []);
+  }
+
+  async function handleEdit(message: MessageDto, novoTexto: string) {
+    const content = novoTexto.trim();
+    if (!content || content === message.content) {
+      cancelEdit();
+      return;
+    }
+    setSending(true);
     try {
-      const result = await api.patch<{ message: MessageDto }>(`/messages/${message.id}`, {
-        content,
-      });
+      const result = await messagesApi.edit(message.id, content);
       setMessages((current) =>
-        current?.map((entry) => (entry.id === message.id ? result.message : entry)) ?? null,
+        current?.map((entry) => (entry.id === message.id ? result : entry)) ?? null,
       );
+      // Só sai da edição depois da confirmação: se o WhatsApp recusar (a
+      // janela de edição fechou, o número caiu), o texto continua no campo
+      // para a pessoa copiar ou tentar de novo.
+      cancelEdit();
     } catch (err) {
       window.alert(err instanceof Error ? err.message : "Falha ao editar mensagem");
+    } finally {
+      setSending(false);
     }
   }
 
@@ -1040,8 +1078,12 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   }
 
   // ---------- Respostas rápidas (atalho "/") ----------
+  // Durante a edição o "/" é texto: a pessoa está corrigindo uma frase já
+  // enviada, não escolhendo uma resposta pronta.
   const slashQuery =
-    draft.startsWith("/") && !draft.includes("\n") ? draft.slice(1).toLowerCase() : null;
+    !editing && draft.startsWith("/") && !draft.includes("\n")
+      ? draft.slice(1).toLowerCase()
+      : null;
   const conversationDepartmentId = conversation?.department?.id ?? null;
   const quickReplyMatches = useMemo(() => {
     if (slashQuery === null || quickReplyDismissed) return [];
@@ -1409,7 +1451,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                         updateComposerMode("message");
                       }}
                       onForward={(message) => setForwarding(message)}
-                      onEdit={(message) => void handleEdit(message)}
+                      onEdit={(message) => startEdit(message)}
                       onDelete={(message) => void handleDelete(message)}
                       onOpenMedia={(message) => setLightboxMessageId(message.id)}
                       senderAvatar={senderAvatarFor(item.message)}
@@ -1440,7 +1482,31 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   : "border-slate-200 bg-white",
               )}
             >
+              {/* Editando: o campo passa a ser da mensagem já enviada, e as
+                  abas somem — nota interna não se edita por aqui. */}
+              {editing && (
+                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-500 bg-slate-50 px-2.5 py-1.5">
+                  <Pencil className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-600" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[11px] font-semibold text-slate-700">
+                      {editing.type === "text" ? "Editando mensagem" : "Editando legenda"}
+                    </p>
+                    <p className="truncate text-xs text-slate-500">
+                      Enter salva · Esc cancela · o cliente vê a mensagem marcada como editada
+                    </p>
+                  </div>
+                  <button
+                    onClick={cancelEdit}
+                    disabled={sending}
+                    className="rounded p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-50"
+                    aria-label="Cancelar edição"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )}
               {/* Alternância entre resposta ao cliente e nota interna */}
+              {!editing && (
               <div className="mb-2 flex items-center gap-1">
                 <button
                   onClick={() => updateComposerMode("message")}
@@ -1473,6 +1539,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   </span>
                 )}
               </div>
+              )}
 
               {/* Mensagem sendo respondida */}
               {replyTo && composerMode === "message" && (
@@ -1675,9 +1742,17 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                         return;
                       }
                     }
+                    if (editing && event.key === "Escape") {
+                      event.preventDefault();
+                      cancelEdit();
+                      return;
+                    }
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
-                      void sendText();
+                      // Editando, o Enter salva a mensagem já enviada em vez
+                      // de mandar uma nova — igual ao aplicativo.
+                      if (editing) void handleEdit(editing, draft);
+                      else void sendText();
                     }
                   }}
                   placeholder={
@@ -1689,7 +1764,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                 />
 
                 <div className="flex items-center gap-1">
-                  {composerMode === "message" && (
+                  {composerMode === "message" && !editing && (
                     <>
                       <Button
                         variant="ghost"
@@ -1740,21 +1815,32 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                     </>
                   )}
                   <span className="ml-auto hidden truncate whitespace-nowrap pr-1 text-[11px] text-slate-400 xl:block">
-                    {composerMode === "message" &&
-                      (mentionsEnabled
-                        ? '"/" respostas rápidas · "@" marca participante · Enter envia'
-                        : '"/" respostas rápidas · Enter envia')}
+                    {editing
+                      ? "Enter salva · Esc cancela"
+                      : composerMode === "message" &&
+                        (mentionsEnabled
+                          ? '"/" respostas rápidas · "@" marca participante · Enter envia'
+                          : '"/" respostas rápidas · Enter envia')}
                   </span>
+                  {editing && (
+                    <Button variant="ghost" disabled={sending} onClick={cancelEdit}>
+                      Cancelar
+                    </Button>
+                  )}
                   <Button
-                    variant={composerMode === "note" ? "secondary" : "primary"}
+                    variant={composerMode === "note" && !editing ? "secondary" : "primary"}
                     disabled={
                       sending ||
                       (draft.trim().length === 0 &&
-                        !(composerMode === "message" && quickReplyMedia?.media))
+                        !(composerMode === "message" && !editing && quickReplyMedia?.media))
                     }
-                    onClick={() => void sendText()}
+                    onClick={() => (editing ? void handleEdit(editing, draft) : void sendText())}
                   >
-                    {composerMode === "note" ? (
+                    {editing ? (
+                      <>
+                        <Pencil className="h-4 w-4" /> Salvar
+                      </>
+                    ) : composerMode === "note" ? (
                       <>
                         <StickyNote className="h-4 w-4" /> Salvar nota
                       </>

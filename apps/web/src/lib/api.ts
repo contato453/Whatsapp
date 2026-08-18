@@ -230,6 +230,15 @@ export const messagesApi = {
     api
       .post<{ message: MessageDto }>(`/conversations/${conversationId}/messages`, input)
       .then((data) => data.message),
+  /**
+   * Edita o texto (ou a legenda, em mídia) de uma mensagem já enviada. O
+   * WhatsApp só aceita por alguns minutos — passado o prazo, a API recusa em
+   * vez de gravar um texto que o cliente nunca vai ver.
+   */
+  edit: (messageId: string, content: string) =>
+    api
+      .patch<{ message: MessageDto }>(`/messages/${messageId}`, { content })
+      .then((data) => data.message),
 };
 
 /**

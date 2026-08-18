@@ -2,6 +2,9 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { MediaPayload, QuotedMessageRef } from "@azvchat/shared";
 import {
+  MESSAGE_EDIT_EXPIRED_MESSAGE,
+  isEditableMessageType,
+  isWithinEditWindow,
   departmentResourceAppliesTo,
   outboundMediaTypeFromMime,
   quickReplyMediaTypeFromMime,
@@ -415,15 +418,38 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       include: { conversation: true },
     });
     if (!message?.externalMessageId) throw new NotFoundError("Mensagem");
-    if (message.direction !== "outbound" || message.type !== "text") {
+    if (message.direction !== "outbound" || !isEditableMessageType(message.type)) {
+      // Áudio e figurinha ficam de fora porque não têm legenda no WhatsApp.
       throw new AppError(
-        "Só é possível editar mensagens de texto enviadas por você",
+        "Esta mensagem não pode ser editada",
         400,
         "not_editable",
       );
     }
     if (message.deletedAt) {
       throw new AppError("Mensagem apagada não pode ser editada", 400, "deleted");
+    }
+    // A janela é do WhatsApp, não nossa. Sem esta conferência o servidor
+    // recusaria a edição e nós gravaríamos o texto novo assim mesmo — a
+    // Inbox passaria a mostrar uma frase que o cliente nunca recebeu.
+    if (!isWithinEditWindow(message.timestamp)) {
+      throw new AppError(MESSAGE_EDIT_EXPIRED_MESSAGE, 400, "edit_window_closed");
+    }
+
+    // Mídia: a edição troca a mensagem inteira, então o arquivo vai junto —
+    // do storage da API, sem passar pelo navegador. Só a legenda muda.
+    let media: MediaPayload | undefined;
+    if (message.type !== "text") {
+      if (!message.mediaUrl) {
+        throw new AppError("Mídia indisponível para edição", 400, "media_missing");
+      }
+      const data = await deps.storage.read(message.mediaUrl);
+      media = {
+        data,
+        mimeType: message.mimeType ?? "application/octet-stream",
+        ...(message.filename ? { filename: message.filename } : {}),
+        type: outboundMediaTypeFromMime(message.mimeType),
+      };
     }
 
     await deps.provider.editMessage(
@@ -435,6 +461,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
         participantExternalId: null,
       },
       content,
+      media ? { media } : undefined,
     );
     const updated = await deps.prisma.message.update({
       where: { id },

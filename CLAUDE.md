@@ -343,6 +343,8 @@ POST   /conversations/:id/quick-reply-media
         sai só JSON; valida com `departmentResourceAppliesTo` e marca `lastUsedAt`)
 POST   /conversations/:id/polls           POST /messages/:id/reactions
 PATCH  /messages/:id                      DELETE /messages/:id
+       (editar: só o que saiu daqui, tipo com texto e dentro da janela de 15 min do
+        WhatsApp; em mídia o que muda é a legenda e o arquivo é remandado do storage)
 POST   /messages/:id/forward              GET  /messages/:id/media
 
 GET    /tags                POST /tags            PATCH|DELETE /tags/:id
@@ -430,6 +432,12 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   destaque. Na entrada, `extractMentionedJids` (`normalize.ts`) lê o mesmo `contextInfo` e
   preenche `NormalizedMessage.mentionedExternalIds`, que a ingestão grava em
   `Message.metadata.mentions`. `sendMedia` **não** leva menção nesta entrega.
+- **Edição de mensagem enviada**: `editMessage` recebe um 5º parâmetro opcional
+  `options?: EditMessageOptions` com `media`. A edição do WhatsApp **substitui a mensagem
+  inteira**, não só o texto: editar a LEGENDA de uma imagem sem remandar o arquivo
+  transformaria a foto do cliente em mensagem de texto. Por isso a rota lê o binário do
+  storage e manda junto, e `mediaContent()` é compartilhado entre `sendMedia` e
+  `editMessage`.
 - `apps/api/src/services/instance-manager.ts` orquestra provider ⇄ banco ⇄ socket
   (registro de instância, sync de chats/grupos/contatos, fotos, reconexão com backoff,
   `resumeSessions` no boot).
@@ -507,6 +515,15 @@ nome técnico no código e neste documento.
   (`splitMentionParts` + `makeMentionResolver`, nós React, nunca `dangerouslySetInnerHTML`):
   o número marcado vira nome, quem não tem cadastro vira telefone formatado e LID
   desconhecido continua como veio — nunca formatado como telefone.
+- **Editar mensagem enviada acontece no COMPOSER**, não em `window.prompt`: o item "Editar"
+  do menu da bolha coloca o texto no campo com o cabeçalho "Editando mensagem" (ou
+  "Editando legenda"), Enter salva, Esc cancela. O rascunho que estava no campo é guardado
+  e volta ao sair — entrar em edição não pode custar o que a pessoa já tinha digitado. Três
+  detalhes que não são opcionais: durante a edição o campo **não** é gravado como rascunho
+  (senão o texto antigo voltaria no próximo login pronto para ser reenviado), o "/" e o "@"
+  não abrem seus seletores (a pessoa está corrigindo frase enviada, e reconstruir marcação
+  de mensagem antiga é outra história), e a saída do modo só acontece **depois** da
+  confirmação da API — recusa mantém o texto no campo.
 - **Arrastar e colar arquivo** vivem em `attachment-drop.tsx`, fora do `inbox-shell` — que
   só passa a conversa aberta, o rascunho e o `disabled`. A área válida é a **coluna do
   chat**: a zona envolve a coluna inteira (e não só a janela de mensagens) porque trocar de
@@ -851,6 +868,14 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   nenhum e o WhatsApp não documenta).
 - LID (`@lid`) não é telefone. Existe migration só para limpar telefones que vieram de LID
   (`20260814140000_clear_lid_phone_numbers`).
+- **A janela de edição é do WhatsApp, e vale nos dois lados.** Só dá para editar nos
+  primeiros `MESSAGE_EDIT_WINDOW_MINUTES` (15) minutos, e só tipo com texto —
+  `EDITABLE_MESSAGE_TYPES` (texto, imagem, vídeo, documento; áudio e figurinha não têm
+  legenda). A regra mora em `packages/shared/src/message-edit.ts` porque a tela decide se
+  mostra o botão e a API decide se aceita: sem a conferência do lado da API, o servidor do
+  WhatsApp recusaria a edição e nós gravaríamos o texto novo assim mesmo — a Inbox passaria
+  a mostrar ao atendente uma frase que o cliente nunca recebeu, e ninguém perceberia.
+  Editar mídia é editar a **legenda**, e o arquivo é remandado do storage (ver a seção 8).
 - Mensagem apagada mantém a linha (`deletedAt`) para histórico/auditoria — não faça
   `delete` físico.
 - **Conversa arquivada NÃO desarquiva com mensagem nova** — de propósito, e diferente
@@ -877,7 +902,8 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
 **Funciona**: múltiplos números com conexão por QR e status em tempo real; sessão
 persistida e retomada após restart; sync de chats/contatos/grupos e fotos; recebimento e
 envio de texto, imagem, áudio, vídeo, documento, figurinha, localização, contato; reações;
-responder citando; encaminhar; apagar e editar; gravação de áudio (ffmpeg, com fallback);
+responder citando; encaminhar; apagar; editar mensagem enviada pelo composer (texto e
+legenda de mídia, dentro da janela de 15 minutos do WhatsApp); gravação de áudio (ffmpeg, com fallback);
 enquetes; mensagens agendadas com retentativa; notas internas; etiquetas; atribuição com
 histórico completo; quatro status de atendimento; busca na conversa e busca global;
 marcação de participantes com `@` em grupo, com `@todos` e nome exibido no lugar do

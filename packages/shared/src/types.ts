@@ -119,6 +119,17 @@ export interface SendTextOptions {
   mentionedExternalIds?: string[];
 }
 
+/**
+ * Extras da edição de mensagem já enviada.
+ *
+ * Editar a LEGENDA de uma mídia exige remandar a mídia junto: o WhatsApp
+ * troca a mensagem inteira pela versão editada, e sem o arquivo a foto
+ * sumiria da conversa do cliente, sobrando só o texto.
+ */
+export interface EditMessageOptions {
+  media?: MediaPayload;
+}
+
 /** Referência a uma mensagem citada, para reply. */
 export interface QuotedMessageRef {
   externalMessageId: string;

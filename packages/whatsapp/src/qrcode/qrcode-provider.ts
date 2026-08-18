@@ -24,6 +24,7 @@ import type {
   ProviderChat,
   ProviderContact,
   ProviderGroup,
+  EditMessageOptions,
   QuotedMessageRef,
   SendTextOptions,
 } from "@azvchat/shared";
@@ -690,27 +691,34 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     chatId: string,
     target: MessageTarget,
     newText: string,
+    options?: EditMessageOptions,
   ): Promise<void> {
     const socket = this.requireSocket(instanceId);
+    // A edição substitui a mensagem inteira, e não só o texto dela. Em mídia
+    // isso quer dizer remandar o arquivo com a legenda nova: mandar só o
+    // texto transformaria a foto do cliente em uma mensagem de texto.
+    const content: AnyMessageContent = options?.media
+      ? this.mediaContent({ ...options.media, caption: newText })
+      : { text: newText };
     await socket.sendMessage(chatId, {
-      text: newText,
+      ...content,
       edit: this.targetKey(chatId, target),
-    });
+    } as AnyMessageContent);
     this.logger.info({
       instanceId,
       event: "message_edited",
       chatId,
       messageId: target.externalMessageId,
+      withMedia: !!options?.media,
     });
   }
 
-  async sendMedia(
-    instanceId: string,
-    chatId: string,
-    media: MediaPayload,
-    quoted?: QuotedMessageRef,
-  ): Promise<MessageResult> {
-    const socket = this.requireSocket(instanceId);
+  /**
+   * Traduz a mídia neutra da aplicação para o conteúdo que o Baileys envia.
+   * Usada tanto no envio quanto na edição de legenda — a segunda remanda o
+   * arquivo, porque o WhatsApp troca a mensagem inteira pela versão editada.
+   */
+  private mediaContent(media: MediaPayload): AnyMessageContent {
     let content: AnyMessageContent;
     switch (media.type) {
       case "image":
@@ -739,6 +747,17 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
         };
         break;
     }
+    return content;
+  }
+
+  async sendMedia(
+    instanceId: string,
+    chatId: string,
+    media: MediaPayload,
+    quoted?: QuotedMessageRef,
+  ): Promise<MessageResult> {
+    const socket = this.requireSocket(instanceId);
+    const content = this.mediaContent(media);
     const result = await socket.sendMessage(
       chatId,
       content,

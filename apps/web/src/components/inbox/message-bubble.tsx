@@ -24,6 +24,7 @@ import {
   Video,
   XCircle,
 } from "lucide-react";
+import { isEditableMessageType, isWithinEditWindow } from "@azvchat/shared";
 import { fetchMediaBlobUrl } from "@/lib/api";
 import { documentKindLabel, downloadMessageMedia } from "@/lib/media-download";
 import { cn, formatPhone } from "@/lib/utils";
@@ -495,7 +496,15 @@ function MessageActions({
   onDelete: (message: MessageDto) => void;
 }) {
   const outbound = message.direction === "outbound";
-  const canEdit = outbound && message.type === "text" && !message.deletedAt;
+  // A regra de quem pode ser editada é do WhatsApp e mora no shared: tipo com
+  // texto (mídia entra pela legenda) e dentro da janela de poucos minutos.
+  // Oferecer o botão fora disso faria o servidor recusar e a Inbox mostrar
+  // um texto que o cliente nunca recebeu.
+  const canEdit =
+    outbound &&
+    !message.deletedAt &&
+    isEditableMessageType(message.type) &&
+    isWithinEditWindow(message.timestamp);
   const canDelete = outbound && !message.deletedAt;
 
   if (message.deletedAt) return null;

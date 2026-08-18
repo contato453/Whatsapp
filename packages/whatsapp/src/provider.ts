@@ -1,6 +1,7 @@
 import type {
   CallEvent,
   ConnectionStatus,
+  EditMessageOptions,
   InstanceStatusEvent,
   MediaPayload,
   MessageResult,
@@ -141,12 +142,20 @@ export interface WhatsAppProvider {
   /** Apaga a mensagem para todos os participantes do chat. */
   deleteMessage(instanceId: string, chatId: string, target: MessageTarget): Promise<void>;
 
-  /** Edita o texto de uma mensagem já enviada. */
+  /**
+   * Edita o texto de uma mensagem já enviada.
+   *
+   * Com `options.media`, o que muda é a LEGENDA da mídia — e o arquivo vai
+   * junto porque o WhatsApp substitui a mensagem inteira pela versão
+   * editada. O prazo de edição é do WhatsApp (poucos minutos): passado ele,
+   * o servidor recusa, então quem chama precisa conferir antes.
+   */
   editMessage(
     instanceId: string,
     chatId: string,
     target: MessageTarget,
     newText: string,
+    options?: EditMessageOptions,
   ): Promise<void>;
 
   getChats(instanceId: string): Promise<ProviderChat[]>;
