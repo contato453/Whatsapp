@@ -171,12 +171,22 @@ function SearchModal({
 
 export function AzevedoOsCard({
   conversation,
-  canManage,
+  canLink,
+  canRelink,
   onChanged,
 }: {
   conversation: ConversationDto;
-  /** Vincular, trocar e desvincular: supervisor para cima. */
-  canManage: boolean;
+  /**
+   * Chave `azevedo_os.link`: preencher empresa em conversa SEM empresa.
+   * É rotina de classificação de quem atende.
+   */
+  canLink: boolean;
+  /**
+   * Chave `azevedo_os.relink`: TROCAR ou DESFAZER vínculo já existente.
+   * É mexer na classificação que outra pessoa fez — errar aqui anexa a
+   * conversa ao cliente errado, e por isso é chave separada da de cima.
+   */
+  canRelink: boolean;
   onChanged: () => void;
 }) {
   const linked =
@@ -236,7 +246,7 @@ export function AzevedoOsCard({
       {!linked ? (
         <div className="space-y-2">
           <p className="text-xs text-slate-400">Nenhuma empresa vinculada.</p>
-          {canManage && (
+          {canLink && (
             <Button size="sm" variant="outline" className="w-full" onClick={() => setSearchOpen(true)}>
               <Link2 className="h-3.5 w-3.5" /> Vincular empresa
             </Button>
@@ -259,7 +269,7 @@ export function AzevedoOsCard({
             </button>
             {/* Empresa apagada no Azevedo-OS deixaria o card preso no erro
                 sem uma saída: quem pode gravar consegue desfazer o vínculo. */}
-            {canManage && (
+            {canRelink && (
               <button
                 type="button"
                 disabled={busy}
@@ -330,7 +340,7 @@ export function AzevedoOsCard({
               </a>
             )}
 
-            {canManage && (
+            {canRelink && (
               <div className="flex gap-1.5">
                 <Button
                   size="sm"
@@ -356,8 +366,9 @@ export function AzevedoOsCard({
         )
       )}
 
-      {/* O modal só existe para quem pode gravar o vínculo. */}
-      {canManage && (
+      {/* O modal de busca serve aos dois caminhos: vincular conversa vazia e
+          trocar vínculo existente. Quem não pode nenhum dos dois não o abre. */}
+      {(linked ? canRelink : canLink) && (
         <SearchModal
           conversationId={conversation.id}
           open={searchOpen}

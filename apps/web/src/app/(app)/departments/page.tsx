@@ -157,7 +157,7 @@ function DepartmentTeam({
 }
 
 export default function DepartmentsPage() {
-  const { user: me } = useAuth();
+  const { user: me, can } = useAuth();
   const [departments, setDepartments] = useState<DepartmentDto[] | null>(null);
   const [users, setUsers] = useState<UserWithAccessDto[]>([]);
   const [creating, setCreating] = useState(false);
@@ -182,7 +182,10 @@ export default function DepartmentsPage() {
 
   const userNames = useMemo(() => new Map(users.map((user) => [user.id, user.name])), [users]);
 
-  const canManage = me?.role === "admin" || me?.role === "supervisor";
+  // Chave do catálogo, não papel. Excluir departamento continua sendo do
+  // administrador e fixo no código — não tem chave, e por isso segue com a
+  // comparação de papel logo abaixo.
+  const canManage = can("department.manage");
 
   /**
    * Só entram na lista quem realmente enxerga o departamento — atribuir a

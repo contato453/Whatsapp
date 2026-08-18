@@ -42,7 +42,6 @@ import {
   FILTER_ALL_USERS,
   FILTER_NONE,
   USER_ROLE_LABELS,
-  hasRole,
   type ConnectionStatus,
   type ConversationStatus,
   type DashboardPeriod,
@@ -548,7 +547,7 @@ function MessageTile({
 // ---------- Tela ----------
 
 export default function DashboardPage() {
-  const { user } = useAuth();
+  const { can } = useAuth();
   const router = useRouter();
 
   const [filters, setFilters] = useState<DashboardFilters>(DEFAULT_FILTERS);
@@ -653,9 +652,10 @@ export default function DashboardPage() {
   const carriesPartialScope = Boolean(
     filters.assignedUserId || filters.departmentId === FILTER_NONE,
   );
-  // O bloco de equipe é de supervisor para cima, igual ao requireRole que a
-  // API aplica — sem isso o atendente veria um card vazio sem saber por quê.
-  const canSeeTeam = user ? hasRole(user.role, "supervisor") : false;
+  // A MESMA chave que a API consulta para decidir se consulta o bloco: sem
+  // isso a pessoa veria um card vazio sem saber por quê — e ligar a chave na
+  // tela de Permissões não faria o bloco aparecer.
+  const canSeeTeam = can("dashboard.view_team");
   const initialPending = pending && !stats;
 
   return (

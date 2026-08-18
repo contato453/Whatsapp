@@ -147,7 +147,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const socket = useSocket();
-  const { user: me } = useAuth();
+  const { user: me, can } = useAuth();
 
   const [conversations, setConversations] = useState<ConversationDto[] | null>(null);
   /**
@@ -255,6 +255,8 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
 
   /** Supervisor e admin enxergam vários números/departamentos; usuário, não. */
   const canFilterScope = me?.role === "admin" || me?.role === "supervisor";
+  /** Chave do catálogo, resolvida uma vez — o histórico repete por nota. */
+  const canManageOtherNotes = can("note.delete_other");
 
   /**
    * Filtro vindo da URL — é assim que os cards do dashboard abrem a Inbox já
@@ -1462,9 +1464,9 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                     <InternalNoteItem
                       key={`note-${item.note.id}`}
                       note={item.note}
-                      canManage={
-                        item.note.user?.id === me?.id || me?.role === "admin" || me?.role === "supervisor"
-                      }
+                      // Nota própria cada um sempre edita; nota de terceiro é
+                      // a MESMA chave que a API confere.
+                      canManage={item.note.user?.id === me?.id || canManageOtherNotes}
                       onEdit={(note) => void handleEditNote(note)}
                       onDelete={(note) => void handleDeleteNote(note)}
                     />

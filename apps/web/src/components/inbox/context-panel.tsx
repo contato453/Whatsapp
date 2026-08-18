@@ -18,11 +18,8 @@ import {
   ALL_USERS_ASSIGNEE_HINT,
   ALL_USERS_ASSIGNEE_LABEL,
   ASSIGNMENT_ACTION_LABELS,
-  canManageAzevedoOsLink,
-  CONVERSATION_DEPARTMENT_MIN_ROLE,
   CONVERSATION_STATUSES,
   CONVERSATION_STATUS_LABELS,
-  hasRole,
   PARTICIPANT_CLIENT_ROLES,
   PARTICIPANT_CLIENT_ROLE_COLORS,
   PARTICIPANT_CLIENT_ROLE_LABELS,
@@ -133,14 +130,16 @@ export function ContextPanel({
   onChanged: () => void;
 }) {
   const router = useRouter();
-  const { user: me } = useAuth();
+  const { can } = useAuth();
   const conversation = detail.conversation;
   /**
-   * Mesmo papel mínimo que a API exige na rota de transferência — o valor
-   * vem de `@azvchat/shared` justamente para os dois não divergirem. Sessão
-   * ainda carregando (`me` nulo) esconde o campo: o lado seguro do erro.
+   * A MESMA chave que a API exige na rota de transferência. Vem da sessão
+   * (`can`), e não do papel: com a tela deduzindo pelo cargo, ligar a chave
+   * na tela de Permissões não faria o campo voltar a aparecer, e a
+   * configuração viraria mentira visual. Sessão ainda carregando responde
+   * `false` — o lado seguro do erro.
    */
-  const podeTrocarDepartamento = me ? hasRole(me.role, CONVERSATION_DEPARTMENT_MIN_ROLE) : false;
+  const podeTrocarDepartamento = can("conversation.change_department");
   const [noteText, setNoteText] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -506,7 +505,11 @@ export function ContextPanel({
       */}
       <AzevedoOsCard
         conversation={conversation}
-        canManage={me ? canManageAzevedoOsLink(me.role) : false}
+        // Vincular e trocar são chaves SEPARADAS: preencher conversa vazia
+        // é rotina; mexer em vínculo já feito por outra pessoa anexa a
+        // conversa ao cliente errado quando dá errado.
+        canLink={can("azevedo_os.link")}
+        canRelink={can("azevedo_os.relink")}
         onChanged={onChanged}
       />
 

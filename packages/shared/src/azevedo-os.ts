@@ -1,4 +1,3 @@
-import { hasRole, type UserRole } from "./enums.js";
 
 /**
  * Integração de leitura com o Azevedo-OS.
@@ -181,12 +180,10 @@ export function azevedoOsSearchIsValid(term: string): boolean {
 }
 
 /**
- * Quem pode vincular, trocar e desvincular a empresa: supervisor para cima.
- *
- * A mesma régua vale na API (`requireRole`/`planReferenceUpdate`) e no
- * botão da tela — o `agent` enxerga o card inteiro da empresa vinculada,
- * mas nesta fase não mexe no vínculo.
+ * Quem pode mexer no vínculo NÃO mora mais aqui: são duas chaves do catálogo
+ * de permissões (`azevedo_os.link` para preencher conversa vazia e
+ * `azevedo_os.relink` para trocar ou desfazer vínculo existente), decididas
+ * por `can()` na tela e por `planReferenceUpdate` na API. Uma função de
+ * papel aqui voltaria a fixar a regra em código, que é justamente o que o
+ * menu de Permissões veio tirar.
  */
-export function canManageAzevedoOsLink(role: UserRole): boolean {
-  return hasRole(role, "supervisor");
-}

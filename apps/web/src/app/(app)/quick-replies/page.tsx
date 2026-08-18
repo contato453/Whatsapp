@@ -58,7 +58,7 @@ function MediaBadge({ type }: { type: QuickReplyMediaType }) {
 }
 
 export default function QuickRepliesPage() {
-  const { user: me } = useAuth();
+  const { can } = useAuth();
   const departments = useMyDepartments();
   const [replies, setReplies] = useState<QuickReplyDto[] | null>(null);
   const [editing, setEditing] = useState<QuickReplyDto | "new" | null>(null);
@@ -81,7 +81,12 @@ export default function QuickRepliesPage() {
   }, []);
   useEffect(load, [load]);
 
-  const isAdmin = me?.role === "admin";
+  /**
+   * Resposta rápida GERAL vale para a organização inteira, então tem chave
+   * própria no catálogo — criar uma restrita ao próprio departamento não
+   * depende dela. É a MESMA chave que a API consulta.
+   */
+  const canCreateShared = can("quick_reply.create_shared");
 
   /**
    * Filtro local: a lista inteira já veio da API (dezenas de linhas, não
@@ -107,7 +112,7 @@ export default function QuickRepliesPage() {
     // departamento dele marcado.
     setForm({
       ...EMPTY_FORM,
-      departmentIds: isAdmin ? [] : departments[0] ? [departments[0].id] : [],
+      departmentIds: canCreateShared ? [] : departments[0] ? [departments[0].id] : [],
     });
     setMediaFile(null);
     setMediaRemoved(false);
@@ -327,7 +332,7 @@ export default function QuickRepliesPage() {
                     </span>
                   </span>
                 </button>
-                {canManageScopedItem(reply, !!isAdmin, departments) && (
+                {canManageScopedItem(reply, !!canCreateShared, departments) && (
                   <div className="flex shrink-0 gap-1 py-2.5 pr-2">
                     <button
                       onClick={() => openEdit(reply)}
@@ -374,7 +379,7 @@ export default function QuickRepliesPage() {
               placeholder="Ex.: Saudação da manhã"
             />
           </Field>
-          {isAdmin && (
+          {canCreateShared && (
             <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
               <input
                 type="checkbox"

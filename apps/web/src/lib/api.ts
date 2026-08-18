@@ -4,11 +4,19 @@ import { AZEVEDO_OS_SOURCE } from "@azvchat/shared";
 import type {
   AttendanceSettings,
   AzevedoOsCompanyDto,
+  ConfigurableRole,
   ConversationStatus,
   DashboardPeriod,
   ParticipantClientRole,
+  PermissionAction,
 } from "@azvchat/shared";
-import type { DashboardStatsDto, MessageDto, QuickReplyDto, TagDto } from "./types";
+import type {
+  DashboardStatsDto,
+  MessageDto,
+  QuickReplyDto,
+  RolePermissionOverrideDto,
+  TagDto,
+} from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -358,6 +366,22 @@ export const dashboardApi = {
  * mundo (o dashboard depende dela); a gravação exige supervisor e é barrada
  * pela API mesmo que alguém chame direto.
  */
+/**
+ * Tela de Permissões. O CATÁLOGO não vem da API: a tela o importa de
+ * `@azvchat/shared`, que é a fonte única dos rótulos, das áreas e dos
+ * padrões. Daqui vem só o que a organização gravou por cima.
+ */
+export const permissionsApi = {
+  list: () =>
+    api
+      .get<{ overrides: RolePermissionOverrideDto[] }>("/permissions")
+      .then((data) => data.overrides),
+  save: (entries: Array<{ role: ConfigurableRole; action: PermissionAction; allowed: boolean }>) =>
+    api
+      .put<{ overrides: RolePermissionOverrideDto[] }>("/permissions", { entries })
+      .then((data) => data.overrides),
+};
+
 export const attendanceSettingsApi = {
   get: () =>
     api

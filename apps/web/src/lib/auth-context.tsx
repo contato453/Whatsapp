@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
+import type { PermissionAction } from "@azvchat/shared";
 import { api, getToken, setToken } from "./api";
 import type { UserDto } from "./types";
 
@@ -22,6 +23,15 @@ interface AuthContextValue {
   setSession: (token: string, user: UserDto) => void;
   /** Atualiza os dados do usuário sem trocar o token (troca de foto). */
   setUser: (user: UserDto) => void;
+  /**
+   * A pessoa pode executar esta ação?
+   *
+   * Vem da lista que a API resolveu (catálogo + configuração da
+   * organização), nunca deduzida do papel: deduzir faria a tela de
+   * Permissões virar mentira visual. Enquanto a sessão carrega, e para quem
+   * não está logado, a resposta é `false` — o lado seguro do erro.
+   */
+  can: (action: PermissionAction) => boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -70,9 +80,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const updateUser = useCallback((next: UserDto) => setUser(next), []);
 
+  const can = useCallback(
+    (action: PermissionAction) => user?.permissions.includes(action) ?? false,
+    [user],
+  );
+
   const value = useMemo(
-    () => ({ user, loading, login, logout, setSession, setUser: updateUser }),
-    [user, loading, login, logout, setSession, updateUser],
+    () => ({ user, loading, login, logout, setSession, setUser: updateUser, can }),
+    [user, loading, login, logout, setSession, updateUser, can],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

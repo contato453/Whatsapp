@@ -8,7 +8,9 @@ import type {
   MessageType,
   NotificationSound,
   NotificationVolume,
+  ConfigurableRole,
   ParticipantClientRole,
+  PermissionAction,
   QuickReplyMediaType,
   UserRole,
 } from "@azvchat/shared";
@@ -31,6 +33,15 @@ export interface UserDirectoryDto {
 
 /** Cadastro completo: só chega para o próprio usuário (/auth/me) e para o administrador. */
 export interface UserDto extends UserDirectoryDto {
+  /**
+   * O que ESTA pessoa pode fazer agora, resolvido pela API a partir do
+   * catálogo e da configuração da organização.
+   *
+   * A tela decide o que mostrar por esta lista, NUNCA deduzindo pelo papel:
+   * deduzir faria a tela de Permissões virar mentira visual — botão
+   * aparecendo para quem a API recusa, ou escondido para quem ela aceita.
+   */
+  permissions: PermissionAction[];
   email: string;
   /** Prefixa as mensagens enviadas com o nome do atendente */
   signMessages: boolean;
@@ -49,7 +60,15 @@ export interface UserDto extends UserDirectoryDto {
  * Lista vazia = não enxerga conversa alguma por ali — não existe "sem
  * marcação = vê tudo" (ver `lib/access.ts` na API).
  */
-export interface UserWithAccessDto extends UserDto {
+export interface RolePermissionOverrideDto {
+  role: ConfigurableRole;
+  action: PermissionAction;
+  allowed: boolean;
+  updatedAt: string;
+  updatedBy: UserDirectoryDto | null;
+}
+
+export interface UserWithAccessDto extends Omit<UserDto, "permissions"> {
   whatsappInstanceIds: string[];
   departmentIds: string[];
 }

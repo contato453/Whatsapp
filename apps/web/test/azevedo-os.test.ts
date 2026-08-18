@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   azevedoOsCompanyDisplayName,
   azevedoOsSearchIsValid,
-  canManageAzevedoOsLink,
+  defaultPermission,
+  permissionActionDefinition,
   normalizeAzevedoOsStatus,
   type AzevedoOsCompany,
 } from "@azvchat/shared";
@@ -164,10 +165,24 @@ describe("mensagens de falha do card", () => {
   });
 });
 
+/**
+ * Os botões do card seguem DUAS chaves do catálogo, e não uma régua de
+ * papel: preencher conversa vazia é rotina de quem atende, trocar vínculo
+ * já feito por outra pessoa é o que anexa a conversa ao cliente errado.
+ */
 describe("botões de vínculo na tela", () => {
-  it("só supervisor e admin veem vincular, trocar e desvincular", () => {
-    expect(canManageAzevedoOsLink("admin")).toBe(true);
-    expect(canManageAzevedoOsLink("supervisor")).toBe(true);
-    expect(canManageAzevedoOsLink("agent")).toBe(false);
+  it("vincular e trocar são chaves separadas, com padrões diferentes", () => {
+    expect(defaultPermission("azevedo_os.link", "agent")).toBe(false);
+    expect(defaultPermission("azevedo_os.link", "supervisor")).toBe(true);
+    expect(defaultPermission("azevedo_os.relink", "agent")).toBe(false);
+    expect(defaultPermission("azevedo_os.relink", "supervisor")).toBe(true);
+  });
+
+  it("as duas chaves existem no catálogo, com rótulo e explicação", () => {
+    for (const chave of ["azevedo_os.link", "azevedo_os.relink"] as const) {
+      const definicao = permissionActionDefinition(chave);
+      expect(definicao).not.toBeNull();
+      expect(definicao?.area).toBe("atendimento");
+    }
   });
 });

@@ -10,6 +10,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
+  ShieldCheck,
   SlidersHorizontal,
   Smartphone,
   Tags,
@@ -19,7 +20,12 @@ import {
   Zap,
   Lock,
 } from "lucide-react";
-import { USER_ROLE_LABELS, hasRole, type UserRole } from "@azvchat/shared";
+import {
+  USER_ROLE_LABELS,
+  hasRole,
+  type PermissionAction,
+  type UserRole,
+} from "@azvchat/shared";
 import { useAuth } from "@/lib/auth-context";
 import type { UserDto } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -44,26 +50,74 @@ const NAV: Array<{
   href: string;
   label: string;
   icon: typeof Inbox;
+  /** Papel mínimo — usado só onde a tela é fixa no código (admin). */
   minRole: UserRole;
+  /**
+   * Chave do catálogo que a tela exige. Quando existe, é ELA que decide, e
+   * não o papel: o item precisa sumir exatamente quando a API recusa, senão
+   * desligar a chave produziria um menu que só dá 403.
+   */
+  permission?: PermissionAction;
 }> = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, minRole: "agent" },
   // Os rótulos falam a língua da equipe; as rotas continuam /inbox e
   // /whatsapp — mudá-las quebraria favoritos e os links dos cards do
   // dashboard sem ganho nenhum.
   { href: "/inbox", label: "Conversas", icon: Inbox, minRole: "agent" },
-  { href: "/whatsapp", label: "Conexões", icon: Smartphone, minRole: "supervisor" },
+  {
+    href: "/whatsapp",
+    label: "Conexões",
+    icon: Smartphone,
+    minRole: "supervisor",
+    permission: "whatsapp_instance.manage",
+  },
   { href: "/users", label: "Usuários", icon: Users, minRole: "admin" },
-  { href: "/departments", label: "Departamentos", icon: Building2, minRole: "supervisor" },
-  // Mesmo papel do requireRole("supervisor") em /reports/agents.
-  { href: "/reports", label: "Relatórios", icon: BarChart3, minRole: "supervisor" },
-  { href: "/tags", label: "Etiquetas", icon: Tags, minRole: "supervisor" },
+  {
+    href: "/departments",
+    label: "Departamentos",
+    icon: Building2,
+    minRole: "supervisor",
+    permission: "department.manage",
+  },
+  {
+    href: "/reports",
+    label: "Relatórios",
+    icon: BarChart3,
+    minRole: "supervisor",
+    permission: "reports.view",
+  },
+  {
+    href: "/tags",
+    label: "Etiquetas",
+    icon: Tags,
+    minRole: "supervisor",
+    permission: "tag.manage",
+  },
   { href: "/quick-replies", label: "Respostas rápidas", icon: Zap, minRole: "agent" },
-  // Mesmo papel do requireRole("supervisor") em PUT /attendance-settings.
   // Fica fora de Configurações de propósito: aquilo é escopo pessoal (perfil
   // e senha) e isto é regra do escritório inteiro.
-  { href: "/attendance-settings", label: "Parâmetros", icon: SlidersHorizontal, minRole: "supervisor" },
+  {
+    href: "/attendance-settings",
+    label: "Parâmetros",
+    icon: SlidersHorizontal,
+    minRole: "supervisor",
+    permission: "attendance_settings.manage",
+  },
+  // Só admin abre e só admin grava, sem chave: uma chave "editar permissões"
+  // deixaria um supervisor se promover sozinho, e o menu inteiro deixaria de
+  // valer alguma coisa.
+  { href: "/permissions", label: "Permissões", icon: ShieldCheck, minRole: "admin" },
   { href: "/settings", label: "Configurações", icon: Settings, minRole: "agent" },
 ];
+
+/** Uma tela do menu está liberada para esta sessão? */
+function navAllowed(
+  item: (typeof NAV)[number],
+  role: UserRole,
+  can: (action: PermissionAction) => boolean,
+): boolean {
+  return item.permission ? can(item.permission) : hasRole(role, item.minRole);
+}
 
 /**
  * Preferência de barra recolhida. Mesmo prefixo do token (`zapdesk.`) para
@@ -103,7 +157,15 @@ function writeCollapsedPreference(collapsed: boolean): void {
   }
 }
 
-function Sidebar({ user, logout }: { user: UserDto; logout: () => void }) {
+function Sidebar({
+  user,
+  logout,
+  can,
+}: {
+  user: UserDto;
+  logout: () => void;
+  can: (action: PermissionAction) => boolean;
+}) {
   const pathname = usePathname();
   // Começa expandida: é o estado de hoje e o que o servidor renderiza. A
   // preferência salva entra no efeito, depois da hidratação, para o HTML do
@@ -159,7 +221,7 @@ function Sidebar({ user, logout }: { user: UserDto; logout: () => void }) {
     setHoverOpen(false);
   };
 
-  const items = NAV.filter((item) => hasRole(user.role, item.minRole));
+  const items = NAV.filter((item) => navAllowed(item, user.role, can));
 
   return (
     <div
@@ -300,7 +362,7 @@ function AccessDenied() {
 }
 
 export default function AppLayout({ children }: { children: ReactNode }) {
-  const { user, loading, logout } = useAuth();
+  const { user, loading, logout, can } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -323,11 +385,11 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const current = NAV.find(
     (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),
   );
-  const allowed = !current || hasRole(user.role, current.minRole);
+  const allowed = !current || navAllowed(current, user.role, can);
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50">
-      <Sidebar user={user} logout={logout} />
+      <Sidebar user={user} logout={logout} can={can} />
       <main className="min-w-0 flex-1 overflow-hidden">
         {allowed ? children : <AccessDenied />}
       </main>
