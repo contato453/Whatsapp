@@ -566,7 +566,7 @@ export function AttachmentDropZone({
       {/* Sobreposição do arrasto: diz o que vai acontecer antes de soltar. */}
       {dragging && conversationId && !disabled && (
         <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-brand-600/10 p-6">
-          <div className="rounded-2xl border-2 border-dashed border-brand-500 bg-white/95 px-8 py-6 text-center shadow-lg">
+          <div className="rounded-2xl border-2 border-dashed border-brand-600 bg-white/95 px-8 py-6 text-center shadow-lg">
             <Upload className="mx-auto mb-2 h-8 w-8 text-brand-600" />
             <p className="text-sm font-semibold text-slate-900">Solte para anexar</p>
             <p className="mt-1 text-xs text-slate-500">

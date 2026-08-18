@@ -301,6 +301,21 @@ export const conversationArchiveApi = {
 };
 
 /**
+ * Leitura da conversa — POR USUÁRIO, sempre.
+ *
+ * `read` avança a marca de quem chamou até a última mensagem; `unread` recua
+ * de propósito, para a pessoa reservar a conversa para depois. Nenhuma das
+ * duas mexe no aviso de ninguém mais, e as outras abas desta mesma pessoa
+ * são avisadas pelo evento `conversation:read`.
+ */
+export const conversationReadApi = {
+  read: (conversationId: string) =>
+    api.post<{ ok: boolean; unreadCount: number }>(`/conversations/${conversationId}/read`),
+  unread: (conversationId: string) =>
+    api.post<{ ok: boolean; unreadCount: number }>(`/conversations/${conversationId}/unread`),
+};
+
+/**
  * Responsável da conversa. As três saídas do seletor num lugar só: uma
  * pessoa, o atendimento coletivo ("@todos") ou ninguém.
  *

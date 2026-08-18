@@ -149,7 +149,10 @@ snake_case e id `uuid`.
 - `Conversation` — `type` (`individual|group`), `title` (vem do WhatsApp, o sync sobrescreve)
   vs `customTitle` (definido pela equipe, o sync **nunca** toca), `status`
   (`open|waiting_client|waiting_internal|resolved`),
-  `assignedUserId`, `departmentId`, `unreadCount`, `lastMessageAt`, `lastMessagePreview`,
+  `assignedUserId`, `departmentId`, `lastMessageAt`, `lastMessagePreview`,
+  `unreadCount` (**APOSENTADA** — o não lido é por usuário; ver `ConversationRead`
+  logo abaixo. A coluna segue no banco com o dado histórico, sem nenhuma leitura nem
+  escrita no código; a remoção é migration futura),
   `archivedAt`/`archivedByUserId` (arquivamento: a data responde "está arquivada?",
   nulo = não; **ortogonal ao status** — não é um quinto status, e ao desarquivar a
   conversa volta com o status que tinha; `archivedByUserId` nulo = arquivada pelo
@@ -159,6 +162,16 @@ snake_case e id `uuid`.
   identificador da empresa no Azevedo-OS; ver a seção 15). Índice
   `(organizationId, archivedAt, lastMessageAt)` serve a lista da Inbox (não
   arquivadas por última mensagem).
+- `ConversationRead` — **leitura por usuário**: até onde CADA pessoa leu uma conversa.
+  Única por `(userId, conversationId)`, com `lastReadAt` (o instante da última mensagem
+  lida) e `lastReadMessageId` (referência, opcional). **Guarda a marca, e não um
+  contador por pessoa**: contador exigiria escrever uma linha por usuário a cada
+  mensagem recebida — num grupo que dez atendentes enxergam, dez escritas por mensagem.
+  Com a marca, escreve só quem lê, e o número de não lidas é **derivado** na consulta
+  (mensagens `inbound` vivas acima da marca, em conversa não arquivada). **Linha ausente
+  = nunca leu**, e nada é semeado: conversa que a pessoa nunca abriu aparece por ler
+  inteira, que é o estado seguro. Fonte única da conta:
+  `apps/api/src/lib/conversation-reads.ts`.
 - `Message` — `direction`, `type` (`text|image|audio|video|document|sticker|location|contact|poll|call|other`),
   `status` (`pending|sent|delivered|read|failed`), `content`, `mediaUrl`, `quotedMessageId`,
   `sentByUserId`, `deletedAt`/`deletedByUserId`, `editedAt`, `metadata` (Json, ex.: opções
@@ -332,12 +345,19 @@ GET    /integrations/azevedo-os/company-facets
         Nunca devolve erro: `facets: null` com `unavailable: false` é
         integração desligada e com `true` é portal mudo)
 POST   /conversations/:id/archive         POST /conversations/:id/unarchive
-       (papel mínimo agent, o mesmo de status/atribuição; arquivar zera o
-        unreadCount, audita e emite conversation:updated)
+       (papel mínimo agent, o mesmo de status/atribuição; audita e emite
+        conversation:updated — não há contador de conversa para zerar, a
+        arquivada simplesmente não conta não lidas para ninguém)
 PATCH  /conversations/:id                 PATCH /conversations/:id/reference
 GET    /conversations/:id/avatar          POST /conversations/:id/avatar/refresh
 GET    /group-participants/:id/avatar     PATCH /group-participants/:id
-POST   /conversations/:id/read            POST /conversations/:id/status
+POST   /conversations/:id/read            POST /conversations/:id/unread
+       (leitura POR USUÁRIO: `read` avança a marca de quem chamou até a última
+        mensagem e `unread` recua de propósito ("reservar para depois"). As duas
+        devolvem o contador já recalculado, valem só para quem chamou e emitem
+        `conversation:read` para a sala pessoal — nunca para a audiência da
+        conversa. Sem auditoria: leitura é estado pessoal de interface)
+POST   /conversations/:id/status
 POST   /conversations/:id/assign          POST /conversations/:id/unassign
 POST   /conversations/:id/resolve         POST /conversations/:id/reopen
 GET    /conversations/:id/files
@@ -394,8 +414,14 @@ Contratos em `packages/shared/src/realtime.ts` — **nomes de evento nunca são 
 sempre `RealtimeEvents.X`:
 
 `message:new`, `message:status`, `message:reaction`, `message:updated`, `call:incoming`,
-`conversation:updated`, `group:participants`, `note:new`, `instance:status`, `instance:qr`,
-`scheduled:pending`, `session:closing`, `session:closed`.
+`conversation:updated`, `conversation:read`, `group:participants`, `note:new`,
+`instance:status`, `instance:qr`, `scheduled:pending`, `session:closing`,
+`session:closed`.
+
+`conversation:read` (`{ conversationId, unreadCount }`) é o outro evento que **não** vai
+para uma audiência: ele sai para `user:<userId>`, a sala pessoal de quem leu, e existe
+para a segunda aba da mesma pessoa acompanhar. Mandá-lo para a sala da conversa
+apagaria o aviso de quem não leu — o defeito que a leitura por usuário conserta.
 
 `session:closing` e `session:closed` são os únicos eventos que vão para **um socket**, e
 não para uma audiência: quem decide é o horário de uso da pessoa, não o acesso à conversa.
@@ -409,6 +435,7 @@ cancelado, enviado pelo scheduler e marcado como `failed`. Retentativa **não** 
 
 Salas (`apps/api/src/realtime/socket.ts`):
 
+- `user:<userId>` — todas as abas de uma pessoa; só leitura de conversa usa esta sala;
 - `org:<organizationId>` — só admin;
 - `instance:<instanceId>` — eventos do número (QR, status), sem conteúdo de conversa;
 - `sup:<instanceId>:<departmentKey>` — supervisores;
@@ -472,6 +499,42 @@ estão para não quebrar favoritos nem os links dos cards do dashboard. Nos text
 interface, a tela se chama "Conversas" (ou "lista de conversas"); "Inbox" segue sendo o
 nome técnico no código e neste documento.
 
+- **Cor de marca: tokens `brand-*`, fonte única em `src/lib/brand.ts`** (`BRAND_COLORS`,
+  `BRAND_NAVY`), de onde o `tailwind.config.ts` monta as classes `*-brand-*`. O verde é
+  `#17BF6B`, tirado do próprio logotipo (`components/logo.tsx` e `app/icon.svg`) — antes
+  daqui saía indigo, que não era cor de marca nenhuma. Os nomes são por **papel**, não por
+  cor: 50/100 fundo suave, 400 borda leve, 500 o verde exato da marca (detalhe, ícone),
+  **550 os controles verdes da tela de Conversas** (aba ativa do composer, badge de não
+  lidas, botão de gravar), **600 o fundo sólido do resto do sistema** (botão primário,
+  hover do 550) e texto de marca sobre claro, 700 hover do primário. O 500 puro dá só
+  2,41:1 com branco: **fundo sólido nunca usa o 500**, sempre 550 (5,00:1), 600 (6,61:1)
+  ou 700 (9,45:1). Nada de hex de marca solto em componente.
+- **A BOLHA ENVIADA não usa a paleta de marca: ela é o verde claro do WhatsApp**, tokens
+  `chat-*` (`CHAT_COLORS` em `lib/brand.ts`) — fundo `#d9fdd3` com **letra escura**
+  (`chat-sent-text`, 15,75:1), e horário, citação, legenda e status em `chat-sent-meta`
+  (4,83:1). É convenção visual do próprio WhatsApp, que a equipe lê há anos como "esta
+  saiu daqui"; trocar a marca não deve repintar o chat, e por isso os dois grupos de
+  token são separados. Dois valores **não** copiam o aplicativo ao pé da letra, porque
+  reprovariam: o cinza dele (`#667781`) dá 4,19:1 e o horário tem 10px, e o azul do check
+  duplo (`#53bdeb`) dá 1,92:1 contra o mínimo de 3:1 de ícone — daí `chat-sent-meta` e
+  `text-sky-600`. Tudo que a bolha enviada desenha por dentro segue essa inversão:
+  player de áudio, enquete, reações, mensagem apagada e o spinner do download.
+- **O DASHBOARD fica no indigo, de propósito, e não consome a paleta de marca.** Os
+  acentos (`DASHBOARD_ACCENT` / `_SOFT` em `app/(app)/dashboard/page.tsx`) e a rampa do
+  mapa de calor são indigo porque ali os números convivem com o verde de estado e com o
+  verde das barras de recebidas: acento de marca verde ao lado deles viraria um degradê de
+  verdes sem hierarquia. Os hexes ficam na própria tela, fora de `lib/brand.ts`, para o
+  Dashboard **não** mudar junto na próxima troca de marca.
+- **Verde de MARCA e verde de ESTADO são coisas separadas, e não se misturam.** O de
+  estado é `#16a34a` e mora em `@azvchat/shared` (`CONVERSATION_STATUS_COLORS.open`,
+  `CONNECTION_STATUS_COLORS.connected`, e o mesmo hex no selo "Ativo"): ele responde
+  "como está o atendimento". O de marca responde "de quem é o produto". Fundi-los faria a
+  bolha enviada parecer um selo de status. Por isso o `brand-600` é bem mais escuro e
+  saturado que o `#16a34a`, e o Dashboard inteiro ficou fora da paleta de marca. **Se um dia os dois chegarem perto demais, escurece-se o de marca — nunca
+  se ajusta o de estado para caber.** Chip de marca colado em selo de estado usa
+  `bg-brand-100` (e não o 50, que fica quase igual ao fundo do selo verde). Cor de
+  etiqueta e de departamento escolhida no cadastro é **dado**, não tema, e não muda; só o
+  valor inicial do formulário é de marca (azul-marinho, para não disputar com "Aberto").
 - `src/lib/api.ts` — client HTTP único (`api.*`). Token em `localStorage` (`zapdesk.token`);
   401 limpa token e manda para `/login`. **Não faça `fetch` solto em componente**: adicione
   o método em `api.ts`.
@@ -479,6 +542,13 @@ nome técnico no código e neste documento.
 - `src/components/ui.tsx` — kit da casa: `Button`, `Input`, `Textarea`, `Field`, `Badge`,
   `Card`, `Avatar`, `Modal`, `Tooltip`, `Spinner`, `EmptyState`. **Reuse antes de criar
   componente novo.** `Tooltip` é só CSS (hover + `focus-within`), sem biblioteca.
+- **Não lidas no frontend** (`src/lib/unread.ts` + `components/inbox/use-unread-counts.ts`):
+  o contador é por usuário e **não vive no `ConversationDto`** — o mesmo DTO chega por
+  socket a todo mundo que enxerga a conversa. A tela guarda um mapa `id → contador`,
+  semeado pelo campo `unread` da resposta de `GET /conversations`, que sobe sozinho
+  quando chega `message:new` de entrada numa conversa que não é a aberta, e que só zera
+  pelo evento `conversation:read` (ou pela resposta do `POST .../read`). O hook fica
+  fora do `inbox-shell` de propósito: aquele arquivo já tem ~1300 linhas.
 - **Rascunho do composer** (`src/lib/drafts.ts`): o que está escrito e ainda não foi enviado
   é gravado no `localStorage` a cada tecla, por conversa, com a chave
   `zapdesk.draft.<userId>.<conversationId>`. Existe por causa do fim do horário de uso (a
@@ -825,7 +895,9 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   acessível, e o valor exato de um dia não pode depender de acertar o mouse na barra. As
   cores saem do validador de paleta, não do olho: o par recebidas/enviadas é o mesmo dos
   cards (ΔE 16,1 sob deuteranopia) e o mapa de calor usa **uma** rampa de um tom só
-  (indigo 400→800), porque magnitude não se pinta com arco-íris.
+  (indigo 400→800), porque magnitude não se pinta com arco-íris. Indigo e não verde: no
+  card ao lado as barras de recebidas são o `#16a34a` de estado, e uma rampa verde faria
+  magnitude e status parecerem a mesma escala.
 - **O mapa dia × hora é o único bloco que ignora o período**: ele usa sempre os últimos
   `DASHBOARD_HEATMAP_DAYS` (30) dias, porque padrão de horário só aparece com repetição e
   "hoje" mostraria um dia em vez do hábito do cliente. Os filtros de número, departamento e
@@ -863,10 +935,29 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   responsável padrão do departamento **não se aplica** à conversa marcada, em
   momento nenhum. Atribuir uma pessoa desliga a marcação (é a saída natural do
   coletivo), e a exclusão mútua também é garantida por constraint no banco.
-- **O não lido de uma conversa `@todos` é da conversa, não por pessoa**: quem abrir
-  zera para todos. É limitação conhecida do modelo atual (`Conversation.unreadCount`
-  é uma coluna só) e está registrada em comentário no código — resolver exigiria não
-  lidas por usuário, que é outra entrega.
+- **O não lido é POR USUÁRIO, e `Conversation.unreadCount` está aposentado.** Quem
+  abre uma conversa marca como lida só para si: supervisor e admin acompanham sem
+  apagar o aviso de quem atende, e numa conversa sem responsável (ou marcada
+  `@todos`) cada pessoa do departamento tem o próprio contador. O que se guarda é a
+  MARCA (`ConversationRead.lastReadAt`, "até onde eu li"), nunca um contador por
+  pessoa — contador obrigaria a escrever N linhas a cada mensagem recebida. Regras
+  que valem para qualquer mexida aqui: (1) **a marca nunca retrocede sozinha** —
+  rolar para cima e reler mensagem antiga não faz a conversa voltar a ter não lidas;
+  recuar é a ação explícita "marcar como não lida", que volta UMA e vale só para
+  quem pediu; (2) **só mensagem recebida conta** — enviada pela equipe, nota interna
+  (que nem é `Message`) e apagada ficam de fora, e conversa arquivada não conta para
+  ninguém; (3) a contagem sai em **uma consulta para a página inteira** e **para no
+  centésimo**, porque o badge mostra "99+" e saber que são 4.000 não muda um pixel;
+  (4) o número **nunca entra no DTO da conversa** — aquele payload é publicado para
+  a audiência inteira, e o contador viaja na resposta da lista (mapa `unread`) e no
+  evento `conversation:read`, dirigido a uma pessoa. A coluna antiga
+  `Conversation.unreadCount` continua no banco com o dado histórico, sem leitura nem
+  escrita: não volte a usá-la.
+- **A leitura NÃO envia read receipt ao cliente.** O AZVCHAT nunca marcou visto azul
+  para fora (o Baileys sobe com `markOnlineOnConnect: false` e nada chama
+  `readMessages`), e agora há um motivo a mais para continuar assim: com leitura por
+  usuário, um supervisor espiando faria o cliente ver o visto azul de um atendimento
+  que ninguém começou.
 - **Os filtros de regime tributário e folha dependem do Azevedo-OS, e degradam sozinhos.**
   Os dois campos não existem neste banco: quem responde "quais empresas são do Simples" é
   o portal, e a API usa a lista de identificadores que voltou para recortar as conversas
@@ -926,7 +1017,7 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
 - **Conversa arquivada NÃO desarquiva com mensagem nova** — de propósito, e diferente
   do WhatsApp do celular: o número de backup recebe as mesmas conversas o dia inteiro
   e desarquivaria tudo sozinho. A mensagem é gravada (histórico completo, acha pela
-  busca), mas não incrementa `unreadCount`, não reabre status e a conversa não volta
+  busca), mas não conta como não lida para ninguém, não reabre status e não volta
   para a lista de quem está com a Inbox aberta (o frontend filtra pelo `archivedAt`
   do payload). Mensagem agendada em conversa arquivada ainda é enviada — compromisso
   com o cliente — e também não desarquiva.
@@ -950,7 +1041,9 @@ envio de texto, imagem, áudio, vídeo, documento, figurinha, localização, con
 responder citando; encaminhar; apagar; editar mensagem enviada pelo composer (texto e
 legenda de mídia, dentro da janela de 15 minutos do WhatsApp); gravação de áudio (ffmpeg, com fallback);
 enquetes; mensagens agendadas com retentativa; notas internas; etiquetas; atribuição com
-histórico completo; quatro status de atendimento; busca na conversa e busca global;
+histórico completo; quatro status de atendimento; leitura por usuário (cada pessoa com
+o próprio contador de não lidas, com "marcar como não lida" para reservar a conversa
+para depois); busca na conversa e busca global;
 marcação de participantes com `@` em grupo, com `@todos` e nome exibido no lugar do
 número (enviadas e recebidas);
 respostas rápidas com `/`, inclusive com mídia anexada (imagem, áudio ou vídeo) que sai

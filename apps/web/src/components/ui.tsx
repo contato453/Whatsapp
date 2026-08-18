@@ -8,6 +8,12 @@ import { cn } from "@/lib/utils";
 
 type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "outline";
 
+/**
+ * O primário é a marca: fundo `brand-600` com texto branco dá 6,61:1 e o
+ * hover `brand-700` dá 9,45:1 — os dois acima do 4,5:1 do WCAG AA. O verde
+ * puro da marca (`brand-500`) NÃO entra aqui: com branco ele fica em 2,41:1.
+ * Ele vale para detalhe e ícone, nunca para fundo de texto.
+ */
 const buttonVariants: Record<ButtonVariant, string> = {
   primary: "bg-brand-600 text-white hover:bg-brand-700 disabled:bg-brand-600/50",
   secondary: "bg-slate-100 text-slate-800 hover:bg-slate-200",
@@ -42,7 +48,7 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
       <input
         ref={ref}
         className={cn(
-          "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20",
+          "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-500/20",
           className,
         )}
         {...props}
@@ -57,7 +63,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
       <textarea
         ref={ref}
         className={cn(
-          "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20",
+          "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-500/20",
           className,
         )}
         {...props}

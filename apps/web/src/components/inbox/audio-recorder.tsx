@@ -163,7 +163,7 @@ export function AudioRecorder({
         onClick={() => void send()}
         disabled={disabled}
         title="Enviar áudio"
-        className="flex items-center gap-1 rounded-full bg-brand-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+        className="flex items-center gap-1 rounded-full bg-brand-550 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-brand-600 disabled:opacity-50"
       >
         <Send className="h-3 w-3" /> Enviar
       </button>

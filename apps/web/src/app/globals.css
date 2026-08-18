@@ -35,3 +35,13 @@ body {
 .thin-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/*
+ * Seleção de texto na cor da marca: fundo no tom suave (brand-100) e texto
+ * escuro. Verde forte com texto claro esconderia justamente o trecho que a
+ * pessoa acabou de marcar — e vale também dentro da bolha enviada, onde o
+ * texto é branco e ficaria invisível sem o par escuro daqui.
+ */
+::selection {
+  @apply bg-brand-100 text-slate-900;
+}

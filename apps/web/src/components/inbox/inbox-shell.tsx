@@ -9,6 +9,7 @@ import {
   History,
   Inbox as InboxIcon,
   Info,
+  Mail,
   Paperclip,
   Pencil,
   Search,
@@ -36,7 +37,14 @@ import {
   AZEVEDO_OS_FACET_NONE,
   type AzevedoOsFacetsDto,
 } from "@azvchat/shared";
-import { api, azevedoOsApi, conversationMediaApi, messagesApi, quickRepliesApi } from "@/lib/api";
+import {
+  api,
+  azevedoOsApi,
+  conversationMediaApi,
+  conversationReadApi,
+  messagesApi,
+  quickRepliesApi,
+} from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { useAuth } from "@/lib/auth-context";
 import { pruneDrafts, readDraft, saveDraft, type Draft, type DraftMode } from "@/lib/drafts";
@@ -68,6 +76,7 @@ import { Avatar, Button, EmptyState, Input, Modal, Spinner, Textarea } from "@/c
 import { appliesToConversation } from "@/components/department-picker";
 import { ArchivedBanner } from "./archived-banner";
 import { ConversationListItem } from "./conversation-list";
+import { useUnreadCounts } from "./use-unread-counts";
 import { FilterBar } from "./filter-bar";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
 import { MentionPicker, mentionOptions, type MentionOption } from "./mention-picker";
@@ -155,6 +164,19 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const { user: me } = useAuth();
 
   const [conversations, setConversations] = useState<ConversationDto[] | null>(null);
+  /**
+   * Não lidas DESTA pessoa, por conversa. Vem em separado do DTO da conversa
+   * de propósito: aquele payload é publicado para todo mundo que enxerga a
+   * conversa, e um contador ali seria o mesmo número para o supervisor e para
+   * quem atende — o defeito que a leitura por usuário conserta.
+   */
+  const {
+    counts: unreadCounts,
+    countsRef: unreadCountsRef,
+    replaceAll: replaceUnreadCounts,
+    bump: bumpUnreadCount,
+    set: setUnreadCount,
+  } = useUnreadCounts();
   /**
    * Filtros da lista, num objeto só, reidratados do navegador já na
    * montagem. Este componente vive no layout da rota (`inbox/layout.tsx`)
@@ -418,15 +440,21 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     if (filters.unlinked) params.set("unlinked", "true");
     params.set("limit", "80");
     api
-      .get<{ conversations: ConversationDto[]; companyFilter: CompanyFilterStateDto | null }>(
+      .get<{
+        conversations: ConversationDto[];
+        unread: Record<string, number>;
+        companyFilter: CompanyFilterStateDto | null;
+      }>(
         `/conversations?${params.toString()}`,
       )
       .then((data) => {
         setConversations(data.conversations);
         setCompanyFilter(data.companyFilter);
+        // O mapa vem calculado para a página inteira, numa consulta só.
+        replaceUnreadCounts(data.unread ?? {});
       })
       .catch(() => undefined);
-  }, [filters]);
+  }, [filters, replaceUnreadCounts]);
 
   useEffect(() => {
     const timer = setTimeout(loadConversations, filters.search ? 300 : 0);
@@ -482,8 +510,14 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         setHasMore(data.hasMore);
       })
       .catch(() => setMessages([]));
-    void api.post(`/conversations/${conversationId}/read`).catch(() => undefined);
-  }, [conversationId, loadDetail, me]);
+    // Abrir marca como lida SÓ para quem abriu — o gatilho é o mesmo de
+    // sempre, o que mudou é o alcance. A resposta traz o contador já
+    // recalculado; as outras abas desta pessoa recebem pelo socket.
+    void conversationReadApi
+      .read(conversationId)
+      .then((data) => setUnreadCount(conversationId, data.unreadCount))
+      .catch(() => undefined);
+  }, [conversationId, loadDetail, me, setUnreadCount]);
 
   // Busca dentro da conversa (com atraso para não consultar a cada tecla)
   useEffect(() => {
@@ -553,7 +587,13 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         // O tempo real respeita o filtro ativo: conversa fora do recorte não
         // é forçada para dentro da lista, e a que deixou de casar sai — mas
         // a aberta continua aberta no chat, filtro nunca fecha conversa.
-        if (!conversationMatchesFilters(payload.conversation, filters, meId)) {
+        const count =
+          (unreadCountsRef.current[payload.conversation.id] ?? 0) +
+          (payload.message.direction === "inbound" &&
+          payload.message.conversationId !== conversationId
+            ? 1
+            : 0);
+        if (!conversationMatchesFilters(payload.conversation, filters, meId, count)) {
           return rest.length === current.length ? current : rest;
         }
         // Com o recorte por empresa ligado, linha que ainda não estava na
@@ -564,13 +604,25 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         if (!jaEstava && hasCompanyFilter(filters)) return current;
         return [payload.conversation, ...rest];
       });
+      // Contador de cada um sobe sozinho na aba de cada um. A conversa
+      // ABERTA não sobe: ela é marcada como lida logo abaixo, exatamente
+      // como já acontecia antes desta mudança.
+      if (
+        payload.message.direction === "inbound" &&
+        payload.message.conversationId !== conversationId
+      ) {
+        bumpUnreadCount(payload.message.conversationId);
+      }
       if (payload.message.conversationId === conversationId) {
         setMessages((current) => {
           if (!current) return current;
           if (current.some((message) => message.id === payload.message.id)) return current;
           return [...current, payload.message];
         });
-        void api.post(`/conversations/${conversationId}/read`).catch(() => undefined);
+        void conversationReadApi
+          .read(conversationId)
+          .then((data) => setUnreadCount(conversationId, data.unreadCount))
+          .catch(() => undefined);
       }
     };
     const onConversationUpdated = (payload: ConversationDto) => {
@@ -580,7 +632,14 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         // Atribuição, status, departamento ou etiqueta mudou e a linha
         // deixou de casar com o filtro ativo: sai da lista sem recarregar
         // tudo. A conversa aberta no chat não é fechada por isso.
-        if (!conversationMatchesFilters(payload, filters, meId)) {
+        if (
+          !conversationMatchesFilters(
+            payload,
+            filters,
+            meId,
+            unreadCountsRef.current[payload.id] ?? 0,
+          )
+        ) {
           return current.filter((conversation) => conversation.id !== payload.id);
         }
         return current.map((conversation) => (conversation.id === payload.id ? payload : conversation));
@@ -688,7 +747,16 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     // `filters`/`meId` entram nas dependências porque os handlers casam a
     // conversa com o filtro ativo — reassinar os listeners é barato e a
     // lista de dependências continua honesta.
-  }, [socket, conversationId, loadDetail, filters, meId]);
+  }, [
+    socket,
+    conversationId,
+    loadDetail,
+    filters,
+    meId,
+    unreadCountsRef,
+    bumpUnreadCount,
+    setUnreadCount,
+  ]);
 
   /**
    * Toda escrita no composer passa por aqui, e grava na hora.
@@ -1316,6 +1384,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
               <ConversationListItem
                 key={entry.id}
                 conversation={entry}
+                unreadCount={unreadCounts[entry.id] ?? 0}
                 active={entry.id === conversationId}
                 onClick={() => router.push(`/inbox/${entry.id}`)}
               />
@@ -1410,6 +1479,22 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   }}
                 >
                   <Search className="h-4 w-4" />
+                </Button>
+                {/* Reservar a conversa para depois: recua a marca de leitura
+                    DESTA pessoa e fecha o chat. Ninguém mais vê o aviso
+                    voltar, e sair da conversa evita que a leitura volte a
+                    avançar na próxima mensagem que chegar aqui. */}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  title="Marcar como não lida"
+                  onClick={async () => {
+                    const data = await conversationReadApi.unread(conversation.id);
+                    setUnreadCount(conversation.id, data.unreadCount);
+                    router.push("/inbox");
+                  }}
+                >
+                  <Mail className="h-4 w-4" />
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setShowPanel((value) => !value)}>
                   <Info className="h-4 w-4" />
@@ -1550,7 +1635,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
               {/* Editando: o campo passa a ser da mensagem já enviada, e as
                   abas somem — nota interna não se edita por aqui. */}
               {editing && (
-                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-500 bg-slate-50 px-2.5 py-1.5">
+                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-600 bg-slate-50 px-2.5 py-1.5">
                   <Pencil className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-600" />
                   <div className="min-w-0 flex-1">
                     <p className="text-[11px] font-semibold text-slate-700">
@@ -1578,7 +1663,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   className={cn(
                     "shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
                     composerMode === "message"
-                      ? "bg-brand-600 text-white"
+                      ? "bg-brand-550 text-white"
                       : "bg-slate-100 text-slate-600 hover:bg-slate-200",
                   )}
                 >
@@ -1608,7 +1693,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
 
               {/* Mensagem sendo respondida */}
               {replyTo && composerMode === "message" && (
-                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-500 bg-slate-50 px-2.5 py-1.5">
+                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-600 bg-slate-50 px-2.5 py-1.5">
                   <CornerUpLeft className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-600" />
                   <div className="min-w-0 flex-1">
                     <p className="text-[11px] font-semibold text-slate-700">
@@ -1631,7 +1716,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   chip vira o indicador de progresso: vídeo grande demora e,
                   sem isso, a espera parecia defeito. */}
               {quickReplyMedia?.media && composerMode === "message" && (
-                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-500 bg-slate-50 px-2.5 py-1.5">
+                <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-brand-600 bg-slate-50 px-2.5 py-1.5">
                   {sending ? (
                     <Spinner className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-600" />
                   ) : (

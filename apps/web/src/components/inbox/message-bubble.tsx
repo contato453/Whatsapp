@@ -36,20 +36,33 @@ import { FormattedText, makeMentionResolver } from "./formatted-text";
 /** Emojis oferecidos no acesso rápido de reação. */
 export const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
 
+/**
+ * Só aparece na bolha ENVIADA, que é verde claro com letra escura — por isso
+ * os tons são escuros. O azul do WhatsApp (`#53bdeb`) daria 1,92:1 sobre esse
+ * fundo, abaixo do 3:1 de ícone; o `sky-600` dá 3,69:1 e continua lendo como
+ * "o check azul".
+ */
 function StatusIcon({ status }: { status: MessageDto["status"] }) {
   if (status === "pending") return <Clock className="h-3 w-3" />;
   if (status === "sent") return <Check className="h-3 w-3" />;
   if (status === "delivered") return <CheckCheck className="h-3 w-3" />;
-  if (status === "read") return <CheckCheck className="h-3 w-3 text-sky-300" />;
-  return <XCircle className="h-3 w-3 text-red-300" />;
+  if (status === "read") return <CheckCheck className="h-3 w-3 text-sky-600" />;
+  return <XCircle className="h-3 w-3 text-red-600" />;
 }
 
-/** Cor determinística por remetente para distinguir participantes do grupo. */
-const SENDER_COLORS = ["#4f46e5", "#0891b2", "#16a34a", "#d97706", "#dc2626", "#9333ea", "#0284c7", "#ca8a04"];
+/**
+ * Cor determinística por remetente para distinguir participantes do grupo.
+ *
+ * É paleta CATEGÓRICA, não a cor da marca: aqui a cor só separa uma pessoa da
+ * outra. Os dois tons roxos que existiam (`#4f46e5` e `#9333ea`) saíram junto
+ * com o indigo do tema e viraram teal e rosa — matizes que continuam
+ * distinguíveis entre si e não puxam a leitura para o verde da marca.
+ */
+const SENDER_COLORS = ["#0f766e", "#0891b2", "#16a34a", "#d97706", "#dc2626", "#be123c", "#0284c7", "#ca8a04"];
 function senderColor(key: string): string {
   let hash = 0;
   for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) | 0;
-  return SENDER_COLORS[Math.abs(hash) % SENDER_COLORS.length] ?? "#4f46e5";
+  return SENDER_COLORS[Math.abs(hash) % SENDER_COLORS.length] ?? "#0f766e";
 }
 
 function MediaContent({
@@ -183,9 +196,7 @@ function MediaContent({
         className="mt-1.5 flex items-center gap-1.5 text-xs font-medium underline-offset-2 transition-opacity hover:underline disabled:opacity-60"
       >
         {downloading ? (
-          <Spinner
-            className={cn("h-3 w-3", outbound ? "border-white/40 border-t-white" : undefined)}
-          />
+          <Spinner className="h-3 w-3" />
         ) : (
           <Download className="h-3 w-3" />
         )}
@@ -302,7 +313,7 @@ export function MessageBubble({
         className={cn(
           "max-w-[75%] overflow-hidden rounded-2xl px-3.5 py-2 shadow-sm",
           outbound
-            ? "rounded-br-md bg-brand-600 text-white"
+            ? "rounded-br-md bg-chat-sent text-chat-sent-text"
             : "rounded-bl-md border border-slate-200 bg-white text-slate-900",
         )}
       >
@@ -320,7 +331,7 @@ export function MessageBubble({
           </p>
         )}
         {outbound && message.senderName && showSender && (
-          <p className="mb-0.5 text-xs font-semibold text-white/80">{message.senderName}</p>
+          <p className="mb-0.5 text-xs font-semibold text-chat-sent-meta">{message.senderName}</p>
         )}
 
         {/* Pré-visualização da mensagem citada */}
@@ -328,7 +339,7 @@ export function MessageBubble({
           <div
             className={cn(
               "mb-1.5 border-l-2 py-0.5 pl-2 text-xs",
-              outbound ? "border-white/50 text-white/80" : "border-brand-400 text-slate-500",
+              outbound ? "border-brand-600 text-chat-sent-meta" : "border-brand-400 text-slate-500",
             )}
           >
             <p className="font-semibold">{message.quoted.senderName ?? "Mensagem"}</p>
@@ -342,7 +353,7 @@ export function MessageBubble({
           <p
             className={cn(
               "flex items-center gap-1.5 text-sm italic",
-              outbound ? "text-white/70" : "text-slate-400",
+              outbound ? "text-chat-sent-meta" : "text-slate-400",
             )}
           >
             <Ban className="h-3.5 w-3.5" /> Esta mensagem foi apagada
@@ -378,14 +389,14 @@ export function MessageBubble({
                   key={index}
                   className={cn(
                     "rounded-md border px-2 py-1 text-xs",
-                    outbound ? "border-white/30 bg-white/10" : "border-slate-200 bg-slate-50",
+                    outbound ? "border-black/10 bg-white/50" : "border-slate-200 bg-slate-50",
                   )}
                 >
                   {option}
                 </div>
               ))}
             </div>
-            <p className={cn("text-[10px]", outbound ? "text-white/60" : "text-slate-400")}>
+            <p className={cn("text-[10px]", outbound ? "text-chat-sent-meta" : "text-slate-400")}>
               Os votos aparecem no WhatsApp dos participantes
             </p>
           </div>
@@ -412,10 +423,14 @@ export function MessageBubble({
           </div>
         )}
 
+        {/* A bolha enviada é o verde claro do WhatsApp com letra escura, então
+            aqui o horário e o check também são escuros. O tom vem do token
+            `chat-sent-meta`, medido em 4,83:1 sobre esse fundo — o cinza do
+            próprio WhatsApp daria 4,19:1, e o horário tem 10px. */}
         <p
           className={cn(
             "mt-1 flex items-center justify-end gap-1 text-[10px]",
-            outbound ? "text-white/70" : "text-slate-400",
+            outbound ? "text-chat-sent-meta" : "text-slate-400",
           )}
         >
           {message.editedAt && !message.deletedAt && <span className="italic">editada</span>}
@@ -439,7 +454,7 @@ export function MessageBubble({
                   info.mine
                     ? "border-brand-400 bg-brand-50 text-brand-700"
                     : outbound
-                      ? "border-white/30 bg-white/15 text-white"
+                      ? "border-black/10 bg-white/60 text-slate-600"
                       : "border-slate-200 bg-slate-50 text-slate-600",
                 )}
               >

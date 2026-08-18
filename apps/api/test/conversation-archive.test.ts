@@ -18,7 +18,8 @@ import type { AppDeps } from "../src/types.js";
  * 1. a listagem exclui arquivadas por padrão, e o parâmetro traz SÓ elas —
  *    nunca as duas misturadas;
  * 2. arquivar passa pelo escopo de acesso (conversa fora do recorte é 404);
- * 3. mensagem nova NÃO desarquiva, não soma não lido e não mexe no status;
+ * 3. mensagem nova NÃO desarquiva e não mexe no status (não lido não é mais
+ *    contador de conversa: é por usuário, ver conversation-reads.test.ts);
  * 4. a busca global continua encontrando arquivada;
  * 5. a marcação de backup e o arquivamento em massa exigem supervisor;
  * 6. no número de backup a conversa nova já nasce arquivada.
@@ -173,7 +174,7 @@ describe("GET /conversations (recorte de arquivadas)", () => {
 });
 
 describe("POST /conversations/:id/archive|unarchive", () => {
-  it("arquiva zerando o não lido e audita", async () => {
+  it("arquiva marcando data e autor, e audita", async () => {
     const app = await buildApp(conversationRoutes, fakeConversationPrisma(baseConversation()));
     const response = await app.inject({
       method: "POST",
@@ -184,7 +185,9 @@ describe("POST /conversations/:id/archive|unarchive", () => {
     const update = recorded.conversationUpdates[0]?.data as Record<string, unknown>;
     expect(update.archivedAt).toBeInstanceOf(Date);
     expect(update.archivedByUserId).toBe("user-agent");
-    expect(update.unreadCount).toBe(0);
+    // Não lido não é mais coluna da conversa: nada para zerar aqui, e a
+    // contagem por usuário já descarta conversa arquivada.
+    expect(update).not.toHaveProperty("unreadCount");
     // Ortogonal ao status: arquivar nunca toca no status do atendimento.
     expect(update).not.toHaveProperty("status");
     expect(recorded.auditActions).toContain("conversation.archived");
@@ -277,7 +280,7 @@ describe("mensagem nova em conversa arquivada (ingestão)", () => {
     media: null,
   };
 
-  it("não desarquiva, não soma não lido e não mexe no status", async () => {
+  it("não desarquiva e não mexe no status", async () => {
     const service = ingestHarness(
       baseConversation({ archivedAt: new Date(), status: "resolved" }),
     );
@@ -286,9 +289,8 @@ describe("mensagem nova em conversa arquivada (ingestão)", () => {
     const update = recorded.conversationUpdates[0]?.data as Record<string, unknown>;
     // A mensagem é gravada e o preview anda — o histórico fica completo...
     expect(update.lastMessageAt).toBeInstanceOf(Date);
-    // ...mas nada de trazer a conversa de volta: sem incremento de não
-    // lido, sem reabrir status e sem tocar no arquivamento.
-    expect(update).not.toHaveProperty("unreadCount");
+    // ...mas nada de trazer a conversa de volta: sem reabrir status e sem
+    // tocar no arquivamento.
     expect(update).not.toHaveProperty("status");
     expect(update).not.toHaveProperty("archivedAt");
   });
@@ -297,7 +299,8 @@ describe("mensagem nova em conversa arquivada (ingestão)", () => {
     const service = ingestHarness(baseConversation({ status: "resolved" }));
     await service.ingest(inbound, { organizationId: "org-1" });
     const update = recorded.conversationUpdates.at(-1)?.data as Record<string, unknown>;
-    expect(update.unreadCount).toEqual({ increment: 1 });
+    // Nenhum contador de conversa é tocado — o não lido é por usuário.
+    expect(update).not.toHaveProperty("unreadCount");
     expect(update.status).toBe("open");
   });
 });
@@ -351,7 +354,7 @@ describe("número de backup (ingestão e papéis)", () => {
     );
     const created = recorded.conversationCreates[0]?.data as Record<string, unknown>;
     expect(created.archivedAt).toBeInstanceOf(Date);
-    // Nascida arquivada: sem responsável padrão e sem não lido acumulando.
+    // Nascida arquivada: sem responsável padrão e sem reabrir status.
     const update = recorded.conversationUpdates[0]?.data as Record<string, unknown>;
     expect(update).not.toHaveProperty("unreadCount");
   });
@@ -446,7 +449,7 @@ describe("número de backup (ingestão e papéis)", () => {
     await app.close();
   });
 
-  it("arquivamento em massa roda em lote, zera não lido e audita a quantidade", async () => {
+  it("arquivamento em massa roda em lote e audita a quantidade", async () => {
     const app = await buildApp(whatsappInstanceRoutes, instancePrisma());
     const response = await app.inject({
       method: "POST",
@@ -458,7 +461,7 @@ describe("número de backup (ingestão e papéis)", () => {
     const data = recorded.conversationUpdateMany[0]?.data as Record<string, unknown>;
     expect(data.archivedAt).toBeInstanceOf(Date);
     expect(data.archivedByUserId).toBe("user-supervisor");
-    expect(data.unreadCount).toBe(0);
+    expect(data).not.toHaveProperty("unreadCount");
     // O lote só pega as ainda não arquivadas — rodar duas vezes não regrava.
     const where = recorded.conversationFindMany[0]?.where as Record<string, unknown>;
     expect(where.archivedAt).toBeNull();

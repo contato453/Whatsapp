@@ -15,9 +15,14 @@ import { ChartCard, ChartTable } from "./chart-card";
  * Mapa de calor: em que dia e hora o cliente procura o escritório.
  *
  * Magnitude pede rampa sequencial de **um** tom só, clara para escura — arco-
- * íris aqui faria o leitor procurar significado na cor errada. A rampa é o
- * indigo da marca (400 → 800), conferida no validador: passos monótonos, cada
- * degrau perceptível, e o mais claro ainda separa da superfície branca.
+ * íris aqui faria o leitor procurar significado na cor errada. A rampa é
+ * indigo (400 → 800), conferida no validador: passos monótonos, cada degrau
+ * perceptível, e o mais claro ainda separa da superfície branca.
+ *
+ * Indigo, e não o verde da marca, pelo mesmo motivo dos acentos do Dashboard
+ * (ver `dashboard/page.tsx`): no card ao lado as barras de recebidas são o
+ * `#16a34a` de estado, e uma rampa verde ao lado delas faria magnitude e
+ * status parecerem a mesma escala.
  */
 const RAMP = ["#818cf8", "#6366f1", "#4f46e5", "#3730a3"];
 /** Célula sem nenhuma mensagem: cinza de superfície, não é degrau da rampa. */

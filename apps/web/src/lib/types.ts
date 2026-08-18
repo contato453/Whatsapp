@@ -128,7 +128,6 @@ export interface ConversationDto {
   assignedToAll: boolean;
   department: DepartmentDto | null;
   tags: TagDto[];
-  unreadCount: number;
   /** Nulo = não arquivada. Arquivada não conta em número nenhum do sistema. */
   archivedAt: string | null;
   /** Quem arquivou; nulo no arquivamento automático do número de backup. */

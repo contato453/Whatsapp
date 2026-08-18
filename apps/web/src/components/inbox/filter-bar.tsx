@@ -73,7 +73,7 @@ const QUICK_FILTER_GROUPS: Array<{ label: string; options: Array<{ key: QuickFil
 function filterSelectClass(ativo: boolean): string {
   return cn(
     "rounded-lg border px-1.5 py-1 text-[11px]",
-    ativo ? "border-brand-500 font-medium text-brand-700" : "border-slate-200 text-slate-600",
+    ativo ? "border-brand-600 font-medium text-brand-700" : "border-slate-200 text-slate-600",
   );
 }
 

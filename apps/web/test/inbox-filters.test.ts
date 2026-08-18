@@ -68,7 +68,6 @@ function conversa(overrides: Partial<ConversationDto> = {}): ConversationDto {
     assignedToAll: false,
     department: null,
     tags: [],
-    unreadCount: 0,
     archivedAt: null,
     archivedBy: null,
     lastMessageAt: null,
@@ -152,10 +151,12 @@ describe("casamento de conversa com o filtro ativo (tempo real)", () => {
       conversationMatchesFilters(conversa({ type: "individual" }), { ...EMPTY_INBOX_FILTERS, quick: "groups" }, ANA),
     ).toBe(false);
     expect(
-      conversationMatchesFilters(conversa({ unreadCount: 3 }), { ...EMPTY_INBOX_FILTERS, quick: "unread" }, ANA),
+      // Não lidas é por usuário e chega de fora do DTO — o mesmo DTO com
+      // contador diferente é o caso normal (supervisor e atendente).
+      conversationMatchesFilters(conversa(), { ...EMPTY_INBOX_FILTERS, quick: "unread" }, ANA, 3),
     ).toBe(true);
     expect(
-      conversationMatchesFilters(conversa({ unreadCount: 0 }), { ...EMPTY_INBOX_FILTERS, quick: "unread" }, ANA),
+      conversationMatchesFilters(conversa(), { ...EMPTY_INBOX_FILTERS, quick: "unread" }, ANA, 0),
     ).toBe(false);
   });
 

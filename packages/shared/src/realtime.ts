@@ -12,6 +12,13 @@ export const RealtimeEvents = {
   /** Chamada tocando agora — aviso na tela do atendente responsável. */
   CallIncoming: "call:incoming",
   ConversationUpdated: "conversation:updated",
+  /**
+   * Leitura de uma conversa mudou — e é a única coisa do sistema que vai
+   * para UMA PESSOA, e não para a audiência da conversa: leitura é estado
+   * pessoal. Mandá-lo para a sala da conversa zeraria o aviso de quem não
+   * leu, que é exatamente o defeito que a leitura por usuário conserta.
+   */
+  ConversationRead: "conversation:read",
   GroupParticipants: "group:participants",
   InternalNote: "note:new",
   InstanceStatus: "instance:status",
@@ -58,6 +65,19 @@ export interface SessionClosedPayload {
 export interface ScheduledPendingPayload {
   conversationId: string;
   pending: number;
+}
+
+/**
+ * Quantas mensagens recebidas ESTA PESSOA ainda não leu na conversa.
+ *
+ * Vai só para as abas de quem leu (sala `user:<userId>`), para a segunda aba
+ * da mesma pessoa acompanhar sem recarregar. O contador nunca viaja no DTO da
+ * conversa: aquele payload é de audiência, e um número pessoal ali vazaria
+ * para todo mundo que enxerga a conversa.
+ */
+export interface ConversationReadPayload {
+  conversationId: string;
+  unreadCount: number;
 }
 
 export interface InstanceStatusPayload {
