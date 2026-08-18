@@ -32,6 +32,21 @@ export function isGroupJid(jid: string | null | undefined): boolean {
 }
 
 /**
+ * Remove o sufixo de aparelho de um JID ("...:51@lid" -> "...@lid"),
+ * preservando o domínio.
+ *
+ * O ":51" identifica o dispositivo de quem ligou, não a pessoa — e os
+ * cadastros (Contact, GroupParticipant, Conversation) guardam o JID sem
+ * ele. Sem esta limpeza, a chamada de um segundo aparelho não casa com
+ * nada do banco e ainda cria uma conversa duplicada para o mesmo contato.
+ */
+export function stripDeviceSuffix(jid: string): string {
+  const [bare = "", domain] = jid.split("@");
+  const user = bare.split(":")[0] ?? "";
+  return domain ? `${user}@${domain}` : user;
+}
+
+/**
  * JIDs "@lid" são identificadores internos e anônimos do WhatsApp — o
  * número neles NÃO é telefone. Precisamos ignorá-los ao exibir contatos.
  */

@@ -474,6 +474,20 @@ sempre `RealtimeEvents.X`:
 `instance:status`, `instance:qr`, `scheduled:pending`, `session:closing`,
 `session:closed`.
 
+`call:incoming` avisa que uma ligação está tocando (o sistema nunca atende nem recusa) e
+chega com a identidade de quem liga **já resolvida pela API** — a tela só desenha, sem
+consulta própria: `{ conversationId, conversationTitle, callerName, callerPhone,
+callerGroups, callerAvatar, isVideo, isGroup, assignedUserId, instanceId, instanceName,
+at }`. A resolução (`lib/call-identity.ts`) para na primeira fonte que acertar — conversa
+individual (`customTitle`/`title`, descartando título que é o próprio JID), `Contact` da
+agenda do número, `GroupParticipant` (`customName`/`name`) — e `callerGroups` traz os
+grupos do sistema de que a pessoa participa naquele número (é como o aviso diz "de qual
+cliente" é quem liga). `callerName` nulo = contato não identificado; `callerPhone` só vem
+quando é número real (LID nunca vira telefone); `callerAvatar` aponta a fonte da foto
+(`conversation`/`participant`) para o frontend buscar pelo endpoint autenticado;
+`instanceName` é o chip por onde a chamada entrou. Audiência: a mesma
+`conversationAudience()` de sempre.
+
 `conversation:read` (`{ conversationId, unreadCount }`) é o outro evento que **não** vai
 para uma audiência: ele sai para `user:<userId>`, a sala pessoal de quem leu, e existe
 para a segunda aba da mesma pessoa acompanhar. Mandá-lo para a sala da conversa
@@ -1185,6 +1199,15 @@ sempre juntos.
   nenhum e o WhatsApp não documenta).
 - LID (`@lid`) não é telefone. Existe migration só para limpar telefones que vieram de LID
   (`20260814140000_clear_lid_phone_numbers`).
+- **Chamada recebida por LID pode não ter telefone — e isso é esperado.** O aviso de
+  chamada mostra o nome resolvido e o telefone só quando alguma fonte o conhece de
+  verdade (JID `@s.whatsapp.net`, `Contact` ou `GroupParticipant`); chamada de um `@lid`
+  desconhecido chega com `callerPhone` nulo e a tela mostra "Contato não identificado",
+  sem linha de número. Exibir os dígitos do LID como telefone faria alguém tentar ligar
+  de volta para um número que não existe. O evento de chamada do Baileys também traz o
+  JID **com sufixo de aparelho** ("...:51@lid") — o provider o remove
+  (`stripDeviceSuffix`, em `normalize.ts`) antes de emitir, senão a chamada não casaria
+  com contato nem conversa e criaria conversa duplicada.
 - **A janela de edição é do WhatsApp, e vale nos dois lados.** Só dá para editar nos
   primeiros `MESSAGE_EDIT_WINDOW_MINUTES` (15) minutos, e só tipo com texto —
   `EDITABLE_MESSAGE_TYPES` (texto, imagem, vídeo, documento; áudio e figurinha não têm

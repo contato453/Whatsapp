@@ -98,19 +98,51 @@ export interface MessageStatusPayload {
   status: MessageStatus;
 }
 
+/** Grupo conhecido de que quem liga participa — diz "de qual cliente" é a pessoa. */
+export interface CallerGroupRef {
+  /** Conversa do grupo na Inbox; null quando o grupo ainda não virou conversa. */
+  conversationId: string | null;
+  name: string;
+}
+
+/**
+ * De onde vem a foto de quem liga. A chave do arquivo nunca viaja — o
+ * frontend busca pelo endpoint autenticado correspondente à fonte.
+ */
+export interface CallerAvatarRef {
+  source: "conversation" | "participant";
+  id: string;
+}
+
 /**
  * Chamada tocando agora. O sistema não atende nem rejeita — este aviso
  * existe para o atendente saber na hora e poder retornar.
+ *
+ * A identidade de quem liga chega RESOLVIDA pela API (nome, telefone real,
+ * grupos, foto): a tela não consulta nada, só desenha. Mesma audiência de
+ * sempre — quem não enxerga o número nunca recebe este evento.
  */
 export interface CallIncomingPayload {
   conversationId: string;
   conversationTitle: string;
+  /** Nome resolvido pela API; null = contato não identificado. Nunca é um LID. */
   callerName: string | null;
+  /**
+   * Telefone REAL, quando alguma fonte o conhece. Chamada por "@lid" sem
+   * telefone no cadastro chega com null — os dígitos do LID não são número
+   * discável e não podem ser exibidos como se fossem.
+   */
   callerPhone: string | null;
+  /** Grupos do sistema de que a pessoa participa (vazio em chamada de grupo). */
+  callerGroups: CallerGroupRef[];
+  /** Foto de quem liga; null = sem foto conhecida (a tela mostra iniciais). */
+  callerAvatar: CallerAvatarRef | null;
   isVideo: boolean;
   isGroup: boolean;
   /** Responsável pela conversa; null = ninguém assumiu ainda */
   assignedUserId: string | null;
   instanceId: string;
+  /** Nome do número da casa por onde a chamada entrou — o "chip" exibido no aviso. */
+  instanceName: string | null;
   at: string;
 }

@@ -4,12 +4,13 @@ import type {
   ProviderChat,
   ProviderGroup,
 } from "@azvchat/shared";
-import { RealtimeEvents } from "@azvchat/shared";
+import { RealtimeEvents, type CallIncomingPayload } from "@azvchat/shared";
 import type { WhatsAppProvider } from "@azvchat/whatsapp";
 import type { Server } from "socket.io";
 import type { Logger } from "pino";
 import { conversationAudience, instanceAudience } from "../realtime/socket.js";
 import { serializeConversation, serializeMessage } from "../lib/serialize.js";
+import { resolveCallerIdentity } from "../lib/call-identity.js";
 import { extensionFromMime, type MediaStorage } from "../lib/media-storage.js";
 import type { MessageIngestService } from "./message-ingest.js";
 import type { AuditService } from "../modules/audit/service.js";
@@ -228,7 +229,7 @@ export class InstanceManager {
                 whatsappInstanceId: event.instanceId,
                 externalId: event.fromExternalId,
               },
-              select: { name: true, pushName: true },
+              select: { name: true, pushName: true, phoneNumber: true },
             })
           : null;
         const callerName = caller?.name ?? caller?.pushName ?? null;
@@ -318,18 +319,40 @@ export class InstanceManager {
         // Está tocando agora: avisa o responsável em qualquer tela do sistema.
         // O sistema nunca atende nem rejeita — o telefone segue tocando.
         if (!existing && event.status === "ringing") {
-          this.io.to(room).emit(RealtimeEvents.CallIncoming, {
+          // A identidade é resolvida AQUI, no backend, para a tela receber
+          // pronto — nada de consulta de agenda espalhada por componente.
+          // São só consultas locais indexadas: não seguram o aviso.
+          const ref = full ?? conversation;
+          const identity = await resolveCallerIdentity(this.prisma, {
+            whatsappInstanceId: event.instanceId,
+            callerExternalId: event.fromExternalId,
+            callerPhone: event.fromPhone,
+            conversation: {
+              id: ref.id,
+              title: ref.title,
+              customTitle: ref.customTitle,
+              externalChatId: ref.externalChatId,
+              hasAvatar: ref.profilePicture != null,
+            },
+            isGroup: event.isGroup,
+            contact: caller,
+          });
+          const payload: CallIncomingPayload = {
             conversationId: conversation.id,
             conversationTitle:
               full?.customTitle ?? full?.title ?? conversation.customTitle ?? conversation.title,
-            callerName,
-            callerPhone: event.fromPhone,
+            callerName: identity.name,
+            callerPhone: identity.phone,
+            callerGroups: identity.groups,
+            callerAvatar: identity.avatar,
             isVideo: event.isVideo,
             isGroup: event.isGroup,
             assignedUserId: full?.assignedUserId ?? conversation.assignedUserId,
             instanceId: event.instanceId,
+            instanceName: full?.instance?.name ?? null,
             at: event.timestamp.toISOString(),
-          });
+          };
+          this.io.to(room).emit(RealtimeEvents.CallIncoming, payload);
         }
       });
     });

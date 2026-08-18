@@ -9,6 +9,7 @@ import {
   isGroupJid,
   isIgnorableJid,
   jidToPhone,
+  stripDeviceSuffix,
   toDate,
   unwrapMessage,
 } from "../src/qrcode/normalize.js";
@@ -26,6 +27,22 @@ describe("jidToPhone", () => {
     expect(jidToPhone(null)).toBeNull();
     expect(jidToPhone(undefined)).toBeNull();
     expect(jidToPhone("")).toBeNull();
+  });
+});
+
+describe("stripDeviceSuffix", () => {
+  it("remove o sufixo de aparelho preservando o domínio", () => {
+    // O ":51" identifica o dispositivo, não a pessoa — os cadastros guardam
+    // o JID limpo, e é com eles que a chamada precisa casar.
+    expect(stripDeviceSuffix("19675832402083:51@lid")).toBe("19675832402083@lid");
+    expect(stripDeviceSuffix("5511999998888:12@s.whatsapp.net")).toBe(
+      "5511999998888@s.whatsapp.net",
+    );
+  });
+
+  it("não altera JID que já está limpo", () => {
+    expect(stripDeviceSuffix("19675832402083@lid")).toBe("19675832402083@lid");
+    expect(stripDeviceSuffix("120363012345678@g.us")).toBe("120363012345678@g.us");
   });
 });
 

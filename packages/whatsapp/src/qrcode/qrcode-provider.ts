@@ -40,6 +40,7 @@ import {
   isIgnorableJid,
   jidToPhone,
   phoneFromJid,
+  stripDeviceSuffix,
   toDate,
   unwrapMessage,
 } from "./normalize.js";
@@ -218,8 +219,14 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     // Chamadas de voz/vídeo: viram registro na conversa.
     socket.ev.on("call", (calls) => {
       for (const call of calls) {
-        const chatId = call.chatId ?? call.from;
-        if (!chatId) continue;
+        const rawChatId = call.chatId ?? call.from;
+        if (!rawChatId) continue;
+        // Diferente das mensagens, o evento de chamada costuma trazer o JID
+        // COM o sufixo de aparelho ("...:51@lid"). Os cadastros guardam o
+        // JID limpo, então sem normalizar aqui a chamada não casaria com
+        // contato nem conversa nenhuma — e criaria uma conversa duplicada.
+        const chatId = stripDeviceSuffix(rawChatId);
+        const from = call.from ? stripDeviceSuffix(call.from) : null;
         const status =
           call.status === "accept"
             ? "accepted"
@@ -232,9 +239,9 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
           instanceId,
           callId: call.id,
           externalChatId: chatId,
-          fromExternalId: call.from ?? null,
+          fromExternalId: from,
           // Sem fallback para jidToPhone: um "@lid" viraria telefone falso.
-          fromPhone: phoneFromJid(call.from),
+          fromPhone: phoneFromJid(from),
           isVideo: call.isVideo ?? false,
           isGroup: call.isGroup ?? isGroupJid(chatId),
           status,
