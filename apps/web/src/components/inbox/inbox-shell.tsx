@@ -69,7 +69,6 @@ import type {
   NoteDto,
   QuickReplyDto,
   TagDto,
-  UserDirectoryDto,
 } from "@/lib/types";
 import { Avatar, Button, EmptyState, Input, Modal, Spinner, Textarea } from "@/components/ui";
 import { appliesToConversation } from "@/components/department-picker";
@@ -223,7 +222,6 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   /** Mídia aberta em tela cheia — guarda o id para sobreviver a atualizações da lista. */
   const [lightboxMessageId, setLightboxMessageId] = useState<string | null>(null);
 
-  const [users, setUsers] = useState<UserDirectoryDto[]>([]);
   const [departments, setDepartments] = useState<DepartmentDto[]>([]);
   const [tags, setTags] = useState<TagDto[]>([]);
   const [instances, setInstances] = useState<InstanceDto[]>([]);
@@ -307,7 +305,6 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   // em silêncio: aquele campo volta para "todos", em vez de deixar a lista
   // vazia sem explicação.
   useEffect(() => {
-    api.get<{ users: UserDirectoryDto[] }>("/users").then((data) => setUsers(data.users)).catch(() => undefined);
     api
       .get<{ departments: DepartmentDto[] }>("/departments")
       .then((data) => {
@@ -2023,7 +2020,6 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         <div className="hidden w-80 shrink-0 border-l border-slate-200 bg-white lg:block">
           <ContextPanel
             detail={detail}
-            users={users}
             departments={departments}
             tags={tags}
             onChanged={loadDetail}

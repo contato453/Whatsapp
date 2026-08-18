@@ -254,7 +254,23 @@ departmentResourceScope(ids)                       // tags e quick replies: gera
 canWriteGeneralResource(ids)                       // item geral continua sendo só do admin
 canWriteInAllDepartments(ids, departmentIds)       // escrita exige TODOS, não um só
 groupScope(access)                     // consultas que partem do grupo (usa `is:` obrigatório)
+
+conversationAssigneeWhere(orgId, conversa)   // quem pode RECEBER esta conversa
+canAssignBeyondConversationReach(role)       // quem transfere para fora do alcance
 ```
+
+As duas últimas são o **avesso** de `conversationScope`: em vez de "quais conversas esta
+pessoa enxerga", "quais pessoas enxergam esta conversa". Elas decidem a ESCRITA do
+responsável, e não a leitura — nada de `loadConversationAccess` ou `conversationScope`
+mudou por causa delas. Candidato é quem tem o **número** da conversa **e**, quando ela está
+classificada, o **departamento dela** (o da conversa, nunca o de quem transfere: valesse o
+de quem move, uma pessoa de vários departamentos empurraria o atendimento para outra área
+sem passar por `transfer-department`, que é de supervisão). Conversa sem departamento só
+exige o número, inativo nunca é candidato e o admin entra sem vínculo nenhum, porque ele
+realmente enxerga tudo. Supervisor e admin podem transferir para fora do alcance — a tela
+confirma antes de gravar —, o atendente é recusado com `ForbiddenError` no
+`POST /conversations/:id/assign`, e `lib/default-assignee.ts` delega à mesma função para o
+responsável padrão não divergir do seletor.
 
 **Papel ≠ visibilidade.** Visibilidade responde "quais conversas"; permissão responde "quais
 ações" — e desde o menu de Permissões **a segunda não é mais tabela de papel: é o catálogo**.
@@ -380,6 +396,11 @@ POST   /conversations/:id/read            POST /conversations/:id/unread
         `conversation:read` para a sala pessoal — nunca para a audiência da
         conversa. Sem auditoria: leitura é estado pessoal de interface)
 POST   /conversations/:id/status
+GET    /conversations/:id/assignees
+       (candidatos a responsável desta conversa, por `conversationAssigneeWhere`;
+        para supervisor e admin vem também `others`, os ativos que NÃO a enxergam,
+        que a tela oferece com confirmação — a lista é conveniência, a recusa
+        de verdade está no assign)
 POST   /conversations/:id/assign          POST /conversations/:id/unassign
 POST   /conversations/:id/resolve         POST /conversations/:id/reopen
 GET    /conversations/:id/files
@@ -1014,6 +1035,20 @@ sempre juntos.
   coletivo tem filtro próprio (`FILTER_ALL_USERS`), nunca somado ao das órfãs. O
   relatório por atendente não muda: ele já ignorava conversa sem responsável, e a
   coletiva não é creditada a ninguém nem distribuída entre as pessoas.
+- **Transferir para quem não tem o NÚMERO faz a conversa sumir do radar de todos.** É a
+  falha silenciosa que `conversationAssigneeWhere` (`lib/access.ts`) existe para impedir:
+  a atribuição grava sem erro nenhum, a conversa sai da fila de quem estava livre e some
+  da tela de todo mundo — inclusive da de quem transferiu —, e a equipe só descobre quando
+  o cliente cobra a resposta. Por isso as duas condições valem JUNTAS: departamento **da
+  conversa** e número. Departamento sozinho parece bastar e não basta, porque a
+  visibilidade tem o número como condição absoluta. Consequências para qualquer mexida
+  aqui: (1) a lista do seletor sai da API (`GET /conversations/:id/assignees`), nunca de
+  filtro montado no componente — duas réguas saem de sincronia; (2) a rota **valida sempre**,
+  porque lista filtrada na tela não é controle de acesso; (3) supervisor e admin escapam da
+  regra, mas nunca em silêncio: a tela confirma nomeando quem não vai enxergar a conversa;
+  (4) conversa que mudou de departamento depois de atribuída **não** é desatribuída sozinha
+  — a regra vale para transferências novas, e tirar o atendimento de quem já está
+  conversando com o cliente seria pior que a inconsistência.
 - **Toda atribuição automática precisa respeitar o `@todos`.** São dois pontos, e os
   dois já checam: a ingestão (`message-ingest.ts`, junto do `archivedAt`) e o
   `POST /whatsapp-instances/:id/apply-default-assignee`. Sem isso o grupo coletivo

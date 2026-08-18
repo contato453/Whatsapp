@@ -611,7 +611,18 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     conversation: { whatsappInstanceId: string; departmentId: string | null },
     targetUserId: string,
   ) {
-    if (canAssignBeyondConversationReach(user.role)) return;
+    if (canAssignBeyondConversationReach(user.role)) {
+      // A supervisão escapa do alcance da conversa, mas não do básico: a
+      // pessoa continua tendo de existir, estar ativa e ser DESTA
+      // organização. Sem esta conferência a rota aceitaria o id de um
+      // usuário de outro tenant, que é o pior tipo de conversa órfã.
+      const existe = await deps.prisma.user.findFirst({
+        where: { id: targetUserId, organizationId: user.organizationId, status: "active" },
+        select: { id: true },
+      });
+      if (!existe) throw new ForbiddenError("Usuário indisponível para receber a conversa.");
+      return;
+    }
     const target = await deps.prisma.user.findFirst({
       where: {
         id: targetUserId,
