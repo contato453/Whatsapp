@@ -3,7 +3,8 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { hasRole } from "@azvchat/shared";
 import { authenticate, requireRole } from "../../lib/auth.js";
-import { AppError, NotFoundError } from "../../lib/errors.js";
+import { loadPermissions } from "../../lib/permissions.js";
+import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import { serializeUserDirectory, serializeUserWithAccess } from "../../lib/serialize.js";
 import { disconnectUser } from "../../realtime/socket.js";
 import type { AppDeps } from "../../types.js";
@@ -77,8 +78,24 @@ export async function userRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
    */
   app.get("/users", { preHandler: authenticate }, async (request) => {
     if (!hasRole(request.user.role, "admin")) {
+      /**
+       * Quem tem a chave `user.deactivate` precisa enxergar TAMBÉM os
+       * inativos — senão não teria como reativar ninguém, e todo mundo na
+       * lista apareceria como "Ativo".
+       *
+       * O que ele recebe continua sendo a agenda interna (nome, papel,
+       * status, foto): e-mail, último acesso e o mapa de números e
+       * departamentos seguem exclusivos do administrador. Poder desativar
+       * alguém não é motivo para ver o cadastro de todo mundo — a chave dá
+       * uma ação, não um recorte de dados.
+       */
+      const permissions = await loadPermissions(deps.prisma, request.user);
+      const podeDesativar = permissions.can("user.deactivate");
       const directory = await deps.prisma.user.findMany({
-        where: { organizationId: request.user.organizationId, status: "active" },
+        where: {
+          organizationId: request.user.organizationId,
+          ...(podeDesativar ? {} : { status: "active" }),
+        },
         orderBy: { name: "asc" },
       });
       return { users: directory.map(serializeUserDirectory) };
@@ -134,13 +151,46 @@ export async function userRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
     return reply.status(201).send({ user: serializeUserWithAccess(user) });
   });
 
-  app.patch("/users/:id", { preHandler: requireRole("admin") }, async (request) => {
+  /**
+   * Cadastro de usuário continua sendo do administrador, fixo no código:
+   * criar, renomear, trocar e-mail, mudar papel, redefinir senha e mexer no
+   * recorte de números e departamentos.
+   *
+   * A ÚNICA exceção é o campo `status`, que tem chave própria no catálogo
+   * (`user.deactivate`, padrão não/não). Ela existe porque desativar quem
+   * saiu do escritório é rotina de quem toca a operação no dia a dia, e
+   * segurar isso no administrador deixa um ex-funcionário lendo conversa de
+   * cliente até alguém com o cargo certo aparecer.
+   *
+   * A recusa é DE CAMPO, não da rota: sem a chave, ou mandando qualquer
+   * outro campo junto, quem não é administrador é recusado — e a chave nunca
+   * alcança um administrador, senão um supervisor desligaria a administração
+   * inteira até sobrar o último (o único que a trava do último admin barra).
+   */
+  app.patch("/users/:id", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = updateUserSchema.parse(request.body);
     const user = await deps.prisma.user.findFirst({
       where: { id, organizationId: request.user.organizationId },
     });
     if (!user) throw new NotFoundError("Usuário");
+
+    if (request.user.role !== "admin") {
+      const permissions = await loadPermissions(deps.prisma, request.user);
+      permissions.assert("user.deactivate");
+      // Só `status`, e ele obrigatoriamente presente: o corpo é o mesmo
+      // schema do cadastro completo, então sem esta conferência bastaria
+      // mandar `role: "admin"` junto para virar administrador.
+      const outrosCampos = Object.keys(body).filter((campo) => campo !== "status");
+      if (body.status === undefined || outrosCampos.length > 0) {
+        throw new ForbiddenError(
+          "Seu perfil só pode ativar e desativar usuários — o restante do cadastro é do administrador",
+        );
+      }
+      if (user.role === "admin") {
+        throw new ForbiddenError("Só um administrador pode desativar outro administrador");
+      }
+    }
 
     // Evita que o admin logado se tranque para fora do sistema.
     if (id === request.user.sub) {

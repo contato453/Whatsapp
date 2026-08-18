@@ -58,6 +58,13 @@ const NAV: Array<{
    * desligar a chave produziria um menu que só dá 403.
    */
   permission?: PermissionAction;
+  /**
+   * Telas ABAIXO deste caminho continuam exclusivas do administrador, mesmo
+   * que a lista esteja liberada por chave. É o caso de /users: quem tem
+   * `user.deactivate` abre a lista e desativa alguém, mas /users/new e
+   * /users/:id são o cadastro inteiro, que segue fixo em admin.
+   */
+  adminOnlySubRoutes?: boolean;
 }> = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, minRole: "agent" },
   // Os rótulos falam a língua da equipe; as rotas continuam /inbox e
@@ -71,7 +78,14 @@ const NAV: Array<{
     minRole: "supervisor",
     permission: "whatsapp_instance.manage",
   },
-  { href: "/users", label: "Usuários", icon: Users, minRole: "admin" },
+  {
+    href: "/users",
+    label: "Usuários",
+    icon: Users,
+    minRole: "admin",
+    permission: "user.deactivate",
+    adminOnlySubRoutes: true,
+  },
   {
     href: "/departments",
     label: "Departamentos",
@@ -116,7 +130,24 @@ function navAllowed(
   role: UserRole,
   can: (action: PermissionAction) => boolean,
 ): boolean {
+  // Admin passa em qualquer chave, então `can` já o cobre nos dois ramos.
   return item.permission ? can(item.permission) : hasRole(role, item.minRole);
+}
+
+/**
+ * O caminho atual está liberado? Igual ao menu, mais a exceção das telas
+ * filhas de cadastro: entrar em /users/:id pela URL não pode contornar o
+ * `requireRole("admin")` que a API aplica lá.
+ */
+function pathAllowed(
+  item: (typeof NAV)[number],
+  pathname: string,
+  role: UserRole,
+  can: (action: PermissionAction) => boolean,
+): boolean {
+  if (!navAllowed(item, role, can)) return false;
+  if (item.adminOnlySubRoutes && pathname !== item.href) return hasRole(role, "admin");
+  return true;
 }
 
 /**
@@ -385,7 +416,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const current = NAV.find(
     (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),
   );
-  const allowed = !current || navAllowed(current, user.role, can);
+  const allowed = !current || pathAllowed(current, pathname, user.role, can);
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50">

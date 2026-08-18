@@ -9,6 +9,7 @@ import { clearPermissionCache } from "../src/lib/permissions.js";
 import { conversationRoutes } from "../src/modules/conversations/routes.js";
 import { messageRoutes } from "../src/modules/messages/routes.js";
 import { permissionRoutes } from "../src/modules/permissions/routes.js";
+import { userRoutes } from "../src/modules/users/routes.js";
 import type { AppDeps } from "../src/types.js";
 
 /**
@@ -46,7 +47,12 @@ beforeEach(() => {
 });
 
 function fakeIo() {
-  return { to: () => ({ emit: () => undefined }) };
+  // `sockets.sockets` existe porque `disconnectUser` percorre as conexões
+  // abertas ao mudar papel, status ou recorte de acesso.
+  return {
+    to: () => ({ emit: () => undefined }),
+    sockets: { sockets: new Map() },
+  };
 }
 
 function conversa(overrides: Record<string, unknown> = {}) {
@@ -382,6 +388,193 @@ describe("PUT /permissions", () => {
     expect(response.statusCode).toBe(200);
     expect(gravado.permissionWrites).toHaveLength(1);
     expect(gravado.auditActions).toContain("permissions.updated");
+    await app.close();
+  });
+});
+
+/**
+ * Desativar usuário: a chave abre UM CAMPO, e não a tela de cadastro.
+ *
+ * É o par de chaves mais delicado do catálogo, porque a rota que atende o
+ * campo é a mesma que troca papel e redefine senha. Sem a conferência de
+ * campo, ligar "desativar usuário" para supervisor entregaria a ele o
+ * cadastro inteiro — inclusive `role: "admin"` para si mesmo.
+ */
+describe("user.deactivate abre o campo status, e só ele", () => {
+  const ALVO = "44444444-4444-4444-8444-444444444444";
+
+  function usersPrisma(
+    overrides: Array<[ConfigurableRole, PermissionAction, boolean]>,
+    alvo: { role: string; status: string } = { role: "agent", status: "active" },
+  ): PrismaClient {
+    const rows = overrides.map(([role, action, allowed]) => ({
+      role,
+      action,
+      allowed,
+      updatedAt: new Date("2026-08-18T12:00:00Z"),
+      updatedBy: null,
+    }));
+    const usuario = {
+      id: ALVO,
+      organizationId: "org-1",
+      name: "Fulano",
+      email: "fulano@example.com",
+      role: alvo.role,
+      status: alvo.status,
+      avatarUrl: null,
+      signMessages: false,
+      notificationSound: "sound_1",
+      notificationVolume: "medium",
+      lastLoginAt: null,
+      createdAt: new Date(),
+      whatsappAccess: [],
+      departmentAccess: [],
+    };
+    return {
+      rolePermission: { findMany: async () => rows },
+      user: {
+        findFirst: async () => usuario,
+        findMany: async () => [usuario],
+        update: async (args: Record<string, unknown>) => {
+          gravado.conversationUpdates.push(args);
+          return { ...usuario, ...(args.data as Record<string, unknown>) };
+        },
+        count: async () => 1,
+      },
+      userWhatsAppInstance: { deleteMany: async () => ({ count: 0 }) },
+      userDepartment: { deleteMany: async () => ({ count: 0 }) },
+      $queryRaw: async () => [],
+      $transaction: async (arg: unknown) =>
+        typeof arg === "function"
+          ? (arg as (tx: unknown) => Promise<unknown>)({
+              user: {
+                update: async (args: Record<string, unknown>) => {
+                  gravado.conversationUpdates.push(args);
+                  return { ...usuario, ...(args.data as Record<string, unknown>) };
+                },
+                count: async () => 1,
+              },
+              userWhatsAppInstance: { deleteMany: async () => ({ count: 0 }) },
+              userDepartment: { deleteMany: async () => ({ count: 0 }) },
+              $queryRaw: async () => [],
+            })
+          : Promise.all(arg as Promise<unknown>[]),
+    } as unknown as PrismaClient;
+  }
+
+  it("sem a chave, supervisor não desativa — o padrão é não/não", async () => {
+    const app = await buildApp(userRoutes, usersPrisma([]));
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/users/${ALVO}`,
+      payload: { status: "inactive" },
+      headers: { authorization: `Bearer ${tokenFor(app, "supervisor")}` },
+    });
+    expect(response.statusCode).toBe(403);
+    expect(gravado.conversationUpdates).toHaveLength(0);
+    await app.close();
+  });
+
+  it("com a chave, supervisor desativa", async () => {
+    const app = await buildApp(
+      userRoutes,
+      usersPrisma([["supervisor", "user.deactivate", true]]),
+    );
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/users/${ALVO}`,
+      payload: { status: "inactive" },
+      headers: { authorization: `Bearer ${tokenFor(app, "supervisor")}` },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(gravado.conversationUpdates).toHaveLength(1);
+    await app.close();
+  });
+
+  it("com a chave, NÃO vira administrador de carona no mesmo corpo", async () => {
+    const app = await buildApp(
+      userRoutes,
+      usersPrisma([["supervisor", "user.deactivate", true]]),
+    );
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/users/${ALVO}`,
+      payload: { status: "inactive", role: "admin" },
+      headers: { authorization: `Bearer ${tokenFor(app, "supervisor")}` },
+    });
+    expect(response.statusCode).toBe(403);
+    expect(gravado.conversationUpdates).toHaveLength(0);
+    await app.close();
+  });
+
+  it("com a chave, NÃO renomeia nem redefine senha de ninguém", async () => {
+    const app = await buildApp(
+      userRoutes,
+      usersPrisma([["supervisor", "user.deactivate", true]]),
+    );
+    for (const payload of [{ name: "Outro Nome" }, { password: "senha-nova-123" }]) {
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/users/${ALVO}`,
+        payload,
+        headers: { authorization: `Bearer ${tokenFor(app, "supervisor")}` },
+      });
+      expect(response.statusCode).toBe(403);
+    }
+    expect(gravado.conversationUpdates).toHaveLength(0);
+    await app.close();
+  });
+
+  it("com a chave, NÃO desativa um administrador", async () => {
+    // Sem esta trava, um supervisor desligaria a administração inteira até
+    // sobrar o último — que é o único que a trava do último admin barra.
+    const app = await buildApp(
+      userRoutes,
+      usersPrisma([["supervisor", "user.deactivate", true]], {
+        role: "admin",
+        status: "active",
+      }),
+    );
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/users/${ALVO}`,
+      payload: { status: "inactive" },
+      headers: { authorization: `Bearer ${tokenFor(app, "supervisor")}` },
+    });
+    expect(response.statusCode).toBe(403);
+    expect(gravado.conversationUpdates).toHaveLength(0);
+    await app.close();
+  });
+
+  it("administrador segue editando o cadastro inteiro, sem chave nenhuma", async () => {
+    const app = await buildApp(userRoutes, usersPrisma([]));
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/users/${ALVO}`,
+      payload: { name: "Nome Novo", status: "inactive" },
+      headers: { authorization: `Bearer ${tokenFor(app, "admin")}` },
+    });
+    expect(response.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("criar usuário continua fixo em admin: a chave não alcança o POST", async () => {
+    const app = await buildApp(
+      userRoutes,
+      usersPrisma([["supervisor", "user.deactivate", true]]),
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: "/users",
+      payload: {
+        name: "Novo",
+        email: "novo@example.com",
+        password: "senha-forte-123",
+        role: "agent",
+      },
+      headers: { authorization: `Bearer ${tokenFor(app, "supervisor")}` },
+    });
+    expect(response.statusCode).toBe(403);
     await app.close();
   });
 });
