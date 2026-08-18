@@ -149,7 +149,10 @@ snake_case e id `uuid`.
 - `Conversation` — `type` (`individual|group`), `title` (vem do WhatsApp, o sync sobrescreve)
   vs `customTitle` (definido pela equipe, o sync **nunca** toca), `status`
   (`open|waiting_client|waiting_internal|resolved`),
-  `assignedUserId`, `departmentId`, `unreadCount`, `lastMessageAt`, `lastMessagePreview`,
+  `assignedUserId`, `departmentId`, `lastMessageAt`, `lastMessagePreview`,
+  `unreadCount` (**APOSENTADA** — o não lido é por usuário; ver `ConversationRead`
+  logo abaixo. A coluna segue no banco com o dado histórico, sem nenhuma leitura nem
+  escrita no código; a remoção é migration futura),
   `archivedAt`/`archivedByUserId` (arquivamento: a data responde "está arquivada?",
   nulo = não; **ortogonal ao status** — não é um quinto status, e ao desarquivar a
   conversa volta com o status que tinha; `archivedByUserId` nulo = arquivada pelo
@@ -159,6 +162,16 @@ snake_case e id `uuid`.
   identificador da empresa no Azevedo-OS; ver a seção 15). Índice
   `(organizationId, archivedAt, lastMessageAt)` serve a lista da Inbox (não
   arquivadas por última mensagem).
+- `ConversationRead` — **leitura por usuário**: até onde CADA pessoa leu uma conversa.
+  Única por `(userId, conversationId)`, com `lastReadAt` (o instante da última mensagem
+  lida) e `lastReadMessageId` (referência, opcional). **Guarda a marca, e não um
+  contador por pessoa**: contador exigiria escrever uma linha por usuário a cada
+  mensagem recebida — num grupo que dez atendentes enxergam, dez escritas por mensagem.
+  Com a marca, escreve só quem lê, e o número de não lidas é **derivado** na consulta
+  (mensagens `inbound` vivas acima da marca, em conversa não arquivada). **Linha ausente
+  = nunca leu**, e nada é semeado: conversa que a pessoa nunca abriu aparece por ler
+  inteira, que é o estado seguro. Fonte única da conta:
+  `apps/api/src/lib/conversation-reads.ts`.
 - `Message` — `direction`, `type` (`text|image|audio|video|document|sticker|location|contact|poll|call|other`),
   `status` (`pending|sent|delivered|read|failed`), `content`, `mediaUrl`, `quotedMessageId`,
   `sentByUserId`, `deletedAt`/`deletedByUserId`, `editedAt`, `metadata` (Json, ex.: opções
@@ -322,12 +335,19 @@ GET    /conversations                     GET /conversations/:id
        (a lista EXCLUI arquivadas por padrão; `?archived=true` traz só elas —
         não existe "todas misturadas")
 POST   /conversations/:id/archive         POST /conversations/:id/unarchive
-       (papel mínimo agent, o mesmo de status/atribuição; arquivar zera o
-        unreadCount, audita e emite conversation:updated)
+       (papel mínimo agent, o mesmo de status/atribuição; audita e emite
+        conversation:updated — não há contador de conversa para zerar, a
+        arquivada simplesmente não conta não lidas para ninguém)
 PATCH  /conversations/:id                 PATCH /conversations/:id/reference
 GET    /conversations/:id/avatar          POST /conversations/:id/avatar/refresh
 GET    /group-participants/:id/avatar     PATCH /group-participants/:id
-POST   /conversations/:id/read            POST /conversations/:id/status
+POST   /conversations/:id/read            POST /conversations/:id/unread
+       (leitura POR USUÁRIO: `read` avança a marca de quem chamou até a última
+        mensagem e `unread` recua de propósito ("reservar para depois"). As duas
+        devolvem o contador já recalculado, valem só para quem chamou e emitem
+        `conversation:read` para a sala pessoal — nunca para a audiência da
+        conversa. Sem auditoria: leitura é estado pessoal de interface)
+POST   /conversations/:id/status
 POST   /conversations/:id/assign          POST /conversations/:id/unassign
 POST   /conversations/:id/resolve         POST /conversations/:id/reopen
 GET    /conversations/:id/files
@@ -384,8 +404,14 @@ Contratos em `packages/shared/src/realtime.ts` — **nomes de evento nunca são 
 sempre `RealtimeEvents.X`:
 
 `message:new`, `message:status`, `message:reaction`, `message:updated`, `call:incoming`,
-`conversation:updated`, `group:participants`, `note:new`, `instance:status`, `instance:qr`,
-`scheduled:pending`, `session:closing`, `session:closed`.
+`conversation:updated`, `conversation:read`, `group:participants`, `note:new`,
+`instance:status`, `instance:qr`, `scheduled:pending`, `session:closing`,
+`session:closed`.
+
+`conversation:read` (`{ conversationId, unreadCount }`) é o outro evento que **não** vai
+para uma audiência: ele sai para `user:<userId>`, a sala pessoal de quem leu, e existe
+para a segunda aba da mesma pessoa acompanhar. Mandá-lo para a sala da conversa
+apagaria o aviso de quem não leu — o defeito que a leitura por usuário conserta.
 
 `session:closing` e `session:closed` são os únicos eventos que vão para **um socket**, e
 não para uma audiência: quem decide é o horário de uso da pessoa, não o acesso à conversa.
@@ -399,6 +425,7 @@ cancelado, enviado pelo scheduler e marcado como `failed`. Retentativa **não** 
 
 Salas (`apps/api/src/realtime/socket.ts`):
 
+- `user:<userId>` — todas as abas de uma pessoa; só leitura de conversa usa esta sala;
 - `org:<organizationId>` — só admin;
 - `instance:<instanceId>` — eventos do número (QR, status), sem conteúdo de conversa;
 - `sup:<instanceId>:<departmentKey>` — supervisores;
@@ -505,6 +532,13 @@ nome técnico no código e neste documento.
 - `src/components/ui.tsx` — kit da casa: `Button`, `Input`, `Textarea`, `Field`, `Badge`,
   `Card`, `Avatar`, `Modal`, `Tooltip`, `Spinner`, `EmptyState`. **Reuse antes de criar
   componente novo.** `Tooltip` é só CSS (hover + `focus-within`), sem biblioteca.
+- **Não lidas no frontend** (`src/lib/unread.ts` + `components/inbox/use-unread-counts.ts`):
+  o contador é por usuário e **não vive no `ConversationDto`** — o mesmo DTO chega por
+  socket a todo mundo que enxerga a conversa. A tela guarda um mapa `id → contador`,
+  semeado pelo campo `unread` da resposta de `GET /conversations`, que sobe sozinho
+  quando chega `message:new` de entrada numa conversa que não é a aberta, e que só zera
+  pelo evento `conversation:read` (ou pela resposta do `POST .../read`). O hook fica
+  fora do `inbox-shell` de propósito: aquele arquivo já tem ~1300 linhas.
 - **Rascunho do composer** (`src/lib/drafts.ts`): o que está escrito e ainda não foi enviado
   é gravado no `localStorage` a cada tecla, por conversa, com a chave
   `zapdesk.draft.<userId>.<conversationId>`. Existe por causa do fim do horário de uso (a
@@ -891,10 +925,29 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   responsável padrão do departamento **não se aplica** à conversa marcada, em
   momento nenhum. Atribuir uma pessoa desliga a marcação (é a saída natural do
   coletivo), e a exclusão mútua também é garantida por constraint no banco.
-- **O não lido de uma conversa `@todos` é da conversa, não por pessoa**: quem abrir
-  zera para todos. É limitação conhecida do modelo atual (`Conversation.unreadCount`
-  é uma coluna só) e está registrada em comentário no código — resolver exigiria não
-  lidas por usuário, que é outra entrega.
+- **O não lido é POR USUÁRIO, e `Conversation.unreadCount` está aposentado.** Quem
+  abre uma conversa marca como lida só para si: supervisor e admin acompanham sem
+  apagar o aviso de quem atende, e numa conversa sem responsável (ou marcada
+  `@todos`) cada pessoa do departamento tem o próprio contador. O que se guarda é a
+  MARCA (`ConversationRead.lastReadAt`, "até onde eu li"), nunca um contador por
+  pessoa — contador obrigaria a escrever N linhas a cada mensagem recebida. Regras
+  que valem para qualquer mexida aqui: (1) **a marca nunca retrocede sozinha** —
+  rolar para cima e reler mensagem antiga não faz a conversa voltar a ter não lidas;
+  recuar é a ação explícita "marcar como não lida", que volta UMA e vale só para
+  quem pediu; (2) **só mensagem recebida conta** — enviada pela equipe, nota interna
+  (que nem é `Message`) e apagada ficam de fora, e conversa arquivada não conta para
+  ninguém; (3) a contagem sai em **uma consulta para a página inteira** e **para no
+  centésimo**, porque o badge mostra "99+" e saber que são 4.000 não muda um pixel;
+  (4) o número **nunca entra no DTO da conversa** — aquele payload é publicado para
+  a audiência inteira, e o contador viaja na resposta da lista (mapa `unread`) e no
+  evento `conversation:read`, dirigido a uma pessoa. A coluna antiga
+  `Conversation.unreadCount` continua no banco com o dado histórico, sem leitura nem
+  escrita: não volte a usá-la.
+- **A leitura NÃO envia read receipt ao cliente.** O AZVCHAT nunca marcou visto azul
+  para fora (o Baileys sobe com `markOnlineOnConnect: false` e nada chama
+  `readMessages`), e agora há um motivo a mais para continuar assim: com leitura por
+  usuário, um supervisor espiando faria o cliente ver o visto azul de um atendimento
+  que ninguém começou.
 - Ingestão é idempotente por `(conversationId, externalMessageId)` — não crie caminho
   paralelo de inserção de mensagem.
 - **Menção NÃO é formatação de texto.** Escrever "@Fulano" (ou até o número) na mensagem
@@ -935,7 +988,7 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
 - **Conversa arquivada NÃO desarquiva com mensagem nova** — de propósito, e diferente
   do WhatsApp do celular: o número de backup recebe as mesmas conversas o dia inteiro
   e desarquivaria tudo sozinho. A mensagem é gravada (histórico completo, acha pela
-  busca), mas não incrementa `unreadCount`, não reabre status e a conversa não volta
+  busca), mas não conta como não lida para ninguém, não reabre status e não volta
   para a lista de quem está com a Inbox aberta (o frontend filtra pelo `archivedAt`
   do payload). Mensagem agendada em conversa arquivada ainda é enviada — compromisso
   com o cliente — e também não desarquiva.
@@ -959,7 +1012,9 @@ envio de texto, imagem, áudio, vídeo, documento, figurinha, localização, con
 responder citando; encaminhar; apagar; editar mensagem enviada pelo composer (texto e
 legenda de mídia, dentro da janela de 15 minutos do WhatsApp); gravação de áudio (ffmpeg, com fallback);
 enquetes; mensagens agendadas com retentativa; notas internas; etiquetas; atribuição com
-histórico completo; quatro status de atendimento; busca na conversa e busca global;
+histórico completo; quatro status de atendimento; leitura por usuário (cada pessoa com
+o próprio contador de não lidas, com "marcar como não lida" para reservar a conversa
+para depois); busca na conversa e busca global;
 marcação de participantes com `@` em grupo, com `@todos` e nome exibido no lugar do
 número (enviadas e recebidas);
 respostas rápidas com `/`, inclusive com mídia anexada (imagem, áudio ou vídeo) que sai

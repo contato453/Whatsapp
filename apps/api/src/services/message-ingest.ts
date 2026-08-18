@@ -177,9 +177,10 @@ export class MessageIngestService {
      * propósito, e diferente do WhatsApp do celular: o chip de backup recebe
      * as mesmas conversas o tempo todo, e desarquivar sozinho encheria a
      * Inbox de novo todo dia. A mensagem é gravada normalmente (o histórico
-     * fica completo, legível pela busca), mas a conversa não incrementa o
-     * não lido nem muda de status — o status congela junto com o
-     * arquivamento e volta a reagir quando alguém desarquivar.
+     * fica completo, legível pela busca), mas a conversa não conta como não
+     * lida para ninguém (a contagem por usuário descarta arquivada) nem muda
+     * de status — o status congela junto com o arquivamento e volta a reagir
+     * quando alguém desarquivar.
      */
     const isArchived = conversation.archivedAt != null;
     await this.prisma.conversation.update({
@@ -189,7 +190,11 @@ export class MessageIngestService {
         lastMessagePreview: preview,
         ...(isInbound && !isArchived
           ? {
-              unreadCount: { increment: 1 },
+              // Não há contador para incrementar: o não lido é POR USUÁRIO e
+              // sai derivado da marca de leitura de cada um
+              // (`lib/conversation-reads.ts`). Incrementar uma coluna da
+              // conversa era o que fazia a leitura de um apagar o aviso de
+              // todos os outros.
               // Mensagem do cliente devolve a conversa para a fila: concluída
               // reabre, e "AG. Cliente" deixa de fazer sentido — a espera
               // acabou no momento em que ele respondeu.

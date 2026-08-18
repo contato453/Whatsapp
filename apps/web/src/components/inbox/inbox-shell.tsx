@@ -9,6 +9,7 @@ import {
   History,
   Inbox as InboxIcon,
   Info,
+  Mail,
   Paperclip,
   Pencil,
   Search,
@@ -34,7 +35,13 @@ import {
   type DraftMention,
   type ScheduledPendingPayload,
 } from "@azvchat/shared";
-import { api, conversationMediaApi, messagesApi, quickRepliesApi } from "@/lib/api";
+import {
+  api,
+  conversationMediaApi,
+  conversationReadApi,
+  messagesApi,
+  quickRepliesApi,
+} from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { useAuth } from "@/lib/auth-context";
 import { pruneDrafts, readDraft, saveDraft, type Draft, type DraftMode } from "@/lib/drafts";
@@ -63,6 +70,7 @@ import { Avatar, Button, EmptyState, Input, Modal, Spinner, Textarea } from "@/c
 import { appliesToConversation } from "@/components/department-picker";
 import { ArchivedBanner } from "./archived-banner";
 import { ConversationListItem } from "./conversation-list";
+import { useUnreadCounts } from "./use-unread-counts";
 import { FilterBar } from "./filter-bar";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
 import { MentionPicker, mentionOptions, type MentionOption } from "./mention-picker";
@@ -150,6 +158,19 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const { user: me } = useAuth();
 
   const [conversations, setConversations] = useState<ConversationDto[] | null>(null);
+  /**
+   * Não lidas DESTA pessoa, por conversa. Vem em separado do DTO da conversa
+   * de propósito: aquele payload é publicado para todo mundo que enxerga a
+   * conversa, e um contador ali seria o mesmo número para o supervisor e para
+   * quem atende — o defeito que a leitura por usuário conserta.
+   */
+  const {
+    counts: unreadCounts,
+    countsRef: unreadCountsRef,
+    replaceAll: replaceUnreadCounts,
+    bump: bumpUnreadCount,
+    set: setUnreadCount,
+  } = useUnreadCounts();
   /**
    * Filtros da lista, num objeto só, reidratados do navegador já na
    * montagem. Este componente vive no layout da rota (`inbox/layout.tsx`)
@@ -376,10 +397,16 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     if (filters.search.trim().length >= 2) params.set("q", filters.search.trim());
     params.set("limit", "80");
     api
-      .get<{ conversations: ConversationDto[] }>(`/conversations?${params.toString()}`)
-      .then((data) => setConversations(data.conversations))
+      .get<{ conversations: ConversationDto[]; unread: Record<string, number> }>(
+        `/conversations?${params.toString()}`,
+      )
+      .then((data) => {
+        setConversations(data.conversations);
+        // O mapa vem calculado para a página inteira, numa consulta só.
+        replaceUnreadCounts(data.unread ?? {});
+      })
       .catch(() => undefined);
-  }, [filters]);
+  }, [filters, replaceUnreadCounts]);
 
   useEffect(() => {
     const timer = setTimeout(loadConversations, filters.search ? 300 : 0);
@@ -435,8 +462,14 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         setHasMore(data.hasMore);
       })
       .catch(() => setMessages([]));
-    void api.post(`/conversations/${conversationId}/read`).catch(() => undefined);
-  }, [conversationId, loadDetail, me]);
+    // Abrir marca como lida SÓ para quem abriu — o gatilho é o mesmo de
+    // sempre, o que mudou é o alcance. A resposta traz o contador já
+    // recalculado; as outras abas desta pessoa recebem pelo socket.
+    void conversationReadApi
+      .read(conversationId)
+      .then((data) => setUnreadCount(conversationId, data.unreadCount))
+      .catch(() => undefined);
+  }, [conversationId, loadDetail, me, setUnreadCount]);
 
   // Busca dentro da conversa (com atraso para não consultar a cada tecla)
   useEffect(() => {
@@ -506,18 +539,36 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         // O tempo real respeita o filtro ativo: conversa fora do recorte não
         // é forçada para dentro da lista, e a que deixou de casar sai — mas
         // a aberta continua aberta no chat, filtro nunca fecha conversa.
-        if (!conversationMatchesFilters(payload.conversation, filters, meId)) {
+        const count =
+          (unreadCountsRef.current[payload.conversation.id] ?? 0) +
+          (payload.message.direction === "inbound" &&
+          payload.message.conversationId !== conversationId
+            ? 1
+            : 0);
+        if (!conversationMatchesFilters(payload.conversation, filters, meId, count)) {
           return rest.length === current.length ? current : rest;
         }
         return [payload.conversation, ...rest];
       });
+      // Contador de cada um sobe sozinho na aba de cada um. A conversa
+      // ABERTA não sobe: ela é marcada como lida logo abaixo, exatamente
+      // como já acontecia antes desta mudança.
+      if (
+        payload.message.direction === "inbound" &&
+        payload.message.conversationId !== conversationId
+      ) {
+        bumpUnreadCount(payload.message.conversationId);
+      }
       if (payload.message.conversationId === conversationId) {
         setMessages((current) => {
           if (!current) return current;
           if (current.some((message) => message.id === payload.message.id)) return current;
           return [...current, payload.message];
         });
-        void api.post(`/conversations/${conversationId}/read`).catch(() => undefined);
+        void conversationReadApi
+          .read(conversationId)
+          .then((data) => setUnreadCount(conversationId, data.unreadCount))
+          .catch(() => undefined);
       }
     };
     const onConversationUpdated = (payload: ConversationDto) => {
@@ -527,7 +578,14 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         // Atribuição, status, departamento ou etiqueta mudou e a linha
         // deixou de casar com o filtro ativo: sai da lista sem recarregar
         // tudo. A conversa aberta no chat não é fechada por isso.
-        if (!conversationMatchesFilters(payload, filters, meId)) {
+        if (
+          !conversationMatchesFilters(
+            payload,
+            filters,
+            meId,
+            unreadCountsRef.current[payload.id] ?? 0,
+          )
+        ) {
           return current.filter((conversation) => conversation.id !== payload.id);
         }
         return current.map((conversation) => (conversation.id === payload.id ? payload : conversation));
@@ -635,7 +693,16 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     // `filters`/`meId` entram nas dependências porque os handlers casam a
     // conversa com o filtro ativo — reassinar os listeners é barato e a
     // lista de dependências continua honesta.
-  }, [socket, conversationId, loadDetail, filters, meId]);
+  }, [
+    socket,
+    conversationId,
+    loadDetail,
+    filters,
+    meId,
+    unreadCountsRef,
+    bumpUnreadCount,
+    setUnreadCount,
+  ]);
 
   /**
    * Toda escrita no composer passa por aqui, e grava na hora.
@@ -1251,6 +1318,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
               <ConversationListItem
                 key={entry.id}
                 conversation={entry}
+                unreadCount={unreadCounts[entry.id] ?? 0}
                 active={entry.id === conversationId}
                 onClick={() => router.push(`/inbox/${entry.id}`)}
               />
@@ -1345,6 +1413,22 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   }}
                 >
                   <Search className="h-4 w-4" />
+                </Button>
+                {/* Reservar a conversa para depois: recua a marca de leitura
+                    DESTA pessoa e fecha o chat. Ninguém mais vê o aviso
+                    voltar, e sair da conversa evita que a leitura volte a
+                    avançar na próxima mensagem que chegar aqui. */}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  title="Marcar como não lida"
+                  onClick={async () => {
+                    const data = await conversationReadApi.unread(conversation.id);
+                    setUnreadCount(conversation.id, data.unreadCount);
+                    router.push("/inbox");
+                  }}
+                >
+                  <Mail className="h-4 w-4" />
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setShowPanel((value) => !value)}>
                   <Info className="h-4 w-4" />

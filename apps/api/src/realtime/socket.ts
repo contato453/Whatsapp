@@ -80,6 +80,11 @@ export function createRealtime(
     const user = socket.data.user as AuthTokenPayload;
     const access = socket.data.access as RealtimeAccess;
 
+    // Sala pessoal: leitura de conversa é estado de uma pessoa e vai só para
+    // as abas dela. Existe para a segunda aba acompanhar o que a primeira
+    // leu — nunca para avisar a audiência da conversa.
+    void socket.join(userRoom(user.sub));
+
     if (!access.instanceIds || !access.departmentIds) {
       // admin: organização inteira
       void socket.join(orgRoom(user.organizationId));
@@ -159,6 +164,11 @@ export function grantInstanceAccess(io: Server, userId: string, instanceId: stri
 
 export function orgRoom(organizationId: string): string {
   return `org:${organizationId}`;
+}
+
+/** Todas as abas de uma pessoa. Só leitura de conversa usa esta sala. */
+export function userRoom(userId: string): string {
+  return `user:${userId}`;
 }
 
 export function instanceRoom(instanceId: string): string {

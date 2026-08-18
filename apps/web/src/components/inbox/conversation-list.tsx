@@ -10,16 +10,24 @@ import {
   CONVERSATION_STATUS_LABELS,
 } from "@azvchat/shared";
 import { cn, formatDateTime, formatTime } from "@/lib/utils";
+import { formatUnreadBadge } from "@/lib/unread";
 import type { ConversationDto } from "@/lib/types";
 import { Badge } from "@/components/ui";
 import { ConversationAvatar } from "./conversation-avatar";
 
 export function ConversationListItem({
   conversation,
+  unreadCount,
   active,
   onClick,
 }: {
   conversation: ConversationDto;
+  /**
+   * Não lidas DESTA pessoa. Vem de fora porque o contador é por usuário e
+   * não viaja no DTO da conversa — que é publicado para todo mundo que
+   * enxerga a conversa.
+   */
+  unreadCount: number;
   active: boolean;
   onClick: () => void;
 }) {
@@ -60,9 +68,9 @@ export function ConversationListItem({
             <p className="truncate text-xs text-slate-500">
               {conversation.lastMessagePreview ?? "Sem mensagens"}
             </p>
-            {conversation.unreadCount > 0 && (
+            {unreadCount > 0 && (
               <span className="flex h-4.5 min-w-[18px] shrink-0 items-center justify-center rounded-full bg-brand-550 px-1 text-[10px] font-bold text-white">
-                {conversation.unreadCount > 99 ? "99+" : conversation.unreadCount}
+                {formatUnreadBadge(unreadCount)}
               </span>
             )}
           </div>

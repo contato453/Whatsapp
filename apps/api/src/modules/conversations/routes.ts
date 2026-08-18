@@ -31,6 +31,14 @@ import {
   clearAssignmentData,
   unassignedConversationWhere,
 } from "../../lib/conversation-assignment.js";
+import {
+  fullyReadConversationIds,
+  loadUnreadCount,
+  loadUnreadCounts,
+  markConversationRead,
+  markConversationUnread,
+  unreadConversationWhere,
+} from "../../lib/conversation-reads.js";
 import { canApplyToConversation } from "../../lib/department-resource.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import {
@@ -45,7 +53,7 @@ import {
   emitConversationUpdated as publishConversationUpdated,
 } from "../../lib/conversation-events.js";
 import { resolveContacts, type SenderInfo } from "../../lib/sender-directory.js";
-import { conversationAudience } from "../../realtime/socket.js";
+import { conversationAudience, userRoom } from "../../realtime/socket.js";
 import type { AppDeps } from "../../types.js";
 
 const listQuerySchema = z.object({
@@ -102,7 +110,6 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       ...(query.type ? { type: query.type } : {}),
       ...(query.departmentId ? { departmentId: query.departmentId } : {}),
       ...(query.instanceId ? { whatsappInstanceId: query.instanceId } : {}),
-      ...(query.unread ? { unreadCount: { gt: 0 } } : {}),
       // Arquivamento é um filtro POR CIMA do escopo de acesso, nunca no
       // lugar dele: `conversationScope` continua valendo inteiro acima.
       archivedAt: query.archived ? { not: null } : null,
@@ -118,6 +125,14 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
           }
         : {}),
     };
+    if (query.unread) {
+      // "Não lidas" passou a ser pergunta pessoal: o que ESTE usuário ainda
+      // não leu. Vai por cima do escopo de acesso, nunca no lugar dele.
+      Object.assign(
+        where,
+        unreadConversationWhere(await fullyReadConversationIds(deps.prisma, request.user.sub)),
+      );
+    }
     if (query.assigned === "me") {
       where.assignedUserId = request.user.sub;
     } else if (query.assigned === FILTER_NONE) {
@@ -140,7 +155,20 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       }),
       deps.prisma.conversation.count({ where }),
     ]);
-    return { conversations: conversations.map(serializeConversation), total };
+    // O contador vai num mapa à parte, e não dentro do DTO: o mesmo DTO é
+    // publicado por socket para a audiência inteira da conversa, e um número
+    // pessoal ali vazaria de uma pessoa para a outra. Uma consulta só para a
+    // página inteira — nunca uma por linha.
+    const unread = await loadUnreadCounts(
+      deps.prisma,
+      request.user.sub,
+      conversations.map((conversation) => conversation.id),
+    );
+    return {
+      conversations: conversations.map(serializeConversation),
+      total,
+      unread: Object.fromEntries(unread),
+    };
   });
 
   app.get("/conversations/:id", { preHandler: authenticate }, async (request) => {
@@ -362,12 +390,59 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     return { updated };
   });
 
+  /**
+   * Avisa as outras abas DESTA pessoa que a leitura mudou. Vai para a sala
+   * pessoal, e não para a audiência da conversa: mandar leitura para a
+   * audiência zeraria o aviso de quem não leu — o defeito que esta entrega
+   * conserta. Por isso também não há `conversation:updated` aqui: o DTO da
+   * conversa não mudou em nada para os outros.
+   */
+  async function emitConversationRead(
+    userId: string,
+    conversationId: string,
+    unreadCount: number,
+  ): Promise<void> {
+    deps.io.to(userRoom(userId)).emit(RealtimeEvents.ConversationRead, {
+      conversationId,
+      unreadCount,
+    });
+  }
+
+  /**
+   * Marca a conversa como lida SÓ PARA QUEM ABRIU. A marca avança até a
+   * última mensagem e nunca retrocede sozinha — rolar para cima e reler
+   * mensagens antigas não faz a conversa voltar a ter não lidas.
+   */
   app.post("/conversations/:id/read", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     await findConversationOr404(id, request.user);
-    await deps.prisma.conversation.update({ where: { id }, data: { unreadCount: 0 } });
-    await emitConversationUpdated(id, request.user.organizationId);
-    return { ok: true };
+    await markConversationRead(deps.prisma, {
+      organizationId: request.user.organizationId,
+      conversationId: id,
+      userId: request.user.sub,
+    });
+    const unreadCount = await loadUnreadCount(deps.prisma, request.user.sub, id);
+    await emitConversationRead(request.user.sub, id, unreadCount);
+    return { ok: true, unreadCount };
+  });
+
+  /**
+   * "Marcar como não lida": recua a marca de propósito, para a pessoa
+   * reservar a conversa para depois. Vale só para ela — ninguém mais vê o
+   * aviso voltar. Sem auditoria: leitura é estado pessoal de interface, e
+   * registrar cada abertura de conversa geraria volume sem valor.
+   */
+  app.post("/conversations/:id/unread", { preHandler: authenticate }, async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    await findConversationOr404(id, request.user);
+    await markConversationUnread(deps.prisma, {
+      organizationId: request.user.organizationId,
+      conversationId: id,
+      userId: request.user.sub,
+    });
+    const unreadCount = await loadUnreadCount(deps.prisma, request.user.sub, id);
+    await emitConversationRead(request.user.sub, id, unreadCount);
+    return { ok: true, unreadCount };
   });
 
   // ---------------- Atribuição de atendimento ----------------
@@ -523,11 +598,9 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
    * departamento, "todos" são todos os que enxergam aquele número — que é
    * exatamente o alcance que a conversa órfã já tinha.
    *
-   * **Limitação conhecida e aceita:** o não lido é da conversa, e não por
-   * pessoa (`Conversation.unreadCount` é uma coluna só). Numa conversa
-   * coletiva, quem abrir primeiro zera o badge para todo mundo. Resolver isso
-   * exigiria não lidas por usuário — outra entrega, e que mexeria em toda a
-   * Inbox; aqui fica registrado para ninguém tratar como bug novo.
+   * O não lido da conversa coletiva é de cada pessoa, como em qualquer
+   * outra: quem abrir não apaga o aviso dos colegas (ver
+   * `lib/conversation-reads.ts`).
    */
   app.post("/conversations/:id/assign-all", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
@@ -615,9 +688,10 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       data: {
         archivedAt: new Date(),
         archivedByUserId: request.user.sub,
-        // Arquivada não deve pesar em contador nenhum — inclusive o badge
-        // de não lidas da linha, que voltaria junto no desarquivamento.
-        unreadCount: 0,
+        // Não lidas não são mais zeradas aqui: elas são por usuário e a
+        // conversa arquivada já não conta para ninguém (a contagem descarta
+        // arquivada). Zerar a marca de cada pessoa, além de caro, faria o
+        // desarquivamento voltar sem aviso nenhum.
       },
     });
     deps.audit.record({

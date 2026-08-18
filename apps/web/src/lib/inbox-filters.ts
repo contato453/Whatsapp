@@ -165,6 +165,12 @@ export function conversationMatchesFilters(
   conversation: ConversationDto,
   filters: InboxFilters,
   meId: string | null,
+  /**
+   * Não lidas DESTA pessoa. Chega como parâmetro porque o contador é por
+   * usuário e não vive no DTO: o mesmo DTO vai por socket para todo mundo
+   * que enxerga a conversa.
+   */
+  unreadCount = 0,
 ): boolean {
   // Arquivamento primeiro, e dos dois lados: a visão padrão só tem não
   // arquivadas e a "Arquivadas", só arquivadas — nunca misturadas. Sem
@@ -192,7 +198,7 @@ export function conversationMatchesFilters(
       if (conversation.type !== "individual") return false;
       break;
     case "unread":
-      if (conversation.unreadCount === 0) return false;
+      if (unreadCount === 0) return false;
       break;
     case "open":
     case "waiting_client":
