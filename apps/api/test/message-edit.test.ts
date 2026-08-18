@@ -151,7 +151,10 @@ function token(app: FastifyInstance): string {
   return app.jwt.sign({
     sub: "user-1",
     organizationId: "org-1",
-    role: "agent",
+    // Editar mensagem enviada é chave do catálogo, padrão não/sim: o token
+    // dos casos abaixo precisa ser de quem pode, senão todos param no 403 e
+    // a regra do WhatsApp (janela e tipo) deixaria de ser exercitada.
+    role: "supervisor",
     name: "Fulano de Tal",
     email: "fulano@example.com",
   });

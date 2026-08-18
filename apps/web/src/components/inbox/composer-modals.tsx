@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { CalendarClock, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import { formatDateTime } from "@/lib/utils";
 import type { ScheduledMessageDto } from "@/lib/types";
 import { Button, Field, Input, Modal, Textarea } from "@/components/ui";
@@ -26,6 +27,7 @@ export function ScheduleModal({
   conversationId: string;
   initialContent?: string;
 }) {
+  const { user: me, can } = useAuth();
   const [content, setContent] = useState("");
   const [when, setWhen] = useState(defaultScheduleValue());
   const [items, setItems] = useState<ScheduledMessageDto[]>([]);
@@ -123,7 +125,11 @@ export function ScheduleModal({
                       {item.error ? ` · ${item.error.slice(0, 60)}` : ""}
                     </p>
                   </div>
-                  {item.status === "pending" && (
+                  {/* Cancelar o PRÓPRIO agendamento nunca depende de chave;
+                      desfazer o compromisso que outra pessoa assumiu com o
+                      cliente é que é configurável. Mesma régua da API. */}
+                  {item.status === "pending" &&
+                    (item.createdBy?.id === me?.id || can("scheduled_message.cancel_other")) && (
                     <button
                       onClick={() => void cancel(item.id)}
                       className="rounded p-1 text-slate-300 hover:text-red-600"

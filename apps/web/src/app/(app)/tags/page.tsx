@@ -21,7 +21,7 @@ const EMPTY_FORM = {
 };
 
 export default function TagsPage() {
-  const { user: me } = useAuth();
+  const { user: me, can } = useAuth();
   const departments = useMyDepartments();
   const [tags, setTags] = useState<TagDto[] | null>(null);
   const [editing, setEditing] = useState<TagDto | "new" | null>(null);
@@ -100,7 +100,7 @@ export default function TagsPage() {
     }
   }
 
-  const canCreate = isAdmin || departments.length > 0;
+  const canCreate = can("tag.manage") && (isAdmin || departments.length > 0);
   const invalidTarget = !form.isGeneral && form.departmentIds.length === 0;
 
   return (
@@ -139,20 +139,27 @@ export default function TagsPage() {
               </div>
               {canManageScopedItem(tag, !!isAdmin, departments) && (
                 <div className="flex shrink-0 gap-1">
-                  <button
-                    onClick={() => openEdit(tag)}
-                    className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-                    title="Editar"
-                  >
-                    <Pencil className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={() => void remove(tag)}
-                    className="rounded-lg p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-600"
-                    title="Excluir"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                  {/* Editar e excluir são chaves separadas no catálogo:
+                      excluir tira a etiqueta de todas as conversas em que ela
+                      estiver, e não se desfaz com um clique. */}
+                  {can("tag.manage") && (
+                    <button
+                      onClick={() => openEdit(tag)}
+                      className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                      title="Editar"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                  )}
+                  {can("tag.delete") && (
+                    <button
+                      onClick={() => void remove(tag)}
+                      className="rounded-lg p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-600"
+                      title="Excluir"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
                 </div>
               )}
             </div>

@@ -150,8 +150,10 @@ describe("catálogo bem formado", () => {
  * escritório desligaria a chave, veria o botão sumir e continuaria com a
  * rota aberta, sem nada vermelho em lugar nenhum.
  */
+const modulesDirForRead = join(import.meta.dirname, "../src/modules");
+
 describe("varredura das rotas", () => {
-  const modulesDir = join(import.meta.dirname, "../src/modules");
+  const modulesDir = modulesDirForRead;
   const arquivos = readdirSync(modulesDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => join(modulesDir, entry.name, "routes.ts"));
@@ -196,6 +198,102 @@ describe("varredura das rotas", () => {
       );
       expect(code, `${file}: hasRole com papel configurável no handler`).not.toMatch(
         /hasRole\([^)]*"(agent|supervisor)"\)/,
+      );
+    }
+  });
+});
+
+/**
+ * A POLÍTICA PEDIDA PELO ESCRITÓRIO.
+ *
+ * Estes casos fixam os padrões de fábrica de cada chave. Não é redundância
+ * com o teste de "padrão do catálogo" acima: aquele confere que o motor LÊ o
+ * padrão; este confere QUAL é o padrão. Mudança silenciosa de padrão altera
+ * o que a equipe inteira pode fazer no próximo deploy, sem ninguém abrir a
+ * tela de Permissões.
+ */
+describe("padrões de fábrica (Usuário / Supervisor)", () => {
+  const esperado: Array<[PermissionAction, boolean, boolean]> = [
+    // Atendimento
+    ["message.delete_sent", false, true],
+    ["message.edit_sent", false, true],
+    ["scheduled_message.cancel_other", false, true],
+    ["conversation.transfer_user", true, true],
+    ["conversation.unassign", true, true],
+    ["conversation.change_department", false, true],
+    ["conversation.assign_all", true, true],
+    ["conversation.archive", false, true],
+    ["note.delete_other", false, true],
+    ["conversation.rename", true, true],
+    ["group_participant.rename", true, true],
+    ["azevedo_os.link", true, true],
+    ["azevedo_os.relink", false, true],
+    // Cadastros
+    ["tag.manage", false, true],
+    ["tag.delete", false, true],
+    ["quick_reply.manage", true, true],
+    ["quick_reply.create_shared", false, true],
+    ["department.manage", false, true],
+    ["whatsapp_instance.manage", false, true],
+    ["whatsapp_instance.connection", false, true],
+    ["whatsapp_instance.backup", false, true],
+    // Visão e relatórios
+    ["reports.view", false, true],
+    ["dashboard.view_team", false, true],
+    ["audit.view", false, true],
+    ["attendance_settings.manage", false, true],
+  ];
+
+  it.each(esperado)("%s → Usuário %s, Supervisor %s", (action, agent, supervisor) => {
+    expect(defaultPermission(action, "agent")).toBe(agent);
+    expect(defaultPermission(action, "supervisor")).toBe(supervisor);
+  });
+
+  it("o catálogo não tem ação além das declaradas aqui", () => {
+    expect([...PERMISSION_ACTION_KEYS].sort()).toEqual(esperado.map(([key]) => key).sort());
+  });
+});
+
+/**
+ * NÃO EXISTE CAMINHO PARA TRANCAR O ATENDENTE FORA DO PRÓPRIO TRABALHO.
+ *
+ * Com TODAS as chaves desligadas, a pessoa ainda precisa conseguir ler a
+ * conversa, enviar mensagem, mudar status e mexer na própria nota. Se um dia
+ * alguém criar chave para uma dessas quatro coisas, é aqui que aparece —
+ * antes de um clique na tela de Permissões deixar a equipe sem trabalhar.
+ */
+describe("o atendente nunca fica trancado fora do próprio trabalho", () => {
+  const SEM_CHAVE = ["ler", "read", "message.send", "conversation.read", "note.create"];
+
+  it("ler e enviar mensagem não são chaves do catálogo", () => {
+    for (const proibida of SEM_CHAVE) {
+      expect(PERMISSION_ACTION_KEYS).not.toContain(proibida);
+    }
+  });
+
+  it("mudar status e escrever nota própria também não são", () => {
+    expect(PERMISSION_ACTION_KEYS).not.toContain("conversation.status");
+    expect(PERMISSION_ACTION_KEYS).not.toContain("note.create");
+    // "note.delete_other" existe, mas fala de nota DE TERCEIRO: a própria
+    // cada um sempre edita, e isso é código, não chave.
+    expect(PERMISSION_ACTION_KEYS).toContain("note.delete_other");
+  });
+
+  it("as rotas de ler e enviar não passam por requirePermission", () => {
+    const conversas = readFileSync(join(modulesDirForRead, "conversations/routes.ts"), "utf8");
+    const mensagens = readFileSync(join(modulesDirForRead, "messages/routes.ts"), "utf8");
+    for (const [rota, code] of [
+      ['app.get("/conversations"', conversas],
+      ['app.get("/conversations/:id"', conversas],
+      ['app.post("/conversations/:id/status"', conversas],
+      ['app.post("/conversations/:id/read"', conversas],
+      ['app.post("/conversations/:id/notes"', conversas],
+      ['app.get("/conversations/:id/messages"', mensagens],
+      ['app.post("/conversations/:id/messages"', mensagens],
+    ] as const) {
+      const trecho = code.slice(code.indexOf(rota), code.indexOf(rota) + 160);
+      expect(trecho, `${rota} deveria seguir com authenticate puro`).toContain(
+        "preHandler: authenticate",
       );
     }
   });

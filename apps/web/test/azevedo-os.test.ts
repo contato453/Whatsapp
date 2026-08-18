@@ -172,8 +172,11 @@ describe("mensagens de falha do card", () => {
  */
 describe("botões de vínculo na tela", () => {
   it("vincular e trocar são chaves separadas, com padrões diferentes", () => {
-    expect(defaultPermission("azevedo_os.link", "agent")).toBe(false);
+    // Preencher conversa VAZIA é rotina de quem atende: padrão sim/sim.
+    expect(defaultPermission("azevedo_os.link", "agent")).toBe(true);
     expect(defaultPermission("azevedo_os.link", "supervisor")).toBe(true);
+    // Trocar vínculo já feito por outra pessoa é o que anexa a conversa ao
+    // cliente errado: padrão não/sim.
     expect(defaultPermission("azevedo_os.relink", "agent")).toBe(false);
     expect(defaultPermission("azevedo_os.relink", "supervisor")).toBe(true);
   });

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Archive, ArchiveRestore } from "lucide-react";
 import { conversationArchiveApi } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import { formatDateTime } from "@/lib/utils";
 import type { ConversationDto } from "@/lib/types";
 import { Button } from "@/components/ui";
@@ -22,6 +23,7 @@ export function ArchivedBanner({
   conversation: ConversationDto;
   onUnarchived: () => void;
 }) {
+  const { can } = useAuth();
   const [busy, setBusy] = useState(false);
   if (!conversation.archivedAt) return null;
 
@@ -46,10 +48,14 @@ export function ArchivedBanner({
         {formatDateTime(conversation.archivedAt)}. Ela não aparece na lista de conversas nem conta nos números
         do sistema; dá para ler e responder, e responder não desarquiva.
       </p>
+      {/* Quem não pode desarquivar continua LENDO a conversa arquivada
+          normalmente — some o botão, não o histórico. */}
+      {can("conversation.archive") && (
       <Button size="sm" variant="outline" disabled={busy} onClick={() => void unarchive()}>
-        <ArchiveRestore className="h-3.5 w-3.5" />
-        {busy ? "Desarquivando..." : "Desarquivar"}
-      </Button>
+          <ArchiveRestore className="h-3.5 w-3.5" />
+          {busy ? "Desarquivando..." : "Desarquivar"}
+        </Button>
+      )}
     </div>
   );
 }

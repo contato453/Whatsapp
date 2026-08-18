@@ -175,17 +175,32 @@ describe("GET /conversations (recorte de arquivadas)", () => {
 });
 
 describe("POST /conversations/:id/archive|unarchive", () => {
-  it("arquiva zerando o não lido e audita", async () => {
+  it("atendente NÃO arquiva: o padrão da chave é não/sim", async () => {
+    // Arquivar tira a conversa da lista de todo mundo. Depois do menu de
+    // Permissões isso é chave (`conversation.archive`), e o padrão de
+    // fábrica é supervisor para cima — ligar a chave na tela libera.
     const app = await buildApp(conversationRoutes, fakeConversationPrisma(baseConversation()));
     const response = await app.inject({
       method: "POST",
       url: `/conversations/${CONV_ID}/archive`,
       headers: { authorization: `Bearer ${tokenFor(app, "agent")}` },
     });
+    expect(response.statusCode).toBe(403);
+    expect(recorded.conversationUpdates).toHaveLength(0);
+    await app.close();
+  });
+
+  it("arquiva zerando o não lido e audita", async () => {
+    const app = await buildApp(conversationRoutes, fakeConversationPrisma(baseConversation()));
+    const response = await app.inject({
+      method: "POST",
+      url: `/conversations/${CONV_ID}/archive`,
+      headers: { authorization: `Bearer ${tokenFor(app, "supervisor")}` },
+    });
     expect(response.statusCode).toBe(200);
     const update = recorded.conversationUpdates[0]?.data as Record<string, unknown>;
     expect(update.archivedAt).toBeInstanceOf(Date);
-    expect(update.archivedByUserId).toBe("user-agent");
+    expect(update.archivedByUserId).toBe("user-supervisor");
     expect(update.unreadCount).toBe(0);
     // Ortogonal ao status: arquivar nunca toca no status do atendimento.
     expect(update).not.toHaveProperty("status");
@@ -203,7 +218,7 @@ describe("POST /conversations/:id/archive|unarchive", () => {
     const response = await app.inject({
       method: "POST",
       url: `/conversations/${CONV_ID}/unarchive`,
-      headers: { authorization: `Bearer ${tokenFor(app, "agent")}` },
+      headers: { authorization: `Bearer ${tokenFor(app, "supervisor")}` },
     });
     expect(response.statusCode).toBe(200);
     const update = recorded.conversationUpdates[0]?.data as Record<string, unknown>;
@@ -219,7 +234,7 @@ describe("POST /conversations/:id/archive|unarchive", () => {
     const response = await app.inject({
       method: "POST",
       url: `/conversations/${CONV_ID}/archive`,
-      headers: { authorization: `Bearer ${tokenFor(app, "agent")}` },
+      headers: { authorization: `Bearer ${tokenFor(app, "supervisor")}` },
     });
     expect(response.statusCode).toBe(404);
     expect(recorded.conversationUpdates).toHaveLength(0);

@@ -464,8 +464,9 @@ export function ContextPanel({
             seletor logo acima e o status, na barra da conversa. Dois caminhos
             para a mesma ação só criam dúvida sobre qual usar. */}
         {/* Arquivar mora junto de status e responsável: é o mesmo tipo de
-            decisão sobre o atendimento. Papel mínimo é o mesmo dos dois. */}
-        {conversation.archivedAt ? (
+            decisão sobre o atendimento. Quem não tem a chave continua lendo,
+            respondendo e mudando status — só não tira da lista. */}
+        {!can("conversation.archive") ? null : conversation.archivedAt ? (
           <Button
             size="sm"
             variant="outline"

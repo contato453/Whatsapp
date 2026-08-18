@@ -59,7 +59,7 @@ export const PERMISSION_ACTIONS = [
     description:
       "Apaga no WhatsApp do cliente uma mensagem que a equipe enviou. O histórico daqui guarda a linha apagada.",
     area: "atendimento",
-    defaults: { agent: true, supervisor: true },
+    defaults: { agent: false, supervisor: true },
   },
   {
     key: "message.edit_sent",
@@ -67,7 +67,7 @@ export const PERMISSION_ACTIONS = [
     description:
       "Corrige o texto (ou a legenda) de uma mensagem enviada, dentro da janela de 15 minutos do WhatsApp.",
     area: "atendimento",
-    defaults: { agent: true, supervisor: true },
+    defaults: { agent: false, supervisor: true },
   },
   {
     key: "scheduled_message.cancel_other",
@@ -75,7 +75,7 @@ export const PERMISSION_ACTIONS = [
     description:
       "Cancela mensagem agendada que outro atendente programou. Cancelar o próprio agendamento não depende desta chave.",
     area: "atendimento",
-    defaults: { agent: true, supervisor: true },
+    defaults: { agent: false, supervisor: true },
   },
   {
     key: "conversation.transfer_user",
@@ -113,7 +113,7 @@ export const PERMISSION_ACTIONS = [
     description:
       "Tira a conversa da lista principal (ou traz de volta). Mensagem nova em conversa arquivada não a desarquiva.",
     area: "atendimento",
-    defaults: { agent: true, supervisor: true },
+    defaults: { agent: false, supervisor: true },
   },
   {
     key: "note.delete_other",
@@ -145,7 +145,7 @@ export const PERMISSION_ACTIONS = [
     description:
       "Preenche a empresa em conversa que ainda está SEM empresa. É rotina de classificação do dia a dia.",
     area: "atendimento",
-    defaults: { agent: false, supervisor: true },
+    defaults: { agent: true, supervisor: true },
   },
   {
     key: "azevedo_os.relink",
@@ -162,14 +162,14 @@ export const PERMISSION_ACTIONS = [
     label: "Criar e editar etiqueta",
     description: "Mexe na lista de etiquetas do escritório. Aplicar etiqueta na conversa não depende desta chave.",
     area: "cadastros",
-    defaults: { agent: true, supervisor: true },
+    defaults: { agent: false, supervisor: true },
   },
   {
     key: "tag.delete",
     label: "Excluir etiqueta",
     description: "Remove a etiqueta de todas as conversas em que ela estiver.",
     area: "cadastros",
-    defaults: { agent: true, supervisor: true },
+    defaults: { agent: false, supervisor: true },
   },
   {
     key: "quick_reply.manage",
@@ -184,7 +184,7 @@ export const PERMISSION_ACTIONS = [
     description:
       "Cria atalho geral, que aparece para a organização inteira em vez de ficar restrito a departamentos.",
     area: "cadastros",
-    defaults: { agent: false, supervisor: false },
+    defaults: { agent: false, supervisor: true },
   },
   {
     key: "department.manage",

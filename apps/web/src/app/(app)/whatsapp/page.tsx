@@ -20,12 +20,14 @@ import {
   type ConnectionStatus,
 } from "@azvchat/shared";
 import { api, ApiError, instanceBackupApi } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import { useSocket } from "@/lib/socket-context";
 import { formatDateTime, formatPhone } from "@/lib/utils";
 import type { DepartmentDto, InstanceDto, UserDirectoryDto } from "@/lib/types";
 import { Badge, Button, Card, Field, Input, Modal, Spinner, EmptyState } from "@/components/ui";
 
 export default function WhatsAppPage() {
+  const { user: me, can } = useAuth();
   const socket = useSocket();
   const [instances, setInstances] = useState<InstanceDto[] | null>(null);
   const [creating, setCreating] = useState(false);
@@ -391,8 +393,10 @@ export default function WhatsAppPage() {
                   </div>
 
                   <div className="flex w-28 shrink-0 items-center gap-1">
-                    {/* Papel mínimo: supervisor — o mesmo requireRole da
-                        rota. Esta tela inteira já é de supervisor no NAV. */}
+                    {/* Marcar backup tem chave PRÓPRIA no catálogo: muda como
+                        toda conversa futura do número nasce, e por isso não
+                        anda junto de editar nome e departamento. */}
+                    {can("whatsapp_instance.backup") && (
                     <label
                       className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-600"
                       title="Ligado, toda conversa nova deste número já nasce arquivada"
@@ -406,7 +410,8 @@ export default function WhatsAppPage() {
                       />
                       Backup
                     </label>
-                    {instance.isBackup && (
+                    )}
+                    {instance.isBackup && can("whatsapp_instance.manage") && (
                       <button
                         type="button"
                         className="shrink-0 rounded-lg border border-slate-200 p-1.5 text-slate-500 transition-colors hover:bg-slate-100 disabled:opacity-50"
@@ -429,7 +434,10 @@ export default function WhatsAppPage() {
                   </div>
 
                   <div className="flex w-56 shrink-0 flex-wrap gap-2 lg:justify-end">
-                    {instance.status === "connected" ? (
+                    {/* Pôr no ar e tirar do ar é chave separada de editar o
+                        cadastro: desconectar derruba o atendimento daquele
+                        número para o escritório inteiro. */}
+                    {!can("whatsapp_instance.connection") ? null : instance.status === "connected" ? (
                       <Button
                         size="sm"
                         variant="outline"
@@ -447,9 +455,13 @@ export default function WhatsAppPage() {
                         <PlugZap className="h-3.5 w-3.5" /> Conectar
                       </Button>
                     )}
-                    <Button size="sm" variant="danger" disabled={busy === instance.id} onClick={() => remove(instance)}>
-                      <Trash2 className="h-3.5 w-3.5" /> Excluir
-                    </Button>
+                    {/* Excluir número é fixo no código: só administrador, sem
+                        chave no catálogo. */}
+                    {me?.role === "admin" && (
+                      <Button size="sm" variant="danger" disabled={busy === instance.id} onClick={() => remove(instance)}>
+                        <Trash2 className="h-3.5 w-3.5" /> Excluir
+                      </Button>
+                    )}
                   </div>
                 </li>
               );

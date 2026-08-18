@@ -69,10 +69,20 @@ describe("vincular empresa", () => {
     );
   });
 
-  it("agent não vincula — 403", () => {
+  it("atendente VINCULA conversa vazia — é rotina de classificação", () => {
+    // Padrão do catálogo: `azevedo_os.link` é sim/sim. Preencher empresa em
+    // conversa que está sem empresa é o trabalho de quem atende.
+    expect(semVinculo("agent", EMPRESA, AZEVEDO_OS_SOURCE).auditAction).toBe(
+      REFERENCE_AUDIT_ACTIONS.linked,
+    );
+  });
+
+  it("mas o atendente NÃO troca vínculo já existente — 403", () => {
+    // `azevedo_os.relink` é não/sim: mexer na classificação de outra pessoa
+    // anexa a conversa ao cliente errado quando dá errado.
     const erro = (() => {
       try {
-        semVinculo("agent", EMPRESA, AZEVEDO_OS_SOURCE);
+        vinculada("agent", OUTRA);
       } catch (err) {
         return err;
       }

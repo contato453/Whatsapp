@@ -170,6 +170,17 @@ snake_case e id `uuid`.
   (`assigned|transferred_user|transferred_department|unassigned|resolved|reopened`),
   `AuditLog`.
 
+**Permissões**
+- `RolePermission` — o que cada perfil PODE FAZER nesta organização, por par
+  (`role`, `action`), único por `(organizationId, role, action)`. **Só grava o que difere do
+  catálogo**: ausência de linha significa o padrão de `PERMISSION_ACTIONS`
+  (`packages/shared/src/permissions.ts`) — semear as 25 ações por papel congelaria os padrões
+  no banco, e mudar um padrão no código deixaria de valer para quem já existe. `action` é
+  **texto**, não enum: ação removida do código não exige migration, e a linha órfã é ignorada
+  em silêncio pela leitura. Constraint `role_permissions_role_not_admin` impede linha de
+  `admin` — administrador passa por cima de tudo, senão a organização se trancaria do lado de
+  fora sem ninguém para religar. `updatedById` é quem mexeu por último, exibido na tela.
+
 **Parâmetros de atendimento**
 - `AttendanceSettings` — uma linha por organização (`organizationId` único):
   `responseLimitMinutes` (padrão 30) e `timezone` (padrão `America/Sao_Paulo`). É a política
@@ -232,14 +243,23 @@ canWriteInAllDepartments(ids, departmentIds)       // escrita exige TODOS, não 
 groupScope(access)                     // consultas que partem do grupo (usa `is:` obrigatório)
 ```
 
-**Papel ≠ visibilidade.** Visibilidade responde "quais conversas"; papel responde "quais
-ações":
+**Papel ≠ visibilidade.** Visibilidade responde "quais conversas"; permissão responde "quais
+ações" — e desde o menu de Permissões **a segunda não é mais tabela de papel: é o catálogo**.
 
-| Ação | Papel mínimo |
+A fonte única é `packages/shared/src/permissions.ts` (`PERMISSION_ACTIONS`): 25 ações com nome
+técnico, rótulo, explicação, área e o **padrão por papel**. A API decide por
+`apps/api/src/lib/permissions.ts` (`requirePermission` / `loadPermissions().can()`), a tela de
+Permissões é **gerada** a partir da mesma lista, e o admin **sempre pode**, sem chave. Ação
+nova entra no catálogo e já vale nos dois lados.
+
+O que **não** tem chave, e é fixo no código de propósito:
+
+| Ação fixa | Regra |
 | --- | --- |
-| Criar/editar usuário; excluir número ou departamento | `admin` |
-| Criar/conectar número, criar departamento e etiqueta, ver auditoria, relatórios, **gravar parâmetros de atendimento** (item "Parâmetros" do menu), editar nota de terceiro, **alterar o departamento da conversa** | `supervisor` |
-| Inbox, atribuição, status, notas próprias, respostas rápidas, próprio perfil e senha, **ler parâmetros de atendimento** | `agent` |
+| Criar/editar usuário, redefinir senha de terceiro; excluir número; excluir departamento; abrir e gravar a tela de Permissões | `admin` (`requireRole("admin")`) |
+| Nunca deixar a organização sem admin ativo | transação com linhas travadas |
+| Ler conversa, enviar mensagem, mudar status, escrever e editar a **própria** nota | sempre liberado — não existe caminho para trancar o atendente fora do próprio trabalho |
+| Etiqueta **geral** (`isGeneral`) | `admin` (resposta rápida geral, sim, tem chave: `quick_reply.create_shared`) |
 
 **Departamento da conversa é escrita de supervisão.** É o campo que decide *quem enxerga*
 (ele alimenta `conversationScope`), então trocá-lo tira a conversa do campo de visão de um
@@ -298,6 +318,8 @@ senha 5–10/min.
 GET    /health
 
 POST   /auth/login          GET /auth/me   PATCH /auth/me   POST /auth/logout
+       (os dois primeiros devolvem `user.permissions`: as ações liberadas para a sessão,
+        já resolvidas com catálogo + configuração — a tela NUNCA deduz pelo papel)
 POST   /auth/change-password (exige a senha atual, 5 req/min)
 POST   /auth/me/avatar      DELETE /auth/me/avatar          GET /users/:id/avatar
 
@@ -358,6 +380,11 @@ POST   /quick-replies/:id/used
         recorte de leitura, sem auditoria: o envio em si já é auditado)
 GET    /conversations/:id/scheduled-messages   POST /conversations/:id/scheduled-messages
 DELETE /scheduled-messages/:id
+
+GET    /permissions          (admin; o que a organização gravou por cima do catálogo —
+       o catálogo em si NÃO vem por aqui, a tela o importa de @azvchat/shared)
+PUT    /permissions          (admin; grava em bloco, apaga a linha quando o valor volta ao
+       padrão, invalida o cache e audita cada par com valor anterior e novo)
 
 GET    /attendance-settings  (qualquer papel — o dashboard depende dela)
 PUT    /attendance-settings  (supervisor; grava SLA + expediente + janela de login,
@@ -660,15 +687,62 @@ nome técnico no código e neste documento.
 2. item no `NAV` do `layout.tsx` com `minRole` **igual** ao `requireRole` da API;
 3. montar com o kit de UI; textos em português.
 
-**Mudança de permissão**
-Mexe em `access.ts` e/ou na tabela de papéis: atualizar `enums.ts`, os `requireRole` das
-rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/access.test.ts`
-— os cinco, sempre juntos.
+**Nova ação configurável (o caminho normal hoje)**
+1. entrada em `PERMISSION_ACTIONS` (`packages/shared/src/permissions.ts`) com rótulo,
+   explicação, área e o padrão por papel — a tela de Permissões passa a mostrá-la sozinha;
+2. a rota (ou o campo) passa a decidir por `requirePermission(deps, "<chave>")` ou
+   `loadPermissions(...).assert("<chave>")`;
+3. a tela esconde o controle pelo mesmo `can("<chave>")` — esconder e recusar sempre juntos;
+4. caso em `apps/api/test/permissions.test.ts` (padrão de fábrica) e, se a rota for nova,
+   em `permissions-routes.test.ts`.
+Nada disso encosta em `access.ts`: **permissão é ação, visibilidade é alcance**.
+
+**Mudança de VISIBILIDADE** (quem enxerga qual conversa)
+Mexe em `access.ts` e nos vínculos de número/departamento: atualizar as salas do socket e os
+testes de `apps/api/test/access.test.ts`. **Não** existe chave de permissão para isso, e criar
+uma seria entender o desenho errado.
+
+**Mudança na hierarquia de papéis** (o que continua fixo em `admin`)
+Atualizar `enums.ts`, os `requireRole("admin")` das rotas, o `NAV` do frontend e os testes —
+sempre juntos.
 
 ---
 
 ## 13. Armadilhas conhecidas
 
+- **PERMISSÃO É AÇÃO, VISIBILIDADE É ALCANCE — e os dois nunca se misturam.** O menu de
+  Permissões (`packages/shared/src/permissions.ts` + `apps/api/src/lib/permissions.ts`) decide
+  o que cada perfil pode FAZER. Ele **não** decide, e não pode passar a decidir, QUAIS
+  conversas alguém enxerga: isso continua saindo inteiro de `lib/access.ts`, dos vínculos de
+  número (`UserWhatsAppInstance`) e de departamento (`UserDepartment`). Uma chave ligada dá
+  poder sobre o que a pessoa **já** enxerga; nenhuma chave amplia o recorte. Por isso não
+  existe (e não deve nascer) chave do tipo "ver todas as conversas" ou "ver conversa de outro
+  departamento" — a permissão entra **por cima** de `conversationScope`, nunca no lugar dele.
+  `apps/api/test/access.test.ts` tranca a invariante: com o catálogo inteiro ligado, o filtro
+  de conversa de um atendente sai idêntico ao de quem não tem chave nenhuma.
+- **Nenhum `if` de papel dentro de handler.** Toda decisão de ação passa por
+  `requirePermission()` (preHandler) ou `loadPermissions().assert()` (recusa de CAMPO, quando
+  a rota faz mais de uma coisa — é o caso de `isBackup` no PATCH do número, de `departmentId`
+  no corpo da atribuição, da nota de terceiro e do agendamento de outra pessoa). `requireRole`
+  sobrou **só** com `"admin"`, no que é fixo por decisão. `apps/api/test/permissions.test.ts`
+  varre as rotas e reprova comparação de papel solta, `requireRole` fora de admin e chave do
+  catálogo que nenhuma rota consulta.
+- **Esconder e recusar andam sempre juntos.** A tela decide pelo `can()` do `auth-context`,
+  alimentado por `user.permissions` de `/auth/me` — **nunca** deduzindo pelo papel. Deduzir faz
+  a configuração virar mentira visual: o dono desliga a chave, o botão continua lá e só dá
+  erro; ou liga a chave e o campo não volta. Mudança de permissão vale **na ação seguinte**
+  (cache de 5s com invalidação na gravação), sem relogar e sem reiniciar o container; se a aba
+  antiga ainda mostrar um botão que a API passou a recusar, o 403 vem com
+  `permission_denied` e a mensagem **nomeia a chave**, em vez de um "acesso negado" genérico.
+- **Vincular e trocar vínculo do Azevedo-OS são DUAS chaves**, não uma. Preencher empresa em
+  conversa que está sem empresa é rotina de classificação (padrão sim/sim); trocar ou desfazer
+  vínculo que outra pessoa já fez é mexer em classificação alheia, e errar anexa a conversa ao
+  cliente errado (padrão não/sim). Uma chave só obrigaria o escritório a escolher entre travar
+  a rotina e liberar o estrago. Quem decide continua sendo `planReferenceUpdate`, que olha o
+  ESTADO da conversa antes das chaves.
+- **Voltar uma chave ao padrão APAGA a linha**, em vez de gravar o mesmo valor. Guardar o
+  padrão como linha congelaria o padrão de hoje para aquela organização, e mudá-lo no código
+  deixaria de valer para ela.
 - **Som de notificação depende de o navegador destravar o áudio.** Chrome e Safari só
   deixam tocar depois de uma interação na página, e o `AudioContext` nasce suspenso — sem
   destravar no primeiro clique ou tecla, o som não sai na primeira aba do dia e o recurso
