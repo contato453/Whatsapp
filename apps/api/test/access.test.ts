@@ -8,6 +8,8 @@ import {
 import { buildPermissions } from "../src/lib/permissions.js";
 import {
   accessibleInstanceIds,
+  canAssignBeyondConversationReach,
+  conversationAssigneeWhere,
   canWriteGeneralResource,
   canWriteInAllDepartments,
   conversationScope,
@@ -421,5 +423,167 @@ describe("permissão nunca altera visibilidade", () => {
         { OR: [{ assignedUserId: "u1" }, { assignedUserId: null }] },
       ],
     });
+  });
+});
+
+/**
+ * PARA QUEM DÁ PARA TRANSFERIR (`conversationAssigneeWhere`).
+ *
+ * O avesso de `conversationScope`: em vez de "quais conversas esta pessoa
+ * enxerga", "quais pessoas enxergam esta conversa". A visibilidade não muda
+ * — o que muda é a ESCRITA do responsável.
+ *
+ * O que estes testes protegem é a falha silenciosa: transferir para alguém
+ * do departamento certo mas SEM o número vinculado grava um dono que nunca
+ * abre a conversa. Ela sai da fila de quem estava livre, some da tela de
+ * todo mundo e nenhum erro aparece.
+ */
+describe("conversationAssigneeWhere (candidatos a responsável)", () => {
+  interface Candidato {
+    id: string;
+    role: "admin" | "supervisor" | "agent";
+    status: "active" | "inactive";
+    instanceIds: string[];
+    departmentIds: string[];
+  }
+
+  /**
+   * Um ramo do `OR` gerado: ou o atalho do admin, ou o par número +
+   * departamento. Declarado aqui porque o tipo do Prisma é uma união larga
+   * demais para o teste ler campo a campo.
+   */
+  interface RamoDeAlcance {
+    role?: string;
+    whatsappAccess?: { some?: { whatsappInstanceId?: string } };
+    departmentAccess?: { some?: { departmentId?: string } };
+  }
+
+  /** Interpreta o filtro Prisma gerado, para o teste falar de gente e não de objeto. */
+  function elegivel(candidato: Candidato, where: ReturnType<typeof conversationAssigneeWhere>) {
+    if (where.status && candidato.status !== where.status) return false;
+    const ramos = (where.OR ?? []) as RamoDeAlcance[];
+    return ramos.some((ramo) => {
+      if (ramo.role) return candidato.role === ramo.role;
+      const numero = ramo.whatsappAccess?.some?.whatsappInstanceId;
+      const departamento = ramo.departmentAccess?.some?.departmentId;
+      if (numero && !candidato.instanceIds.includes(numero)) return false;
+      if (departamento && !candidato.departmentIds.includes(departamento)) return false;
+      return true;
+    });
+  }
+
+  const doDepartamentoComNumero: Candidato = {
+    id: "u-ok",
+    role: "agent",
+    status: "active",
+    instanceIds: ["i1"],
+    departmentIds: ["d1"],
+  };
+  const doDepartamentoSemNumero: Candidato = {
+    id: "u-sem-numero",
+    role: "agent",
+    status: "active",
+    instanceIds: ["i2"],
+    departmentIds: ["d1"],
+  };
+  const deOutroDepartamento: Candidato = {
+    id: "u-outro-dept",
+    role: "agent",
+    status: "active",
+    instanceIds: ["i1"],
+    departmentIds: ["d2"],
+  };
+  const inativo: Candidato = {
+    id: "u-inativo",
+    role: "agent",
+    status: "inactive",
+    instanceIds: ["i1"],
+    departmentIds: ["d1"],
+  };
+  const adminSemVinculo: Candidato = {
+    id: "u-admin",
+    role: "admin",
+    status: "active",
+    instanceIds: [],
+    departmentIds: [],
+  };
+
+  const conversa = conversationAssigneeWhere("org-1", {
+    whatsappInstanceId: "i1",
+    departmentId: "d1",
+  });
+
+  it("o filtro é sempre da organização e só de gente ativa", () => {
+    expect(conversa.organizationId).toBe("org-1");
+    expect(conversa.status).toBe("active");
+  });
+
+  it("quem tem o departamento da conversa E o número é candidato", () => {
+    expect(elegivel(doDepartamentoComNumero, conversa)).toBe(true);
+  });
+
+  it("mesmo departamento, sem o número: NÃO é candidato", () => {
+    // O caso que a regra existe para impedir: a atribuição funcionaria, e a
+    // conversa sumiria da tela de todo mundo sem erro nenhum.
+    expect(elegivel(doDepartamentoSemNumero, conversa)).toBe(false);
+  });
+
+  it("tem o número, mas é de outro departamento: NÃO é candidato", () => {
+    expect(elegivel(deOutroDepartamento, conversa)).toBe(false);
+  });
+
+  it("inativo nunca é candidato, nem com os dois vínculos", () => {
+    expect(elegivel(inativo, conversa)).toBe(false);
+  });
+
+  it("admin é candidato sem vínculo nenhum, porque enxerga a organização inteira", () => {
+    expect(elegivel(adminSemVinculo, conversa)).toBe(true);
+  });
+
+  it("conversa SEM departamento: basta ter o número", () => {
+    const semDepartamento = conversationAssigneeWhere("org-1", {
+      whatsappInstanceId: "i1",
+      departmentId: null,
+    });
+    // Ela já é visível para todos que têm o chip: exigir departamento aqui
+    // inventaria uma barreira que a leitura não tem.
+    expect(elegivel(deOutroDepartamento, semDepartamento)).toBe(true);
+    expect(elegivel(doDepartamentoSemNumero, semDepartamento)).toBe(false);
+  });
+
+  it("quem atua em vários departamentos entra em qualquer um deles, com o número", () => {
+    const doisDepartamentos: Candidato = {
+      ...doDepartamentoComNumero,
+      departmentIds: ["d1", "d2"],
+    };
+    expect(elegivel(doisDepartamentos, conversa)).toBe(true);
+    expect(
+      elegivel(
+        doisDepartamentos,
+        conversationAssigneeWhere("org-1", { whatsappInstanceId: "i1", departmentId: "d2" }),
+      ),
+    ).toBe(true);
+  });
+});
+
+/**
+ * Quem pode transferir para FORA do alcance da conversa.
+ *
+ * Não é bloqueio de supervisão: o supervisor tem o caso legítimo de puxar
+ * alguém de outra área para o atendimento. O que ele não pode é fazer isso
+ * sem saber — a tela confirma antes de gravar. O atendente é recusado no
+ * servidor, porque lista filtrada na tela é conveniência, não controle.
+ */
+describe("canAssignBeyondConversationReach (quem escapa da regra)", () => {
+  it("atendente não escapa", () => {
+    expect(canAssignBeyondConversationReach("agent")).toBe(false);
+  });
+
+  it("supervisor escapa, com confirmação na tela", () => {
+    expect(canAssignBeyondConversationReach("supervisor")).toBe(true);
+  });
+
+  it("admin escapa", () => {
+    expect(canAssignBeyondConversationReach("admin")).toBe(true);
   });
 });

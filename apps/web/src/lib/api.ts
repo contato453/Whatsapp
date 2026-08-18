@@ -17,6 +17,7 @@ import type {
   QuickReplyDto,
   RolePermissionOverrideDto,
   TagDto,
+  UserDirectoryDto,
 } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
@@ -331,6 +332,21 @@ export const conversationReadApi = {
  * desliga a marcação na própria atribuição, porque as duas nunca coexistem.
  */
 export const conversationAssignmentApi = {
+  /**
+   * Quem pode receber ESTA conversa. A decisão é da API
+   * (`conversationAssigneeWhere`, em `lib/access.ts`): a tela não monta
+   * filtro de candidato por conta própria, senão a lista e a rota
+   * divergiriam na primeira mudança de regra.
+   *
+   * `others` só vem para supervisor e admin — são os ativos que NÃO
+   * enxergam a conversa, oferecidos com confirmação antes de gravar.
+   */
+  assignees: (conversationId: string) =>
+    api.get<{
+      users: UserDirectoryDto[];
+      others: UserDirectoryDto[];
+      canAssignBeyondReach: boolean;
+    }>(`/conversations/${conversationId}/assignees`),
   assign: (conversationId: string, userId: string) =>
     api.post<{ ok: boolean }>(`/conversations/${conversationId}/assign`, { userId }),
   assignAll: (conversationId: string) =>

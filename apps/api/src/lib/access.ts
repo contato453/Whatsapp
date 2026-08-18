@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "@azvchat/database";
+import { hasRole, type UserRole } from "@azvchat/shared";
 import type { AuthTokenPayload } from "./auth.js";
 
 /**
@@ -185,4 +186,79 @@ export function groupScope(access: ConversationAccess): Prisma.WhatsAppGroupWher
     // sincronização do grupo e a primeira mensagem.
     OR: [{ conversationId: null }, { conversation: { is: conversationScope(access) } }],
   };
+}
+
+/**
+ * A conversa, na medida em que ela decide quem pode receber o atendimento:
+ * o número em que ela vive e o departamento em que ela está classificada.
+ */
+export interface AssignableConversation {
+  whatsappInstanceId: string;
+  /** `null` = conversa ainda sem departamento. */
+  departmentId: string | null;
+}
+
+/**
+ * Quem pode RECEBER esta conversa — a lista de candidatos a responsável.
+ *
+ * É a mesma pergunta de `conversationScope`, virada do avesso: em vez de
+ * "quais conversas esta pessoa enxerga", "quais pessoas enxergam esta
+ * conversa". Por isso mora aqui, e não na rota: candidato calculado em dois
+ * lugares vira duas regras diferentes na primeira manutenção.
+ *
+ * As duas condições valem JUNTAS, e a do número não é detalhe. Transferir
+ * para alguém do departamento certo que não tem aquele chip vinculado grava
+ * um responsável que nunca vai abrir a conversa: ela sai da fila de quem
+ * estava livre, some da tela de todo mundo e nenhum erro aparece — a falha
+ * só é notada quando o cliente cobra a resposta.
+ *
+ * O departamento que manda é o DA CONVERSA, nunca o de quem transfere: se
+ * valesse o de quem move, uma pessoa de vários departamentos empurraria a
+ * conversa para outra área sem passar por
+ * `POST /conversations/:id/transfer-department`, que é restrita à supervisão
+ * justamente porque muda quem enxerga.
+ *
+ * Conversa SEM departamento não restringe nada além do número: ela já é
+ * visível para todos que têm o chip (ver `conversationScope`), então exigir
+ * um departamento aqui inventaria uma barreira que a leitura não tem.
+ *
+ * Inativo nunca é candidato: atribuir a quem não entra mais no sistema é
+ * outra forma de conversa órfã.
+ *
+ * Admin entra sem vínculo nenhum porque ele realmente enxerga a organização
+ * inteira — o critério continua sendo "enxerga a conversa", e não "tem
+ * linha em UserWhatsAppInstance".
+ */
+export function conversationAssigneeWhere(
+  organizationId: string,
+  conversation: AssignableConversation,
+): Prisma.UserWhereInput {
+  return {
+    organizationId,
+    status: "active",
+    OR: [
+      { role: "admin" },
+      {
+        whatsappAccess: { some: { whatsappInstanceId: conversation.whatsappInstanceId } },
+        ...(conversation.departmentId
+          ? { departmentAccess: { some: { departmentId: conversation.departmentId } } }
+          : {}),
+      },
+    ],
+  };
+}
+
+/**
+ * Pode transferir para alguém FORA do alcance da conversa?
+ *
+ * Supervisor e admin podem: existe o caso legítimo de puxar alguém de outra
+ * área para um atendimento, e travar a supervisão criaria um problema pior
+ * do que o que a regra resolve. A tela avisa antes de gravar, com
+ * confirmação explícita — o que não pode é acontecer em silêncio.
+ *
+ * O atendente não pode, e a recusa é do servidor: lista filtrada na tela é
+ * conveniência, não controle de acesso.
+ */
+export function canAssignBeyondConversationReach(role: UserRole): boolean {
+  return hasRole(role, "supervisor");
 }

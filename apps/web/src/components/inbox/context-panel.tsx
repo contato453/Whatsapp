@@ -15,8 +15,6 @@ import {
   X,
 } from "lucide-react";
 import {
-  ALL_USERS_ASSIGNEE_HINT,
-  ALL_USERS_ASSIGNEE_LABEL,
   ASSIGNMENT_ACTION_LABELS,
   CONVERSATION_STATUSES,
   CONVERSATION_STATUS_LABELS,
@@ -28,7 +26,6 @@ import {
 import {
   api,
   conversationArchiveApi,
-  conversationAssignmentApi,
   fetchMediaBlobUrl,
   groupParticipantsApi,
   invalidateConversationAvatar,
@@ -40,7 +37,6 @@ import type {
   DepartmentDto,
   NoteDto,
   TagDto,
-  UserDirectoryDto,
 } from "@/lib/types";
 import { useAuth } from "@/lib/auth-context";
 import { Badge, Button, Textarea } from "@/components/ui";
@@ -48,6 +44,7 @@ import { appliesToConversation } from "@/components/department-picker";
 import { AzevedoOsCard } from "./azevedo-os-card";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
 import { InternalNotePanelItem, useCanManageNote } from "./internal-note";
+import { AssigneeSelect } from "./assignee-select";
 
 /**
  * Telefone de uma conversa individual. O endereço do WhatsApp vem como
@@ -68,12 +65,6 @@ const FILE_TYPE_LABELS: Record<string, string> = {
   document: "Documento",
   sticker: "Figurinha",
 };
-
-/**
- * Valor do seletor de responsável que representa o coletivo. Não é id de
- * ninguém — no banco a conversa marcada segue sem responsável.
- */
-const ALL_USERS_OPTION = "__all_users__";
 
 /**
  * Descrição do grupo recolhida em 3 linhas. Descrições longas empurram o
@@ -120,7 +111,6 @@ function GroupDescription({ text }: { text: string }) {
 
 export function ContextPanel({
   detail,
-  users,
   departments,
   tags,
   onChanged,
@@ -128,7 +118,6 @@ export function ContextPanel({
   onDeleteNote,
 }: {
   detail: ConversationDetailDto;
-  users: UserDirectoryDto[];
   departments: DepartmentDto[];
   tags: TagDto[];
   onChanged: () => void;
@@ -266,17 +255,6 @@ export function ContextPanel({
       appliesToConversation(tag, conversation.department?.id ?? null),
   );
 
-  /**
-   * A lista de usuários só traz gente ativa. Se o responsável atual foi
-   * desativado, ele entra como opção mesmo assim — sem isso o seletor
-   * mostraria "Sem responsável" numa conversa que tem dono.
-   */
-  const assignable = conversation.assignedUser
-    ? users.some((item) => item.id === conversation.assignedUser?.id)
-      ? users
-      : [...users, conversation.assignedUser]
-    : users;
-
   return (
     <div className="thin-scroll flex h-full flex-col gap-5 overflow-y-auto p-4">
       {/* Dados da conversa */}
@@ -380,59 +358,10 @@ export function ContextPanel({
               ))}
             </select>
           </div>
-          <div className="flex items-center justify-between">
-            <span className="text-slate-500">Responsável</span>
-            <select
-              className={cn(
-                "max-w-[55%] rounded-lg border px-2 py-1 text-xs",
-                // Coletivo marcado fica visualmente diferente de um nome de
-                // pessoa: no banco não existe usuário "@todos", e na tela ele
-                // também não pode passar por um.
-                conversation.assignedToAll
-                  ? "border-brand-100 bg-brand-50 font-semibold text-brand-700"
-                  : "border-slate-200",
-              )}
-              value={
-                conversation.assignedToAll ? ALL_USERS_OPTION : (conversation.assignedUser?.id ?? "")
-              }
-              disabled={busy}
-              onChange={(event) => {
-                const value = event.target.value;
-                if (value === ALL_USERS_OPTION) {
-                  // Um movimento só: tira o responsável atual e liga a marcação.
-                  void run(() => conversationAssignmentApi.assignAll(conversation.id));
-                } else if (!value) {
-                  void run(() => conversationAssignmentApi.unassign(conversation.id));
-                } else {
-                  // Atribuir desliga o @todos sozinho, do lado da API.
-                  void run(() => conversationAssignmentApi.assign(conversation.id, value));
-                }
-              }}
-            >
-              {/* No topo e separado das pessoas: é uma decisão de atendimento,
-                  não mais um nome na lista. */}
-              <option value={ALL_USERS_OPTION}>{ALL_USERS_ASSIGNEE_LABEL}</option>
-              <option value="">Sem responsável</option>
-              <optgroup label="Pessoas">
-                {assignable.map((user) => (
-                  <option key={user.id} value={user.id}>
-                    {user.name}
-                  </option>
-                ))}
-              </optgroup>
-            </select>
-          </div>
-          {/* A linha fica sempre visível: o efeito de "@todos" precisa estar
-              explicado ANTES de a pessoa escolher, e um <option> não comporta
-              texto de apoio. Marcada, ela muda de tom e confirma o estado. */}
-          <p
-            className={cn(
-              "text-right text-[11px]",
-              conversation.assignedToAll ? "text-brand-600" : "text-slate-400",
-            )}
-          >
-            {ALL_USERS_ASSIGNEE_LABEL}: {ALL_USERS_ASSIGNEE_HINT}
-          </p>
+          {/* Quem pode receber a conversa é decisão da API, e o seletor tem
+              estado próprio: a lista muda por conversa (número + departamento
+              dela) e não pode ser montada aqui. */}
+          <AssigneeSelect conversation={conversation} disabled={busy} onChanged={onChanged} />
           {/*
             Departamento só aparece para quem pode gravá-lo. Não é campo
             desabilitado: o atendente não classifica conversa, então mostrar

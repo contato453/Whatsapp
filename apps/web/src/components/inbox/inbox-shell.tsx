@@ -61,6 +61,7 @@ import {
 import { cn, formatDateTime, formatDayLabel } from "@/lib/utils";
 import type {
   CompanyFilterStateDto,
+  UserDirectoryDto,
   ConversationDetailDto,
   ConversationDto,
   DepartmentDto,
@@ -69,7 +70,6 @@ import type {
   NoteDto,
   QuickReplyDto,
   TagDto,
-  UserDirectoryDto,
 } from "@/lib/types";
 import { Avatar, Button, EmptyState, Input, Modal, Spinner, Textarea } from "@/components/ui";
 import { appliesToConversation } from "@/components/department-picker";
@@ -218,8 +218,15 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   /** Mídia aberta em tela cheia — guarda o id para sobreviver a atualizações da lista. */
   const [lightboxMessageId, setLightboxMessageId] = useState<string | null>(null);
 
-  const [users, setUsers] = useState<UserDirectoryDto[]>([]);
   const [departments, setDepartments] = useState<DepartmentDto[]>([]);
+  /**
+   * A agenda interna da organização, para o bloco "Usuários" do filtro
+   * unificado. É lista de ORGANIZAÇÃO, e não os candidatos de uma conversa
+   * (isso é do `assignee-select`, que pergunta por conversa): aqui a pergunta
+   * é "quais pessoas posso usar para recortar a lista", não "quem pode
+   * receber esta conversa".
+   */
+  const [users, setUsers] = useState<UserDirectoryDto[]>([]);
   const [tags, setTags] = useState<TagDto[]>([]);
   const [instances, setInstances] = useState<InstanceDto[]>([]);
   const [quickReplies, setQuickReplies] = useState<QuickReplyDto[]>([]);
@@ -2050,7 +2057,6 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         <div className="hidden w-80 shrink-0 border-l border-slate-200 bg-white lg:block">
           <ContextPanel
             detail={detail}
-            users={users}
             departments={departments}
             tags={tags}
             onChanged={loadDetail}
