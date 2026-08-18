@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from "@azvchat/database";
 import type { Server } from "socket.io";
 import { RealtimeEvents } from "@azvchat/shared";
 import { conversationAudience } from "../realtime/socket.js";
+import { resolveConversationPersonName } from "./person-profile.js";
 import { serializeConversation } from "./serialize.js";
 
 /**
@@ -36,8 +37,11 @@ export async function emitConversationUpdated(
     include: conversationInclude,
   });
   if (!conversation) return;
+  // Conversa individual carrega o nome da PESSOA no título — sem isso o
+  // evento sobrescreveria na lista o nome corrigido com o título antigo.
+  const personName = await resolveConversationPersonName(prisma, organizationId, conversation);
   io.to(conversationAudience(organizationId, conversation)).emit(
     RealtimeEvents.ConversationUpdated,
-    serializeConversation(conversation),
+    serializeConversation(conversation, personName),
   );
 }

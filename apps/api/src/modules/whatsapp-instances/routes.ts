@@ -11,6 +11,7 @@ import {
   serializeInstance,
   serializeUserDirectory,
 } from "../../lib/serialize.js";
+import { resolveConversationPersonNames } from "../../lib/person-profile.js";
 import {
   eligibleAssigneeWhere,
   loadAssigneeReach,
@@ -413,10 +414,20 @@ export async function whatsappInstanceRoutes(app: FastifyInstance, deps: AppDeps
         where: { id: { in: ids } },
         include: conversationInclude,
       });
+      // Nome da PESSOA nas individuais, em lote — o DTO publicado não pode
+      // regredir o nome corrigido na lista de quem está com a Inbox aberta.
+      const personNames = await resolveConversationPersonNames(
+        deps.prisma,
+        request.user.organizationId,
+        updated,
+      );
       for (const conversation of updated) {
         deps.io
           .to(conversationAudience(request.user.organizationId, conversation))
-          .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation));
+          .emit(
+            RealtimeEvents.ConversationUpdated,
+            serializeConversation(conversation, personNames.get(conversation.id) ?? null),
+          );
       }
 
       return { assigned: ids.length };

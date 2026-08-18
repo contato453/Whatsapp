@@ -3,6 +3,7 @@ import type {
   Department,
   GroupParticipant,
   Message,
+  ParticipantClientRole,
   QuickReply,
   Tag,
   User,
@@ -340,7 +341,16 @@ type ConversationWithRelations = Conversation & {
   archivedBy?: User | null;
 };
 
-export function serializeConversation(conversation: ConversationWithRelations) {
+export function serializeConversation(
+  conversation: ConversationWithRelations,
+  /**
+   * Nome da PESSOA (`PersonProfile.customName`) resolvido para conversa
+   * individual — ver `lib/person-profile.ts`. Opcional porque nem todo ponto
+   * de emissão precisa dele; quando vem, entra entre o apelido da conversa e
+   * o título do WhatsApp: corrigir a pessoa no grupo corrige o privado.
+   */
+  personName?: string | null,
+) {
   return {
     id: conversation.id,
     whatsappInstanceId: conversation.whatsappInstanceId,
@@ -350,9 +360,9 @@ export function serializeConversation(conversation: ConversationWithRelations) {
     externalChatId: conversation.externalChatId,
     type: conversation.type,
     // `title` é o nome efetivo: o que a equipe definiu tem prioridade sobre o
-    // que vem do WhatsApp. Assim toda a interface exibe o nome certo sem
-    // precisar decidir nada.
-    title: conversation.customTitle || conversation.title,
+    // que vem do WhatsApp — o apelido DESTA conversa primeiro (decisão local
+    // explícita), depois o nome da pessoa (vale no sistema inteiro).
+    title: conversation.customTitle || personName || conversation.title,
     customTitle: conversation.customTitle,
     /// Nome do WhatsApp, exibido como referência quando há nome próprio.
     whatsappTitle: conversation.title,
@@ -398,9 +408,10 @@ export function serializeConversation(conversation: ConversationWithRelations) {
 export function serializeConversationDetail(
   conversation: ConversationWithRelations,
   scheduledPendingCount: number,
+  personName?: string | null,
 ) {
   return {
-    ...serializeConversation(conversation),
+    ...serializeConversation(conversation, personName),
     scheduledPendingCount,
   };
 }
@@ -415,6 +426,16 @@ export interface ParticipantNameSources {
   contact?: { phoneNumber: string | null; name: string | null } | null;
   /** Nome que a própria pessoa configurou, visto na última mensagem dela. */
   pushName?: string | null;
+  /**
+   * Registro da PESSOA (`PersonProfile`), único na organização. Três estados,
+   * e a diferença importa: objeto = a equipe decidiu no nível da pessoa e os
+   * valores dele valem MESMO NULOS (limpar o nome é decisão); `null` =
+   * resolvido e sem registro, vale o legado da linha do grupo; ausente
+   * (`undefined`) = quem chamou não resolveu perfis, mesmo fallback.
+   */
+  profile?: { customName: string | null; clientRole: ParticipantClientRole | null } | null;
+  /** Em quantos grupos da organização a pessoa está — o aviso da edição. */
+  groupCount?: number;
 }
 
 /**
@@ -425,9 +446,12 @@ export interface ParticipantNameSources {
  *
  * A cadeia, do mais forte para o mais fraco:
  *
- *   a. `customName` — o que a equipe definiu. Vence sempre porque é a única
- *      fonte que a casa controla: o sync do WhatsApp nunca a toca, então é a
- *      única que não some nem muda sozinha na próxima sincronização.
+ *   a. o nome definido pela equipe — no registro da PESSOA (`PersonProfile`,
+ *      único na organização e válido em todos os grupos) quando ele existe,
+ *      senão o legado `customName` da linha deste grupo. Vence sempre porque
+ *      é a única fonte que a casa controla: o sync do WhatsApp nunca a toca,
+ *      então é a única que não some nem muda sozinha na próxima
+ *      sincronização.
  *   b. nome do `Contact` — quem está salvo na agenda do número conectado.
  *      Vem antes do pushName porque é escolha de alguém do escritório
  *      ("Marina Contabilidade"), não o apelido que a pessoa pôs em si mesma.
@@ -444,13 +468,17 @@ export function serializeGroupParticipant(
   sources: ParticipantNameSources = {},
 ) {
   const phoneNumber = participant.phoneNumber || sources.contact?.phoneNumber || "";
+  // O que a equipe decidiu vive no registro da PESSOA quando ele existe —
+  // registro presente vale inteiro, mesmo com campos nulos (limpar o nome é
+  // decisão). Sem registro, vale o legado gravado na linha deste grupo.
+  const customName = sources.profile ? sources.profile.customName : participant.customName;
+  const clientRole = sources.profile ? sources.profile.clientRole : participant.clientRole;
   // Nome de origem: o melhor nome que NÃO veio da equipe. Vai para a tela
   // como referência ao editar, e é o degrau (b)+(c) da cadeia.
   const whatsappName =
     sources.contact?.name || participant.name || sources.pushName || null;
   const formattedPhone = formatPhone(phoneNumber);
-  const name =
-    participant.customName || whatsappName || formattedPhone || PARTICIPANT_WITHOUT_NAME_LABEL;
+  const name = customName || whatsappName || formattedPhone || PARTICIPANT_WITHOUT_NAME_LABEL;
   return {
     id: participant.id,
     // Permite ligar o remetente de cada mensagem ao participante
@@ -463,14 +491,18 @@ export function serializeGroupParticipant(
     nameIsPhone: name === formattedPhone,
     // Sem nenhum nome real, o botão de renomear convida a dar um; com nome,
     // convida a editar. A tela não precisa refazer a conta.
-    hasKnownName: (participant.customName ?? whatsappName) != null,
-    customName: participant.customName,
+    hasKnownName: (customName ?? whatsappName) != null,
+    customName,
     /// Nome de origem, exibido como referência quando há nome próprio.
     whatsappName,
     isAdmin: participant.isAdmin || participant.isSuperAdmin,
     // Papel no cliente, marcado pela equipe. Distinto de `isAdmin`, que é
     // administrador do grupo no WhatsApp.
-    clientRole: participant.clientRole,
+    clientRole,
+    // Em quantos grupos da organização a pessoa está: é o número do aviso
+    // "a alteração vale para todos os grupos". 1 é o piso — a pessoa está,
+    // no mínimo, no grupo que a tela está mostrando.
+    groupCount: sources.groupCount ?? 1,
     hasAvatar: participant.avatarUrl != null,
   };
 }

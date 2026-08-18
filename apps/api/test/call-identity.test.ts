@@ -26,12 +26,15 @@ interface FakeRows {
     avatarUrl: string | null;
     group: { name: string; conversationId: string | null };
   }>;
+  /** Registro da PESSOA — presente vale inteiro, ausente cai no legado. */
+  profile?: { customName: string | null } | null;
 }
 
 function fakePrisma(rows: FakeRows): PrismaClient {
   return {
     contact: { findFirst: async () => rows.contact ?? null },
     groupParticipant: { findMany: async () => rows.participations ?? [] },
+    personProfile: { findUnique: async () => rows.profile ?? null },
   } as unknown as PrismaClient;
 }
 
@@ -47,6 +50,7 @@ function conversation(overrides: Partial<CallConversationRef> = {}): CallConvers
 }
 
 const baseInput = {
+  organizationId: "org-1",
   whatsappInstanceId: "inst-1",
   callerExternalId: "19675832402083@lid",
   callerPhone: null,
@@ -178,6 +182,7 @@ describe("resolveCallerIdentity — telefone", () => {
 describe("resolveCallerIdentity — grupo e foto", () => {
   it("chamada de grupo identifica o grupo, sem apontar pessoa nem telefone", async () => {
     const identity = await resolveCallerIdentity(fakePrisma({}), {
+      organizationId: "org-1",
       whatsappInstanceId: "inst-1",
       callerExternalId: "19675832402083@lid",
       callerPhone: null,

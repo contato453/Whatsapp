@@ -33,6 +33,7 @@ model Organization {
   conversationReads   ConversationRead[]
   attendanceSettings  AttendanceSettings?
   rolePermissions     RolePermission[]
+  personProfiles      PersonProfile[]
 
   @@map("organizations")
 }
@@ -304,6 +305,49 @@ model GroupParticipant {
 
   @@unique([groupId, externalContactId])
   @@map("group_participants")
+}
+
+/// O que a equipe sabe sobre UMA PESSOA do WhatsApp, único na organização.
+///
+/// A identidade saiu da linha do grupo (`GroupParticipant`) para cá porque a
+/// mesma pessoa participa de vários grupos do mesmo cliente (Geral, Contábil,
+/// Fiscal, DP): editar grupo a grupo obrigava a repetir a correção, e na
+/// prática ninguém repetia — o dado ficava certo num lugar e errado nos
+/// outros. `GroupParticipant` continua com o que é do GRUPO (participação,
+/// isAdmin, foto); o que é da PESSOA (nome dado pela equipe, papel no
+/// cliente) mora aqui.
+///
+/// Não é o `Contact`: aquele é por número conectado (`@@unique(instanceId,
+/// externalId)`), vem do sync da agenda e só existe para quem está nela. O
+/// registro da pessoa precisa ser único na ORGANIZAÇÃO e existir para
+/// qualquer participante — inclusive `@lid` fora de qualquer agenda.
+///
+/// LINHA EXISTENTE = a equipe já decidiu no nível da pessoa, e os valores
+/// dela valem MESMO QUANDO NULOS (limpar o nome é decisão, não ausência).
+/// Linha ausente = vale o legado por grupo, que ficou nas colunas antigas.
+model PersonProfile {
+  id             String                 @id @default(uuid())
+  organizationId String
+  /// Identificador da pessoa no WhatsApp (JID normalizado) — o mesmo valor
+  /// de `GroupParticipant.externalContactId`. Pode ser `@s.whatsapp.net` ou
+  /// `@lid`; o LID é estável, então ele também unifica entre grupos.
+  externalId     String
+  /// Telefone conhecido (dígitos), copiado da participação. Serve de ponte
+  /// para a conversa individual quando ela usa outro endereçamento do mesmo
+  /// número. NUNCA é chave de fusão de registros — só de exibição.
+  phoneNumber    String?
+  /// Nome definido pela equipe — vale em todos os grupos e telas.
+  customName     String?
+  /// Papel da pessoa dentro do cliente (sócio/administrativo), da equipe.
+  clientRole     ParticipantClientRole?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, externalId])
+  @@index([organizationId, phoneNumber])
+  @@map("person_profiles")
 }
 
 // ============================================================

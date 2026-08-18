@@ -11,6 +11,7 @@ import type { Logger } from "pino";
 import { conversationAudience, instanceAudience } from "../realtime/socket.js";
 import { serializeConversation, serializeMessage } from "../lib/serialize.js";
 import { resolveCallerIdentity } from "../lib/call-identity.js";
+import { resolveConversationPersonName } from "../lib/person-profile.js";
 import { extensionFromMime, type MediaStorage } from "../lib/media-storage.js";
 import type { MessageIngestService } from "./message-ingest.js";
 import type { AuditService } from "../modules/audit/service.js";
@@ -98,12 +99,21 @@ export class InstanceManager {
           this.prisma.message.findUnique({ where: { id: result.messageId } }),
         ]);
         if (!conversation || !persisted) return;
+        // Conversa individual leva o nome da PESSOA no título — o DTO da
+        // mensagem não pode sobrescrever o nome corrigido na lista.
+        const personName = await resolveConversationPersonName(
+          this.prisma,
+          organizationId,
+          conversation,
+        );
         const room = conversationAudience(organizationId, conversation);
         this.io.to(room).emit(RealtimeEvents.MessageNew, {
-          conversation: serializeConversation(conversation),
+          conversation: serializeConversation(conversation, personName),
           message: serializeMessage(persisted),
         });
-        this.io.to(room).emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation));
+        this.io
+          .to(room)
+          .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation, personName));
       });
     });
 
@@ -302,18 +312,21 @@ export class InstanceManager {
           },
         });
         const room = conversationAudience(organizationId, full ?? conversation);
+        const personName = full
+          ? await resolveConversationPersonName(this.prisma, organizationId, full)
+          : null;
         if (existing) {
           this.io.to(room).emit(RealtimeEvents.MessageUpdated, serializeMessage(message));
         } else if (full) {
           this.io.to(room).emit(RealtimeEvents.MessageNew, {
-            conversation: serializeConversation(full),
+            conversation: serializeConversation(full, personName),
             message: serializeMessage(message),
           });
         }
         if (full) {
           this.io
             .to(room)
-            .emit(RealtimeEvents.ConversationUpdated, serializeConversation(full));
+            .emit(RealtimeEvents.ConversationUpdated, serializeConversation(full, personName));
         }
 
         // Está tocando agora: avisa o responsável em qualquer tela do sistema.
@@ -329,6 +342,7 @@ export class InstanceManager {
           // neutro — que é o degrau "nada encontrado" da própria regra.
           const ref = full ?? conversation;
           const identity = await resolveCallerIdentity(this.prisma, {
+            organizationId,
             whatsappInstanceId: event.instanceId,
             callerExternalId: event.fromExternalId,
             callerPhone: event.fromPhone,
@@ -801,7 +815,13 @@ export class InstanceManager {
           if (full) {
             this.io
               .to(conversationAudience(organizationId, full))
-              .emit(RealtimeEvents.ConversationUpdated, serializeConversation(full));
+              .emit(
+                RealtimeEvents.ConversationUpdated,
+                serializeConversation(
+                  full,
+                  await resolveConversationPersonName(this.prisma, organizationId, full),
+                ),
+              );
           }
         }
         await new Promise((resolve) => setTimeout(resolve, AVATAR_FETCH_DELAY_MS));

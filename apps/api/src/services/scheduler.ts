@@ -6,6 +6,7 @@ import type { Logger } from "pino";
 import { conversationAudience } from "../realtime/socket.js";
 import { emitScheduledPending } from "../lib/scheduled-pending.js";
 import { serializeConversation, serializeMessage } from "../lib/serialize.js";
+import { resolveConversationPersonName } from "../lib/person-profile.js";
 import { applySignature } from "../lib/signature.js";
 import { buildPreview } from "./message-ingest.js";
 
@@ -140,15 +141,22 @@ export class ScheduledMessageWorker {
         },
       });
       if (conversation) {
+        // Conversa individual leva o nome da PESSOA no título, como em todo
+        // ponto que publica o DTO — o disparo agendado não pode regredi-lo.
+        const personName = await resolveConversationPersonName(
+          this.prisma,
+          scheduled.organizationId,
+          conversation,
+        );
         // Respeita o mesmo recorte de número, departamento e responsável da API
         const room = conversationAudience(scheduled.organizationId, conversation);
         this.io.to(room).emit(RealtimeEvents.MessageNew, {
-          conversation: serializeConversation(conversation),
+          conversation: serializeConversation(conversation, personName),
           message: serializeMessage(message),
         });
         this.io
           .to(room)
-          .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation));
+          .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation, personName));
       }
       // Saiu da fila: o badge do composer cai um (ou some, se era o último).
       await this.emitPending(scheduled.organizationId, scheduled.conversationId);

@@ -63,6 +63,13 @@ import {
   emitConversationUpdated as publishConversationUpdated,
 } from "../../lib/conversation-events.js";
 import { resolveContacts, type SenderInfo } from "../../lib/sender-directory.js";
+import {
+  countPersonGroups,
+  resolveConversationPersonName,
+  resolveConversationPersonNames,
+  resolvePersonProfiles,
+  upsertPersonProfile,
+} from "../../lib/person-profile.js";
 import { conversationAudience, userRoom } from "../../realtime/socket.js";
 import type { AppDeps } from "../../types.js";
 
@@ -306,13 +313,20 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     // publicado por socket para a audiência inteira da conversa, e um número
     // pessoal ali vazaria de uma pessoa para a outra. Uma consulta só para a
     // página inteira — nunca uma por linha.
-    const unread = await loadUnreadCounts(
-      deps.prisma,
-      request.user.sub,
-      conversations.map((conversation) => conversation.id),
-    );
+    const [unread, personNames] = await Promise.all([
+      loadUnreadCounts(
+        deps.prisma,
+        request.user.sub,
+        conversations.map((conversation) => conversation.id),
+      ),
+      // Nome da PESSOA nas conversas individuais — uma consulta para a
+      // página inteira, nunca uma por linha.
+      resolveConversationPersonNames(deps.prisma, request.user.organizationId, conversations),
+    ]);
     return {
-      conversations: conversations.map(serializeConversation),
+      conversations: conversations.map((conversation) =>
+        serializeConversation(conversation, personNames.get(conversation.id) ?? null),
+      ),
       total,
       unread: Object.fromEntries(unread),
       companyFilter: companyFilterActive ? { unavailable, truncated, unlinkedExcluded } : null,
@@ -361,23 +375,34 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     // cada participante. Completamos com duas fontes: o cadastro de
     // contatos e o nome que o WhatsApp envia junto das mensagens (pushName).
     const participantIds = group?.participants.map((p) => p.externalContactId) ?? [];
-    const [participantContacts, namesFromMessages] = await Promise.all([
-      group
-        ? resolveContacts(deps.prisma, conversation.whatsappInstanceId, participantIds)
-        : Promise.resolve(new Map<string, SenderInfo>()),
-      group
-        ? deps.prisma.message.findMany({
-            where: {
-              conversationId: id,
-              senderExternalId: { in: participantIds },
-              senderName: { not: null },
-            },
-            distinct: ["senderExternalId"],
-            orderBy: { timestamp: "desc" },
-            select: { senderExternalId: true, senderName: true },
-          })
-        : Promise.resolve([]),
-    ]);
+    const [participantContacts, namesFromMessages, personProfiles, personGroupCounts, personName] =
+      await Promise.all([
+        group
+          ? resolveContacts(deps.prisma, conversation.whatsappInstanceId, participantIds)
+          : Promise.resolve(new Map<string, SenderInfo>()),
+        group
+          ? deps.prisma.message.findMany({
+              where: {
+                conversationId: id,
+                senderExternalId: { in: participantIds },
+                senderName: { not: null },
+              },
+              distinct: ["senderExternalId"],
+              orderBy: { timestamp: "desc" },
+              select: { senderExternalId: true, senderName: true },
+            })
+          : Promise.resolve([]),
+        // O que a equipe sabe da PESSOA (vale em todos os grupos) e em
+        // quantos grupos ela está — tudo em lote, junto das outras fontes.
+        group
+          ? resolvePersonProfiles(deps.prisma, request.user.organizationId, participantIds)
+          : Promise.resolve(new Map()),
+        group
+          ? countPersonGroups(deps.prisma, request.user.organizationId, participantIds)
+          : Promise.resolve(new Map<string, number>()),
+        // Conversa individual: o título carrega o nome corrigido da pessoa.
+        resolveConversationPersonName(deps.prisma, request.user.organizationId, conversation),
+      ]);
     const pushNames = new Map(
       namesFromMessages
         .filter((entry) => entry.senderExternalId)
@@ -385,19 +410,21 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     );
 
     return {
-      conversation: serializeConversationDetail(conversation, scheduledPendingCount),
+      conversation: serializeConversationDetail(conversation, scheduledPendingCount, personName),
       group: group
         ? {
             id: group.id,
             name: group.name,
             description: group.description,
             participantCount: group.participantCount,
-            // As duas fontes extras são resolvidas em lote (dois SELECT para
+            // As fontes extras são resolvidas em lote (um SELECT cada para
             // o grupo inteiro) — grupo grande não vira consulta por pessoa.
             participants: group.participants.map((participant) =>
               serializeGroupParticipant(participant, {
                 contact: participantContacts.get(participant.externalContactId) ?? null,
                 pushName: pushNames.get(participant.externalContactId) ?? null,
+                profile: personProfiles.get(participant.externalContactId) ?? null,
+                groupCount: personGroupCounts.get(participant.externalContactId) ?? 1,
               }),
             ),
           }
@@ -1202,6 +1229,13 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
    * do cliente. Os dois campos são opcionais e independentes — quem só quer
    * marcar o sócio não precisa reenviar o nome.
    *
+   * A edição grava no registro da PESSOA (`PersonProfile`, único na
+   * organização), e não mais na linha deste grupo: a mesma pessoa está nos
+   * grupos Geral, Contábil, Fiscal e DP do cliente, e a correção vale para
+   * todos eles — e para a conversa individual — de uma vez. A rota continua
+   * exigindo acesso ao GRUPO de onde a edição parte (`groupScope`), então
+   * ninguém edita quem não enxerga.
+   *
    * Papel mínimo continua sendo `agent`: quem atende o grupo é quem sabe
    * quem é quem nele.
    */
@@ -1226,7 +1260,45 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       },
       select: {
         id: true,
+        externalContactId: true,
+        phoneNumber: true,
+        customName: true,
         clientRole: true,
+      },
+    });
+    if (!participant) throw new NotFoundError("Participante");
+
+    const valor =
+      body.customName !== undefined && body.customName && body.customName.length > 0
+        ? body.customName
+        : null;
+
+    // Valores EFETIVOS anteriores (registro da pessoa quando existe, senão o
+    // legado do grupo) — a auditoria registra de onde a mudança partiu.
+    const previousProfile = await deps.prisma.personProfile.findUnique({
+      where: {
+        organizationId_externalId: {
+          organizationId: request.user.organizationId,
+          externalId: participant.externalContactId,
+        },
+      },
+      select: { customName: true, clientRole: true },
+    });
+    const previous = previousProfile ?? participant;
+
+    await upsertPersonProfile(deps.prisma, request.user.organizationId, participant, {
+      ...(body.customName !== undefined ? { customName: valor } : {}),
+      ...(body.clientRole !== undefined ? { clientRole: body.clientRole } : {}),
+    });
+
+    // Todas as participações da pessoa na organização: dão a contagem de
+    // grupos afetados (auditoria e resposta) e a audiência de cada conversa.
+    const participations = await deps.prisma.groupParticipant.findMany({
+      where: {
+        externalContactId: participant.externalContactId,
+        group: { organizationId: request.user.organizationId },
+      },
+      select: {
         group: {
           select: {
             conversationId: true,
@@ -1238,19 +1310,8 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
         },
       },
     });
-    if (!participant) throw new NotFoundError("Participante");
+    const affectedGroups = participations.length;
 
-    const valor =
-      body.customName !== undefined && body.customName && body.customName.length > 0
-        ? body.customName
-        : null;
-    await deps.prisma.groupParticipant.update({
-      where: { id },
-      data: {
-        ...(body.customName !== undefined ? { customName: valor } : {}),
-        ...(body.clientRole !== undefined ? { clientRole: body.clientRole } : {}),
-      },
-    });
     if (body.customName !== undefined) {
       deps.audit.record({
         organizationId: request.user.organizationId,
@@ -1258,7 +1319,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
         action: "group_participant.renamed",
         entityType: "GroupParticipant",
         entityId: id,
-        metadata: { customName: valor },
+        metadata: { from: previous.customName, customName: valor, affectedGroups },
       });
     }
     // Marcação de papel é alteração de cadastro feita por pessoa: entra na
@@ -1270,21 +1331,24 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
         action: "group_participant.client_role_changed",
         entityType: "GroupParticipant",
         entityId: id,
-        metadata: { from: participant.clientRole, to: body.clientRole },
+        metadata: { from: previous.clientRole, to: body.clientRole, affectedGroups },
       });
     }
 
-    // Quem está com a mesma conversa aberta precisa ver a mudança sem
-    // reload. O evento já existe e o frontend recarrega o painel com ele,
-    // então não há payload novo a inventar.
-    const conversationId = participant.group.conversationId;
-    if (conversationId) {
+    // Quem está com QUALQUER grupo da pessoa aberto precisa ver a mudança sem
+    // reload — a edição agora vale para todos eles. O payload não muda
+    // (`{ conversationId }`); o alcance é que passa a ser um evento por
+    // conversa de grupo afetada, cada um para a própria audiência: quem não
+    // enxerga um grupo continua sem receber nada dele.
+    for (const participation of participations) {
+      const conversationId = participation.group.conversationId;
+      if (!conversationId) continue;
       deps.io
         .to(
           conversationAudience(
             request.user.organizationId,
-            participant.group.conversation ?? {
-              whatsappInstanceId: participant.group.whatsappInstanceId,
+            participation.group.conversation ?? {
+              whatsappInstanceId: participation.group.whatsappInstanceId,
               departmentId: null,
               assignedUserId: null,
             },
@@ -1292,7 +1356,30 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
         )
         .emit(RealtimeEvents.GroupParticipants, { conversationId });
     }
-    return { ok: true };
+
+    // A conversa individual exibe o mesmo nome corrigido: publica o DTO novo
+    // para a lista de quem a enxerga. O casamento por telefone cobre o caso
+    // do grupo por "@lid" com privado por "@s.whatsapp.net".
+    if (body.customName !== undefined) {
+      const phone = participant.phoneNumber.replace(/\D/g, "");
+      const individuals = await deps.prisma.conversation.findMany({
+        where: {
+          organizationId: request.user.organizationId,
+          type: "individual",
+          externalChatId: {
+            in: [
+              participant.externalContactId,
+              ...(phone.length > 0 ? [`${phone}@s.whatsapp.net`] : []),
+            ],
+          },
+        },
+        select: { id: true },
+      });
+      for (const conversa of individuals) {
+        await emitConversationUpdated(conversa.id, request.user.organizationId);
+      }
+    }
+    return { ok: true, affectedGroups };
   });
 
   /**

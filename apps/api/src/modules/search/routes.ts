@@ -2,6 +2,10 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { conversationScope, groupScope, loadConversationAccess } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
+import {
+  resolveConversationPersonNames,
+  resolvePersonProfiles,
+} from "../../lib/person-profile.js";
 import { serializeConversation, serializeMessage } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
 
@@ -21,6 +25,14 @@ export async function searchRoutes(app: FastifyInstance, deps: AppDeps): Promise
     // A busca global respeita as conexões liberadas para o usuário.
     const access = await loadConversationAccess(deps.prisma, request.user);
     const scope = conversationScope(access);
+
+    // O nome dado pela equipe mora no registro da PESSOA — sem esta lista,
+    // buscar pelo nome corrigido não acharia ninguém nos grupos.
+    const matchingProfiles = await deps.prisma.personProfile.findMany({
+      where: { organizationId, customName: { contains: q, mode: "insensitive" } },
+      select: { externalId: true },
+      take: limit,
+    });
 
     const [conversations, messages, participants] = await Promise.all([
       deps.prisma.conversation.findMany({
@@ -64,6 +76,9 @@ export async function searchRoutes(app: FastifyInstance, deps: AppDeps): Promise
           OR: [
             { name: { contains: q, mode: "insensitive" } },
             { phoneNumber: { contains: q.replace(/\D/g, "") || q } },
+            {
+              externalContactId: { in: matchingProfiles.map((profile) => profile.externalId) },
+            },
           ],
         },
         take: limit,
@@ -71,20 +86,38 @@ export async function searchRoutes(app: FastifyInstance, deps: AppDeps): Promise
       }),
     ]);
 
+    // Nomes decididos no nível da pessoa, em lote, para os resultados
+    // exibirem o valor corrigido — nunca uma consulta por linha.
+    const [personNames, participantProfiles] = await Promise.all([
+      resolveConversationPersonNames(deps.prisma, organizationId, conversations),
+      resolvePersonProfiles(
+        deps.prisma,
+        organizationId,
+        participants.map((participant) => participant.externalContactId),
+      ),
+    ]);
+
     return {
-      conversations: conversations.map(serializeConversation),
+      conversations: conversations.map((conversation) =>
+        serializeConversation(conversation, personNames.get(conversation.id) ?? null),
+      ),
       messages: messages.map((message) => ({
         ...serializeMessage(message),
         conversationTitle: message.conversation.customTitle || message.conversation.title,
         conversationType: message.conversation.type,
       })),
-      participants: participants.map((participant) => ({
-        id: participant.id,
-        name: participant.name,
-        phoneNumber: participant.phoneNumber,
-        groupName: participant.group.name,
-        conversationId: participant.group.conversationId,
-      })),
+      participants: participants.map((participant) => {
+        const profile = participantProfiles.get(participant.externalContactId);
+        return {
+          id: participant.id,
+          // Registro da pessoa presente vale inteiro; sem ele, o legado do
+          // grupo e por fim o nome do WhatsApp.
+          name: (profile ? profile.customName : participant.customName) ?? participant.name,
+          phoneNumber: participant.phoneNumber,
+          groupName: participant.group.name,
+          conversationId: participant.group.conversationId,
+        };
+      }),
     };
   });
 }

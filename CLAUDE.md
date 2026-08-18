@@ -123,8 +123,21 @@ snake_case e id `uuid`.
 - `Contact`, `WhatsAppGroup` (com `participantCount`, `conversationId`), `GroupParticipant`
   (`name` do WhatsApp vs `customName` da equipe, `isAdmin`, `avatarUrl`, `avatarCheckedAt`,
   `clientRole`).
-- `GroupParticipant.clientRole` (`ParticipantClientRole`: `partner` | `administrative` |
-  `null`) — papel da pessoa **dentro do cliente**, marcado pela equipe. Coluna única, então
+- `PersonProfile` — **onde mora a identidade da PESSOA, única na organização**, chaveada
+  por `(organizationId, externalId)` (o mesmo JID de `GroupParticipant.externalContactId`;
+  LID é estável e também unifica). Guarda o que é da pessoa e vem da equipe: `customName`,
+  `clientRole` e `phoneNumber` (ponte de EXIBIÇÃO para a conversa individual — nunca chave
+  de fusão). Existe porque a mesma pessoa está nos grupos Geral, Contábil, Fiscal e DP do
+  cliente, e a edição por grupo obrigava a repetir a correção. **Linha existente vale
+  inteira, mesmo com campos nulos** (limpar é decisão); linha ausente cai no legado da
+  linha do grupo, que a migration `20260818150000_person_profiles` deixou no banco de
+  propósito (fallback dos conflitados + caminho de volta). A leitura/escrita é fonte única
+  em `apps/api/src/lib/person-profile.ts`; o sync nunca escreve aqui.
+- `GroupParticipant.clientRole` e `customName` são o **legado por grupo** dessa identidade:
+  continuam no banco e valem só para quem ainda não tem `PersonProfile` (pessoa que estava
+  com valores divergentes entre grupos — a primeira edição pelo lápis resolve). `clientRole`
+  (`ParticipantClientRole`: `partner` | `administrative` | `null`) — papel da pessoa
+  **dentro do cliente**, marcado pela equipe. Coluna única, então
   a seleção é única por construção. **Não confundir com `isAdmin`**, que é administrador do
   grupo no WhatsApp e vem do sync. Desde que o texto livre "sócio" saiu da conversa
   (migration `20260816200000_drop_partner_name`), é a única marcação de quem representa
@@ -926,13 +939,29 @@ sempre juntos.
   para dizer o que a lista da Inbox já diz. Nenhuma rota define `metadata` própria,
   então o título base é capturado uma vez na montagem; se um dia alguma tela definir o
   seu, esse pressuposto cai.
-- `title` vs `customTitle` e `name` vs `customName`: o **sync do WhatsApp sobrescreve o
-  primeiro e nunca toca no segundo**. Exibição prefere o custom.
+- `title` vs `customTitle`: o **sync do WhatsApp sobrescreve o primeiro e nunca toca no
+  segundo**. Na conversa INDIVIDUAL o título efetivo tem três degraus:
+  `customTitle` (apelido desta conversa) → `PersonProfile.customName` (nome da pessoa,
+  casado por `externalChatId` e, quando o endereçamento difere, pela ponte de telefone) →
+  `title`. Quem resolve é `resolveConversationPersonName(s)` (`lib/person-profile.ts`),
+  chamado em TODO ponto que serializa conversa para lista ou evento — um ponto que
+  publique o DTO sem isso regride o nome corrigido na tela dos outros.
+- **EDITAR PARTICIPANTE EDITA A PESSOA, não a linha do grupo.** O lápis
+  (`PATCH /group-participants/:id`) grava em `PersonProfile` e vale para todos os grupos
+  da pessoa, todas as telas e a conversa individual, de uma vez. A tela avisa antes de
+  salvar com a contagem (`groupCount` no DTO do participante), a auditoria registra
+  `affectedGroups`, e o `group:participants` sai UM POR CONVERSA de grupo afetada, cada um
+  para a própria `conversationAudience` — nunca para a organização inteira. Não existe (e
+  não deve nascer) exceção "só neste grupo"; o registro da pessoa sobrevive à saída dela
+  de todos os grupos, de propósito. Regra de precedência: **linha de perfil presente vale
+  inteira, mesmo nula** — voltar a ler o legado do grupo quando o perfil diz "sem nome"
+  ressuscitaria valor apagado.
 - **Nome do participante é decidido no backend**, em `serializeGroupParticipant`
   (`lib/serialize.ts`), nunca no componente — a tela recebe `name` já pronto (nunca nulo)
   mais os campos crus que a edição precisa. A cadeia, do mais forte para o mais fraco:
-  1. `customName` — vence porque é a única fonte que a equipe controla e que o sync não
-     sobrescreve;
+  1. o nome da equipe — `PersonProfile.customName` quando o perfil existe (mesmo nulo:
+     perfil presente vale inteiro), senão o legado `customName` da linha do grupo. Vence
+     porque é a única fonte que a casa controla e que o sync não sobrescreve;
   2. nome do `Contact` do número conectado — escolha de alguém do escritório, por isso vem
      antes do apelido que a pessoa pôs em si mesma;
   3. `name` do participante — o pushName, gravado na ingestão quando a pessoa escreve, mais
@@ -943,10 +972,11 @@ sempre juntos.
   5. `PARTICIPANT_WITHOUT_NAME_LABEL`. **Nunca o LID cru** — ele é identificador interno e
      exibi-lo faria a equipe tratá-lo como telefone.
 
-  As fontes extras (`Contact` e pushName) são resolvidas **em lote**, dois SELECT para o
-  grupo inteiro — grupo grande não pode virar consulta por participante. `nameIsPhone` avisa
-  a tela para não repetir o telefone na segunda linha, e `hasKnownName` diz se existe nome
-  de verdade. A ingestão grava o pushName em `name` e **nunca** em `customName`.
+  As fontes extras (`Contact`, pushName, `PersonProfile` e `groupCount`) são resolvidas
+  **em lote**, um SELECT cada para o grupo inteiro — grupo grande não pode virar consulta
+  por participante. `nameIsPhone` avisa a tela para não repetir o telefone na segunda
+  linha, e `hasKnownName` diz se existe nome de verdade. A ingestão grava o pushName em
+  `name` e **nunca** em `customName` nem em `PersonProfile`.
 - Relação opcional no Prisma exige `is:` (`conversation: { is: ... }`) — sem isso o filtro
   vazio do admin não casa nada. Já documentado em `groupScope`.
 - Em `Tag`/`QuickReply`, **"geral" é a flag `isGeneral`, nunca a lista vazia de
@@ -1249,7 +1279,9 @@ histórico completo; quatro status de atendimento; leitura por usuário (cada pe
 o próprio contador de não lidas, com "marcar como não lida" para reservar a conversa
 para depois); busca na conversa e busca global;
 marcação de participantes com `@` em grupo, com `@todos` e nome exibido no lugar do
-número (enviadas e recebidas);
+número (enviadas e recebidas); edição de participante valendo para a PESSOA inteira
+(nome e papel corrigidos uma vez aparecem em todos os grupos dela e na conversa
+individual, com aviso da contagem antes de salvar);
 respostas rápidas com `/`, inclusive com mídia anexada (imagem, áudio ou vídeo) que sai
 junto com o texto; mídia ampliada em tela cheia com navegação por teclado e download;
 botão de baixar em documento recebido; arrastar arquivo para a conversa e colar com Ctrl+V,
