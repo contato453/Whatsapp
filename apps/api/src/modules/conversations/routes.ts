@@ -3,6 +3,7 @@ import type { Prisma } from "@azvchat/database";
 import { z } from "zod";
 import {
   AZEVEDO_OS_SOURCE,
+  azevedoOsFacetValueIsValid,
   CONVERSATION_DEPARTMENT_MIN_ROLE,
   CONVERSATION_STATUSES,
   EXTERNAL_REFERENCE_SOURCES,
@@ -12,6 +13,12 @@ import {
   RealtimeEvents,
 } from "@azvchat/shared";
 import { planReferenceUpdate } from "../../lib/azevedo-os-link.js";
+import {
+  companyReferenceWhere,
+  resolveCompanyIds,
+  unlinkedCompanyWhere,
+} from "../../lib/azevedo-os-company-filter.js";
+import { AzevedoOsError } from "../../services/azevedo-os-client.js";
 import {
   accessibleDepartmentIds,
   conversationScope,
@@ -64,9 +71,32 @@ const listQuerySchema = z.object({
    */
   archived: z.coerce.boolean().default(false),
   q: z.string().max(120).optional(),
+  /**
+   * Recorte por característica do cliente no Azevedo-OS. O valor é a chave
+   * do enum de lá; `none` é o sentinela de cadastro em branco.
+   *
+   * A validação é de FORMATO, e não contra uma lista de valores: copiar os
+   * valores do Azevedo-OS para cá criaria o dicionário duplicado que a
+   * integração existe para evitar, e ele envelheceria calado no dia em que
+   * um regime novo fosse cadastrado lá. Valor bem formado que não existe no
+   * portal devolve zero conversas, que é resultado e não erro.
+   */
+  taxRegime: z.string().trim().refine(azevedoOsFacetValueIsValid).optional(),
+  payroll: z.string().trim().refine(azevedoOsFacetValueIsValid).optional(),
+  /**
+   * Só as conversas SEM empresa vinculada. É o atalho do aviso "N ficaram de
+   * fora", e o caminho natural para a equipe ir vinculando o que falta.
+   */
+  unlinked: z.coerce.boolean().optional(),
   limit: z.coerce.number().min(1).max(100).default(50),
   offset: z.coerce.number().min(0).default(0),
-});
+})
+  // Pedir "sem empresa" e "regime X" ao mesmo tempo é contradição: a conversa
+  // sem vínculo não tem regime nenhum. Recusar é melhor do que devolver a
+  // lista sempre vazia que essa combinação produziria.
+  .refine((query) => !(query.unlinked && (query.taxRegime || query.payroll)), {
+    message: "O filtro de conversas sem empresa não combina com regime ou folha.",
+  });
 
 export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
   /**
@@ -130,6 +160,67 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       where.assignedUserId = query.assigned;
     }
 
+    /**
+     * Recorte por característica do cliente (regime tributário e folha), que
+     * moram no Azevedo-OS. Ele é montado por ÚLTIMO e entra por cima: `where`
+     * já carrega `conversationScope(access)` e os demais filtros, e o recorte
+     * por empresa só sabe TIRAR conversa da lista, nunca trazer uma que a
+     * pessoa não enxergaria. Filtrar pelo regime de uma conversa de outro
+     * atendente não a revela: o escopo continua valendo inteiro acima.
+     *
+     * Vai em `AND`, e não espalhado no objeto, porque o filtro de conversa
+     * sem empresa é um `OR` e a busca por texto também: fundir os dois no
+     * mesmo nível faria um sobrescrever o outro em silêncio.
+     */
+    const criteria = {
+      ...(query.taxRegime ? { taxRegime: query.taxRegime } : {}),
+      ...(query.payroll ? { payroll: query.payroll } : {}),
+    };
+    const companyFilterActive = Object.keys(criteria).length > 0;
+    /**
+     * O escopo de acesso JÁ OCUPA o `AND` do `where`: `conversationScope`
+     * devolve `{ AND: [...] }` com o recorte de números, departamentos e
+     * "só as minhas". Atribuir um `AND` novo aqui apagaria esse recorte, e o
+     * filtro por regime passaria a revelar ao atendente a conversa de outra
+     * pessoa — o filtro viraria uma porta de saída do controle de acesso.
+     * Por isso o recorte por empresa é ACRESCENTADO à lista existente, nunca
+     * posto no lugar dela. Há teste fixando exatamente isso.
+     */
+    const scopeAnd = Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : [];
+    const baseWhere: Prisma.ConversationWhereInput = { ...where };
+    const extras: Prisma.ConversationWhereInput[] = [];
+    let unavailable = false;
+    let truncated = false;
+    let unlinkedExcluded = 0;
+
+    if (query.unlinked) {
+      extras.push(unlinkedCompanyWhere());
+    } else if (companyFilterActive) {
+      try {
+        const resolved = await resolveCompanyIds(deps.azevedoOs, criteria);
+        truncated = resolved.truncated;
+        extras.push(companyReferenceWhere(resolved.ids));
+        // Quantas o recorte deixou de fora por não terem empresa vinculada.
+        // Sem esse número a lista encurta sem explicação e o filtro parece
+        // quebrado — e é ele que vira o atalho para a equipe ir vinculando.
+        unlinkedExcluded = await deps.prisma.conversation.count({
+          where: { ...baseWhere, AND: [...scopeAnd, unlinkedCompanyWhere()] },
+        });
+      } catch (err) {
+        // Azevedo-OS fora do ar não derruba a Inbox: a lista volta SEM o
+        // recorte e a tela avisa, em letras suficientes para ninguém ler uma
+        // lista completa achando que ela está filtrada. Erro que não seja da
+        // integração continua subindo — engolir tudo esconderia defeito nosso.
+        if (!(err instanceof AzevedoOsError)) throw err;
+        unavailable = true;
+        deps.logger.warn(
+          { event: "conversation_company_filter_unavailable" },
+          "conversation_company_filter_unavailable",
+        );
+      }
+    }
+    if (extras.length > 0) where.AND = [...scopeAnd, ...extras];
+
     const [conversations, total] = await Promise.all([
       deps.prisma.conversation.findMany({
         where,
@@ -140,7 +231,11 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       }),
       deps.prisma.conversation.count({ where }),
     ]);
-    return { conversations: conversations.map(serializeConversation), total };
+    return {
+      conversations: conversations.map(serializeConversation),
+      total,
+      companyFilter: companyFilterActive ? { unavailable, truncated, unlinkedExcluded } : null,
+    };
   });
 
   app.get("/conversations/:id", { preHandler: authenticate }, async (request) => {

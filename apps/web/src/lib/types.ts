@@ -432,3 +432,16 @@ export interface DashboardHourlyCellDto {
   received: number;
   sent: number;
 }
+
+/**
+ * Como o recorte por característica do cliente saiu na última consulta de
+ * `GET /conversations`. Vem nulo quando nenhum dos dois filtros está ativo.
+ */
+export interface CompanyFilterStateDto {
+  /** O Azevedo-OS não respondeu: a lista veio SEM o recorte. */
+  unavailable: boolean;
+  /** O portal cortou a lista de empresas no teto dele. */
+  truncated: boolean;
+  /** Conversas do recorte atual que ficaram de fora por não terem empresa. */
+  unlinkedExcluded: number;
+}

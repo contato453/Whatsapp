@@ -61,6 +61,18 @@ export interface InboxFilters {
   departmentId: string;
   tagId: string;
   search: string;
+  /**
+   * Característica do cliente no Azevedo-OS. "" = não filtrar; a chave do
+   * enum de lá, ou o sentinela `none` ("sem informação"), quando filtra.
+   *
+   * Diferente dos outros, estes dois só o SERVIDOR sabe avaliar: o regime
+   * mora no outro banco e a conversa não carrega o dado. É por isso que
+   * `conversationMatchesFilters` não os examina — ver o comentário lá.
+   */
+  taxRegime: string;
+  payroll: string;
+  /** Atalho do aviso: só conversas sem empresa vinculada. */
+  unlinked: boolean;
 }
 
 export const EMPTY_INBOX_FILTERS: InboxFilters = {
@@ -69,7 +81,28 @@ export const EMPTY_INBOX_FILTERS: InboxFilters = {
   departmentId: "",
   tagId: "",
   search: "",
+  taxRegime: "",
+  payroll: "",
+  unlinked: false,
 };
+
+/**
+ * Junta a mudança ao estado atual mantendo a exclusão entre o recorte por
+ * empresa e o "sem empresa vinculada": a conversa sem vínculo não tem regime
+ * nenhum, e a API recusa a combinação. Quem foi tocado por último vence, para
+ * o clique fazer exatamente o que promete em vez de não fazer nada.
+ */
+export function mergeInboxFilters(current: InboxFilters, patch: Partial<InboxFilters>): InboxFilters {
+  const next = { ...current, ...patch };
+  if (patch.unlinked === true) return { ...next, taxRegime: "", payroll: "" };
+  if (patch.taxRegime || patch.payroll) return { ...next, unlinked: false };
+  return next;
+}
+
+/** O recorte que só o servidor sabe avaliar está ligado? */
+export function hasCompanyFilter(filters: InboxFilters): boolean {
+  return filters.taxRegime !== "" || filters.payroll !== "" || filters.unlinked;
+}
 
 /** Mesmo prefixo do token (`zapdesk.`), como o rascunho e a barra lateral. */
 const STORAGE_PREFIX = "zapdesk.inbox-filters.";
@@ -102,6 +135,9 @@ export function readInboxFilters(userId: string): InboxFilters {
       departmentId: typeof parsed.departmentId === "string" ? parsed.departmentId : "",
       tagId: typeof parsed.tagId === "string" ? parsed.tagId : "",
       search: typeof parsed.search === "string" ? parsed.search : "",
+      taxRegime: typeof parsed.taxRegime === "string" ? parsed.taxRegime : "",
+      payroll: typeof parsed.payroll === "string" ? parsed.payroll : "",
+      unlinked: parsed.unlinked === true,
     };
   }, EMPTY_INBOX_FILTERS);
 }
@@ -124,7 +160,8 @@ export function hasActiveInboxFilters(filters: InboxFilters): boolean {
     filters.instanceId !== "" ||
     filters.departmentId !== "" ||
     filters.tagId !== "" ||
-    filters.search.trim() !== ""
+    filters.search.trim() !== "" ||
+    hasCompanyFilter(filters)
   );
 }
 
@@ -136,6 +173,9 @@ export function countActiveInboxFilters(filters: InboxFilters): number {
     filters.departmentId !== "",
     filters.tagId !== "",
     filters.search.trim() !== "",
+    filters.taxRegime !== "",
+    filters.payroll !== "",
+    filters.unlinked,
   ].filter(Boolean).length;
 }
 
@@ -160,6 +200,15 @@ function effectiveSearchTerm(filters: InboxFilters): string {
  *
  * Isto é recorte de apresentação sobre o que já chegou pelo socket dentro do
  * acesso da pessoa — nenhum filtro daqui revela conversa fora do recorte.
+ *
+ * **Regime e folha ficam de fora, e não por esquecimento.** Eles moram no
+ * Azevedo-OS, em outro banco, e a conversa que chega pelo socket não carrega
+ * o dado: não há como responder aqui se ela casa. Fingir que casa colocaria
+ * na lista filtrada a conversa de um cliente de outro regime, e o F5 a faria
+ * sumir sem explicação. Quem trata isso é o `inbox-shell`, que para de
+ * INSERIR linha nova enquanto o recorte por empresa está ligado (ver
+ * `hasCompanyFilter`); atualizar linha que já está na lista continua valendo,
+ * porque ela já passou pelo servidor.
  */
 export function conversationMatchesFilters(
   conversation: ConversationDto,

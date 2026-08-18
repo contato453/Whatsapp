@@ -190,3 +190,82 @@ export function azevedoOsSearchIsValid(term: string): boolean {
 export function canManageAzevedoOsLink(role: UserRole): boolean {
   return hasRole(role, "supervisor");
 }
+
+/* ------------------------------------------------------------------ *
+ * Filtros da Inbox por característica do cliente (regime e folha)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Por que estes filtros existem aqui, e não no lado de lá: o AZVCHAT filtra
+ * CONVERSAS, e conversa só existe neste banco. O regime tributário e a folha
+ * moram no Azevedo-OS, em banco separado, então não há consulta única capaz
+ * de cruzar as duas coisas. O caminho é pedir ao Azevedo-OS a lista de
+ * identificadores das empresas que batem com o critério e usar essa lista
+ * para recortar as conversas por `externalReference`.
+ *
+ * Este arquivo é compartilhado porque a API valida o valor do filtro e a
+ * tela desenha o seletor, e as duas precisam concordar sobre o sentinela de
+ * "sem informação" e sobre o que é um valor aceitável.
+ */
+
+/**
+ * Sentinela de "sem informação", combinado com o Azevedo-OS. Vale nos dois
+ * campos e significa cadastro em branco (nulo) na empresa — não confundir
+ * com o `FILTER_NONE` do responsável, que fala de outra coisa.
+ */
+export const AZEVEDO_OS_FACET_NONE = "none";
+
+/** Uma opção do seletor, já com o rótulo escrito pelo Azevedo-OS. */
+export interface AzevedoOsFacetOption {
+  /** Código estável (a chave do enum lá). É o único valor comparado. */
+  value: string;
+  /** Rótulo em português. Quem nomeia o vocabulário é o dono do cadastro. */
+  label: string;
+}
+
+export interface AzevedoOsFieldFacets {
+  options: AzevedoOsFacetOption[];
+  /**
+   * Existe empresa com o campo em branco? É isso, e não uma lista fixa, que
+   * decide se o seletor oferece "Sem informação": hoje a folha tem dezenas
+   * de empresas em branco e o regime não tem nenhuma, e oferecer uma opção
+   * que nunca devolve nada é caminho sem saída.
+   */
+  hasNone: boolean;
+}
+
+/**
+ * O que a API entrega ao seletor. **Sem as contagens que o Azevedo-OS manda**:
+ * elas contam EMPRESAS no cadastro, não conversas na Inbox, e "Simples (191)"
+ * ao lado de uma lista com doze conversas faria a pessoa achar que o filtro
+ * está quebrado. A contagem entra só na decisão de `hasNone`, no servidor.
+ */
+export interface AzevedoOsFacetsDto {
+  taxRegime: AzevedoOsFieldFacets;
+  payroll: AzevedoOsFieldFacets;
+}
+
+export const AZEVEDO_OS_TAX_REGIME_LABEL = "Regime tributário";
+export const AZEVEDO_OS_PAYROLL_LABEL = "Folha de pgto";
+export const AZEVEDO_OS_FACET_NONE_LABEL = "Sem informação";
+
+/**
+ * Aviso quando o Azevedo-OS não responde. A Inbox continua inteira e a lista
+ * vem SEM o recorte — por isso o texto precisa dizer as duas coisas, senão a
+ * pessoa lê uma lista completa achando que ela está filtrada.
+ */
+export const AZEVEDO_OS_FILTER_UNAVAILABLE_MESSAGE =
+  "Não foi possível consultar o cadastro no Azevedo-OS. A lista está sem os filtros de regime e folha.";
+
+/**
+ * Forma aceita para o valor de um filtro: chave de enum em snake_case, ou o
+ * sentinela. A lista de valores válidos é do Azevedo-OS e não pode ser
+ * copiada para cá (viraria dicionário duplicado, que envelhece calado), então
+ * o que a validação garante é o FORMATO. Valor bem formado que não existe lá
+ * devolve zero conversas, que é resultado, não erro.
+ */
+const FACET_VALUE_PATTERN = /^[a-z0-9_]{1,60}$/;
+
+export function azevedoOsFacetValueIsValid(value: string): boolean {
+  return FACET_VALUE_PATTERN.test(value);
+}

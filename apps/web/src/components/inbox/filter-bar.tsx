@@ -1,7 +1,16 @@
 "use client";
 
-import { ListFilter, Search, X } from "lucide-react";
-import { ALL_USERS_ASSIGNEE_LABEL } from "@azvchat/shared";
+import { Building2, ListFilter, Search, TriangleAlert, X } from "lucide-react";
+import {
+  ALL_USERS_ASSIGNEE_LABEL,
+  AZEVEDO_OS_FACET_NONE,
+  AZEVEDO_OS_FACET_NONE_LABEL,
+  AZEVEDO_OS_FILTER_UNAVAILABLE_MESSAGE,
+  AZEVEDO_OS_PAYROLL_LABEL,
+  AZEVEDO_OS_TAX_REGIME_LABEL,
+  type AzevedoOsFacetsDto,
+  type AzevedoOsFieldFacets,
+} from "@azvchat/shared";
 import { cn } from "@/lib/utils";
 import {
   countActiveInboxFilters,
@@ -9,7 +18,7 @@ import {
   type InboxFilters,
   type QuickFilter,
 } from "@/lib/inbox-filters";
-import type { DepartmentDto, InstanceDto, TagDto } from "@/lib/types";
+import type { CompanyFilterStateDto, DepartmentDto, InstanceDto, TagDto } from "@/lib/types";
 import { Badge, Button, Input } from "@/components/ui";
 
 /**
@@ -68,6 +77,47 @@ function filterSelectClass(ativo: boolean): string {
   );
 }
 
+/**
+ * Um dos dois seletores de característica do cliente. Ele é montado com o que
+ * o Azevedo-OS devolveu, nunca com lista escrita aqui: regime novo cadastrado
+ * lá aparece sozinho, e um dicionário nosso envelheceria calado.
+ *
+ * "Sem informação" só entra quando existe empresa com o campo em branco. Hoje
+ * isso vale para a folha e não para o regime, e é o próprio portal que diz —
+ * opção que nunca devolve nada é beco sem saída no meio do seletor.
+ */
+function FacetSelect({
+  label,
+  value,
+  field,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  field: AzevedoOsFieldFacets | null;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <select
+      className={filterSelectClass(value !== "")}
+      value={value}
+      disabled={disabled}
+      title={disabled ? AZEVEDO_OS_FILTER_UNAVAILABLE_MESSAGE : undefined}
+      onChange={(event) => onChange(event.target.value)}
+    >
+      <option value="">{label}</option>
+      {field?.hasNone && <option value={AZEVEDO_OS_FACET_NONE}>{AZEVEDO_OS_FACET_NONE_LABEL}</option>}
+      {(field?.options ?? []).map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 export function FilterBar({
   filters,
   onChange,
@@ -76,6 +126,9 @@ export function FilterBar({
   instances,
   departments,
   tags,
+  facets,
+  facetsUnavailable,
+  companyFilter,
 }: {
   filters: InboxFilters;
   onChange: (patch: Partial<InboxFilters>) => void;
@@ -85,6 +138,15 @@ export function FilterBar({
   instances: InstanceDto[];
   departments: DepartmentDto[];
   tags: TagDto[];
+  /**
+   * Opções vindas do Azevedo-OS. Nulo = integração desligada, e aí os dois
+   * seletores nem existem: campo que nunca vai filtrar nada só ocupa espaço.
+   */
+  facets: AzevedoOsFacetsDto | null;
+  /** Portal mudo: os seletores aparecem, desligados e com o aviso. */
+  facetsUnavailable: boolean;
+  /** Como o recorte por empresa saiu na última consulta; nulo = sem recorte. */
+  companyFilter: CompanyFilterStateDto | null;
 }) {
   const active = hasActiveInboxFilters(filters);
   const activeCount = countActiveInboxFilters(filters);
@@ -161,7 +223,77 @@ export function FilterBar({
             </option>
           ))}
         </select>
+        {/* Característica do cliente, vinda do Azevedo-OS. Somam por E com
+            todos os outros: nenhum filtro novo desliga os antigos. */}
+        {(facets !== null || facetsUnavailable) && (
+          <>
+            <FacetSelect
+              label={AZEVEDO_OS_PAYROLL_LABEL}
+              value={filters.payroll}
+              field={facets?.payroll ?? null}
+              disabled={facetsUnavailable}
+              onChange={(payroll) => onChange({ payroll })}
+            />
+            <FacetSelect
+              label={AZEVEDO_OS_TAX_REGIME_LABEL}
+              value={filters.taxRegime}
+              field={facets?.taxRegime ?? null}
+              disabled={facetsUnavailable}
+              onChange={(taxRegime) => onChange({ taxRegime })}
+            />
+          </>
+        )}
       </div>
+      {/* Recorte por empresa ligado e o portal caiu no meio: a lista voltou
+          COMPLETA, sem o recorte. O aviso precisa dizer isso com todas as
+          letras, senão a pessoa lê uma lista inteira achando que é a filtrada. */}
+      {(facetsUnavailable || companyFilter?.unavailable) && (
+        <p className="flex items-start gap-1.5 rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+          <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" />
+          {AZEVEDO_OS_FILTER_UNAVAILABLE_MESSAGE}
+        </p>
+      )}
+      {/* Quantas ficaram de fora por não terem empresa vinculada. Sem esta
+          linha a lista encurta sem explicação e o filtro parece quebrado — e
+          o atalho é o caminho natural para a equipe ir vinculando o que falta. */}
+      {!companyFilter?.unavailable && (companyFilter?.unlinkedExcluded ?? 0) > 0 && (
+        <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 px-0.5 text-[11px] text-slate-500">
+          <Building2 className="h-3 w-3 shrink-0" />
+          {companyFilter?.unlinkedExcluded === 1
+            ? "1 conversa ficou de fora por não ter empresa vinculada."
+            : `${companyFilter?.unlinkedExcluded} conversas ficaram de fora por não terem empresa vinculada.`}
+          <button
+            type="button"
+            className="font-medium text-brand-700 underline underline-offset-2"
+            onClick={() => onChange({ unlinked: true })}
+          >
+            Ver as sem vínculo
+          </button>
+        </p>
+      )}
+      {/* O portal cortou a lista de empresas no teto dele. Some com conversa
+          que deveria aparecer, então não pode ser engolido. */}
+      {companyFilter?.truncated && (
+        <p className="px-0.5 text-[11px] text-amber-700">
+          O cadastro devolveu empresas demais e a lista foi cortada. Combine com outro filtro para
+          estreitar o recorte.
+        </p>
+      )}
+      {/* Estado "sem vínculo" precisa se anunciar: ele foi ligado por um
+          clique no aviso, e sem esta linha a lista curta pareceria defeito. */}
+      {filters.unlinked && (
+        <p className="flex flex-wrap items-center gap-x-1.5 px-0.5 text-[11px] text-slate-500">
+          <Building2 className="h-3 w-3 shrink-0" />
+          Mostrando só conversas sem empresa vinculada.
+          <button
+            type="button"
+            className="font-medium text-brand-700 underline underline-offset-2"
+            onClick={() => onChange({ unlinked: false })}
+          >
+            Voltar
+          </button>
+        </p>
+      )}
       {/* Aviso de lista filtrada + limpeza. Só existe com filtro ativo: sem
           ele, uma Inbox curta por causa de filtro esquecido parece vazia. */}
       {active && (

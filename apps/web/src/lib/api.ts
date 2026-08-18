@@ -4,6 +4,7 @@ import { AZEVEDO_OS_SOURCE } from "@azvchat/shared";
 import type {
   AttendanceSettings,
   AzevedoOsCompanyDto,
+  AzevedoOsFacetsDto,
   ConversationStatus,
   DashboardPeriod,
   ParticipantClientRole,
@@ -251,6 +252,18 @@ export const messagesApi = {
  * para o mesmo campo seria pedir para eles divergirem.
  */
 export const azevedoOsApi = {
+  /**
+   * Valores dos dois seletores de característica do cliente (regime e folha).
+   *
+   * `facets` nulo com `unavailable` falso é integração desligada, e a tela
+   * nem desenha os seletores; nulo com `unavailable` verdadeiro é o portal
+   * mudo, e aí eles aparecem avisando. A rota nunca devolve erro justamente
+   * para a Inbox abrir igual nos dois casos.
+   */
+  facets: () =>
+    api.get<{ facets: AzevedoOsFacetsDto | null; unavailable: boolean }>(
+      "/integrations/azevedo-os/company-facets",
+    ),
   /** Empresa vinculada; `null` quando a conversa não tem vínculo. */
   company: (conversationId: string) =>
     api

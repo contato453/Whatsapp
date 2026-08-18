@@ -4,7 +4,9 @@ import { AZEVEDO_OS_SOURCE, azevedoOsSearchIsValid } from "@azvchat/shared";
 import { authenticate, requireRole } from "../../lib/auth.js";
 import { findAccessibleConversation } from "../../lib/conversation-access.js";
 import type { AppDeps } from "../../types.js";
-import { serializeAzevedoOsCompany } from "./serialize.js";
+import { loadCompanyFacets } from "../../lib/azevedo-os-company-filter.js";
+import { AzevedoOsError } from "../../services/azevedo-os-client.js";
+import { serializeAzevedoOsCompany, serializeAzevedoOsFacets } from "./serialize.js";
 
 /**
  * Ponte do AZVCHAT com o Azevedo-OS. O frontend nunca fala com o Azevedo-OS:
@@ -68,6 +70,35 @@ export async function integrationRoutes(app: FastifyInstance, deps: AppDeps): Pr
           serializeAzevedoOsCompany(company, deps.azevedoOs.companyWebUrl(company.id)),
         ),
       };
+    },
+  );
+
+  /**
+   * Valores possíveis de regime tributário e folha, para os dois seletores
+   * da Inbox. Papel mínimo `agent`: quem atende é quem filtra.
+   *
+   * Esta é a única rota da integração que **não** parte de uma conversa, e
+   * pode ser: ela não devolve empresa nenhuma, só os valores dos dois campos
+   * com o rótulo escrito no Azevedo-OS. Exigir uma conversa aqui seria
+   * formalidade sem proteção, e ainda quebraria o seletor, que precisa estar
+   * pronto antes de qualquer conversa ser aberta.
+   *
+   * Falha nunca vira erro HTTP: a Inbox tem que abrir com o Azevedo-OS fora
+   * do ar. `facets: null` com `unavailable: false` é integração desligada (a
+   * tela simplesmente não desenha os seletores); com `unavailable: true` é
+   * portal mudo (a tela desenha e avisa que estão indisponíveis).
+   */
+  app.get(
+    "/integrations/azevedo-os/company-facets",
+    { preHandler: authenticate },
+    async () => {
+      if (!deps.azevedoOs.enabled) return { facets: null, unavailable: false };
+      try {
+        return { facets: serializeAzevedoOsFacets(await loadCompanyFacets(deps.azevedoOs)), unavailable: false };
+      } catch (err) {
+        if (!(err instanceof AzevedoOsError)) throw err;
+        return { facets: null, unavailable: true };
+      }
     },
   );
 }

@@ -321,6 +321,16 @@ POST   /whatsapp-instances/:id/archive-all       (supervisor; arquiva todas as c
 GET    /conversations                     GET /conversations/:id
        (a lista EXCLUI arquivadas por padrão; `?archived=true` traz só elas —
         não existe "todas misturadas")
+       [&taxRegime=<valor|none>][&payroll=<valor|none>][&unlinked=true]
+       (recorte por característica do cliente no Azevedo-OS; `none` é "sem
+        informação" e `unlinked` são as conversas sem empresa vinculada, que
+        NÃO combina com os outros dois. A resposta ganha `companyFilter`
+        (`unavailable`, `truncated`, `unlinkedExcluded`), nulo quando nenhum
+        dos dois filtros está ativo — ver a seção 15)
+GET    /integrations/azevedo-os/company-facets
+       (agent+; opções dos dois seletores, com o rótulo escrito no Azevedo-OS.
+        Nunca devolve erro: `facets: null` com `unavailable: false` é
+        integração desligada e com `true` é portal mudo)
 POST   /conversations/:id/archive         POST /conversations/:id/unarchive
        (papel mínimo agent, o mesmo de status/atribuição; arquivar zera o
         unreadCount, audita e emite conversation:updated)
@@ -857,6 +867,25 @@ rotas, o `NAV` do frontend, as salas do socket e os testes de `apps/api/test/acc
   zera para todos. É limitação conhecida do modelo atual (`Conversation.unreadCount`
   é uma coluna só) e está registrada em comentário no código — resolver exigiria não
   lidas por usuário, que é outra entrega.
+- **Os filtros de regime tributário e folha dependem do Azevedo-OS, e degradam sozinhos.**
+  Os dois campos não existem neste banco: quem responde "quais empresas são do Simples" é
+  o portal, e a API usa a lista de identificadores que voltou para recortar as conversas
+  por `externalReference` (`lib/azevedo-os-company-filter.ts`). Daí três consequências que
+  valem para qualquer mexida aqui. (1) **O recorte é ACRESCENTADO ao `AND` do `where`,
+  nunca posto no lugar dele**: `conversationScope` já ocupa esse `AND`, e sobrescrevê-lo
+  faria o filtro por regime revelar ao atendente a conversa de outra pessoa — o filtro
+  viraria porta de saída do controle de acesso. Há teste que fica vermelho se isso voltar.
+  (2) **Portal mudo não derruba a Inbox**: a lista volta SEM o recorte, com
+  `companyFilter.unavailable` e aviso na tela dizendo que ela está completa — ler uma
+  lista inteira achando que está filtrada é pior do que não filtrar. (3) **O cache é de
+  segundos** (60s para o recorte, 5 min para as opções), só para a mesma pergunta não sair
+  a cada tecla: regime muda na virada do ano e a Inbox tem que acompanhar no mesmo dia.
+  Duas coisas mais: conversa sem empresa vinculada some quando o filtro está ativo, e a
+  tela diz quantas ficaram de fora com atalho para elas (senão o filtro parece quebrado);
+  e o casamento no cliente (`inbox-filters.ts`) **não avalia** esses dois campos, porque a
+  conversa que chega pelo socket não carrega o regime — por isso o `inbox-shell` para de
+  INSERIR linha nova enquanto o recorte está ligado, e só atualiza o que o servidor já
+  devolveu.
 - Ingestão é idempotente por `(conversationId, externalMessageId)` — não crie caminho
   paralelo de inserção de mensagem.
 - **Menção NÃO é formatação de texto.** Escrever "@Fulano" (ou até o número) na mensagem
@@ -1055,6 +1084,29 @@ de fato conserta é a ordem de precedência: **rótulo de fora vence rótulo de 
 `externalReference`/`externalSource` no DTO. Auditoria em
 `conversation.azevedo_os_company_linked` / `_changed` / `_unlinked`, com `companyId` e
 `previousCompanyId` — dado de cadastro da empresa não entra no `AuditLog`, o id basta.
+
+**Filtros da Inbox por característica do cliente.** A Inbox recorta por **regime
+tributário** e **folha de pagamento** (perto do vencimento do Simples, ver só os do
+Simples; em fechamento de folha, só quem tem folha). Os dois campos moram lá, e os bancos
+são separados, então **não há consulta capaz de cruzar as duas coisas**: o caminho é
+decompor a pergunta. O portal responde quais EMPRESAS batem
+(`GET /company-ids?taxRegime=&payroll=`, só os identificadores) e o AZVCHAT recorta as
+conversas por `externalReference`. Uma viagem por consulta, nunca uma por conversa.
+
+As opções dos seletores vêm de `GET /company-facets`, e **não são lista escrita aqui**:
+os dois campos são enum fechado no Azevedo-OS, e cada valor vem com o rótulo em português
+escrito por lá — mesma divisão de `status`/`statusLabel`, pelo mesmo motivo. A contagem de
+empresas que o portal manda **não atravessa para a tela** (ela conta empresas, não
+conversas, e o número ao lado do rótulo seria lido errado); ela decide só uma coisa, no
+servidor: se o seletor oferece "Sem informação". Só o envio pelo caminho autenticado
+prova a integração de ponta a ponta — o ambiente de desenvolvimento nasce com ela
+desligada.
+
+Nada disso encosta em `lib/access.ts`: é recorte de apresentação **por cima** do que a
+pessoa já enxerga. Sem evento novo, sem auditoria (é filtro de visualização) e sem
+migration. E **nenhum dado financeiro** atravessa nesta integração: honorário,
+inadimplência e valor de contrato são do Financeiro e da Diretoria no Azevedo-OS, e
+trazê-los para cá contornaria aquela regra por fora.
 
 **Na tela.** Card "Cliente Azevedo-OS" em `components/inbox/azevedo-os-card.tsx`, dentro do
 painel de contexto, com estado próprio de carregamento e de erro. `agent` vê o card inteiro

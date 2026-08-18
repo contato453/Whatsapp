@@ -33,14 +33,18 @@ import {
   mentionTrigger,
   type DraftMention,
   type ScheduledPendingPayload,
+  AZEVEDO_OS_FACET_NONE,
+  type AzevedoOsFacetsDto,
 } from "@azvchat/shared";
-import { api, conversationMediaApi, messagesApi, quickRepliesApi } from "@/lib/api";
+import { api, azevedoOsApi, conversationMediaApi, messagesApi, quickRepliesApi } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
 import { useAuth } from "@/lib/auth-context";
 import { pruneDrafts, readDraft, saveDraft, type Draft, type DraftMode } from "@/lib/drafts";
 import {
   EMPTY_INBOX_FILTERS,
   conversationMatchesFilters,
+  hasCompanyFilter,
+  mergeInboxFilters,
   hasActiveInboxFilters,
   readInboxFilters,
   saveInboxFilters,
@@ -49,6 +53,7 @@ import {
 } from "@/lib/inbox-filters";
 import { cn, formatDateTime, formatDayLabel } from "@/lib/utils";
 import type {
+  CompanyFilterStateDto,
   ConversationDetailDto,
   ConversationDto,
   DepartmentDto,
@@ -173,10 +178,19 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
 
   /** Toda mudança de filtro passa por aqui — a persistência vem no efeito. */
   const applyFilters = useCallback((patch: Partial<InboxFilters>) => {
-    setFilters((current) => ({ ...current, ...patch }));
+    setFilters((current) => mergeInboxFilters(current, patch));
   }, []);
 
   const meId = me?.id ?? null;
+
+  /**
+   * Opções dos dois seletores de característica do cliente e o resultado do
+   * último recorte. Nulo em `facets` é integração desligada (os seletores não
+   * existem); `facetsUnavailable` é o portal mudo (existem, avisando).
+   */
+  const [facets, setFacets] = useState<AzevedoOsFacetsDto | null>(null);
+  const [facetsUnavailable, setFacetsUnavailable] = useState(false);
+  const [companyFilter, setCompanyFilter] = useState<CompanyFilterStateDto | null>(null);
 
   // Grava toda mudança (mão, URL do dashboard, poda de id extinto): o F5
   // com uma conversa aberta volta exatamente ao que estava na tela. Sem
@@ -352,6 +366,27 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       })
       .catch(() => undefined);
     quickRepliesApi.list().then(setQuickReplies).catch(() => undefined);
+    // Opções de regime e folha. A poda segue a mesma regra dos outros
+    // filtros: valor guardado que não existe mais no Azevedo-OS volta para
+    // "todos" em silêncio, em vez de deixar a lista vazia sem explicação.
+    azevedoOsApi
+      .facets()
+      .then((data) => {
+        setFacets(data.facets);
+        setFacetsUnavailable(data.unavailable);
+        if (!data.facets) return;
+        const valido = (field: { options: Array<{ value: string }>; hasNone: boolean }, value: string) =>
+          value === "" ||
+          (value === AZEVEDO_OS_FACET_NONE ? field.hasNone : field.options.some((o) => o.value === value));
+        setFilters((current) => {
+          const taxRegime = valido(data.facets!.taxRegime, current.taxRegime) ? current.taxRegime : "";
+          const payroll = valido(data.facets!.payroll, current.payroll) ? current.payroll : "";
+          return taxRegime === current.taxRegime && payroll === current.payroll
+            ? current
+            : { ...current, taxRegime, payroll };
+        });
+      })
+      .catch(() => undefined);
   }, []);
 
   // ---------- Lista de conversas ----------
@@ -374,10 +409,22 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     if (filters.instanceId) params.set("instanceId", filters.instanceId);
     if (filters.tagId) params.set("tagId", filters.tagId);
     if (filters.search.trim().length >= 2) params.set("q", filters.search.trim());
+    // O recorte por característica do cliente é resolvido no SERVIDOR: ele
+    // pede ao Azevedo-OS os identificadores das empresas que batem e corta a
+    // consulta por eles. Trazer tudo e filtrar aqui exigiria o cadastro
+    // inteiro no navegador, que é justamente o que a integração não faz.
+    if (filters.taxRegime) params.set("taxRegime", filters.taxRegime);
+    if (filters.payroll) params.set("payroll", filters.payroll);
+    if (filters.unlinked) params.set("unlinked", "true");
     params.set("limit", "80");
     api
-      .get<{ conversations: ConversationDto[] }>(`/conversations?${params.toString()}`)
-      .then((data) => setConversations(data.conversations))
+      .get<{ conversations: ConversationDto[]; companyFilter: CompanyFilterStateDto | null }>(
+        `/conversations?${params.toString()}`,
+      )
+      .then((data) => {
+        setConversations(data.conversations);
+        setCompanyFilter(data.companyFilter);
+      })
       .catch(() => undefined);
   }, [filters]);
 
@@ -509,6 +556,12 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         if (!conversationMatchesFilters(payload.conversation, filters, meId)) {
           return rest.length === current.length ? current : rest;
         }
+        // Com o recorte por empresa ligado, linha que ainda não estava na
+        // lista NÃO entra: só o servidor sabe o regime do cliente, e chutar
+        // que ela casa mostraria conversa de outro regime até o próximo F5.
+        // Linha que já veio do servidor continua sendo atualizada.
+        const jaEstava = rest.length !== current.length;
+        if (!jaEstava && hasCompanyFilter(filters)) return current;
         return [payload.conversation, ...rest];
       });
       if (payload.message.conversationId === conversationId) {
@@ -1229,6 +1282,9 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
             instances={instances}
             departments={departments}
             tags={tags}
+            facets={facets}
+            facetsUnavailable={facetsUnavailable}
+            companyFilter={companyFilter}
           />
         </div>
         <div className="thin-scroll flex-1 overflow-y-auto">
@@ -1241,9 +1297,18 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
               icon={<InboxIcon className="h-10 w-10" />}
               title="Nenhuma conversa encontrada"
               description={
-                hasActiveInboxFilters(filters)
-                  ? "Nenhuma conversa casa com os filtros ativos. Limpe os filtros para ver tudo."
-                  : "Conecte um WhatsApp e as conversas aparecerão aqui automaticamente."
+                hasCompanyFilter(filters)
+                  ? "Nenhuma conversa casa com os filtros ativos. O recorte por característica do cliente só alcança conversas com empresa vinculada ao Azevedo-OS."
+                  : hasActiveInboxFilters(filters)
+                    ? "Nenhuma conversa casa com os filtros ativos. Limpe os filtros para ver tudo."
+                    : "Conecte um WhatsApp e as conversas aparecerão aqui automaticamente."
+              }
+              action={
+                hasActiveInboxFilters(filters) ? (
+                  <Button variant="outline" size="sm" onClick={() => setFilters(EMPTY_INBOX_FILTERS)}>
+                    Limpar filtros
+                  </Button>
+                ) : undefined
               }
             />
           ) : (
