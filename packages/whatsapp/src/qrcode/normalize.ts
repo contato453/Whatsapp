@@ -1,5 +1,10 @@
 import type { proto } from "@whiskeysockets/baileys";
-import type { ConversationType, MessageDirection, MessageType } from "@azvchat/shared";
+import type {
+  ConversationType,
+  MessageDirection,
+  MessageType,
+  QuotedMessagePreview,
+} from "@azvchat/shared";
 
 /**
  * Funções puras de normalização de mensagens do formato Baileys para o
@@ -233,6 +238,43 @@ export function extractQuotedMessageId(
   rawMessage: proto.IMessage | null | undefined,
 ): string | null {
   return contextInfoOf(rawMessage)?.stanzaId ?? null;
+}
+
+/** Compara JIDs ignorando o sufixo de dispositivo ("5511999:12@..."). */
+function sameJid(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  const bare = (jid: string) => {
+    const [user, server] = jid.split("@");
+    return `${(user ?? "").split(":")[0]}@${server ?? ""}`;
+  };
+  return bare(a) === bare(b);
+}
+
+/**
+ * Resumo da mensagem citada, tirado do PRÓPRIO payload
+ * (`contextInfo.quotedMessage`) — o WhatsApp manda uma cópia do conteúdo
+ * citado junto com a resposta.
+ *
+ * Sem este resumo, exibir a citação dependeria de encontrar a mensagem
+ * original no banco — e mensagem anterior à sincronização faria a resposta
+ * aparecer "solta", sem o bloco, em silêncio.
+ */
+export function extractQuotedPreview(
+  rawMessage: proto.IMessage | null | undefined,
+  ownJid: string | null,
+): QuotedMessagePreview | null {
+  const context = contextInfoOf(rawMessage);
+  if (!context?.stanzaId || !context.quotedMessage) return null;
+  // Reaproveita a classificação normal: a citada é uma mensagem como outra
+  // qualquer. Conteúdo não classificável ainda indica que HAVIA algo citado.
+  const extracted = extractContent(context.quotedMessage);
+  const participant = context.participant ?? null;
+  return {
+    participantExternalId: participant,
+    fromMe: sameJid(participant, ownJid),
+    type: extracted?.type ?? "other",
+    content: extracted?.content ?? null,
+  };
 }
 
 /**

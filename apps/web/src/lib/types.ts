@@ -175,10 +175,13 @@ export interface MessageReactionDto {
 }
 
 export interface QuotedPreviewDto {
+  /** Id interno da original quando ela existe no banco; null = só o resumo do payload. */
   id: string | null;
   senderName: string | null;
   content: string | null;
   type: string;
+  /** Quando a original existe no banco, permite navegar até ela. */
+  timestamp: string | null;
 }
 
 export interface MessageDto {

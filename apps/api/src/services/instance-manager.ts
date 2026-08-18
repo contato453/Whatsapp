@@ -10,6 +10,7 @@ import type { Server } from "socket.io";
 import type { Logger } from "pino";
 import { conversationAudience, instanceAudience } from "../realtime/socket.js";
 import { serializeConversation, serializeMessage } from "../lib/serialize.js";
+import { loadQuotedPreviews } from "../lib/quoted-preview.js";
 import { extensionFromMime, type MediaStorage } from "../lib/media-storage.js";
 import type { MessageIngestService } from "./message-ingest.js";
 import type { AuditService } from "../modules/audit/service.js";
@@ -97,10 +98,17 @@ export class InstanceManager {
           this.prisma.message.findUnique({ where: { id: result.messageId } }),
         ]);
         if (!conversation || !persisted) return;
+        // Reply: o evento leva a prévia da citação. Sem isso, quem estava com
+        // a conversa aberta via a resposta "solta" até recarregar — o GET das
+        // mensagens montava o bloco, o tempo real não.
+        const quotedMap = await loadQuotedPreviews(this.prisma, conversation, [persisted]);
+        const quoted = persisted.quotedMessageId
+          ? (quotedMap.get(persisted.quotedMessageId) ?? null)
+          : null;
         const room = conversationAudience(organizationId, conversation);
         this.io.to(room).emit(RealtimeEvents.MessageNew, {
           conversation: serializeConversation(conversation),
-          message: serializeMessage(persisted),
+          message: serializeMessage(persisted, quoted),
         });
         this.io.to(room).emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation));
       });

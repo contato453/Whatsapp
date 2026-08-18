@@ -1,6 +1,6 @@
 import type { PrismaClient, Prisma } from "@azvchat/database";
 import type { NormalizedMessage } from "@azvchat/shared";
-import { stripWhatsAppFormatting } from "@azvchat/shared";
+import { MESSAGE_TYPE_PREVIEW_LABELS, stripWhatsAppFormatting } from "@azvchat/shared";
 import type { Logger } from "pino";
 import type { MediaStorage } from "../lib/media-storage.js";
 import { extensionFromMime } from "../lib/media-storage.js";
@@ -19,17 +19,8 @@ export interface IngestResult {
 export function buildPreview(message: Pick<NormalizedMessage, "type" | "content">): string {
   const content = message.content ? stripWhatsAppFormatting(message.content) : null;
   if (message.type === "text") return (content ?? "").slice(0, 120);
-  const labels: Record<string, string> = {
-    image: "📷 Imagem",
-    audio: "🎤 Áudio",
-    video: "🎬 Vídeo",
-    document: "📄 Documento",
-    sticker: "🩵 Figurinha",
-    location: "📍 Localização",
-    contact: "👤 Contato",
-    other: "Mensagem",
-  };
-  const label = labels[message.type] ?? "Mensagem";
+  // Rótulos no shared: o bloco de citação do web usa os mesmos textos.
+  const label = MESSAGE_TYPE_PREVIEW_LABELS[message.type] ?? "Mensagem";
   return content ? `${label} — ${content}`.slice(0, 120) : label;
 }
 
@@ -146,6 +137,27 @@ export class MessageIngestService {
       }
     }
 
+    // Metadados extras da mensagem (Json), montados condicionalmente.
+    const metadata: Record<string, Prisma.InputJsonValue> = {};
+    // Quem a mensagem marcou. Guardado porque o texto sozinho não diz:
+    // ele traz "@5511999998888", e é esta lista que permite à Inbox
+    // exibir o NOME do participante no lugar do número.
+    if (message.mentionedExternalIds?.length) {
+      metadata.mentions = message.mentionedExternalIds;
+    }
+    // Resumo da mensagem citada, vindo do payload do WhatsApp. Guardado
+    // porque a original pode não existir no banco (anterior à sincronização,
+    // por exemplo) — sem o resumo, a citação sumiria em silêncio nesse caso.
+    if (message.quotedExternalMessageId && message.quotedPreview) {
+      metadata.quoted = {
+        participantExternalId: message.quotedPreview.participantExternalId,
+        fromMe: message.quotedPreview.fromMe,
+        type: message.quotedPreview.type,
+        // Só a prévia: o bloco de citação mostra duas linhas, não a mensagem.
+        content: message.quotedPreview.content?.slice(0, 300) ?? null,
+      };
+    }
+
     const created = await this.prisma.message.create({
       data: {
         organizationId: context.organizationId,
@@ -163,12 +175,7 @@ export class MessageIngestService {
         quotedMessageId: message.quotedExternalMessageId,
         timestamp: message.timestamp,
         status: isInbound ? "delivered" : "sent",
-        // Quem a mensagem marcou. Guardado porque o texto sozinho não diz:
-        // ele traz "@5511999998888", e é esta lista que permite à Inbox
-        // exibir o NOME do participante no lugar do número.
-        ...(message.mentionedExternalIds?.length
-          ? { metadata: { mentions: message.mentionedExternalIds } }
-          : {}),
+        ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
       },
     });
 

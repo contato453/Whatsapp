@@ -498,19 +498,25 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     return () => clearTimeout(timer);
   }, [chatSearch, conversationId]);
 
-  /** Abre o trecho da conversa em torno de uma mensagem encontrada. */
-  async function jumpToMessage(message: MessageDto) {
+  /**
+   * Abre o trecho da conversa em torno de uma mensagem — usado pela busca da
+   * conversa e pelo clique no bloco de citação. Se a mensagem já está na
+   * janela carregada, só rola até ela, sem trocar a janela.
+   */
+  async function jumpToMessage(target: { id: string; timestamp: string }) {
     if (!conversationId) return;
-    const data = await api.get<{ messages: MessageDto[]; hasMore: boolean }>(
-      `/conversations/${conversationId}/messages/around?at=${encodeURIComponent(message.timestamp)}`,
-    );
-    setMessages(data.messages);
-    setHasMore(data.hasMore);
-    setHighlightId(message.id);
+    if (!messages?.some((message) => message.id === target.id)) {
+      const data = await api.get<{ messages: MessageDto[]; hasMore: boolean }>(
+        `/conversations/${conversationId}/messages/around?at=${encodeURIComponent(target.timestamp)}`,
+      );
+      setMessages(data.messages);
+      setHasMore(data.hasMore);
+    }
+    setHighlightId(target.id);
     setChatSearchOpen(false);
     setChatSearch("");
     setTimeout(() => {
-      document.getElementById(`message-${message.id}`)?.scrollIntoView({
+      document.getElementById(`message-${target.id}`)?.scrollIntoView({
         behavior: "smooth",
         block: "center",
       });
@@ -670,7 +676,14 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     const onMessageUpdated = (payload: MessageDto) => {
       if (payload.conversationId !== conversationId) return;
       setMessages((current) =>
-        current?.map((message) => (message.id === payload.id ? payload : message)) ?? null,
+        current?.map((message) =>
+          message.id === payload.id
+            ? // Edição e exclusão não recalculam a citação no servidor — e ela
+              // não muda com a edição. Preserva a que a tela já tem, senão o
+              // bloco de reply sumiria da bolha ao editar ou apagar.
+              { ...payload, quoted: payload.quoted ?? message.quoted }
+            : message,
+        ) ?? null,
       );
     };
     const onNote = (payload: NoteDto & { conversationId?: string }) => {
@@ -1543,6 +1556,13 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                       onEdit={(message) => startEdit(message)}
                       onDelete={(message) => void handleDelete(message)}
                       onOpenMedia={(message) => setLightboxMessageId(message.id)}
+                      onQuoteClick={(quoted) => {
+                        // Sem id/timestamp a original não está no banco — o
+                        // bloco nem vira botão, mas a checagem fica pelo tipo.
+                        if (quoted.id && quoted.timestamp) {
+                          void jumpToMessage({ id: quoted.id, timestamp: quoted.timestamp });
+                        }
+                      }}
                       senderAvatar={senderAvatarFor(item.message)}
                       mentionNames={mentionNames}
                     />

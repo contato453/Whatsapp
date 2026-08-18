@@ -35,6 +35,7 @@ import {
   extractContent,
   extractMentionedJids,
   extractQuotedMessageId,
+  extractQuotedPreview,
   extractSender,
   isGroupJid,
   isIgnorableJid,
@@ -445,6 +446,9 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
       senderPhone,
       senderName: message.pushName ?? null,
       quotedExternalMessageId: extractQuotedMessageId(message.message),
+      // O resumo vai junto: a original pode não existir no banco (mensagem
+      // anterior à sincronização), e é ele que mantém a citação visível.
+      quotedPreview: extractQuotedPreview(message.message, state.ownJid),
       mentionedExternalIds: extractMentionedJids(message.message),
       ...(extracted.pollOptions ? { pollOptions: extracted.pollOptions } : {}),
       timestamp: toDate(message.messageTimestamp),

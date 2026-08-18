@@ -62,6 +62,23 @@ export interface ProviderContact {
   name: string | null;
 }
 
+/**
+ * Resumo da mensagem citada num reply, extraído do PRÓPRIO payload do
+ * WhatsApp (`contextInfo.quotedMessage`). Existe porque a mensagem original
+ * pode nunca ter passado pelo sistema — anterior à sincronização, enviada por
+ * outro canal — e, sem este resumo, a citação dependeria de encontrá-la no
+ * banco e sumiria em silêncio quando não encontrasse.
+ */
+export interface QuotedMessagePreview {
+  /** JID de quem enviou a mensagem citada, quando o payload informa. */
+  participantExternalId: string | null;
+  /** A mensagem citada saiu da própria conexão. */
+  fromMe: boolean;
+  type: MessageType;
+  /** Texto ou legenda da mensagem citada. */
+  content: string | null;
+}
+
 /** Mensagem normalizada vinda do provider (inbound ou echo de outbound) */
 export interface NormalizedMessage {
   instanceId: string;
@@ -78,6 +95,11 @@ export interface NormalizedMessage {
   senderPhone: string | null;
   senderName: string | null;
   quotedExternalMessageId: string | null;
+  /**
+   * Resumo da mensagem citada, vindo do payload. Opcional para não obrigar
+   * caminhos que não citam (ligações, testes) a declararem o campo.
+   */
+  quotedPreview?: QuotedMessagePreview | null;
   /**
    * Quem a mensagem marcou ("@"). Vem do `contextInfo` do WhatsApp, e não do
    * texto: é esta lista que notifica, o nome escrito na frase é só enfeite.

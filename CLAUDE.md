@@ -1135,6 +1135,23 @@ sempre juntos.
   literal no texto (não existe token de grupo no protocolo) e marca todo mundo pela lista,
   respeitando o teto de `MENTION_MAX_PER_MESSAGE` (100, teto nosso: o Baileys não impõe
   nenhum e o WhatsApp não documenta).
+- **A citação recebida (reply) NUNCA depende de encontrar a original no banco.** O
+  WhatsApp manda, junto da resposta, uma cópia do conteúdo citado
+  (`contextInfo.quotedMessage`); `extractQuotedPreview` (normalize.ts) lê autor, tipo e
+  texto, e a ingestão grava o resumo em `Message.metadata.quoted` (mesmo caminho do
+  `mentions`, sem migration). Quem monta a prévia é `lib/quoted-preview.ts`
+  (`loadQuotedPreviews`), a fonte única das DUAS camadas: original no banco → prévia com
+  `id` e `timestamp`, e o bloco navega até ela; original ausente (mensagem anterior à
+  sincronização) → prévia do resumo gravado, sem navegação — mas sempre visível. Era o
+  descarte silencioso desse segundo caso que fazia respostas aparecerem "soltas" na
+  Inbox. Três consequências: (1) todo caminho que serializa mensagem com
+  `quotedMessageId` passa pela mesma função — GET das mensagens, `messages/around`, o
+  `message:new` do tempo real (ingestão E envio) e a resposta do POST; emitir sem a
+  prévia faz a citação aparecer só depois do reload, que era a segunda causa da falha
+  intermitente; (2) citação de mídia mostra o rótulo do tipo
+  (`MESSAGE_TYPE_PREVIEW_LABELS`, no shared — o mesmo mapa do preview da lista), nunca
+  bloco vazio; (3) LID citado sem cadastro vira rótulo genérico, jamais os dígitos como
+  telefone. `apps/api/test/quoted-preview.test.ts` tranca a regra.
 - LID (`@lid`) não é telefone. Existe migration só para limpar telefones que vieram de LID
   (`20260814140000_clear_lid_phone_numbers`).
 - **A janela de edição é do WhatsApp, e vale nos dois lados.** Só dá para editar nos
@@ -1171,7 +1188,8 @@ sempre juntos.
 **Funciona**: múltiplos números com conexão por QR e status em tempo real; sessão
 persistida e retomada após restart; sync de chats/contatos/grupos e fotos; recebimento e
 envio de texto, imagem, áudio, vídeo, documento, figurinha, localização, contato; reações;
-responder citando; encaminhar; apagar; editar mensagem enviada pelo composer (texto e
+responder citando — e a citação recebida aparece mesmo quando a mensagem original não
+está no banco, com clique levando até a original quando ela está; encaminhar; apagar; editar mensagem enviada pelo composer (texto e
 legenda de mídia, dentro da janela de 15 minutos do WhatsApp); gravação de áudio (ffmpeg, com fallback);
 enquetes; mensagens agendadas com retentativa; notas internas; etiquetas; atribuição com
 histórico completo; quatro status de atendimento; leitura por usuário (cada pessoa com

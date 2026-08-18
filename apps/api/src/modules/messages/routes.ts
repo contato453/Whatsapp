@@ -28,6 +28,7 @@ import {
   serializeMessage,
   type QuotedPreview,
 } from "../../lib/serialize.js";
+import { loadQuotedPreviews, previewFromMessage } from "../../lib/quoted-preview.js";
 import { resolveSenders, type SenderDirectory } from "../../lib/sender-directory.js";
 import { applySignature, type Signer } from "../../lib/signature.js";
 import { conversationAudience } from "../../realtime/socket.js";
@@ -69,10 +70,16 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       deps.prisma.message.findUnique({ where: { id: messageId } }),
     ]);
     if (!conversation || !message) return;
+    // Resposta citando: o evento precisa levar a prévia, senão a tela de quem
+    // está com a conversa aberta mostraria a resposta "solta" até recarregar.
+    const quotedMap = await loadQuotedPreviews(deps.prisma, conversation, [message]);
+    const quoted = message.quotedMessageId
+      ? (quotedMap.get(message.quotedMessageId) ?? null)
+      : null;
     const room = conversationAudience(organizationId, conversation);
     deps.io.to(room).emit(RealtimeEvents.MessageNew, {
       conversation: serializeConversation(conversation),
-      message: serializeMessage(message),
+      message: serializeMessage(message, quoted),
     });
     deps.io.to(room).emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation));
   }
@@ -109,46 +116,6 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
     });
   }
 
-  /**
-   * Resolve as mensagens citadas de um lote, em uma única consulta,
-   * para exibir a pré-visualização do reply.
-   */
-  async function loadQuotedPreviews(
-    conversationId: string,
-    messages: Array<{ quotedMessageId: string | null }>,
-  ): Promise<Map<string, QuotedPreview>> {
-    const ids = [
-      ...new Set(messages.map((message) => message.quotedMessageId).filter((value): value is string => !!value)),
-    ];
-    if (ids.length === 0) return new Map();
-    const originals = await deps.prisma.message.findMany({
-      where: { conversationId, externalMessageId: { in: ids } },
-      select: {
-        id: true,
-        externalMessageId: true,
-        senderName: true,
-        senderPhone: true,
-        content: true,
-        type: true,
-        direction: true,
-      },
-    });
-    return new Map(
-      originals.map((original) => [
-        original.externalMessageId as string,
-        {
-          id: original.id,
-          senderName:
-            original.direction === "outbound"
-              ? (original.senderName ?? "Você")
-              : (original.senderName ?? original.senderPhone),
-          content: original.content,
-          type: original.type,
-        },
-      ]),
-    );
-  }
-
   app.get("/conversations/:id/messages", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const query = listQuerySchema.parse(request.query);
@@ -164,7 +131,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
     });
     const ordered = messages.reverse();
     const [quotedMap, senders] = await Promise.all([
-      loadQuotedPreviews(id, ordered),
+      loadQuotedPreviews(deps.prisma, conversation, ordered),
       loadSenders(conversation, ordered),
     ]);
     const total = await deps.prisma.message.count({ where: { conversationId: id } });
@@ -235,7 +202,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
     ]);
     const ordered = [...before.reverse(), ...after];
     const [quotedMap, senders] = await Promise.all([
-      loadQuotedPreviews(id, ordered),
+      loadQuotedPreviews(deps.prisma, conversation, ordered),
       loadSenders(conversation, ordered),
     ]);
     const oldest = ordered[0];
@@ -610,12 +577,16 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
     // Reply: monta a referência da mensagem citada a partir do que temos salvo.
     let quoted: QuotedMessageRef | undefined;
     let quotedExternalId: string | null = null;
+    let quotedPreview: QuotedPreview | null = null;
     if (replyToMessageId) {
       const original = await deps.prisma.message.findFirst({
         where: { id: replyToMessageId, conversationId: id },
       });
       if (original?.externalMessageId) {
         quotedExternalId = original.externalMessageId;
+        // A resposta HTTP também leva a prévia — sem ela, quem enviou só
+        // veria o bloco de citação depois de recarregar a conversa.
+        quotedPreview = previewFromMessage(original);
         quoted = {
           externalMessageId: original.externalMessageId,
           participantExternalId:
@@ -672,7 +643,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       entityId: id,
     });
     await afterOutboundPersist(id, request.user.organizationId, message.id);
-    return reply.status(201).send({ message: serializeMessage(message) });
+    return reply.status(201).send({ message: serializeMessage(message, quotedPreview) });
   });
 
   app.post(

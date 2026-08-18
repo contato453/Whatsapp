@@ -24,12 +24,17 @@ import {
   Video,
   XCircle,
 } from "lucide-react";
-import { isEditableMessageType, isWithinEditWindow } from "@azvchat/shared";
+import {
+  MESSAGE_TYPE_PREVIEW_LABELS,
+  isEditableMessageType,
+  isWithinEditWindow,
+  type MessageType,
+} from "@azvchat/shared";
 import { fetchMediaBlobUrl } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { documentKindLabel, downloadMessageMedia } from "@/lib/media-download";
 import { cn, formatPhone } from "@/lib/utils";
-import type { MessageDto } from "@/lib/types";
+import type { MessageDto, QuotedPreviewDto } from "@/lib/types";
 import { Spinner } from "@/components/ui";
 import { AudioPlayer } from "./audio-player";
 import { FormattedText, makeMentionResolver } from "./formatted-text";
@@ -223,6 +228,51 @@ function groupReactions(message: MessageDto) {
   return [...map.entries()];
 }
 
+/**
+ * Bloco de citação (reply). Aparece SEMPRE que a mensagem cita outra — mesmo
+ * quando a original não está no banco (anterior à sincronização): nesse caso
+ * o conteúdo vem do resumo do payload e o bloco perde só a navegação.
+ * Citação de mídia mostra o rótulo do tipo, nunca um bloco vazio.
+ */
+function QuotedBlock({
+  quoted,
+  outbound,
+  onQuoteClick,
+}: {
+  quoted: QuotedPreviewDto;
+  outbound: boolean;
+  onQuoteClick?: (quoted: QuotedPreviewDto) => void;
+}) {
+  const body = (
+    <>
+      <p className="font-semibold">{quoted.senderName ?? "Mensagem"}</p>
+      <p className="line-clamp-2">
+        {quoted.content ??
+          MESSAGE_TYPE_PREVIEW_LABELS[quoted.type as MessageType] ??
+          "Mensagem"}
+      </p>
+    </>
+  );
+  const baseClass = cn(
+    "mb-1.5 border-l-2 py-0.5 pl-2 text-xs",
+    outbound ? "border-brand-600 text-chat-sent-meta" : "border-brand-400 text-slate-500",
+  );
+  // Só vira botão quando há para onde ir: a original está no banco.
+  if (quoted.id && quoted.timestamp && onQuoteClick) {
+    return (
+      <button
+        type="button"
+        onClick={() => onQuoteClick(quoted)}
+        title="Ir para a mensagem original"
+        className={cn(baseClass, "block w-full cursor-pointer rounded-r text-left hover:bg-black/5")}
+      >
+        {body}
+      </button>
+    );
+  }
+  return <div className={baseClass}>{body}</div>;
+}
+
 export function MessageBubble({
   message,
   isGroup,
@@ -233,6 +283,7 @@ export function MessageBubble({
   onEdit,
   onDelete,
   onOpenMedia,
+  onQuoteClick,
   senderAvatar,
   mentionNames,
 }: {
@@ -246,6 +297,12 @@ export function MessageBubble({
   onDelete: (message: MessageDto) => void;
   /** Clique em imagem/vídeo/figurinha — abre a lightbox de tela cheia. */
   onOpenMedia?: (message: MessageDto) => void;
+  /**
+   * Clique no bloco de citação — leva até a mensagem original. Só é usado
+   * quando a original existe no banco; citação de mensagem fora do banco
+   * (anterior à sincronização) mostra o bloco sem navegação.
+   */
+  onQuoteClick?: (quoted: QuotedPreviewDto) => void;
   /** Foto de quem enviou — exibida ao lado das mensagens recebidas */
   senderAvatar?: ReactNode;
   /**
@@ -337,17 +394,7 @@ export function MessageBubble({
 
         {/* Pré-visualização da mensagem citada */}
         {message.quoted && (
-          <div
-            className={cn(
-              "mb-1.5 border-l-2 py-0.5 pl-2 text-xs",
-              outbound ? "border-brand-600 text-chat-sent-meta" : "border-brand-400 text-slate-500",
-            )}
-          >
-            <p className="font-semibold">{message.quoted.senderName ?? "Mensagem"}</p>
-            <p className="line-clamp-2">
-              {message.quoted.content ?? `[${message.quoted.type}]`}
-            </p>
-          </div>
+          <QuotedBlock quoted={message.quoted} outbound={outbound} onQuoteClick={onQuoteClick} />
         )}
 
         {message.deletedAt ? (

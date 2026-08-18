@@ -91,6 +91,25 @@ export const MESSAGE_TYPES = [
 ] as const;
 export type MessageType = (typeof MESSAGE_TYPES)[number];
 
+/**
+ * Rótulo curto por tipo de mensagem, para prévias: a lista de conversas (API)
+ * e o bloco de citação (web) mostram o mesmo texto. Fica aqui para a citação
+ * de uma mídia nunca aparecer vazia — e para os dois lados não divergirem.
+ */
+export const MESSAGE_TYPE_PREVIEW_LABELS: Record<MessageType, string> = {
+  text: "Mensagem",
+  image: "📷 Imagem",
+  audio: "🎤 Áudio",
+  video: "🎬 Vídeo",
+  document: "📄 Documento",
+  sticker: "🩵 Figurinha",
+  location: "📍 Localização",
+  contact: "👤 Contato",
+  poll: "📊 Enquete",
+  call: "📞 Chamada",
+  other: "Mensagem",
+};
+
 export const MESSAGE_STATUSES = [
   "pending",
   "sent",

@@ -5,6 +5,7 @@ import {
   extractContent,
   extractMentionedJids,
   extractQuotedMessageId,
+  extractQuotedPreview,
   extractSender,
   isGroupJid,
   isIgnorableJid,
@@ -147,6 +148,69 @@ describe("extractQuotedMessageId", () => {
 
   it("retorna null quando não há citação", () => {
     expect(extractQuotedMessageId({ conversation: "oi" })).toBeNull();
+  });
+});
+
+describe("extractQuotedPreview", () => {
+  it("extrai autor e texto da mensagem citada do próprio payload", () => {
+    // É este resumo que mantém a citação visível quando a original não está
+    // no banco (mensagem anterior à sincronização, por exemplo).
+    const message = {
+      extendedTextMessage: {
+        text: "O que precisa para regularizar o endereço?",
+        contextInfo: {
+          stanzaId: "ABC123",
+          participant: "5511999998888@s.whatsapp.net",
+          quotedMessage: { conversation: "Segue a lista de documentos..." },
+        },
+      },
+    };
+    expect(extractQuotedPreview(message, "5511000000000@s.whatsapp.net")).toEqual({
+      participantExternalId: "5511999998888@s.whatsapp.net",
+      fromMe: false,
+      type: "text",
+      content: "Segue a lista de documentos...",
+    });
+  });
+
+  it("citação de mídia carrega o tipo — o bloco nunca aparece vazio", () => {
+    const message = {
+      extendedTextMessage: {
+        text: "recebi, obrigado",
+        contextInfo: {
+          stanzaId: "IMG1",
+          participant: "5511999998888@s.whatsapp.net",
+          quotedMessage: { imageMessage: { caption: "contrato" } },
+        },
+      },
+    };
+    const preview = extractQuotedPreview(message, null);
+    expect(preview?.type).toBe("image");
+    expect(preview?.content).toBe("contrato");
+  });
+
+  it("reconhece a citação de mensagem nossa mesmo com sufixo de dispositivo", () => {
+    const message = {
+      extendedTextMessage: {
+        text: "ok",
+        contextInfo: {
+          stanzaId: "OUT1",
+          participant: "5511000000000:12@s.whatsapp.net",
+          quotedMessage: { conversation: "Bom dia!" },
+        },
+      },
+    };
+    expect(extractQuotedPreview(message, "5511000000000@s.whatsapp.net")?.fromMe).toBe(true);
+  });
+
+  it("sem citação (ou sem a cópia do conteúdo) devolve null", () => {
+    expect(extractQuotedPreview({ conversation: "oi" }, null)).toBeNull();
+    expect(
+      extractQuotedPreview(
+        { extendedTextMessage: { text: "oi", contextInfo: { stanzaId: "X" } } },
+        null,
+      ),
+    ).toBeNull();
   });
 });
 

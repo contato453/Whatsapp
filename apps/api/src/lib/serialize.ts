@@ -483,10 +483,13 @@ export interface MessageReactionView {
 
 /** Mensagem citada, resumida para a pré-visualização no chat. */
 export interface QuotedPreview {
+  /** Id interno da original quando ela existe no banco; null = só o resumo do payload. */
   id: string | null;
   senderName: string | null;
   content: string | null;
   type: string;
+  /** Quando a original existe no banco, permite navegar até ela. */
+  timestamp: string | null;
 }
 
 export function serializeMessage(
