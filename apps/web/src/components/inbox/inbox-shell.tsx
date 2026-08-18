@@ -15,7 +15,6 @@ import {
   Search,
   Send,
   StickyNote,
-  Trash2,
   Users2,
   X,
   Zap,
@@ -90,58 +89,13 @@ import { ScheduleModal } from "./composer-modals";
 import { MediaLightbox } from "./media-lightbox";
 import { MessageBubble } from "./message-bubble";
 import { ContextPanel } from "./context-panel";
+import {
+  InternalNoteBubble,
+  internalNoteActions,
+  useCanManageNote,
+} from "./internal-note";
 import { StatusSelect } from "./status-select";
 
-/** Nota interna exibida dentro da conversa — nunca vai para o WhatsApp. */
-function InternalNoteItem({
-  note,
-  canManage,
-  onEdit,
-  onDelete,
-}: {
-  note: NoteDto;
-  canManage: boolean;
-  onEdit: (note: NoteDto) => void;
-  onDelete: (note: NoteDto) => void;
-}) {
-  return (
-    <div className="group flex justify-center py-1">
-      <div className="relative max-w-[80%] rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 shadow-sm">
-        <p className="mb-0.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
-          <StickyNote className="h-3 w-3" /> Nota interna
-        </p>
-        <p className="whitespace-pre-wrap break-words text-sm text-slate-700">{note.content}</p>
-        <p className="mt-1 text-[10px] text-amber-600/80">
-          {note.user?.name ?? "—"} ·{" "}
-          {new Date(note.createdAt).toLocaleString("pt-BR", {
-            day: "2-digit",
-            month: "2-digit",
-            hour: "2-digit",
-            minute: "2-digit",
-          })}
-        </p>
-        {canManage && (
-          <div className="absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-            <button
-              onClick={() => onEdit(note)}
-              title="Editar nota"
-              className="rounded p-1 text-amber-600/70 hover:bg-amber-100 hover:text-amber-800"
-            >
-              <Pencil className="h-3 w-3" />
-            </button>
-            <button
-              onClick={() => onDelete(note)}
-              title="Apagar nota"
-              className="rounded p-1 text-amber-600/70 hover:bg-red-50 hover:text-red-600"
-            >
-              <Trash2 className="h-3 w-3" />
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 /** Status que a Inbox aceita receber pela URL — os mesmos do atendimento. */
 const STATUS_QUICK_FILTERS: QuickFilter[] = [
   "open",
@@ -472,6 +426,17 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       })
       .catch(() => setDetail(null));
   }, [conversationId]);
+
+  /**
+   * Editar e excluir nota: a MESMA implementação para o cartão do chat e para
+   * o item do painel lateral. Ela recarrega o detalhe, e como os dois leem
+   * `detail.notes`, mexer num lugar atualiza o outro na hora.
+   */
+  const noteActions = useMemo(
+    () => internalNoteActions(conversationId, loadDetail),
+    [conversationId, loadDetail],
+  );
+  const canManageNote = useCanManageNote();
 
   useEffect(() => {
     setDetail(null);
@@ -1017,29 +982,6 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     } catch (err) {
       window.alert(err instanceof Error ? err.message : "Falha ao reagir");
       loadDetail();
-    }
-  }
-
-  async function handleEditNote(note: NoteDto) {
-    const next = window.prompt("Editar nota interna:", note.content);
-    if (next === null) return;
-    const content = next.trim();
-    if (!content || content === note.content) return;
-    try {
-      await api.patch(`/conversations/${conversationId}/notes/${note.id}`, { content });
-      loadDetail();
-    } catch (err) {
-      window.alert(err instanceof Error ? err.message : "Falha ao editar nota");
-    }
-  }
-
-  async function handleDeleteNote(note: NoteDto) {
-    if (!window.confirm("Apagar esta nota interna?")) return;
-    try {
-      await api.delete(`/conversations/${conversationId}/notes/${note.id}`);
-      loadDetail();
-    } catch (err) {
-      window.alert(err instanceof Error ? err.message : "Falha ao apagar nota");
     }
   }
 
@@ -1609,14 +1551,12 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                     />
                     </div>
                   ) : (
-                    <InternalNoteItem
+                    <InternalNoteBubble
                       key={`note-${item.note.id}`}
                       note={item.note}
-                      canManage={
-                        item.note.user?.id === me?.id || me?.role === "admin" || me?.role === "supervisor"
-                      }
-                      onEdit={(note) => void handleEditNote(note)}
-                      onDelete={(note) => void handleDeleteNote(note)}
+                      canManage={canManageNote(item.note)}
+                      onEdit={noteActions.edit}
+                      onDelete={noteActions.delete}
                     />
                   ),
                 )
@@ -2085,6 +2025,8 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
             departments={departments}
             tags={tags}
             onChanged={loadDetail}
+            onEditNote={noteActions.edit}
+            onDeleteNote={noteActions.delete}
           />
         </div>
       )}
