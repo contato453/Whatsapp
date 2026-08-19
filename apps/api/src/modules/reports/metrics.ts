@@ -111,3 +111,86 @@ export function formatDuration(seconds: number | null): string {
   const rest = minutes % 60;
   return rest > 0 ? `${hours}h ${rest}min` : `${hours}h`;
 }
+
+/** Fila atual de uma linha do relatório, por status do atendimento. */
+export interface QueueByStatus {
+  open: number;
+  waitingClient: number;
+  waitingInternal: number;
+}
+
+export const emptyQueue = (): QueueByStatus => ({
+  open: 0,
+  waitingClient: 0,
+  waitingInternal: 0,
+});
+
+/** Uma linha do `groupBy` da fila, como o Prisma a devolve. */
+export interface QueueEntry {
+  assignedUserId: string | null;
+  assignedToAll: boolean;
+  status: string;
+  count: number;
+}
+
+/** As três formas de fila que a tabela mostra, já separadas. */
+export interface QueueBuckets {
+  /** Fila de cada pessoa, por id */
+  byUser: Map<string, QueueByStatus>;
+  /** Conversas órfãs: sem responsável e sem marcação coletiva */
+  unassigned: QueueByStatus;
+  /** Atendimento coletivo ("@todos"): sem dono por decisão, não por falta */
+  allUsers: QueueByStatus;
+}
+
+/**
+ * Separa a fila em pessoa, coletivo e órfã.
+ *
+ * **Esta partição é a mesma de `lib/report-slice.ts`**, e tem que continuar
+ * sendo: cada balde aqui é o número da célula, e o predicado de lá é o que o
+ * painel manda para `GET /conversations`. Se as duas divergirem, a célula
+ * diz "4" e o painel lista 3.
+ *
+ * A ordem dos testes importa: `assignedToAll` só vale quando não há
+ * responsável (o banco garante a exclusão mútua, mas ler na ordem certa
+ * deixa a regra visível aqui também), e o que sobra é a órfã de verdade.
+ */
+export function bucketQueueEntries(entries: QueueEntry[]): QueueBuckets {
+  const byUser = new Map<string, QueueByStatus>();
+  const unassigned = emptyQueue();
+  const allUsers = emptyQueue();
+
+  for (const entry of entries) {
+    let queue: QueueByStatus;
+    if (entry.assignedUserId) {
+      queue = byUser.get(entry.assignedUserId) ?? emptyQueue();
+      byUser.set(entry.assignedUserId, queue);
+    } else if (entry.assignedToAll) {
+      queue = allUsers;
+    } else {
+      queue = unassigned;
+    }
+    if (entry.status === "open") queue.open += entry.count;
+    if (entry.status === "waiting_client") queue.waitingClient += entry.count;
+    if (entry.status === "waiting_internal") queue.waitingInternal += entry.count;
+  }
+
+  return { byUser, unassigned, allUsers };
+}
+
+/** Soma das três colunas de fila — "na fila agora" daquela linha. */
+export function queueTotal(queue: QueueByStatus): number {
+  return queue.open + queue.waitingClient + queue.waitingInternal;
+}
+
+/** Soma célula a célula, para o total do cabeçalho de cada coluna. */
+export function sumQueues(queues: QueueByStatus[]): QueueByStatus {
+  return queues.reduce<QueueByStatus>(
+    (sum, queue) => ({
+      open: sum.open + queue.open,
+      waitingClient: sum.waitingClient + queue.waitingClient,
+      waitingInternal: sum.waitingInternal + queue.waitingInternal,
+    }),
+    emptyQueue(),
+  );
+}

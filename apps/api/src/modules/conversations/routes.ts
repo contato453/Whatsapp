@@ -49,6 +49,7 @@ import {
   unreadConversationWhere,
 } from "../../lib/conversation-reads.js";
 import { assertKnownFilterIds, listaDe } from "../../lib/conversation-filters.js";
+import { resolvedInPeriodWhere } from "../../lib/report-slice.js";
 import { canApplyToConversation } from "../../lib/department-resource.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import {
@@ -125,6 +126,24 @@ const listQuerySchema = z.object({
    * fora", e o caminho natural para a equipe ir vinculando o que falta.
    */
   unlinked: z.coerce.boolean().optional(),
+  /**
+   * Conversas CONCLUÍDAS por uma pessoa dentro de um intervalo.
+   *
+   * É o recorte da coluna "Concluídas" do relatório de atendimentos, e é o
+   * único da tela que a lista ainda não sabia responder: os outros três são
+   * status mais responsável, que os filtros acima já cobrem. Ele mora aqui,
+   * e não numa rota nova de listagem, porque duas listagens de conversa
+   * divergiriam na primeira mudança de escopo, de serializer ou de
+   * paginação — e a que quase ninguém abre seria a que passaria a mostrar
+   * demais.
+   *
+   * Repare que ele NÃO olha o status atual: mede o evento de conclusão, e a
+   * conversa concluída ontem e reaberta hoje continua sendo trabalho fechado
+   * ontem. É a mesma definição que a célula conta.
+   */
+  resolvedBy: z.string().uuid().optional(),
+  resolvedFrom: z.string().datetime().optional(),
+  resolvedTo: z.string().datetime().optional(),
   limit: z.coerce.number().min(1).max(100).default(50),
   offset: z.coerce.number().min(0).default(0),
 })
@@ -133,7 +152,15 @@ const listQuerySchema = z.object({
   // lista sempre vazia que essa combinação produziria.
   .refine((query) => !(query.unlinked && (query.taxRegime.length > 0 || query.payroll.length > 0)), {
     message: "O filtro de conversas sem empresa não combina com regime ou folha.",
-  });
+  })
+  // Os três andam juntos: sem o intervalo, "concluídas por fulano" viraria
+  // "de sempre", que é um recorte diferente do que a célula conta. Recusar é
+  // melhor do que assumir um período por conta própria.
+  .refine(
+    (query) =>
+      [query.resolvedBy, query.resolvedFrom, query.resolvedTo].filter(Boolean).length % 3 === 0,
+    { message: "O filtro de concluídas exige responsável, data inicial e data final." },
+  );
 
 export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
   /**
@@ -166,7 +193,9 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     // chegar aqui um id desconhecido significa link torto ou estado corrompido.
     await assertKnownFilterIds(deps.prisma, request.user.organizationId, {
       departmentIds: assignment.departmentIds,
-      userIds: assignment.userIds,
+      // O responsável do recorte de concluídas passa pela mesma conferência:
+      // id que não existe é recusado, nunca ignorado em silêncio.
+      userIds: [...assignment.userIds, ...(query.resolvedBy ? [query.resolvedBy] : [])],
       tagIds: query.tagId,
       instanceIds: query.instanceId,
     });
@@ -220,6 +249,17 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     if (query.tagId.length > 0) filtros.push({ tags: { some: { tagId: { in: query.tagId } } } });
     const atendimento = assignmentFilterWhere(assignment);
     if (atendimento) filtros.push(atendimento);
+    // O predicado sai de `lib/report-slice.ts`, o mesmo arquivo que a
+    // contagem da célula usa: é assim que o número e a lista não divergem.
+    if (query.resolvedBy && query.resolvedFrom && query.resolvedTo) {
+      filtros.push(
+        resolvedInPeriodWhere(
+          query.resolvedBy,
+          new Date(query.resolvedFrom),
+          new Date(query.resolvedTo),
+        ),
+      );
+    }
 
     /**
      * Recorte por característica do cliente (regime tributário e folha), que

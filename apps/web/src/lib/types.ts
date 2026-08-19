@@ -346,15 +346,35 @@ export interface QueueByStatusDto {
   waitingInternal: number;
 }
 
+/**
+ * Linha da tabela que não pertence a ninguém: as conversas órfãs e as
+ * coletivas ("@todos"). Só fila — mensagens, tempo médio e concluídas são
+ * medidas de uma PESSOA, e zero ali seria lido como "não trabalhou".
+ */
+export interface AgentReportQueueRowDto {
+  queue: QueueByStatusDto;
+  openNow: number;
+}
+
 export interface AgentReportDto {
   from: string;
   to: string;
   rows: AgentReportRowDto[];
+  /** Conversas sem responsável de verdade (nem pessoa, nem @todos). */
+  unassigned: AgentReportQueueRowDto;
+  /** Atendimento coletivo: sem dono por decisão, não por falta. */
+  allUsers: AgentReportQueueRowDto;
   totals: {
     messagesReceived: number;
     messagesSent: number;
     conversationsResolved: number;
+    /** Soma das três colunas de fila, incluindo as linhas sem dono. */
     openNow: number;
+    /**
+     * Total de cada coluna de status, para o cabeçalho. Inclui as linhas de
+     * sem responsável e de @todos: o número do cabeçalho tem que bater com a
+     * soma do que está visível na coluna.
+     */
     queue: QueueByStatusDto;
   };
   /** true quando o período estourou o teto e os números ficaram parciais */
