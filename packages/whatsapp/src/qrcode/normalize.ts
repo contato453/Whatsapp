@@ -327,6 +327,23 @@ export function toDate(timestamp: number | LongLike | null | undefined): Date {
 }
 
 /**
+ * A mensagem tem alguma coisa para mostrar?
+ *
+ * Conteúdo classificado como `other`, sem texto e sem arquivo, é uma linha
+ * que a Inbox só sabe desenhar como "Mídia indisponível": sem frase para
+ * ler, sem arquivo para baixar, sem nada que o atendente possa fazer. Foi
+ * assim que os pacotes de protocolo viraram lixo no histórico, e é a última
+ * trava contra QUALQUER formato novo que o WhatsApp mande e que ainda não
+ * saibamos ler — não dá para prever o próximo, dá para garantir que ele não
+ * suje a conversa.
+ */
+export function isDisplayableContent(extracted: ExtractedContent | null): boolean {
+  if (!extracted) return false;
+  if (extracted.type !== "other") return true;
+  return Boolean(extracted.content) || extracted.hasMedia;
+}
+
+/**
  * Valores de `proto.Message.ProtocolMessage.Type` que nos interessam.
  * Ficam como constante local para este módulo continuar puro (e testável
  * sem abrir socket): importar o enum do Baileys só para comparar dois

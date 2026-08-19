@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { proto } from "@whiskeysockets/baileys";
-import { extractProtocolAction, extractEditedContent } from "../src/qrcode/normalize.js";
+import {
+  extractContent,
+  extractEditedContent,
+  extractProtocolAction,
+  isDisplayableContent,
+} from "../src/qrcode/normalize.js";
 
 /**
  * Editar e apagar NÃO são mensagem: chegam como pacote de protocolo
@@ -157,5 +162,20 @@ describe("extractEditedContent", () => {
     // "edição" que ninguém fez.
     expect(extractEditedContent(asMessage({ imageMessage: { caption: "foto" } }))).toBeNull();
     expect(extractEditedContent(asMessage({ conversation: "oi" }))).toBeNull();
+  });
+});
+
+describe("isDisplayableContent", () => {
+  it("bolha sem texto, sem arquivo e de tipo desconhecido não é mensagem", () => {
+    // É a última trava: qualquer formato novo do WhatsApp que caia no
+    // fallback "other" para de virar a linha "Mídia indisponível".
+    expect(isDisplayableContent(extractContent(asMessage({ messageContextInfo: {} })))).toBe(false);
+    expect(isDisplayableContent(null)).toBe(false);
+  });
+
+  it("mensagem de verdade continua passando", () => {
+    expect(isDisplayableContent(extractContent(asMessage({ conversation: "oi" })))).toBe(true);
+    expect(isDisplayableContent(extractContent(asMessage({ audioMessage: {} })))).toBe(true);
+    expect(isDisplayableContent(extractContent(asMessage({ stickerMessage: {} })))).toBe(true);
   });
 });

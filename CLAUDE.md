@@ -1452,7 +1452,11 @@ sempre juntos.
   porque recodificar o que já funciona só perde qualidade. Mesma regra na mídia da
   resposta rápida, normalizada **uma vez no cadastro** em vez de a cada envio.
 - Ingestão é idempotente por `(conversationId, externalMessageId)` — não crie caminho
-  paralelo de inserção de mensagem.
+  paralelo de inserção de mensagem. E **conteúdo que não dá para exibir não vira linha**:
+  `isDisplayableContent` (`qrcode/normalize.ts`) barra o que cai no fallback `other` sem
+  texto e sem arquivo, com log `message_without_content_skipped`. É a trava final contra o
+  próximo formato que o WhatsApp inventar — não dá para prever qual será, dá para garantir
+  que ele não suje a conversa com "Mídia indisponível".
 - **Menção NÃO é formatação de texto.** Escrever "@Fulano" (ou até o número) na mensagem
   não marca ninguém: quem notifica é a lista de identificadores em
   `contextInfo.mentionedJid`, que viaja **ao lado** do texto — do composer

@@ -39,6 +39,7 @@ import {
   extractProtocolAction,
   extractQuotedMessageId,
   extractSender,
+  isDisplayableContent,
   isGroupJid,
   isIgnorableJid,
   jidToPhone,
@@ -442,7 +443,19 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     }
 
     const extracted = extractContent(message.message);
-    if (!extracted) return; // protocolo — não exibível
+    // Protocolo, ou formato que não sabemos ler: nos dois casos não há bolha
+    // a criar. Gravar assim mesmo produzia a linha "Mídia indisponível", que
+    // não diz nada ao atendente e ainda esconde que algo chegou errado — o
+    // log conta, o histórico fica limpo.
+    if (!extracted) return;
+    if (!isDisplayableContent(extracted)) {
+      this.logger.info({
+        instanceId,
+        messageId: message.key?.id ?? null,
+        event: "message_without_content_skipped",
+      });
+      return;
+    }
 
     const { senderExternalId, senderPhone } = extractSender(message.key, state.ownJid);
     const socket = state.socket;
