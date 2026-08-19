@@ -57,6 +57,7 @@ const FILTRADO: InboxFilters = {
   taxRegime: ["simples"],
   payroll: ["folha_fixa"],
   unlinked: false,
+  overdue: false,
 };
 
 function conversa(overrides: Partial<ConversationDto> = {}): ConversationDto {

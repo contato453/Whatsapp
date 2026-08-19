@@ -1,6 +1,6 @@
 "use client";
 
-import { ListFilter, Search, TriangleAlert, X, Building2 } from "lucide-react";
+import { AlertTriangle, ListFilter, Search, TriangleAlert, X, Building2 } from "lucide-react";
 import {
   ALL_USERS_ASSIGNEE_LABEL,
   ASSIGNMENT_ALL_USERS,
@@ -91,12 +91,14 @@ const FIELD_LABELS: Record<InboxFilterField, string> = {
   taxRegime: AZEVEDO_OS_TAX_REGIME_LABEL,
   payroll: AZEVEDO_OS_PAYROLL_LABEL,
   unlinked: "Sem empresa",
+  overdue: "Atrasadas",
 };
 
 /** Ordem do resumo: a mesma da barra, para o olho não precisar procurar. */
 const SUMMARY_FIELDS: InboxFilterField[] = [
   "view",
   "search",
+  "overdue",
   "statuses",
   "assignment",
   "instanceIds",
@@ -352,6 +354,25 @@ export function FilterBar({
         <p className="px-0.5 text-[11px] text-amber-700">
           O cadastro devolveu empresas demais e a lista foi cortada. Combine com outro filtro para
           estreitar o recorte.
+        </p>
+      )}
+
+      {/* O atraso é decidido pelo servidor (expediente + direção da última
+          mensagem), então a barra não tem um seletor para ele: ele chega pelo
+          card "Atrasados agora" do dashboard. O que ela precisa dar é a saída,
+          e dizer que a lista está recortada — lista curta sem explicação é o
+          defeito que este aviso existe para impedir. */}
+      {filters.overdue && (
+        <p className="flex flex-wrap items-center gap-x-1.5 rounded-lg bg-red-50 px-2 py-1.5 text-[11px] text-red-800">
+          <AlertTriangle className="h-3 w-3 shrink-0" />
+          Mostrando só conversas atrasadas: sem resposta além do limite, em tempo de expediente.
+          <button
+            type="button"
+            className="font-medium underline underline-offset-2"
+            onClick={() => onChange({ overdue: false })}
+          >
+            Voltar
+          </button>
         </p>
       )}
 

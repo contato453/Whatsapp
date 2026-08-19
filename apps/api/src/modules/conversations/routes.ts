@@ -50,6 +50,8 @@ import {
 } from "../../lib/conversation-reads.js";
 import { assertKnownFilterIds, listaDe } from "../../lib/conversation-filters.js";
 import { resolvedInPeriodWhere } from "../../lib/report-slice.js";
+import { loadAttendanceSettings } from "../../lib/attendance-settings.js";
+import { scanOverdueConversations } from "../../lib/overdue.js";
 import { canApplyToConversation } from "../../lib/department-resource.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import {
@@ -144,6 +146,16 @@ const listQuerySchema = z.object({
   resolvedBy: z.string().uuid().optional(),
   resolvedFrom: z.string().datetime().optional(),
   resolvedTo: z.string().datetime().optional(),
+  /**
+   * Só as ATRASADAS: não resolvidas, com a última mensagem do cliente,
+   * esperando há mais que o limite em tempo de expediente. É o atalho do card
+   * "Atrasados agora" do dashboard, e a conta é a MESMA (`lib/overdue.ts`) —
+   * um número que abre uma lista diferente dele não serve para nada.
+   *
+   * Continua booleano, e não vira lista: é uma pergunta sobre o estado agora,
+   * não um valor que some com outro.
+   */
+  overdue: z.coerce.boolean().optional(),
   limit: z.coerce.number().min(1).max(100).default(50),
   offset: z.coerce.number().min(0).default(0),
 })
@@ -259,6 +271,26 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
           new Date(query.resolvedTo),
         ),
       );
+    }
+
+    /**
+     * Atrasadas: a lista do card do dashboard. O recorte sai de
+     * `lib/overdue.ts` sobre o `where` JÁ escopado por `access.ts` — a função
+     * só estreita o conjunto, e nunca traz de volta conversa que a pessoa não
+     * enxergaria. Entra como mais um item do `AND`, por cima do escopo.
+     */
+    if (query.overdue) {
+      const settings = await loadAttendanceSettings(deps.prisma, request.user.organizationId);
+      const atrasadas = await scanOverdueConversations(
+        deps.prisma,
+        request.user.organizationId,
+        { ...where, AND: Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : [] },
+        settings,
+        new Date(),
+      );
+      // Lista vazia devolve `in: []`, que é "nenhuma" — e não "todas". Sem
+      // atraso nenhum a lista tem que vir vazia mesmo.
+      filtros.push({ id: { in: atrasadas.ids } });
     }
 
     /**

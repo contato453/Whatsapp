@@ -71,6 +71,13 @@ export interface InboxFilters {
   payroll: string[];
   /** Atalho do aviso: só conversas sem empresa vinculada. */
   unlinked: boolean;
+  /**
+   * Só as ATRASADAS — o atalho do card "Atrasados agora" do dashboard. Quem
+   * decide o que é atraso é o servidor (não resolvida, última mensagem do
+   * cliente, esperando além do limite em tempo de expediente), então este
+   * campo é um pedido, e não um critério que a tela saiba avaliar sozinha.
+   */
+  overdue: boolean;
 }
 
 export const EMPTY_INBOX_FILTERS: InboxFilters = {
@@ -84,6 +91,7 @@ export const EMPTY_INBOX_FILTERS: InboxFilters = {
   taxRegime: [],
   payroll: [],
   unlinked: false,
+  overdue: false,
 };
 
 /**
@@ -102,6 +110,17 @@ export function mergeInboxFilters(current: InboxFilters, patch: Partial<InboxFil
 /** O recorte que só o servidor sabe avaliar está ligado? */
 export function hasCompanyFilter(filters: InboxFilters): boolean {
   return filters.taxRegime.length > 0 || filters.payroll.length > 0 || filters.unlinked;
+}
+
+/**
+ * Recortes que a tela NÃO consegue avaliar sozinha, e que por isso impedem o
+ * tempo real de INSERIR linha nova na lista. O regime do cliente mora no
+ * Azevedo-OS; o atraso depende do expediente e da direção da última mensagem.
+ * Chutar que a conversa que acabou de chegar casa mostraria linha errada até
+ * o próximo F5. Linha que já veio do servidor continua sendo atualizada.
+ */
+export function hasServerOnlyFilter(filters: InboxFilters): boolean {
+  return hasCompanyFilter(filters) || filters.overdue;
 }
 
 /** Mesmo prefixo do token (`zapdesk.`), como o rascunho e a barra lateral. */
@@ -196,6 +215,7 @@ export function readInboxFilters(userId: string): InboxFilters {
       taxRegime: readList(parsed.taxRegime, () => true),
       payroll: readList(parsed.payroll, () => true),
       unlinked: parsed.unlinked === true,
+      overdue: parsed.overdue === true,
     };
     return readLegacy(parsed, base);
   }, EMPTY_INBOX_FILTERS);
@@ -225,6 +245,7 @@ export const INBOX_FILTER_FIELDS = [
   "taxRegime",
   "payroll",
   "unlinked",
+  "overdue",
 ] as const;
 export type InboxFilterField = (typeof INBOX_FILTER_FIELDS)[number];
 
@@ -236,6 +257,8 @@ export function filterFieldIsActive(filters: InboxFilters, field: InboxFilterFie
       return filters.search.trim() !== "";
     case "unlinked":
       return filters.unlinked;
+    case "overdue":
+      return filters.overdue;
     default:
       return filters[field].length > 0;
   }
@@ -250,6 +273,8 @@ export function clearFilterField(filters: InboxFilters, field: InboxFilterField)
       return { ...filters, search: "" };
     case "unlinked":
       return { ...filters, unlinked: false };
+    case "overdue":
+      return { ...filters, overdue: false };
     default:
       return { ...filters, [field]: [] };
   }
@@ -323,6 +348,13 @@ export function conversationMatchesFilters(
   if (filters.tagIds.length > 0 && !conversation.tags.some((tag) => filters.tagIds.includes(tag.id))) {
     return false;
   }
+
+  // O ATRASO não é avaliado aqui, de propósito: ele depende do expediente e
+  // da direção da última mensagem, que o DTO não carrega. Quem decide é o
+  // servidor — por isso `hasServerOnlyFilter` impede a INSERÇÃO de linha nova
+  // enquanto o filtro está ligado, e a linha que já veio de lá segue sendo
+  // atualizada (a resposta da equipe aparece na hora; a saída dela da lista
+  // acontece na próxima carga).
 
   // O filtro unificado: basta UM item marcado casar. É aqui que "o Contábil
   // inteiro mais a fulana" soma em vez de cruzar, e por isso os ramos são

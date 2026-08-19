@@ -362,22 +362,41 @@ export interface OverdueResult {
 }
 
 /**
- * Quantas conversas passaram do limite e há quanto tempo espera a mais
- * antiga. A espera é sempre em tempo útil — comparar contra tempo de relógio
- * marcaria como atrasado tudo o que chegou depois do expediente.
+ * QUAIS conversas passaram do limite, e há quanto tempo cada uma espera.
+ *
+ * A espera é sempre em tempo útil — comparar contra tempo de relógio marcaria
+ * como atrasado tudo o que chegou depois do expediente. É a fonte única da
+ * definição de "atrasada": o card do dashboard conta o que sai daqui, e a
+ * lista de conversas filtra por estes mesmos ids. Duas contas separadas
+ * dariam ao clique no card uma lista que não bate com o número dele.
  */
+export function selectOverdue(
+  waiting: WaitingConversation[],
+  settings: Pick<AttendanceSettings, "timezone" | "businessHours" | "responseLimitMinutes">,
+  now: Date,
+): Array<{ conversationId: string; minutes: number }> {
+  const atrasadas: Array<{ conversationId: string; minutes: number }> = [];
+  for (const conversation of waiting) {
+    const minutes = businessMinutesBetween(conversation.lastInboundAt, now, settings);
+    if (minutes <= settings.responseLimitMinutes) continue;
+    atrasadas.push({ conversationId: conversation.conversationId, minutes });
+  }
+  return atrasadas;
+}
+
+/** Quantas passaram do limite e há quanto tempo espera a mais antiga. */
 export function computeOverdue(
   waiting: WaitingConversation[],
   settings: Pick<AttendanceSettings, "timezone" | "businessHours" | "responseLimitMinutes">,
   now: Date,
 ): OverdueResult {
-  let count = 0;
-  let oldest: number | null = null;
-  for (const conversation of waiting) {
-    const minutes = businessMinutesBetween(conversation.lastInboundAt, now, settings);
-    if (minutes <= settings.responseLimitMinutes) continue;
-    count += 1;
-    if (oldest === null || minutes > oldest) oldest = minutes;
-  }
-  return { count, oldestWaitingMinutes: oldest === null ? null : Math.floor(oldest) };
+  const atrasadas = selectOverdue(waiting, settings, now);
+  const oldest = atrasadas.reduce<number | null>(
+    (maior, row) => (maior === null || row.minutes > maior ? row.minutes : maior),
+    null,
+  );
+  return {
+    count: atrasadas.length,
+    oldestWaitingMinutes: oldest === null ? null : Math.floor(oldest),
+  };
 }

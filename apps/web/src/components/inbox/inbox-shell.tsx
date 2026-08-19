@@ -54,6 +54,7 @@ import {
   EMPTY_INBOX_FILTERS,
   conversationMatchesFilters,
   hasCompanyFilter,
+  hasServerOnlyFilter,
   mergeInboxFilters,
   hasActiveInboxFilters,
   readInboxFilters,
@@ -270,6 +271,8 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const instanceParam = searchParams.getAll("instanceId").join(",");
   // É assim que o card de arquivadas do dashboard abre a visão certa.
   const archivedParam = searchParams.get("archived");
+  // E é assim que o card "Atrasados agora" abre a lista dele.
+  const overdueParam = searchParams.get("overdue");
 
   // O card do dashboard semeia os status pedidos, e eles SUBSTITUEM o que
   // estava marcado: a pessoa clicou num card pedindo aquele recorte
@@ -284,6 +287,13 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       setFilters((current) => ({ ...current, view: "archived" }));
     }
   }, [archivedParam]);
+
+  useEffect(() => {
+    if (overdueParam !== "true" && overdueParam !== "1") return;
+    // Atrasada é sempre não arquivada, então o filtro chega junto da visão
+    // padrão: cair na visão "Arquivadas" com ele ligado daria lista vazia.
+    setFilters((current) => ({ ...current, overdue: true, view: "all" }));
+  }, [overdueParam]);
 
   useEffect(() => {
     if (!canFilterScope) return;
@@ -441,6 +451,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     lista("taxRegime", filters.taxRegime);
     lista("payroll", filters.payroll);
     if (filters.unlinked) params.set("unlinked", "true");
+    if (filters.overdue) params.set("overdue", "true");
     params.set("limit", "80");
     api
       .get<{
@@ -610,12 +621,12 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         if (!conversationMatchesFilters(payload.conversation, filters, meId, count)) {
           return rest.length === current.length ? current : rest;
         }
-        // Com o recorte por empresa ligado, linha que ainda não estava na
-        // lista NÃO entra: só o servidor sabe o regime do cliente, e chutar
-        // que ela casa mostraria conversa de outro regime até o próximo F5.
+        // Com um recorte que só o servidor sabe avaliar (regime do cliente,
+        // atraso), linha que ainda não estava na lista NÃO entra: chutar que
+        // ela casa mostraria conversa fora do recorte até o próximo F5.
         // Linha que já veio do servidor continua sendo atualizada.
         const jaEstava = rest.length !== current.length;
-        if (!jaEstava && hasCompanyFilter(filters)) return current;
+        if (!jaEstava && hasServerOnlyFilter(filters)) return current;
         return [payload.conversation, ...rest];
       });
       // Contador de cada um sobe sozinho na aba de cada um. A conversa
@@ -1358,7 +1369,9 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
               icon={<InboxIcon className="h-10 w-10" />}
               title="Nenhuma conversa encontrada"
               description={
-                hasCompanyFilter(filters)
+                filters.overdue
+                  ? "Nenhuma conversa atrasada no recorte ativo — toda mensagem de cliente foi respondida dentro do limite."
+                  : hasCompanyFilter(filters)
                   ? "Nenhuma conversa casa com os filtros ativos. O recorte por característica do cliente só alcança conversas com empresa vinculada ao Azevedo-OS."
                   : hasActiveInboxFilters(filters)
                     ? "Nenhuma conversa casa com os filtros ativos. Limpe os filtros para ver tudo."
