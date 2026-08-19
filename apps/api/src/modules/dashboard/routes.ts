@@ -19,6 +19,7 @@ import {
   unassignedConversationWhere,
 } from "../../lib/conversation-assignment.js";
 import { authenticate } from "../../lib/auth.js";
+import { assertKnownFilterIds, listaDe } from "../../lib/conversation-filters.js";
 import { loadPermissions } from "../../lib/permissions.js";
 import { serializeDashboardStats, type DashboardTopUserRow } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
@@ -43,21 +44,40 @@ const idOrNone = z.union([z.string().uuid(), z.literal(FILTER_NONE)]);
  */
 const assigneeFilter = z.union([idOrNone, z.literal(FILTER_ALL_USERS)]);
 
+/**
+ * Filtros da tela, todos em LISTA.
+ *
+ * **OU dentro do filtro, E entre filtros** (a regra e o porquê completos
+ * estão em `@azvchat/shared/dashboard-filters`). Os nomes continuam no
+ * singular, como na Inbox: o parâmetro é repetido (`?instanceId=a&instanceId=b`)
+ * e o link antigo, de um valor só, continua valendo sem tratamento nenhum.
+ *
+ * Item inválido é RECUSADO, nunca ignorado: uuid torto, status fora do enum
+ * ou id que não existe na organização derrubam a requisição com 400. Ignorar
+ * em silêncio devolveria números plausíveis recortados por um critério
+ * diferente do que a pessoa marcou — e aqui o resultado é um número só, que
+ * ninguém consegue conferir de olho.
+ */
 const statsQuerySchema = z
   .object({
+    /**
+     * O período continua ÚNICO, e não vira lista: ele é um intervalo, não um
+     * conjunto. "Hoje" mais "30 dias" não significa nada — ou é a união (que
+     * é só o intervalo maior) ou é contradição.
+     */
     period: z.enum(DASHBOARD_PERIODS).default("today"),
     /** Só valem com `period=custom`; são datas civis no fuso configurado. */
     from: z.string().regex(DATE_ONLY_PATTERN, "Data deve estar no formato AAAA-MM-DD").optional(),
     to: z.string().regex(DATE_ONLY_PATTERN, "Data deve estar no formato AAAA-MM-DD").optional(),
-    instanceId: z.string().uuid().optional(),
+    instanceId: listaDe(z.string().uuid()),
     /**
-     * Recorta a tela inteira para um status de atendimento. Com ele, o fluxo
-     * por status mostra só a coluna pedida — os filtros refinam, nunca somem
+     * Recorta a tela inteira para os status marcados. Com eles, o fluxo por
+     * status mostra só as colunas pedidas — os filtros refinam, nunca somem
      * com número em silêncio.
      */
-    status: z.enum(CONVERSATION_STATUSES).optional(),
-    departmentId: idOrNone.optional(),
-    assignedUserId: assigneeFilter.optional(),
+    status: listaDe(z.enum(CONVERSATION_STATUSES)),
+    departmentId: listaDe(idOrNone),
+    assignedUserId: listaDe(assigneeFilter),
   })
   .superRefine((query, ctx) => {
     if (query.period !== "custom") return;
@@ -149,31 +169,82 @@ function scopedConversationWhere(
   return { AND: conditions };
 }
 
+/**
+ * Junta os ramos de um filtro num item só do `AND`.
+ *
+ * Um ramo vai direto; vários viram `OR`, que é o "somam entre si". Lista
+ * vazia não gera item nenhum — o "todos" daquele filtro.
+ */
+function ouEntre(ramos: Prisma.ConversationWhereInput[]): Prisma.ConversationWhereInput | null {
+  if (ramos.length === 0) return null;
+  if (ramos.length === 1) return ramos[0] ?? null;
+  return { OR: ramos };
+}
+
+/**
+ * Os filtros da tela como itens de um `AND`.
+ *
+ * **OU dentro de cada filtro, E entre filtros diferentes.** Cada item desta
+ * lista é um filtro inteiro; dentro dele os valores marcados somam (pelo `in`
+ * ou por um `OR`), e os itens cruzam entre si porque estão todos no mesmo
+ * `AND`. Inverter isso zeraria a tela em quase toda marcação múltipla — uma
+ * conversa não está em dois departamentos ao mesmo tempo.
+ *
+ * **Departamento e responsável são DOIS filtros, e cruzam.** É divergência
+ * proposital em relação à Inbox, onde eles viraram um filtro só que soma: lá
+ * a pergunta é de triagem e o resultado é uma lista; aqui é de análise e o
+ * resultado é um número, e somar recortes diferentes dentro do mesmo total
+ * produz número sem significado. Marcar "CS" e alguém que não é do CS devolve
+ * zero, e isso está certo. O porquê completo está em
+ * `@azvchat/shared/dashboard-filters`.
+ */
 function dashboardFilterConditions(query: StatsQuery): Prisma.ConversationWhereInput[] {
   const conditions: Prisma.ConversationWhereInput[] = [];
-  if (query.instanceId) {
-    conditions.push({ whatsappInstanceId: query.instanceId });
+  if (query.instanceId.length > 0) {
+    conditions.push({ whatsappInstanceId: { in: query.instanceId } });
   }
-  if (query.status) {
-    // Entra no mesmo AND dos demais: pedir `resolved` zera o card de atraso
-    // por construção, porque lá o filtro convive com `status != resolved`.
-    conditions.push({ status: query.status });
+  if (query.status.length > 0) {
+    // Entra no mesmo AND dos demais: pedir só `resolved` zera o card de
+    // atraso por construção, porque lá o filtro convive com
+    // `status != resolved`.
+    conditions.push({ status: { in: query.status } });
   }
-  if (query.departmentId) {
-    conditions.push({
-      departmentId: query.departmentId === FILTER_NONE ? null : query.departmentId,
-    });
-  }
-  if (query.assignedUserId === FILTER_NONE) {
+
+  // Departamento: os ids marcados somam entre si, e "sem departamento" é mais
+  // um ramo do mesmo OU — a conversa que o número não classificou continua
+  // sendo um recorte que a supervisão pede junto dos outros.
+  const departmentIds = query.departmentId.filter((value) => value !== FILTER_NONE);
+  const departmentBranches: Prisma.ConversationWhereInput[] = [
+    ...(query.departmentId.includes(FILTER_NONE) ? [{ departmentId: null }] : []),
+    ...(departmentIds.length > 0 ? [{ departmentId: { in: departmentIds } }] : []),
+  ];
+  const departmentWhere = ouEntre(departmentBranches);
+  if (departmentWhere) conditions.push(departmentWhere);
+
+  const userIds = query.assignedUserId.filter(
+    (value) => value !== FILTER_NONE && value !== FILTER_ALL_USERS,
+  );
+  const assigneeBranches: Prisma.ConversationWhereInput[] = [
     // "Sem responsável" conta só as verdadeiramente órfãs: a coletiva tem
     // destino definido e sairia como problema de fila se entrasse aqui.
-    conditions.push(unassignedConversationWhere());
-  } else if (query.assignedUserId === FILTER_ALL_USERS) {
-    conditions.push(assignedToAllWhere());
-  } else if (query.assignedUserId) {
-    conditions.push({ assignedUserId: query.assignedUserId });
-  }
+    ...(query.assignedUserId.includes(FILTER_NONE) ? [unassignedConversationWhere()] : []),
+    ...(query.assignedUserId.includes(FILTER_ALL_USERS) ? [assignedToAllWhere()] : []),
+    ...(userIds.length > 0 ? [{ assignedUserId: { in: userIds } }] : []),
+  ];
+  const assigneeWhere = ouEntre(assigneeBranches);
+  if (assigneeWhere) conditions.push(assigneeWhere);
+
   return conditions;
+}
+
+/** Os ids de departamento e de pessoa marcados, sem os sentinelas. */
+function filterEntityIds(query: StatsQuery): { departmentIds: string[]; userIds: string[] } {
+  return {
+    departmentIds: query.departmentId.filter((value) => value !== FILTER_NONE),
+    userIds: query.assignedUserId.filter(
+      (value) => value !== FILTER_NONE && value !== FILTER_ALL_USERS,
+    ),
+  };
 }
 
 export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
@@ -198,9 +269,34 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
     // Todo número desta tela sai do mesmo recorte da Inbox — nada de filtro
     // de acesso montado à mão —, com os filtros da tela por cima.
     const access = await loadConversationAccess(deps.prisma, request.user);
-    const instanceFilter = query.instanceId
-      ? { id: query.instanceId, ...instanceIdScope(access.instanceIds) }
-      : instanceIdScope(access.instanceIds);
+
+    // Id que não existe na organização é RECUSADO, não ignorado: ignorar
+    // devolveria um número plausível recortado por um critério diferente do
+    // que a pessoa marcou, e número não se confere de olho. A tela poda o
+    // item extinto antes de mandar, então chegar aqui um id desconhecido
+    // significa link torto ou estado guardado corrompido.
+    await assertKnownFilterIds(deps.prisma, organizationId, {
+      ...filterEntityIds(query),
+      tagIds: [],
+      instanceIds: query.instanceId,
+    });
+
+    /**
+     * O card de infraestrutura conta NÚMEROS, e não conversas: o único filtro
+     * da tela que o recorta é o de número. Departamento e responsável são
+     * atributos da conversa — restringir a lista de conexões por eles faria o
+     * aviso de "fora do ar" esconder justamente o número que parou de receber
+     * conversa (por estar fora do ar), que é o contrário do que o card serve.
+     *
+     * O filtro entra em `AND` com o escopo, e não espalhado no objeto: os dois
+     * escrevem em `id`, e espalhar fazia o escopo SOBRESCREVER o filtro — o
+     * card ignorava o número escolhido para todo mundo que não é admin.
+     */
+    const instanceScopeWhere = instanceIdScope(access.instanceIds);
+    const instanceFilter =
+      query.instanceId.length > 0
+        ? { AND: [instanceScopeWhere, { id: { in: query.instanceId } }] }
+        : instanceScopeWhere;
     const conversationFilter = scopedConversationWhere(access, query, "active");
     const messageFilter = { conversation: conversationFilter };
 
@@ -478,9 +574,12 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
       {
         event: "dashboard_stats",
         period: query.period,
-        filtered: Boolean(
-          query.instanceId || query.status || query.departmentId || query.assignedUserId,
-        ),
+        filtered:
+          query.instanceId.length +
+            query.status.length +
+            query.departmentId.length +
+            query.assignedUserId.length >
+          0,
         overdueCandidates: overdueCandidates.length,
         durationMs: Date.now() - now.getTime(),
       },
@@ -494,10 +593,10 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
       generatedAt: now,
       settings,
       filters: {
-        instanceId: query.instanceId ?? null,
-        status: query.status ?? null,
-        departmentId: query.departmentId ?? null,
-        assignedUserId: query.assignedUserId ?? null,
+        instanceIds: query.instanceId,
+        statuses: query.status,
+        departmentIds: query.departmentId,
+        assignedUserIds: query.assignedUserId,
       },
       conversationsByStatus,
       archivedConversations,

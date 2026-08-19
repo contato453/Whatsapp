@@ -9,7 +9,6 @@ import {
   Archive,
   ArrowDownLeft,
   ArrowUpRight,
-  CalendarDays,
   CheckCircle2,
   CircleDot,
   Database,
@@ -35,10 +34,14 @@ import {
   ALL_USERS_ASSIGNEE_LABEL,
   CONVERSATION_STATUS_COLORS,
   CONVERSATION_STATUS_LABELS,
+  DASHBOARD_EMPTY_CROSS_MESSAGE,
+  DASHBOARD_EMPTY_FILTER_MESSAGE,
+  DASHBOARD_FILTER_LABELS,
+  DASHBOARD_NO_DEPARTMENT_LABEL,
   DASHBOARD_PERIODS,
   DASHBOARD_PERIOD_LABELS,
   DASHBOARD_PERIOD_PHRASES,
-  DATE_ONLY_PATTERN,
+  DASHBOARD_UNASSIGNED_LABEL,
   FILTER_ALL_USERS,
   FILTER_NONE,
   USER_ROLE_LABELS,
@@ -46,7 +49,16 @@ import {
   type ConversationStatus,
   type DashboardPeriod,
 } from "@azvchat/shared";
-import { api, dashboardApi, type DashboardFilters } from "@/lib/api";
+import { api, dashboardApi } from "@/lib/api";
+import {
+  clearDashboardFilters,
+  DEFAULT_DASHBOARD_FILTERS,
+  hasActiveDashboardFilters,
+  pruneDashboardFilters,
+  readDashboardFilters,
+  saveDashboardFilters,
+  type DashboardFilters,
+} from "@/lib/dashboard-filters";
 import { useAuth } from "@/lib/auth-context";
 import type {
   DashboardRankingRowDto,
@@ -57,25 +69,13 @@ import type {
   UserDirectoryDto,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { Card, EmptyState } from "@/components/ui";
+import { Card, EmptyState, MultiSelect, type MultiSelectGroup } from "@/components/ui";
 import { UserAvatar } from "@/components/user-avatar";
 import { MessagesTimeline } from "@/components/dashboard/messages-timeline";
 import { HoursHeatmap } from "@/components/dashboard/hours-heatmap";
 import { Sparkline } from "@/components/dashboard/sparkline";
 import { ConnectivityRing } from "@/components/dashboard/connectivity-ring";
 
-/**
- * Filtros da tela guardados por navegador, igual à barra lateral: mesmo
- * prefixo do token, nada de coluna em `User`. Quem abre o dashboard todo dia
- * olhando o mesmo departamento não deveria remontar o filtro toda vez.
- */
-const FILTERS_STORAGE_KEY = "zapdesk.dashboard-filters";
-/** Chave antiga, de quando só existia o período. Lida uma vez, para migrar. */
-const LEGACY_PERIOD_KEY = "zapdesk.dashboard-period";
-
-const DEFAULT_FILTERS: DashboardFilters = { period: "today" };
-
-/** A cada quanto a tela se recarrega sozinha — ver o efeito na página. */
 /**
  * O Dashboard fica no INDIGO de propósito, fora da paleta de marca.
  *
@@ -92,6 +92,7 @@ const DASHBOARD_ACCENT = "#4f46e5";
 /** Um degrau mais claro, para o card que não pede a mesma ênfase. */
 const DASHBOARD_ACCENT_SOFT = "#6366f1";
 
+/** A cada quanto a tela se recarrega sozinha — ver o efeito na página. */
 const AUTO_REFRESH_MS = 60_000;
 
 /** As duas cores das mensagens — o mesmo par validado dos gráficos. */
@@ -134,57 +135,6 @@ const CONNECTION_ISSUE_ICONS: Record<ConnectionStatus, ReactNode> = {
 
 const numberFormatter = new Intl.NumberFormat("pt-BR");
 
-function isPeriod(value: unknown): value is DashboardPeriod {
-  return typeof value === "string" && (DASHBOARD_PERIODS as readonly string[]).includes(value);
-}
-
-function isStatus(value: unknown): value is ConversationStatus {
-  return (
-    typeof value === "string" && (CONVERSATION_STATUSES as readonly string[]).includes(value)
-  );
-}
-
-function isDate(value: unknown): value is string {
-  return typeof value === "string" && DATE_ONLY_PATTERN.test(value);
-}
-
-/** Só devolve o que reconhece: storage adulterado não vira requisição inválida. */
-function readFilters(): DashboardFilters {
-  try {
-    const raw = window.localStorage.getItem(FILTERS_STORAGE_KEY);
-    if (!raw) {
-      const legacy = window.localStorage.getItem(LEGACY_PERIOD_KEY);
-      return isPeriod(legacy) ? { period: legacy } : DEFAULT_FILTERS;
-    }
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) return DEFAULT_FILTERS;
-    const value = parsed as Record<string, unknown>;
-    const filters: DashboardFilters = {
-      period: isPeriod(value.period) ? value.period : "today",
-    };
-    if (isDate(value.from)) filters.from = value.from;
-    if (isDate(value.to)) filters.to = value.to;
-    if (typeof value.instanceId === "string") filters.instanceId = value.instanceId;
-    if (isStatus(value.status)) filters.status = value.status;
-    if (typeof value.departmentId === "string") filters.departmentId = value.departmentId;
-    if (typeof value.assignedUserId === "string") filters.assignedUserId = value.assignedUserId;
-    // Personalizado sem as duas datas não é pedido válido: cai no padrão.
-    if (filters.period === "custom" && (!filters.from || !filters.to)) return DEFAULT_FILTERS;
-    return filters;
-  } catch {
-    // Storage bloqueado (aba privada) ou JSON estragado: vale o padrão, Hoje.
-    return DEFAULT_FILTERS;
-  }
-}
-
-function writeFilters(filters: DashboardFilters): void {
-  try {
-    window.localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(filters));
-  } catch {
-    // Sem storage a escolha vale só para esta aba — segue o jogo.
-  }
-}
-
 /** Data de hoje no relógio de quem está olhando, no formato do campo. */
 function todayInput(): string {
   const now = new Date();
@@ -194,32 +144,39 @@ function todayInput(): string {
 }
 
 /**
- * Endereço da Inbox já recortada, para o card de status virar atalho.
+ * O que o atalho para a Inbox consegue carregar: o número e o departamento,
+ * os dois em lista (a Inbox lê parâmetro repetido). "Sem departamento" vai
+ * junto, porque lá ele existe como token do filtro de atendimento.
  *
- * Vai só o que a Inbox sabe aplicar e mostrar: o status e, quando são ids de
- * verdade, o número e o departamento. "Sem departamento", "sem responsável" e
- * o filtro de responsável não têm controle equivalente lá, e mandar
- * parâmetro que ela ignoraria em silêncio seria pior do que não mandar.
+ * O RESPONSÁVEL fica de fora de propósito, e não por falta de controle na
+ * Inbox: lá departamento e responsável são um filtro só que SOMA, então
+ * mandar os dois viraria "o Contábil MAIS a fulana" — o contrário do
+ * cruzamento que o número do card representa. Melhor levar menos filtro e
+ * avisar do que levar um recorte diferente do que a pessoa estava lendo.
  *
  * O período também não vai: a Inbox lista por status, não por atividade num
  * intervalo. Por isso a tela avisa que a lista pode vir maior que o card.
  */
-function inboxHref(status: ConversationStatus, filters: DashboardFilters): string {
-  const params = new URLSearchParams({ status });
-  if (filters.instanceId) params.set("instanceId", filters.instanceId);
-  if (filters.departmentId && filters.departmentId !== FILTER_NONE) {
-    params.set("departmentId", filters.departmentId);
+function inboxScopeParams(filters: DashboardFilters): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const instanceId of filters.instanceIds) params.append("instanceId", instanceId);
+  for (const departmentId of filters.departmentIds) {
+    params.append("departmentId", departmentId);
   }
+  return params;
+}
+
+/** Endereço da Inbox já recortada, para o card de status virar atalho. */
+function inboxHref(status: ConversationStatus, filters: DashboardFilters): string {
+  const params = inboxScopeParams(filters);
+  params.append("status", status);
   return `/inbox?${params.toString()}`;
 }
 
 /** O card de arquivadas abre a Inbox direto na visão de arquivadas. */
 function archivedInboxHref(filters: DashboardFilters): string {
-  const params = new URLSearchParams({ archived: "true" });
-  if (filters.instanceId) params.set("instanceId", filters.instanceId);
-  if (filters.departmentId && filters.departmentId !== FILTER_NONE) {
-    params.set("departmentId", filters.departmentId);
-  }
+  const params = inboxScopeParams(filters);
+  params.set("archived", "true");
   return `/inbox?${params.toString()}`;
 }
 
@@ -521,6 +478,23 @@ function FilterSelect({
   );
 }
 
+/**
+ * Rótulo em cima do seletor múltiplo, para a barra ficar igual à do período.
+ * O `MultiSelect` do kit é um botão, e não um `<select>`, então o rótulo não
+ * pode ser um `<label>` envolvendo tudo — seria um clique que abre a lista
+ * sem o navegador saber o que está rotulando.
+ */
+function FilterField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <span className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
+        {label}
+      </span>
+      {children}
+    </div>
+  );
+}
+
 /** Card interno de Recebidas/Enviadas, com a miniatura da série do período. */
 function MessageTile({
   label,
@@ -563,10 +537,10 @@ function MessageTile({
 // ---------- Tela ----------
 
 export default function DashboardPage() {
-  const { can } = useAuth();
+  const { can, user } = useAuth();
   const router = useRouter();
 
-  const [filters, setFilters] = useState<DashboardFilters>(DEFAULT_FILTERS);
+  const [filters, setFilters] = useState<DashboardFilters>(DEFAULT_DASHBOARD_FILTERS);
   const [stats, setStats] = useState<DashboardStatsDto | null>(null);
   const [pending, setPending] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -575,11 +549,18 @@ export default function DashboardPage() {
   const [departments, setDepartments] = useState<DepartmentDto[]>([]);
   const [users, setUsers] = useState<UserDirectoryDto[]>([]);
 
-  // Os filtros salvos entram depois da hidratação: o HTML do servidor não
-  // conhece o storage de quem está olhando.
+  /**
+   * Os filtros salvos entram depois da hidratação: o HTML do servidor não
+   * conhece o storage de quem está olhando. E a chave inclui o usuário, então
+   * a leitura espera a sessão — máquina compartilhada é o caso normal do
+   * escritório, e abrir o dashboard com o recorte do colega é lista curta sem
+   * explicação nenhuma.
+   */
+  const userId = user?.id ?? null;
   useEffect(() => {
-    setFilters(readFilters());
-  }, []);
+    if (!userId) return;
+    setFilters(readDashboardFilters(userId));
+  }, [userId]);
 
   // As três listas já vêm recortadas pelo acesso de quem pediu, então o
   // seletor nunca oferece um número ou departamento que a pessoa não enxerga.
@@ -597,6 +578,27 @@ export default function DashboardPage() {
       .then((data) => setUsers(data.users))
       .catch(() => undefined);
   }, []);
+
+  /**
+   * Item marcado que deixou de existir — chip apagado, departamento excluído,
+   * pessoa desativada — sai do recorte em SILÊNCIO, assim que as listas
+   * chegam. Quem poda é a tela, porque só ela sabe o que ainda existe, e ela
+   * poda antes de virar consulta: a API recusa id desconhecido com 400, e
+   * esse erro não pode aparecer para quem só voltou à tela depois de um
+   * cadastro ter mudado.
+   */
+  useEffect(() => {
+    if (instances.length === 0 && departments.length === 0 && users.length === 0) return;
+    setFilters((current) => {
+      const podado = pruneDashboardFilters(current, {
+        instanceIds: instances.map((instance) => instance.id),
+        departmentIds: departments.map((department) => department.id),
+        userIds: users.map((option) => option.id),
+      });
+      if (podado !== current && userId) saveDashboardFilters(userId, podado);
+      return podado;
+    });
+  }, [instances, departments, users, userId]);
 
   const load = useCallback((next: DashboardFilters) => {
     setPending(true);
@@ -624,7 +626,12 @@ export default function DashboardPage() {
 
   function apply(next: DashboardFilters): void {
     setFilters(next);
-    writeFilters(next);
+    if (userId) saveDashboardFilters(userId, next);
+  }
+
+  /** Troca UM filtro, mantendo o resto do recorte. */
+  function chooseList(field: "instanceIds" | "departmentIds" | "assignedUserIds", values: string[]): void {
+    apply({ ...filters, [field]: values });
   }
 
   function choosePeriod(period: DashboardPeriod): void {
@@ -638,19 +645,6 @@ export default function DashboardPage() {
     apply({ ...filters, period });
   }
 
-  function chooseScope(key: "instanceId" | "departmentId" | "assignedUserId", value: string): void {
-    const next = { ...filters };
-    if (value) next[key] = value;
-    else delete next[key];
-    apply(next);
-  }
-
-  function chooseStatus(value: string): void {
-    const next = { ...filters };
-    if (isStatus(value)) next.status = value;
-    else delete next.status;
-    apply(next);
-  }
 
   const byStatus = stats?.conversations.byStatus;
   const leader = stats?.ranking[0]?.total ?? 0;
@@ -660,46 +654,147 @@ export default function DashboardPage() {
   const connected = stats?.instances.connected ?? 0;
   const phrase = DASHBOARD_PERIOD_PHRASES[filters.period];
   const noAccess = stats !== null && connected + offline === 0;
-  const hasScopeFilter = Boolean(
-    filters.instanceId || filters.status || filters.departmentId || filters.assignedUserId,
-  );
-  // Recortes que a Inbox não sabe reproduzir: o aviso abaixo do fluxo de
-  // status só aparece quando o clique realmente vai levar menos filtro.
-  const carriesPartialScope = Boolean(
-    filters.assignedUserId || filters.departmentId === FILTER_NONE,
-  );
+  const hasScopeFilter = hasActiveDashboardFilters(filters);
+  // Recortes que a Inbox não reproduz: o aviso abaixo do fluxo de status só
+  // aparece quando o clique realmente vai levar menos filtro. O responsável
+  // nunca é levado, porque lá ele SOMA com o departamento em vez de cruzar.
+  const carriesPartialScope = filters.assignedUserIds.length > 0;
+
+  /**
+   * Recorte que não devolveu nada. Zero com filtro ligado é resposta, não
+   * ausência de atendimento — e sem o aviso a pessoa lê a tela zerada como
+   * "não teve movimento". Quando departamento e responsável estão marcados
+   * juntos, o texto muda: ali o zero costuma ser o CRUZAMENTO (alguém que não
+   * atende naquele departamento), e é a explicação que evita o chamado de
+   * "o dashboard quebrou".
+   */
+  const emptyResult =
+    stats !== null &&
+    hasScopeFilter &&
+    stats.conversations.active === 0 &&
+    stats.messages.received === 0 &&
+    stats.messages.sent === 0;
+  const crossedEmpty =
+    emptyResult && filters.departmentIds.length > 0 && filters.assignedUserIds.length > 0;
   // A MESMA chave que a API consulta para decidir se consulta o bloco: sem
   // isso a pessoa veria um card vazio sem saber por quê — e ligar a chave na
   // tela de Permissões não faria o bloco aparecer.
   const canSeeTeam = can("dashboard.view_team");
   const initialPending = pending && !stats;
 
+  /**
+   * Quem pode marcar OUTRA pessoa no filtro de responsável. Para o "Usuário"
+   * a lista traz só ele e os dois coletivos: as conversas que ele enxerga são
+   * as dele mais as sem responsável, então marcar um colega devolveria zero
+   * sempre — e filtro que nunca acha nada é pior do que filtro nenhum. As
+   * listas de número e de departamento já vêm recortadas pela API, então elas
+   * aparecem para todo mundo sem revelar nada.
+   */
+  const canFilterOtherUsers = user?.role === "admin" || user?.role === "supervisor";
+  const assigneeOptions = (canFilterOtherUsers ? users : users.filter((row) => row.id === userId))
+    // Inativo não aparece: ele não recebe conversa nova, e a lista existe
+    // para recortar atendimento, não para consultar quem já saiu.
+    .filter((row) => row.status === "active" || row.id === userId);
+
+  const departmentGroups: MultiSelectGroup[] = [
+    {
+      label: null,
+      options: [
+        // Conversa sem departamento existe quando o número não tem
+        // departamento padrão — precisa ser possível olhar só para ela.
+        { value: FILTER_NONE, label: DASHBOARD_NO_DEPARTMENT_LABEL },
+        ...departments.map((department) => ({ value: department.id, label: department.name })),
+      ],
+    },
+  ];
+
+  const assigneeGroups: MultiSelectGroup[] = [
+    {
+      label: "Atendimento",
+      options: [
+        // "Sem responsável" conta só as verdadeiramente órfãs; as coletivas
+        // têm valor próprio, e nunca somam com elas.
+        { value: FILTER_NONE, label: DASHBOARD_UNASSIGNED_LABEL },
+        { value: FILTER_ALL_USERS, label: ALL_USERS_ASSIGNEE_LABEL },
+      ],
+    },
+    {
+      label: "Usuários",
+      options: assigneeOptions.map((option) => ({
+        value: option.id,
+        label: option.name,
+        hint: USER_ROLE_LABELS[option.role],
+      })),
+    },
+  ].filter((group) => group.options.length > 0);
+
+  /**
+   * Resumo do recorte ativo, em uma linha. Com multisseleção o rótulo fechado
+   * mostra "CS +2", que diz quantos e não quais: sem este resumo a pessoa lê
+   * os números sem saber o que está vendo.
+   *
+   * O texto entre os filtros é " e ", e não " ou ": ele descreve o CRUZAMENTO,
+   * que é como filtros diferentes combinam aqui.
+   */
+  const nomeDoDepartamento = (value: string): string =>
+    value === FILTER_NONE
+      ? DASHBOARD_NO_DEPARTMENT_LABEL
+      : (departments.find((row) => row.id === value)?.name ?? value);
+  const nomeDoResponsavel = (value: string): string => {
+    if (value === FILTER_NONE) return DASHBOARD_UNASSIGNED_LABEL;
+    if (value === FILTER_ALL_USERS) return ALL_USERS_ASSIGNEE_LABEL;
+    return users.find((row) => row.id === value)?.name ?? value;
+  };
+  const activeSummary: Array<{ label: string; value: string }> = [
+    ...(filters.statuses.length > 0
+      ? [
+          {
+            label: DASHBOARD_FILTER_LABELS.status,
+            value: filters.statuses.map((status) => CONVERSATION_STATUS_LABELS[status]).join(", "),
+          },
+        ]
+      : []),
+    ...(filters.departmentIds.length > 0
+      ? [
+          {
+            label: DASHBOARD_FILTER_LABELS.department,
+            value: filters.departmentIds.map(nomeDoDepartamento).join(", "),
+          },
+        ]
+      : []),
+    ...(filters.assignedUserIds.length > 0
+      ? [
+          {
+            label: DASHBOARD_FILTER_LABELS.assignee,
+            value: filters.assignedUserIds.map(nomeDoResponsavel).join(", "),
+          },
+        ]
+      : []),
+    ...(filters.instanceIds.length > 0
+      ? [
+          {
+            label: DASHBOARD_FILTER_LABELS.instance,
+            value: filters.instanceIds
+              .map((id) => instances.find((row) => row.id === id)?.name ?? id)
+              .join(", "),
+          },
+        ]
+      : []),
+  ];
+
   return (
     <div className="thin-scroll h-full overflow-y-auto p-6 lg:p-8">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">Dashboard de Atendimento</h1>
-          <p className="text-sm text-slate-500">
-            Visão geral do atendimento e da operação em tempo real
-          </p>
-        </div>
-        {/* O período tem dois controles ligados ao mesmo filtro: este, sempre
-            à mão no topo, e o da barra de filtros, junto dos demais. */}
-        <label className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
-          <CalendarDays className="h-4 w-4 text-slate-500" aria-hidden />
-          <span className="sr-only">Período dos indicadores</span>
-          <select
-            value={filters.period}
-            onChange={(event) => choosePeriod(event.target.value as DashboardPeriod)}
-            className="bg-transparent text-sm font-medium text-slate-700 focus:outline-none"
-          >
-            {DASHBOARD_PERIODS.map((option) => (
-              <option key={option} value={option}>
-                {DASHBOARD_PERIOD_LABELS[option]}
-              </option>
-            ))}
-          </select>
-        </label>
+      {/* O período tem UM controle só, e ele fica na barra de filtros. Ele já
+          morou também aqui no topo: eram dois seletores ligados ao MESMO
+          estado, então nunca discordaram, mas dois campos dizendo "Hoje" na
+          mesma tela fazem quem olha procurar a diferença entre os dois. Ficou
+          o da barra, que é onde os campos "De" e "Até" do período
+          personalizado aparecem. */}
+      <div>
+        <h1 className="text-2xl font-bold text-slate-900">Dashboard de Atendimento</h1>
+        <p className="text-sm text-slate-500">
+          Visão geral do atendimento e da operação em tempo real
+        </p>
       </div>
 
       <Card className="mt-4 p-3">
@@ -749,62 +844,72 @@ export default function DashboardPage() {
                 </label>
               </>
             )}
-            <FilterSelect label="Status" value={filters.status ?? ""} onChange={chooseStatus}>
-              <option value="">Todos</option>
-              {CONVERSATION_STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {CONVERSATION_STATUS_LABELS[status]}
-                </option>
-              ))}
-            </FilterSelect>
-            <FilterSelect
-              label="Departamento"
-              value={filters.departmentId ?? ""}
-              onChange={(value) => chooseScope("departmentId", value)}
-            >
-              <option value="">Todos</option>
-              {departments.map((department) => (
-                <option key={department.id} value={department.id}>
-                  {department.name}
-                </option>
-              ))}
-              {/* Conversa sem departamento existe quando o número não tem
-                  departamento padrão — precisa ser possível olhar só para ela. */}
-              <option value={FILTER_NONE}>Sem departamento</option>
-            </FilterSelect>
-            <FilterSelect
-              label="Responsável"
-              value={filters.assignedUserId ?? ""}
-              onChange={(value) => chooseScope("assignedUserId", value)}
-            >
-              <option value="">Todos</option>
-              {users.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.name}
-                </option>
-              ))}
-              {/* "Sem responsável" conta só as verdadeiramente órfãs; as
-                  coletivas têm valor próprio, e nunca somam com elas. */}
-              <option value={FILTER_NONE}>Sem responsável</option>
-              <option value={FILTER_ALL_USERS}>{ALL_USERS_ASSIGNEE_LABEL}</option>
-            </FilterSelect>
-            <FilterSelect
-              label="Número"
-              value={filters.instanceId ?? ""}
-              onChange={(value) => chooseScope("instanceId", value)}
-            >
-              <option value="">Todos</option>
-              {instances.map((instance) => (
-                <option key={instance.id} value={instance.id}>
-                  {instance.name}
-                </option>
-              ))}
-            </FilterSelect>
+            {/* Os quatro filtros abaixo são MULTISSELEÇÃO, com caixa de
+                seleção: o que está marcado dentro de um deles SOMA (OU), e
+                filtros diferentes CRUZAM (E). Departamento e responsável são
+                dois filtros separados de propósito — ver o comentário do
+                resumo, logo abaixo da barra. */}
+            <FilterField label={DASHBOARD_FILTER_LABELS.status}>
+              <MultiSelect
+                label="Todos"
+                groups={[
+                  {
+                    label: null,
+                    options: CONVERSATION_STATUSES.map((status) => ({
+                      value: status,
+                      label: CONVERSATION_STATUS_LABELS[status],
+                    })),
+                  },
+                ]}
+                selected={filters.statuses}
+                onChange={(statuses) =>
+                  apply({ ...filters, statuses: statuses as ConversationStatus[] })
+                }
+              />
+            </FilterField>
+            <FilterField label={DASHBOARD_FILTER_LABELS.department}>
+              <MultiSelect
+                label="Todos"
+                groups={departmentGroups}
+                selected={filters.departmentIds}
+                onChange={(departmentIds) => chooseList("departmentIds", departmentIds)}
+                searchPlaceholder="Buscar departamento..."
+                emptyLabel="Nenhum departamento com esse nome."
+              />
+            </FilterField>
+            <FilterField label={DASHBOARD_FILTER_LABELS.assignee}>
+              <MultiSelect
+                label="Todos"
+                groups={assigneeGroups}
+                selected={filters.assignedUserIds}
+                onChange={(assignedUserIds) => chooseList("assignedUserIds", assignedUserIds)}
+                searchPlaceholder="Buscar pessoa..."
+                emptyLabel="Ninguém com esse nome."
+              />
+            </FilterField>
+            <FilterField label={DASHBOARD_FILTER_LABELS.instance}>
+              <MultiSelect
+                label="Todos"
+                groups={[
+                  {
+                    label: null,
+                    options: instances.map((instance) => ({
+                      value: instance.id,
+                      label: instance.name,
+                    })),
+                  },
+                ]}
+                selected={filters.instanceIds}
+                onChange={(instanceIds) => chooseList("instanceIds", instanceIds)}
+                searchPlaceholder="Buscar número..."
+                emptyLabel="Nenhum número com esse nome."
+              />
+            </FilterField>
           </div>
           {hasScopeFilter && (
             <button
               type="button"
-              onClick={() => apply({ period: filters.period, from: filters.from, to: filters.to })}
+              onClick={() => apply(clearDashboardFilters(filters))}
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-800 motion-reduce:transition-none"
             >
               <RotateCcw className="h-3.5 w-3.5" aria-hidden />
@@ -812,9 +917,39 @@ export default function DashboardPage() {
             </button>
           )}
         </div>
+        {/* Resumo do recorte ativo. Fica DENTRO do card, colado na barra, para
+            ser lido antes dos números — é ele que responde "o que estou
+            vendo?" quando os seletores mostram "CS +2". */}
+        {activeSummary.length > 0 && (
+          <p className="mt-2 border-t border-slate-100 pt-2 text-[11px] leading-snug text-slate-500">
+            <span className="font-medium text-slate-600">Vendo:</span> {phrase}
+            {activeSummary.map((item) => (
+              <span key={item.label}>
+                {" · "}
+                {item.label}: <span className="text-slate-700">{item.value}</span>
+              </span>
+            ))}
+            {/* A regra, dita em uma frase, onde ela é sentida. */}
+            <span className="block text-slate-400">
+              Vários valores no mesmo filtro somam; filtros diferentes se cruzam.
+            </span>
+          </p>
+        )}
       </Card>
 
       {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
+
+      {/* Zero com filtro ligado é resposta, e não falta de atendimento. Sem
+          este aviso a tela zerada parece defeito — e no cruzamento de
+          departamento com responsável ela parece defeito de verdade. */}
+      {emptyResult && (
+        <Card className="mt-4 border-slate-200 bg-slate-50 p-4">
+          <p className="flex items-start gap-2 text-xs text-slate-600">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden />
+            {crossedEmpty ? DASHBOARD_EMPTY_CROSS_MESSAGE : DASHBOARD_EMPTY_FILTER_MESSAGE}
+          </p>
+        </Card>
+      )}
 
       {/* Sem número liberado no login, todo indicador seria zero e a tela
           pareceria quebrada. Melhor dizer o motivo do que deixar adivinhar. */}

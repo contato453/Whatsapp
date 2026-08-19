@@ -261,11 +261,19 @@ export interface DashboardStatsInput {
   periodEnd: Date | null;
   generatedAt: Date;
   settings: AttendanceSettings;
+  /**
+   * O recorte pedido, cada filtro em LISTA. Volta na resposta para a tela
+   * conferir que está desenhando o que a API aplicou — com multisseleção isso
+   * deixou de ser detalhe: o resumo do recorte ativo abaixo da barra é o
+   * único jeito de a pessoa saber o que está vendo antes de ler os números.
+   */
   filters: {
-    instanceId: string | null;
-    status: ConversationStatus | null;
-    departmentId: string | null;
-    assignedUserId: string | null;
+    instanceIds: string[];
+    statuses: ConversationStatus[];
+    /** Ids de departamento, mais o sentinela "sem departamento". */
+    departmentIds: string[];
+    /** Ids de pessoa, mais "sem responsável" e o coletivo "@todos". */
+    assignedUserIds: string[];
   };
   conversationsByStatus: Record<ConversationStatus, number>;
   /** Total de arquivadas no recorte — estado de agora, ignora o período. */

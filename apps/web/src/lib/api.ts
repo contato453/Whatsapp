@@ -6,11 +6,10 @@ import type {
   AzevedoOsCompanyDto,
   AzevedoOsFacetsDto,
   ConfigurableRole,
-  ConversationStatus,
-  DashboardPeriod,
   ParticipantClientRole,
   PermissionAction,
 } from "@azvchat/shared";
+import type { DashboardFilters } from "./dashboard-filters";
 import type {
   DashboardStatsDto,
   MessageDto,
@@ -383,17 +382,14 @@ export const instanceBackupApi = {
  * `departmentId` e `assignedUserId` aceitam "none" para "sem departamento" e
  * "sem responsável".
  */
-export interface DashboardFilters {
-  period: DashboardPeriod;
-  from?: string;
-  to?: string;
-  instanceId?: string;
-  /** Recorta a tela inteira para um status de atendimento. */
-  status?: ConversationStatus;
-  departmentId?: string;
-  assignedUserId?: string;
-}
-
+/**
+ * Recorte do Dashboard. Cada filtro é uma LISTA, e os valores marcados dentro
+ * dela somam (OU); filtros diferentes cruzam (E). O período é o único que
+ * continua único: ele é um intervalo, não um conjunto.
+ *
+ * O tipo vive em `lib/dashboard-filters.ts`, junto da leitura e da gravação
+ * no navegador — aqui só se monta a consulta.
+ */
 export const dashboardApi = {
   stats: (filters: DashboardFilters) => {
     const params = new URLSearchParams({ period: filters.period });
@@ -401,10 +397,16 @@ export const dashboardApi = {
       params.set("from", filters.from);
       params.set("to", filters.to);
     }
-    if (filters.instanceId) params.set("instanceId", filters.instanceId);
-    if (filters.status) params.set("status", filters.status);
-    if (filters.departmentId) params.set("departmentId", filters.departmentId);
-    if (filters.assignedUserId) params.set("assignedUserId", filters.assignedUserId);
+    // Parâmetro REPETIDO, e não separado por vírgula: é o formato que a Inbox
+    // já usa e o que a API lê primeiro. Lista vazia não escreve nada, que é
+    // o "todos" daquele filtro.
+    const lista = (nome: string, valores: readonly string[]): void => {
+      for (const valor of valores) params.append(nome, valor);
+    };
+    lista("instanceId", filters.instanceIds);
+    lista("status", filters.statuses);
+    lista("departmentId", filters.departmentIds);
+    lista("assignedUserId", filters.assignedUserIds);
     return api.get<DashboardStatsDto>(`/dashboard/stats?${params.toString()}`);
   },
 };

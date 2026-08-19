@@ -48,7 +48,7 @@ import {
   markConversationUnread,
   unreadConversationWhere,
 } from "../../lib/conversation-reads.js";
-import { assertKnownFilterIds } from "../../lib/conversation-filters.js";
+import { assertKnownFilterIds, listaDe } from "../../lib/conversation-filters.js";
 import { canApplyToConversation } from "../../lib/department-resource.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import {
@@ -72,23 +72,6 @@ import {
 } from "../../lib/person-profile.js";
 import { conversationAudience, userRoom } from "../../realtime/socket.js";
 import type { AppDeps } from "../../types.js";
-
-/**
- * Um parâmetro de filtro que aceita LISTA. A tela manda o mesmo nome
- * repetido (`?tagId=a&tagId=b`), e aceitamos também separado por vírgula
- * porque é o que um link colado à mão costuma trazer. Ausente ou vazio vira
- * lista vazia, que significa "todos" — nunca "nenhum".
- */
-function listaDe<T extends z.ZodTypeAny>(item: T) {
-  return z.preprocess((valor) => {
-    if (valor === undefined || valor === null || valor === "") return [];
-    const bruto = Array.isArray(valor) ? valor : [valor];
-    return bruto
-      .flatMap((entrada) => String(entrada).split(","))
-      .map((entrada) => entrada.trim())
-      .filter((entrada) => entrada.length > 0);
-  }, z.array(item)).default([]);
-}
 
 /**
  * Filtros da lista de conversas.

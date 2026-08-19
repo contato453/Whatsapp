@@ -1,5 +1,37 @@
+import { z } from "zod";
 import type { PrismaClient } from "@azvchat/database";
 import { AppError } from "./errors.js";
+
+/**
+ * Um parâmetro de filtro que aceita LISTA. A tela manda o mesmo nome
+ * repetido (`?tagId=a&tagId=b`), e aceitamos também separado por vírgula
+ * porque é o que um link colado à mão costuma trazer. Ausente ou vazio vira
+ * lista vazia, que significa "todos" — nunca "nenhum".
+ *
+ * Fica aqui, e não dentro de um módulo de rota, porque a Inbox e o Dashboard
+ * precisam ler lista do MESMO jeito: duas cópias divergiriam no dia em que
+ * uma delas passasse a aceitar (ou a recusar) o separador por vírgula, e o
+ * link que funciona numa tela quebraria na outra.
+ *
+ * O teto de itens não é conforto de tela: a lista vira `IN (...)` e, quando é
+ * de id, uma consulta de conferência. Um link forjado com milhares de valores
+ * chegaria ao limite de parâmetros do Postgres e derrubaria a requisição com
+ * erro de driver, que não diz nada a ninguém. Recusar com 400 é a resposta
+ * honesta, e nenhuma tela chega perto do teto — a organização inteira tem
+ * dezenas de departamentos, pessoas e números.
+ */
+const MAX_ITENS_POR_FILTRO = 200;
+
+export function listaDe<T extends z.ZodTypeAny>(item: T) {
+  return z.preprocess((valor) => {
+    if (valor === undefined || valor === null || valor === "") return [];
+    const bruto = Array.isArray(valor) ? valor : [valor];
+    return bruto
+      .flatMap((entrada) => String(entrada).split(","))
+      .map((entrada) => entrada.trim())
+      .filter((entrada) => entrada.length > 0);
+  }, z.array(item).max(MAX_ITENS_POR_FILTRO, "Filtro com valores demais")).default([]);
+}
 
 /**
  * Confere que todo id marcado num filtro existe na organização.

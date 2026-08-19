@@ -399,10 +399,12 @@ export interface DashboardStatsDto {
   generatedAt: string;
   /** Devolvidos como a API os aplicou, para a tela conferir o que desenhou. */
   filters: {
-    instanceId: string | null;
-    status: ConversationStatus | null;
-    departmentId: string | null;
-    assignedUserId: string | null;
+    instanceIds: string[];
+    statuses: ConversationStatus[];
+    /** Ids de departamento, mais o sentinela "sem departamento". */
+    departmentIds: string[];
+    /** Ids de pessoa, mais "sem responsável" e o coletivo "@todos". */
+    assignedUserIds: string[];
   };
   /** Limite vigente nos parâmetros de atendimento, para a tela dizer contra o que mede. */
   responseLimitMinutes: number;

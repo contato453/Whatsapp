@@ -33,7 +33,9 @@ import {
   type ScheduledPendingPayload,
   AZEVEDO_OS_FACET_NONE,
   conversationStatusIsValid,
+  ASSIGNMENT_NO_DEPARTMENT,
   departmentAssignmentToken,
+  FILTER_NONE,
   type AzevedoOsFacetsDto,
   type ConversationStatus,
 } from "@azvchat/shared";
@@ -260,19 +262,21 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
    * filtro na mão continua valendo. Vindo outro card, o valor muda e o
    * recorte novo entra sem precisar recarregar a página.
    */
-  const statusParam = searchParams.get("status");
-  const departmentParam = searchParams.get("departmentId");
-  const instanceParam = searchParams.get("instanceId");
+  // Os três aceitam o parâmetro REPETIDO: o Dashboard virou multisseleção, e
+  // ler só o primeiro valor faria o clique no card levar um recorte menor do
+  // que o número que a pessoa acabou de ler.
+  const statusParam = searchParams.getAll("status").join(",");
+  const departmentParam = searchParams.getAll("departmentId").join(",");
+  const instanceParam = searchParams.getAll("instanceId").join(",");
   // É assim que o card de arquivadas do dashboard abre a visão certa.
   const archivedParam = searchParams.get("archived");
 
-  // O card do dashboard semeia UM status, então ele entra como lista de um
-  // item. Quem já tinha outros marcados perde a marcação, e é o certo: a
-  // pessoa clicou num card pedindo aquele recorte específico.
+  // O card do dashboard semeia os status pedidos, e eles SUBSTITUEM o que
+  // estava marcado: a pessoa clicou num card pedindo aquele recorte
+  // específico, e somar ao antigo devolveria uma lista maior que o número.
   useEffect(() => {
-    if (isStatusParam(statusParam)) {
-      setFilters((current) => ({ ...current, statuses: [statusParam] }));
-    }
+    const statuses = statusParam.split(",").filter(isStatusParam);
+    if (statuses.length > 0) setFilters((current) => ({ ...current, statuses }));
   }, [statusParam]);
 
   useEffect(() => {
@@ -284,13 +288,26 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   useEffect(() => {
     if (!canFilterScope) return;
     if (!departmentParam && !instanceParam) return;
+    const departmentIds = departmentParam.split(",").filter((value) => value.length > 0);
+    const instanceIds = instanceParam.split(",").filter((value) => value.length > 0);
     setFilters((current) => ({
       ...current,
-      // O departamento vindo da URL entra no filtro unificado, como token.
-      ...(departmentParam
-        ? { assignment: [...current.assignment, departmentAssignmentToken(departmentParam)] }
+      // O departamento vindo da URL entra no filtro unificado, como token. O
+      // "sem departamento" do Dashboard tem token próprio aqui — traduzi-lo
+      // para `dept:none` produziria um token que a API recusa.
+      ...(departmentIds.length > 0
+        ? {
+            assignment: [
+              ...current.assignment,
+              ...departmentIds.map((id) =>
+                id === FILTER_NONE ? ASSIGNMENT_NO_DEPARTMENT : departmentAssignmentToken(id),
+              ),
+            ],
+          }
         : {}),
-      ...(instanceParam ? { instanceIds: [...current.instanceIds, instanceParam] } : {}),
+      ...(instanceIds.length > 0
+        ? { instanceIds: [...current.instanceIds, ...instanceIds] }
+        : {}),
     }));
   }, [canFilterScope, departmentParam, instanceParam]);
 

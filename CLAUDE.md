@@ -464,12 +464,20 @@ PUT    /attendance-settings  (supervisor; grava SLA + expediente + janela de log
 
 GET    /search              GET /reports/agents   GET /audit-logs
 GET    /dashboard/stats?period=today|7d|15d|30d|custom[&from=&to=]
+       (o PERÍODO é o único filtro de valor único — intervalo não é conjunto)
+       Os quatro demais aceitam LISTA (parâmetro repetido ou separado por vírgula):
        [&instanceId=][&status=open|waiting_client|waiting_internal|resolved]
-       [&departmentId=<uuid|none>][&assignedUserId=<uuid|none>]
-       (tudo validado por Zod; `custom` exige as duas datas AAAA-MM-DD, teto de 366 dias;
-        o bloco `topUsers` só vem para supervisor, senão é `null`; `timeline` traz um ponto
-        por dia civil do período e `hourly` as células dia da semana × hora, esta sempre
-        numa janela fixa de 30 dias)
+       [&departmentId=<uuid|none>][&assignedUserId=<uuid|none|all_users>]
+       (OU dentro do filtro, E entre filtros; lista vazia = "todos". Aqui
+        departamento e responsável são DOIS filtros e CRUZAM — divergência
+        proposital em relação à Inbox, ver a seção 13. Item fora do enum, uuid
+        torto, id que não existe na organização e lista acima de 200 itens são
+        RECUSADOS com 400, nunca ignorados. `custom` exige as duas datas
+        AAAA-MM-DD, teto de 366 dias; o bloco `topUsers` só vem para supervisor,
+        senão é `null`; `timeline` traz um ponto por dia civil do período e
+        `hourly` as células dia da semana × hora, esta sempre numa janela fixa
+        de 30 dias. A resposta devolve `filters` com as quatro listas como a
+        API as aplicou)
 ```
 
 Mídia é servida **somente autenticada**, escopada por organização, com proteção contra
@@ -627,7 +635,8 @@ nome técnico no código e neste documento.
   antes de criar componente novo.** `Tooltip` é só CSS (hover + `focus-within`), sem
   biblioteca.
 - **`MultiSelect` é o único componente de seleção múltipla**, e todos os filtros da Inbox
-  passam por ele (atendimento, tipo, conexão, etiqueta, folha e regime). Aceita blocos com
+  (atendimento, tipo, conexão, etiqueta, folha e regime) e do Dashboard (status,
+  departamento, responsável e número) passam por ele. Aceita blocos com
   cabeçalho e um campo de busca que filtra os blocos ao mesmo tempo; fecha por clique fora
   e por `Esc`, nunca por `blur` (clicar numa caixa de seleção tira o foco do botão e
   fecharia a lista no primeiro clique). Sem biblioteca de select. Quatro implementações
@@ -1050,26 +1059,46 @@ sempre juntos.
   os atalhos **não** têm corte superior, de propósito: o relógio do WhatsApp pode vir à
   frente do nosso e um `lte: agora` sumiria com a mensagem recém-chegada.
 - **Os filtros do dashboard refinam o recorte, nunca o ampliam.** Número, status,
-  departamento e responsável entram num `AND` junto com `conversationScope`, então pedir um
-  número que o usuário não enxerga devolve vazio em vez de vazar.
-  `departmentId`/`assignedUserId` aceitam `none` para "sem departamento" / "sem
-  responsável". Os filtros valem para a **tela inteira** — inclusive o card de atraso e o de
-  infraestrutura, que continuam ignorando só o período. O filtro de `status` é o único que
-  mexe no fluxo por status: com ele as outras três colunas ficam em zero, porque a pergunta
-  passou a ser "só este status" — e `resolved` zera o atraso por construção, já que lá o
-  recorte convive com `status != resolved`.
+  departamento e responsável — os quatro em MULTISSELEÇÃO, somando dentro e cruzando entre
+  si — entram num `AND` junto com `conversationScope`, então pedir um número que o usuário
+  não enxerga devolve vazio em vez de vazar. `departmentId` aceita `none` ("sem
+  departamento") e `assignedUserId` aceita `none` e `all_users`, os dois separados de
+  propósito. Os filtros valem para a **tela inteira** — inclusive o card de atraso e o de
+  arquivadas, que continuam ignorando só o período (o de infraestrutura conta números, e
+  respeita só o filtro de número: ver a nota da seção 13). O filtro de `status` é o único
+  que mexe no fluxo por status: com ele as colunas não marcadas ficam em zero, porque a
+  pergunta passou a ser "só estes status" — e marcar só `resolved` zera o atraso por
+  construção, já que lá o recorte convive com `status != resolved`.
+- **Os filtros do dashboard são guardados por usuário, em chave PRÓPRIA**
+  (`zapdesk.dashboard-filters.<userId>`, em `web/src/lib/dashboard-filters.ts`), com a
+  mesma mecânica da Inbox e sem se misturar com ela: filtrar as Conversas não pode mexer no
+  Dashboard, porque as duas telas respondem perguntas diferentes. O formato antigo, de um
+  valor por filtro, é CONVERTIDO em lista de um item (e as chaves velhas, sem usuário, são
+  lidas uma vez e apagadas). Item que deixou de existir é podado pela TELA, em silêncio,
+  antes de virar consulta — a rota recusa id desconhecido com 400, e esse erro não pode
+  aparecer para quem só voltou à tela depois de um cadastro ter mudado.
+- **O período do dashboard tem UM controle só, e continua de valor único.** Ele já teve
+  dois seletores (um no topo e um na barra) ligados ao mesmo estado: nunca discordaram, mas
+  dois campos dizendo "Hoje" na mesma tela fazem quem olha procurar a diferença entre eles.
+  Ficou o da barra, que é onde os campos "De" e "Até" do personalizado aparecem. E ele não
+  vira caixa de seleção: período é intervalo, não conjunto — "Hoje" mais "30 dias" ou é o
+  intervalo maior, ou é contradição.
 - **O dashboard se recarrega sozinho a cada minuto** (`AUTO_REFRESH_MS` na página), e o
   rodapé promete isso a quem está olhando. É `setInterval` chamando a mesma rota, e **não**
   evento de socket: a tela agrega dezenas de milhares de mensagens, então empurrar cada
   mensagem nova custaria mais do que uma consulta por minuto. A recarga é silenciosa — os
   números antigos ficam na tela até os novos chegarem, sem esqueleto piscando a cada volta.
 - **Os cards de status do dashboard abrem a Inbox pela URL** (`/inbox?status=...`), levando
-  também `departmentId`/`instanceId` quando são ids de verdade. Quem semeia o filtro é a
-  própria Inbox (`inbox-shell.tsx`), e só em estado que a tela mostra: os seletores de
-  número e departamento existem apenas para supervisor e admin, então parâmetro forjado na
-  URL por um `agent` é ignorado — filtro invisível deixaria a lista curta sem explicação. O
-  período **não** vai junto (a Inbox lista por status, não por atividade), e a tela avisa
-  que a lista pode vir maior que o card.
+  também `departmentId`/`instanceId` — os três agora com o parâmetro REPETIDO, porque o
+  Dashboard virou multisseleção e ler só o primeiro valor levaria um recorte menor do que o
+  número que a pessoa acabou de ler. Quem semeia o filtro é a própria Inbox
+  (`inbox-shell.tsx`), e só em estado que a tela mostra: os seletores de número e
+  departamento existem apenas para supervisor e admin, então parâmetro forjado na URL por um
+  `agent` é ignorado — filtro invisível deixaria a lista curta sem explicação. O
+  **responsável não vai junto**, e não por falta de controle na Inbox: lá ele SOMA com o
+  departamento, então mandá-lo viraria "o Contábil MAIS a fulana", o contrário do
+  cruzamento que o número do card representa. O período também não vai (a Inbox lista por
+  status, não por atividade), e a tela avisa que a lista pode vir maior que o card.
 - **Todo gráfico tem gêmeo em tabela** (o botão na moldura do card). Cor sozinha não é canal
   acessível, e o valor exato de um dia não pode depender de acertar o mouse na barra. As
   cores saem do validador de paleta, não do olho: o par recebidas/enviadas é o mesmo dos
@@ -1161,7 +1190,31 @@ sempre juntos.
   concordar: `shared/inbox-filters.ts` (o contrato), o `AND` de `GET /conversations` (cada
   filtro é UM item da lista, e dentro dele o `in` ou o `OR`) e `web/lib/inbox-filters.ts`
   (o espelho que o tempo real usa). Há teste que fica vermelho ao trocar o `OR` por `AND`.
-- **Departamento e responsável são UM filtro só, e somam.** O caso normal do escritório é
+- **NO DASHBOARD, DEPARTAMENTO E RESPONSÁVEL SÃO DOIS FILTROS, E CRUZAM.** É o
+  contrário da Inbox, de propósito, e vai parecer inconsistência para quem olhar as
+  duas telas de longe. Na Inbox eles viraram um filtro só que SOMA porque lá a
+  pergunta é de triagem e o resultado é uma lista de linhas que a pessoa varre; no
+  Dashboard a pergunta é de análise e o resultado é um NÚMERO, e somar recortes
+  diferentes dentro do mesmo total produz número sem significado ("as conversas do CS
+  mais as da Tatiana" não responde nada, e ainda conta duas vezes o trabalho dela
+  dentro do CS). Cruzando, "CS + Tatiana" é "os números dela dentro do CS", que é o
+  que a supervisão pergunta. Consequência aceita: marcar um departamento junto de
+  alguém que não atende nele devolve ZERO — está certo, e por isso a tela troca o
+  texto do aviso de recorte vazio quando os dois estão marcados. A regra e o porquê
+  moram em `packages/shared/src/dashboard-filters.ts`, o `AND` está em
+  `dashboardFilterConditions` (`modules/dashboard/routes.ts`) e há teste que fica
+  vermelho se os dois virarem um `OR`. **Não "uniformize" as duas telas.**
+- **O card de infraestrutura do Dashboard conta NÚMEROS, não conversas.** Ele respeita
+  o filtro de número (e antes nem isso: o escopo de acesso era espalhado por cima do
+  filtro, os dois escreviam em `id`, e o card ignorava a escolha de quem não é admin),
+  mas **não** é recortado por departamento nem por responsável: os dois são atributos
+  da conversa, e restringir a lista de conexões por eles esconderia justamente o número
+  que parou de receber conversa — por estar fora do ar —, que é o contrário do que o
+  card serve. O de atraso e o de arquivadas, esses sim, contam conversa e respeitam
+  todos os filtros; o que os três ignoram junto é só o PERÍODO, porque são estado de
+  agora.
+- **Departamento e responsável são UM filtro só, e somam** (na INBOX — ver a nota do
+  Dashboard logo acima, onde a decisão é a oposta). O caso normal do escritório é
   "quero ver o Contábil inteiro MAIS a fulana", e ela costuma ser de outro departamento:
   com dois filtros separados isso cruzaria por E e voltaria vazio. Juntos num `assignment`
   de tokens (`none`, `all_users`, `no_department`, `dept:<id>`, `user:<id>`), tudo que está

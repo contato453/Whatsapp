@@ -36,6 +36,26 @@ interface Recorded {
 
 let recorded: Recorded;
 
+/**
+ * Ids que "existem" na organização de teste. A rota confere cada id marcado
+ * antes de consultar, então o falso Prisma precisa saber quais são — e o que
+ * não estiver aqui é justamente o id desconhecido que deve levar 400.
+ */
+const INSTANCE_A = "11111111-1111-4111-8111-111111111111";
+const INSTANCE_B = "1111aaaa-1111-4111-8111-111111111111";
+const DEPARTMENT_A = "22222222-2222-4222-8222-222222222222";
+const DEPARTMENT_B = "2222bbbb-2222-4222-8222-222222222222";
+const USER_A = "33333333-3333-4333-8333-333333333333";
+const USER_B = "3333cccc-3333-4333-8333-333333333333";
+const DESCONHECIDO = "99999999-9999-4999-8999-999999999999";
+
+/** Devolve só os ids pedidos que existem — é o que a conferência compara. */
+function existentes(conhecidos: string[], args: Record<string, unknown>): Array<{ id: string }> {
+  const where = (args.where ?? {}) as { id?: { in?: string[] } };
+  const pedidos = where.id?.in ?? [];
+  return pedidos.filter((id) => conhecidos.includes(id)).map((id) => ({ id }));
+}
+
 const STATUS_BUCKETS = [
   { status: "open", _count: { _all: 7 } },
   { status: "waiting_client", _count: { _all: 3 } },
@@ -91,7 +111,14 @@ function fakePrisma(): PrismaClient {
         return [];
       },
     },
+    department: {
+      findMany: async (args: Record<string, unknown>) =>
+        existentes([DEPARTMENT_A, DEPARTMENT_B], args),
+    },
+    tag: { findMany: async () => [] },
     whatsAppInstance: {
+      findMany: async (args: Record<string, unknown>) =>
+        existentes([INSTANCE_A, INSTANCE_B], args),
       groupBy: async (args: Record<string, unknown>) => {
         recorded.instanceGroupBy.push(args);
         return [
@@ -130,10 +157,16 @@ function fakePrisma(): PrismaClient {
       },
     },
     user: {
-      findMany: async () => [
-        { id: "user-1", name: "Maria Supervisora", role: "supervisor", avatarUrl: null },
-        { id: "user-2", name: "João Atendente", role: "agent", avatarUrl: "avatar.jpg" },
-      ],
+      findMany: async (args: Record<string, unknown>) => {
+        // Duas consultas diferentes caem aqui: a conferência dos ids do filtro
+        // (que pede só `id`) e a busca de nomes do top de usuários.
+        const select = (args.select ?? {}) as Record<string, unknown>;
+        if (!("name" in select)) return existentes([USER_A, USER_B], args);
+        return [
+          { id: "user-1", name: "Maria Supervisora", role: "supervisor", avatarUrl: null },
+          { id: "user-2", name: "João Atendente", role: "agent", avatarUrl: "avatar.jpg" },
+        ];
+      },
     },
     $queryRaw: async (query: { text?: string; sql?: string }) => {
       // Duas consultas cruas na rota: a da última mensagem (atraso) e a da
@@ -425,28 +458,163 @@ describe("GET /dashboard/stats", () => {
 
   it("filtro de chip refina o recorte em vez de substituí-lo", async () => {
     const app = await buildTestApp();
-    await stats(app, "agent", "?instanceId=11111111-1111-4111-8111-111111111111");
+    await stats(app, "agent", `?instanceId=${INSTANCE_A}`);
     const conditions = conditionsOf(
       recorded.conversationGroupBy[0]?.where as Record<string, unknown>,
     );
     // O filtro entra por cima; o recorte de acesso continua inteiro no AND.
-    expect(conditions).toContainEqual({
-      whatsappInstanceId: "11111111-1111-4111-8111-111111111111",
-    });
+    expect(conditions).toContainEqual({ whatsappInstanceId: { in: [INSTANCE_A] } });
     expect(conditions).toContainEqual({ whatsappInstanceId: { in: ["inst-1"] } });
     expect(conditions).toContainEqual({
       OR: [{ assignedUserId: "user-agent" }, { assignedUserId: null }],
     });
-    // O card de chips passa a olhar só aquele número, sem perder o escopo.
+    /**
+     * O card de infraestrutura passa a respeitar o número escolhido — e sem
+     * perder o escopo. Antes o escopo era espalhado por cima do filtro, os
+     * dois escreviam em `id`, e o card ignorava a escolha de todo mundo que
+     * não é admin: filtrar por um chip e continuar vendo todos os números
+     * fora do ar é número que não fecha com o resto da tela.
+     */
     expect(recorded.instanceGroupBy[0]?.where).toMatchObject({
-      id: { in: ["inst-1"] },
+      AND: [{ id: { in: ["inst-1"] } }, { id: { in: [INSTANCE_A] } }],
     });
+    await app.close();
+  });
+
+  it("cada filtro aceita LISTA, e os valores marcados dentro dele somam", async () => {
+    const app = await buildTestApp();
+    await stats(
+      app,
+      "admin",
+      `?instanceId=${INSTANCE_A}&instanceId=${INSTANCE_B}` +
+        `&status=open&status=waiting_client` +
+        `&departmentId=${DEPARTMENT_A}&departmentId=${DEPARTMENT_B}` +
+        `&assignedUserId=${USER_A}&assignedUserId=${USER_B}`,
+    );
+    const conditions = conditionsOf(
+      recorded.conversationGroupBy[0]?.where as Record<string, unknown>,
+    );
+    // OU DENTRO do filtro: um `in` por filtro, e não um item por valor.
+    expect(conditions).toContainEqual({ whatsappInstanceId: { in: [INSTANCE_A, INSTANCE_B] } });
+    expect(conditions).toContainEqual({ status: { in: ["open", "waiting_client"] } });
+    expect(conditions).toContainEqual({ departmentId: { in: [DEPARTMENT_A, DEPARTMENT_B] } });
+    expect(conditions).toContainEqual({ assignedUserId: { in: [USER_A, USER_B] } });
+    await app.close();
+  });
+
+  it("aceita a lista separada por vírgula, como um link colado à mão", async () => {
+    const app = await buildTestApp();
+    await stats(app, "admin", `?status=open,resolved`);
+    expect(
+      conditionsOf(recorded.conversationGroupBy[0]?.where as Record<string, unknown>),
+    ).toContainEqual({ status: { in: ["open", "resolved"] } });
+    await app.close();
+  });
+
+  it("E ENTRE filtros: departamento e responsável cruzam, e não somam", async () => {
+    const app = await buildTestApp();
+    await stats(app, "admin", `?departmentId=${DEPARTMENT_A}&assignedUserId=${USER_A}`);
+    const conditions = conditionsOf(
+      recorded.conversationGroupBy[0]?.where as Record<string, unknown>,
+    );
+    /**
+     * DOIS itens do mesmo `AND`, e não um `OR` juntando os dois: aqui a
+     * pergunta é "os números DELA dentro do CS". É a divergência proposital
+     * em relação à Inbox, onde os dois viraram um filtro só que soma —
+     * somar recortes diferentes num total produz número sem significado.
+     * Trocar isto por um `OR` deixa este teste vermelho.
+     */
+    expect(conditions).toContainEqual({ departmentId: { in: [DEPARTMENT_A] } });
+    expect(conditions).toContainEqual({ assignedUserId: { in: [USER_A] } });
+    const juntos = JSON.stringify(conditions);
+    expect(juntos).not.toContain('"OR":[{"departmentId"');
+    await app.close();
+  });
+
+  it("dentro de um filtro, id e sentinela somam num OU só", async () => {
+    const app = await buildTestApp();
+    await stats(
+      app,
+      "admin",
+      `?departmentId=${FILTER_NONE}&departmentId=${DEPARTMENT_A}` +
+        `&assignedUserId=${FILTER_NONE}&assignedUserId=${FILTER_ALL_USERS}&assignedUserId=${USER_A}`,
+    );
+    const conditions = conditionsOf(
+      recorded.conversationGroupBy[0]?.where as Record<string, unknown>,
+    );
+    expect(conditions).toContainEqual({
+      OR: [{ departmentId: null }, { departmentId: { in: [DEPARTMENT_A] } }],
+    });
+    expect(conditions).toContainEqual({
+      OR: [
+        { assignedUserId: null, assignedToAll: false },
+        { assignedToAll: true },
+        { assignedUserId: { in: [USER_A] } },
+      ],
+    });
+    await app.close();
+  });
+
+  it("recusa id que não existe na organização, em vez de ignorar em silêncio", async () => {
+    const app = await buildTestApp();
+    for (const query of [
+      `?departmentId=${DESCONHECIDO}`,
+      `?assignedUserId=${DESCONHECIDO}`,
+      `?instanceId=${DESCONHECIDO}`,
+      // Um id bom e um ruim: a lista inteira é recusada, senão a tela
+      // mostraria um recorte diferente do que a pessoa marcou.
+      `?departmentId=${DEPARTMENT_A}&departmentId=${DESCONHECIDO}`,
+    ]) {
+      const response = await stats(app, "admin", query);
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error).toBe("validation_error");
+      // A mensagem diz qual filtro, e nunca o id.
+      expect(response.json().message).not.toContain(DESCONHECIDO);
+    }
+    await app.close();
+  });
+
+  it("recusa lista absurdamente longa em vez de estourar no driver", async () => {
+    const app = await buildTestApp();
+    // Link forjado: milhares de valores viram `IN (...)` e passam do limite de
+    // parâmetros do Postgres. 400 diz o que aconteceu; erro de driver, não.
+    const query = Array.from({ length: 300 }, () => `status=open`).join("&");
+    expect((await stats(app, "admin", `?${query}`)).statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("recusa item fora do enum no meio de uma lista válida", async () => {
+    const app = await buildTestApp();
+    const response = await stats(app, "admin", "?status=open&status=arquivado");
+    expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("o filtro é aplicado DEPOIS do escopo de acesso, nunca no lugar dele", async () => {
+    const app = await buildTestApp();
+    // O atendente pede um número e uma pessoa: o recorte dele continua
+    // inteiro no AND, e o filtro só pode tirar conversa da conta.
+    await stats(app, "agent", `?instanceId=${INSTANCE_A}&assignedUserId=${USER_A}`);
+    for (const where of [
+      recorded.conversationGroupBy[0]?.where as Record<string, unknown>,
+      ...recorded.conversationFindMany.map((args) => args.where as Record<string, unknown>),
+      ...recorded.conversationCount.map((args) => args.where as Record<string, unknown>),
+    ]) {
+      const conditions = conditionsOf(where ?? {});
+      if (conditions.length === 0) continue;
+      expect(conditions).toContainEqual({
+        OR: [{ assignedUserId: "user-agent" }, { assignedUserId: null }],
+      });
+      expect(conditions).toContainEqual({ whatsappInstanceId: { in: ["inst-1"] } });
+    }
     await app.close();
   });
 
   it("filtro de departamento e de responsável aceitam 'sem'", async () => {
     const app = await buildTestApp();
     await stats(app, "admin", `?departmentId=${FILTER_NONE}&assignedUserId=${FILTER_NONE}`);
+    // Sozinhos, os sentinelas entram como condição direta: um ramo só não
+    // precisa virar `OR`.
     const conditions = conditionsOf(
       recorded.conversationGroupBy[0]?.where as Record<string, unknown>,
     );
@@ -469,32 +637,37 @@ describe("GET /dashboard/stats", () => {
 
   it("os filtros valem para a tela inteira, inclusive para o card de atraso", async () => {
     const app = await buildTestApp();
-    const departmentId = "22222222-2222-4222-8222-222222222222";
+    const departmentId = DEPARTMENT_A;
     await stats(app, "admin", `?departmentId=${departmentId}`);
     const candidatas = recorded.conversationFindMany.find((args) => {
       const select = (args.select as Record<string, unknown>) ?? {};
       return !("title" in select) && !("assignedUserId" in select);
     });
     expect(conditionsOf(candidatas?.where as Record<string, unknown>)).toContainEqual({
-      departmentId,
+      departmentId: { in: [departmentId] },
     });
     for (const args of recorded.messageCount) {
       const where = args.where as { conversation?: Record<string, unknown> };
-      expect(conditionsOf(where.conversation ?? {})).toContainEqual({ departmentId });
+      expect(conditionsOf(where.conversation ?? {})).toContainEqual({
+        departmentId: { in: [departmentId] },
+      });
     }
     await app.close();
   });
 
-  it("filtro devolvido na resposta é o que a API aplicou", async () => {
+  it("filtro devolvido na resposta é o que a API aplicou, em lista", async () => {
     const app = await buildTestApp();
-    const instanceId = "11111111-1111-4111-8111-111111111111";
-    const body = (await stats(app, "admin", `?instanceId=${instanceId}`)).json();
+    const body = (
+      await stats(app, "admin", `?instanceId=${INSTANCE_A}&instanceId=${INSTANCE_B}&status=open`)
+    ).json();
     expect(body.filters).toEqual({
-      instanceId,
-      status: null,
-      departmentId: null,
-      assignedUserId: null,
+      instanceIds: [INSTANCE_A, INSTANCE_B],
+      statuses: ["open"],
+      departmentIds: [],
+      assignedUserIds: [],
     });
+    // Filtro não usado volta como lista vazia, que é o "todos" — nunca nulo.
+    expect(body.filters.departmentIds).toEqual([]);
     await app.close();
   });
 
@@ -505,7 +678,7 @@ describe("GET /dashboard/stats", () => {
       recorded.conversationGroupBy[0]?.where as Record<string, unknown>,
     );
     // O filtro entra no AND junto com o escopo, nunca no lugar dele.
-    expect(conditions).toContainEqual({ status: "open" });
+    expect(conditions).toContainEqual({ status: { in: ["open"] } });
     expect(conditions).toContainEqual({
       OR: [{ assignedUserId: "user-agent" }, { assignedUserId: null }],
     });
@@ -513,8 +686,27 @@ describe("GET /dashboard/stats", () => {
     // mensagens contariam conversas que os cards de status esconderam.
     for (const args of recorded.messageCount) {
       const where = args.where as { conversation?: Record<string, unknown> };
-      expect(conditionsOf(where.conversation ?? {})).toContainEqual({ status: "open" });
+      expect(conditionsOf(where.conversation ?? {})).toContainEqual({ status: { in: ["open"] } });
     }
+    await app.close();
+  });
+
+  it("nenhum filtro revela ao agent número que ele não enxerga", async () => {
+    const app = await buildTestApp();
+    // Ele pede um número que não está vinculado ao login dele. A consulta sai
+    // com as DUAS condições, e a interseção é vazia: o filtro só sabe tirar
+    // conversa da conta, nunca trazer uma de volta.
+    await stats(app, "agent", `?instanceId=${INSTANCE_B}`);
+    const conditions = conditionsOf(
+      recorded.conversationGroupBy[0]?.where as Record<string, unknown>,
+    );
+    expect(conditions).toContainEqual({ whatsappInstanceId: { in: ["inst-1"] } });
+    expect(conditions).toContainEqual({ whatsappInstanceId: { in: [INSTANCE_B] } });
+    // O card de infraestrutura também: o escopo continua no AND ao lado do
+    // filtro, e não pode ser sobrescrito por ele.
+    expect(recorded.instanceGroupBy[0]?.where).toMatchObject({
+      AND: [{ id: { in: ["inst-1"] } }, { id: { in: [INSTANCE_B] } }],
+    });
     await app.close();
   });
 
@@ -673,7 +865,7 @@ describe("GET /dashboard/stats", () => {
 
   it("os filtros da tela continuam valendo no mapa de 30 dias", async () => {
     const app = await buildTestApp();
-    const departmentId = "22222222-2222-4222-8222-222222222222";
+    const departmentId = DEPARTMENT_A;
     await stats(app, "admin", `?period=today&departmentId=${departmentId}`);
     // Toda busca por atividade — a do período e a do mapa — carrega o filtro.
     const porAtividade = recorded.conversationFindMany.filter(
@@ -682,7 +874,7 @@ describe("GET /dashboard/stats", () => {
     expect(porAtividade.length).toBeGreaterThanOrEqual(2);
     for (const args of porAtividade) {
       expect(conditionsOf(args.where as Record<string, unknown>)).toContainEqual({
-        departmentId,
+        departmentId: { in: [departmentId] },
       });
     }
     await app.close();
