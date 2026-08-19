@@ -5,9 +5,11 @@ import { Download, RefreshCw } from "lucide-react";
 import {
   ALL_USERS_ASSIGNEE_HINT,
   CONVERSATION_STATUS_LABELS,
+  DASHBOARD_NO_DEPARTMENT_LABEL,
+  FILTER_NONE,
   type ConversationStatus,
 } from "@azvchat/shared";
-import { reportsApi } from "@/lib/api";
+import { api, reportsApi, type ReportFilters } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import {
   queueCellStyle,
@@ -18,8 +20,21 @@ import {
   type ReportRowRef,
   type ReportSlice,
 } from "@/lib/report-cells";
-import type { AgentReportDto, AgentReportRowDto, QueueByStatusDto } from "@/lib/types";
-import { Button, Card, EmptyState, Spinner } from "@/components/ui";
+import type {
+  AgentReportDto,
+  AgentReportRowDto,
+  DepartmentDto,
+  InstanceDto,
+  QueueByStatusDto,
+} from "@/lib/types";
+import {
+  Button,
+  Card,
+  EmptyState,
+  MultiSelect,
+  Spinner,
+  type MultiSelectGroup,
+} from "@/components/ui";
 import { UserAvatar } from "@/components/user-avatar";
 import { ReportSlicePanel } from "@/components/reports/slice-panel";
 
@@ -81,9 +96,28 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [slice, setSlice] = useState<ReportSlice | null>(null);
+  const [departmentIds, setDepartmentIds] = useState<string[]>([]);
+  const [instanceIds, setInstanceIds] = useState<string[]>([]);
+  const [departments, setDepartments] = useState<DepartmentDto[]>([]);
+  const [instances, setInstances] = useState<InstanceDto[]>([]);
   // Sobe a cada carga da tabela: o painel aberto recarrega junto, em vez de
   // continuar mostrando a lista de antes do "Atualizar".
   const [reloadToken, setReloadToken] = useState(0);
+
+  /**
+   * As duas listas já vêm recortadas pelo acesso de quem pediu, então o
+   * seletor nunca oferece um chip ou departamento que a pessoa não enxerga.
+   */
+  useEffect(() => {
+    api
+      .get<{ instances: InstanceDto[] }>("/whatsapp-instances")
+      .then((data) => setInstances(data.instances))
+      .catch(() => undefined);
+    api
+      .get<{ departments: DepartmentDto[] }>("/departments/mine")
+      .then((data) => setDepartments(data.departments))
+      .catch(() => undefined);
+  }, []);
 
   const range = useMemo(() => {
     if (preset !== "custom") return rangeFor(preset);
@@ -92,31 +126,63 @@ export default function ReportsPage() {
     return { from, to };
   }, [preset, customFrom, customTo]);
 
+  const filters = useMemo<ReportFilters>(
+    () => ({ departmentId: departmentIds, instanceId: instanceIds }),
+    [departmentIds, instanceIds],
+  );
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      setReport(await reportsApi.agents(range.from.toISOString(), range.to.toISOString()));
+      setReport(
+        await reportsApi.agents(range.from.toISOString(), range.to.toISOString(), filters),
+      );
       setReloadToken((token) => token + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erro ao carregar o relatório");
     } finally {
       setLoading(false);
     }
-  }, [range]);
+  }, [range, filters]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   /**
-   * Trocar o período fecha o painel. Os números da tabela mudam por baixo
-   * dele, e um painel exibindo o recorte anterior é exatamente o tipo de
-   * dado velho que faz a equipe deixar de confiar no relatório.
+   * Trocar o período OU um filtro fecha o painel. Os números da tabela mudam
+   * por baixo dele, e um painel exibindo o recorte anterior é exatamente o
+   * tipo de dado velho que faz a equipe deixar de confiar no relatório.
    */
   useEffect(() => {
     setSlice(null);
-  }, [range]);
+  }, [range, filters]);
+
+  /**
+   * Item marcado que deixou de existir — chip apagado, departamento excluído
+   * — sai do recorte em SILÊNCIO, assim que as listas chegam. Quem poda é a
+   * tela, porque só ela sabe o que ainda existe, e ela poda ANTES de virar
+   * consulta: a API recusa id desconhecido com 400, e esse erro não pode
+   * aparecer para quem só voltou à tela depois de um cadastro ter mudado.
+   */
+  useEffect(() => {
+    if (departments.length === 0) return;
+    setDepartmentIds((atual) => {
+      const vivos = atual.filter(
+        (id) => id === FILTER_NONE || departments.some((row) => row.id === id),
+      );
+      return vivos.length === atual.length ? atual : vivos;
+    });
+  }, [departments]);
+
+  useEffect(() => {
+    if (instances.length === 0) return;
+    setInstanceIds((atual) => {
+      const vivos = atual.filter((id) => instances.some((row) => row.id === id));
+      return vivos.length === atual.length ? atual : vivos;
+    });
+  }, [instances]);
 
   /** CSV gerado no navegador: os dados já estão todos aqui. */
   function downloadCsv() {
@@ -200,6 +266,30 @@ export default function ReportsPage() {
     );
   }
 
+  const departmentGroups: MultiSelectGroup[] = [
+    {
+      label: null,
+      options: [
+        // Conversa sem departamento existe quando o número não tem
+        // departamento padrão — precisa ser possível olhar só para ela.
+        { value: FILTER_NONE, label: DASHBOARD_NO_DEPARTMENT_LABEL },
+        ...departments.map((department) => ({ value: department.id, label: department.name })),
+      ],
+    },
+  ];
+
+  const instanceGroups: MultiSelectGroup[] = [
+    {
+      label: null,
+      options: instances.map((instance) => ({ value: instance.id, label: instance.name })),
+    },
+  ].filter((group) => group.options.length > 0);
+
+  // Aviso de recorte vazio: com filtro marcado a causa provável é o
+  // cruzamento, e não a falta de movimento. Dizer a coisa errada aqui faz a
+  // pessoa procurar defeito no relatório.
+  const filtrando = departmentIds.length > 0 || instanceIds.length > 0;
+
   function openSlice(next: ReportSlice) {
     // Clicar de novo na mesma célula fecha o painel — é o gesto que a pessoa
     // tenta antes de procurar o botão de fechar.
@@ -245,6 +335,47 @@ export default function ReportsPage() {
           >
             Personalizado
           </button>
+          {/*
+           * Os dois filtros ficam na MESMA barra do período, e não numa
+           * linha própria: são três controles do mesmo recorte, e separá-los
+           * faria a pessoa procurar onde está o resto.
+           *
+           * OU dentro do filtro, E entre filtros: marcar Contábil e Fiscal
+           * mostra os dois; marcar Contábil junto de um chip mostra só o que
+           * está nos dois ao mesmo tempo. Aqui eles CRUZAM com o responsável
+           * da linha, como no Dashboard e ao contrário da lista de conversas
+           * — a célula é um número, e somar recortes diferentes dentro do
+           * mesmo total não responde pergunta nenhuma.
+           */}
+          <MultiSelect
+            label="Departamento"
+            className="w-40"
+            groups={departmentGroups}
+            selected={departmentIds}
+            onChange={setDepartmentIds}
+            searchPlaceholder="Buscar departamento"
+            emptyLabel="Nenhum departamento"
+          />
+          <MultiSelect
+            label="Conexão"
+            className="w-40"
+            groups={instanceGroups}
+            selected={instanceIds}
+            onChange={setInstanceIds}
+            searchPlaceholder="Buscar conexão"
+            emptyLabel="Nenhuma conexão"
+          />
+          {(departmentIds.length > 0 || instanceIds.length > 0) && (
+            <button
+              onClick={() => {
+                setDepartmentIds([]);
+                setInstanceIds([]);
+              }}
+              className="text-xs font-medium text-slate-500 underline-offset-2 hover:text-slate-700 hover:underline"
+            >
+              Limpar filtros
+            </button>
+          )}
           {preset === "custom" && (
             <span className="flex items-center gap-2 text-xs text-slate-500">
               <input
@@ -274,8 +405,12 @@ export default function ReportsPage() {
           <p className="text-sm text-red-600">{error}</p>
         ) : !report || (report.rows.length === 0 && report.totals.openNow === 0) ? (
           <EmptyState
-            title="Sem movimento no período"
-            description="Nenhum atendente enviou mensagens nas datas selecionadas."
+            title={filtrando ? "Nada neste recorte" : "Sem movimento no período"}
+            description={
+              filtrando
+                ? "Os filtros CRUZAM: a conversa precisa estar no departamento e na conexão marcados ao mesmo tempo. Desmarque um deles para alargar o recorte."
+                : "Nenhum atendente enviou mensagens nas datas selecionadas."
+            }
           />
         ) : (
           <>
@@ -383,7 +518,12 @@ export default function ReportsPage() {
       </div>
 
       {slice && (
-        <ReportSlicePanel slice={slice} onClose={() => setSlice(null)} reloadToken={reloadToken} />
+        <ReportSlicePanel
+          slice={slice}
+          filters={filters}
+          onClose={() => setSlice(null)}
+          reloadToken={reloadToken}
+        />
       )}
     </div>
   );

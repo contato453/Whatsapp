@@ -36,8 +36,10 @@ const ORG = "org-1";
 const INSTANCIA = "44444444-4444-4444-8444-444444444444";
 const INSTANCIA_FORA = "11111111-1111-4111-8111-111111111111";
 const DEPTO = "55555555-5555-4555-8555-555555555555";
+const DEPTO_2 = "66666666-6666-4666-8666-666666666666";
 const ANA = "77777777-7777-4777-8777-777777777777";
 const BRUNO = "88888888-8888-4888-8888-888888888888";
+const CLARA = "99999999-9999-4999-8999-999999999999";
 const DESDE = "2026-08-01T00:00:00.000Z";
 const ATE = "2026-08-31T23:59:59.000Z";
 
@@ -91,6 +93,12 @@ function base(): Conversa[] {
     // Órfãs: 4 abertas e 1 aguardando cliente
     ...Array.from({ length: 4 }, () => conversa({ status: "open" })),
     conversa({ status: "waiting_client" }),
+    // Clara: 4 abertas, todas no SEGUNDO departamento. Existem para o filtro
+    // ter o que separar: sem filtro ela aparece, filtrando o primeiro
+    // departamento ela zera, e a Ana faz o inverso.
+    ...Array.from({ length: 4 }, () =>
+      conversa({ assignedUserId: CLARA, status: "open", departmentId: DEPTO_2 }),
+    ),
     // Coletivo (@todos): 2 abertas — sem dono por DECISÃO, não por falta
     ...Array.from({ length: 2 }, () => conversa({ assignedToAll: true, status: "open" })),
     // Fora dos dois lados: arquivada, e número que a supervisora não enxerga
@@ -159,9 +167,14 @@ beforeEach(() => {
 });
 
 function fakePrisma(): PrismaClient {
-  const usuarios = [ANA, BRUNO].map((id, indice) => ({
+  const nomes: Record<string, string> = {
+    [ANA]: "Ana Souza",
+    [BRUNO]: "Bruno Lima",
+    [CLARA]: "Clara Dias",
+  };
+  const usuarios = [ANA, BRUNO, CLARA].map((id) => ({
     id,
-    name: indice === 0 ? "Ana Souza" : "Bruno Lima",
+    name: nomes[id] as string,
     email: `${id}@example.com`,
     role: "agent",
     status: "active",
@@ -174,11 +187,24 @@ function fakePrisma(): PrismaClient {
   }));
   return {
     userWhatsAppInstance: { findMany: async () => [{ whatsappInstanceId: INSTANCIA }] },
-    userDepartment: { findMany: async () => [{ departmentId: DEPTO }] },
+    userDepartment: {
+      findMany: async () => [{ departmentId: DEPTO }, { departmentId: DEPTO_2 }],
+    },
     rolePermission: { findMany: async () => [] },
-    department: { findMany: async () => [{ id: DEPTO }] },
+    department: {
+      findMany: async (args: { where?: { id?: { in: string[] } } }) => {
+        const pedidos = args.where?.id?.in;
+        const existentes = [{ id: DEPTO }, { id: DEPTO_2 }];
+        return pedidos ? existentes.filter((row) => pedidos.includes(row.id)) : existentes;
+      },
+    },
     tag: { findMany: async () => [] },
-    whatsAppInstance: { findMany: async () => [] },
+    whatsAppInstance: {
+      findMany: async (args: { where?: { id?: { in: string[] } } }) => {
+        const pedidos = args.where?.id?.in;
+        return pedidos ? pedidos.filter((id) => id === INSTANCIA).map((id) => ({ id })) : [];
+      },
+    },
     conversationRead: { findMany: async () => [] },
     personProfile: { findMany: async () => [] },
     // O contador de não lidas sai de um SQL cru; ele não é assunto deste
@@ -319,8 +345,8 @@ interface Relatorio {
   totals: { queue: { open: number; waitingClient: number; waitingInternal: number } };
 }
 
-async function relatorio(app: FastifyInstance): Promise<Relatorio> {
-  const resposta = await pedir(app, `/reports/agents?from=${DESDE}&to=${ATE}`);
+async function relatorio(app: FastifyInstance, filtro = ""): Promise<Relatorio> {
+  const resposta = await pedir(app, `/reports/agents?from=${DESDE}&to=${ATE}${filtro}`);
   expect(resposta.statusCode).toBe(200);
   return resposta.json() as Relatorio;
 }
@@ -388,8 +414,9 @@ describe("o número da célula é a quantidade que o painel lista", () => {
     expect(dados.totals.queue.open).toBe(somaVisivel("open"));
     expect(dados.totals.queue.waitingClient).toBe(somaVisivel("waitingClient"));
     expect(dados.totals.queue.waitingInternal).toBe(somaVisivel("waitingInternal"));
-    // E o total de "Aberto" é mesmo tudo que a coluna mostra: 3 + 3 + 4 + 2.
-    expect(dados.totals.queue.open).toBe(12);
+    // E o total de "Aberto" é tudo que a coluna mostra: Ana 3, Bruno 3,
+    // Clara 4, sem responsável 4 e coletivo 2.
+    expect(dados.totals.queue.open).toBe(16);
     await app.close();
   });
 
@@ -441,6 +468,80 @@ describe("o número da célula é a quantidade que o painel lista", () => {
         `resolvedBy=${ANA}&resolvedFrom=2026-08-20T00:00:00.000Z&resolvedTo=2026-08-31T23:59:59.000Z`,
       ),
     ).toBe(0);
+    await app.close();
+  });
+});
+
+describe("com os filtros da barra ligados, a célula continua batendo com o painel", () => {
+  it("filtrar um departamento recorta a tabela e o painel do mesmo jeito", async () => {
+    const app = await buildApp();
+
+    // Sem filtro: Ana tem 3 abertas (no primeiro departamento) e Clara 4 (no
+    // segundo).
+    const inteiro = await relatorio(app);
+    expect(inteiro.rows.find((linha) => linha.user.id === ANA)?.queue.open).toBe(3);
+    expect(inteiro.rows.find((linha) => linha.user.id === CLARA)?.queue.open).toBe(4);
+
+    // Filtrando o primeiro departamento, a Clara zera e some da tabela, e a
+    // Ana continua com as 3 dela.
+    const so1 = await relatorio(app, `&departmentId=${DEPTO}`);
+    expect(so1.rows.find((linha) => linha.user.id === ANA)?.queue.open).toBe(3);
+    expect(so1.rows.find((linha) => linha.user.id === CLARA)).toBeUndefined();
+    expect(
+      await painel(
+        app,
+        `status=open&assignment=${encodeURIComponent(userAssignmentToken(ANA))}&departmentId=${DEPTO}`,
+      ),
+    ).toBe(3);
+
+    // Filtrando o segundo, o inverso — e o painel acompanha os dois.
+    const so2 = await relatorio(app, `&departmentId=${DEPTO_2}`);
+    expect(so2.rows.find((linha) => linha.user.id === ANA)).toBeUndefined();
+    expect(so2.rows.find((linha) => linha.user.id === CLARA)?.queue.open).toBe(4);
+    expect(
+      await painel(
+        app,
+        `status=open&assignment=${encodeURIComponent(userAssignmentToken(CLARA))}&departmentId=${DEPTO_2}`,
+      ),
+    ).toBe(4);
+
+    await app.close();
+  });
+
+  it("os dois departamentos marcados SOMAM entre si", async () => {
+    const app = await buildApp();
+    const dados = await relatorio(app, `&departmentId=${DEPTO}&departmentId=${DEPTO_2}`);
+    expect(dados.rows.find((linha) => linha.user.id === ANA)?.queue.open).toBe(3);
+    expect(dados.rows.find((linha) => linha.user.id === CLARA)?.queue.open).toBe(4);
+    await app.close();
+  });
+
+  it("departamento e conexão CRUZAM: chip certo com departamento errado zera", async () => {
+    const app = await buildApp();
+    // A Clara só tem conversa no segundo departamento; pedir o chip dela
+    // junto do PRIMEIRO departamento devolve zero, e está certo.
+    const dados = await relatorio(app, `&instanceId=${INSTANCIA}&departmentId=${DEPTO}`);
+    expect(dados.rows.find((linha) => linha.user.id === CLARA)).toBeUndefined();
+    expect(dados.rows.find((linha) => linha.user.id === ANA)?.queue.open).toBe(3);
+    expect(
+      await painel(
+        app,
+        `status=open&assignment=${encodeURIComponent(userAssignmentToken(CLARA))}&instanceId=${INSTANCIA}&departmentId=${DEPTO}`,
+      ),
+    ).toBe(0);
+    await app.close();
+  });
+
+  it("o total do cabeçalho continua fechando com a coluna, agora filtrada", async () => {
+    const app = await buildApp();
+    const dados = await relatorio(app, `&departmentId=${DEPTO_2}`);
+    const soma =
+      dados.rows.reduce((total, linha) => total + linha.queue.open, 0) +
+      dados.unassigned.queue.open +
+      dados.allUsers.queue.open;
+    expect(dados.totals.queue.open).toBe(soma);
+    // Só as 4 da Clara vivem no segundo departamento.
+    expect(dados.totals.queue.open).toBe(4);
     await app.close();
   });
 });

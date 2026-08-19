@@ -1,8 +1,11 @@
 import type { FastifyInstance } from "fastify";
+import type { Prisma } from "@azvchat/database";
 import { z } from "zod";
 import { conversationScope, loadConversationAccess } from "../../lib/access.js";
 import { requirePermission } from "../../lib/permissions.js";
-import { resolvedHistoryWhere } from "../../lib/report-slice.js";
+import { FILTER_NONE } from "@azvchat/shared";
+import { assertKnownFilterIds, listaDe } from "../../lib/conversation-filters.js";
+import { reportFilterConditions, resolvedHistoryWhere } from "../../lib/report-slice.js";
 import { serializeUser } from "../../lib/serialize.js";
 import {
   bucketQueueEntries,
@@ -24,9 +27,23 @@ import type { AppDeps } from "../../types.js";
  * enxerga o movimento dos números e departamentos que já enxerga.
  */
 
-const rangeSchema = z.object({
+const idOrNone = z.union([z.string().uuid(), z.literal(FILTER_NONE)]);
+
+/**
+ * O período mais os dois filtros da barra.
+ *
+ * Os dois aceitam LISTA (parâmetro repetido ou separado por vírgula), somam
+ * dentro de si e cruzam entre si — a regra da casa, montada em
+ * `lib/report-slice.ts` para a contagem da célula e a listagem do painel
+ * lerem o mesmo recorte. Item que não existe na organização é RECUSADO com
+ * 400, nunca ignorado: ignorar devolveria números plausíveis recortados por
+ * um critério diferente do que a pessoa marcou.
+ */
+const querySchema = z.object({
   from: z.string().datetime(),
   to: z.string().datetime(),
+  departmentId: listaDe(idOrNone),
+  instanceId: listaDe(z.string().uuid()),
 });
 
 /** Teto de mensagens lidas por consulta, para o relatório não travar a API. */
@@ -34,15 +51,42 @@ const MAX_MESSAGES = 100_000;
 
 export async function reportRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
   app.get("/reports/agents", { preHandler: requirePermission(deps, "reports.view") }, async (request) => {
-    const { from, to } = rangeSchema.parse(request.query);
-    const start = new Date(from);
-    const end = new Date(to);
+    const query = querySchema.parse(request.query);
+    const start = new Date(query.from);
+    const end = new Date(query.to);
     const organizationId = request.user.organizationId;
 
+    // A tela poda o item extinto antes de mandar, então um id desconhecido
+    // aqui significa link colado à mão ou estado corrompido — e aí o erro é
+    // a resposta certa.
+    await assertKnownFilterIds(deps.prisma, organizationId, {
+      departmentIds: query.departmentId.filter((value) => value !== FILTER_NONE),
+      userIds: [],
+      tagIds: [],
+      instanceIds: query.instanceId,
+    });
+
     const access = await loadConversationAccess(deps.prisma, request.user);
-    // Arquivada não conta como trabalho de ninguém: o filtro entra POR CIMA
-    // do escopo de acesso, em todas as consultas do relatório de uma vez.
-    const scope = { ...conversationScope(access), archivedAt: null };
+    /**
+     * O recorte de TODAS as consultas do relatório, montado uma vez só.
+     *
+     * Arquivada não conta como trabalho de ninguém, e os filtros da barra
+     * entram POR CIMA do escopo de acesso, nunca no lugar dele: pedir um
+     * chip que a pessoa não enxerga devolve vazio em vez de vazar. Como
+     * `conversationScope` já ocupa o `AND`, os itens novos são
+     * ACRESCENTADOS à lista existente — sobrescrevê-la faria o filtro por
+     * departamento virar porta de saída do controle de acesso.
+     *
+     * Um recorte só para todas as consultas é o que mantém a tabela, os
+     * quatro cards do topo e o painel lateral contando a MESMA coisa.
+     */
+    const escopo = conversationScope(access);
+    const escopoAnd = Array.isArray(escopo.AND) ? escopo.AND : escopo.AND ? [escopo.AND] : [];
+    const scope: Prisma.ConversationWhereInput = {
+      ...escopo,
+      archivedAt: null,
+      AND: [...escopoAnd, ...reportFilterConditions(query)],
+    };
 
     const [users, messages, resolvedEntries, queueEntries, receivedCount] = await Promise.all([
       deps.prisma.user.findMany({
@@ -186,6 +230,8 @@ export async function reportRoutes(app: FastifyInstance, deps: AppDeps): Promise
         openNow: queueTotal(queue),
         queue,
       },
+      // Os filtros como a API os aplicou — a tela confere o que pediu.
+      filters: { departmentId: query.departmentId, instanceId: query.instanceId },
       // Avisa quando o período é grande demais e os números ficaram parciais.
       truncated: messages.length >= MAX_MESSAGES,
     };

@@ -444,17 +444,25 @@ export const permissionsApi = {
  * painel nunca mostre conversa que a pessoa não veria na Inbox.
  */
 export const reportsApi = {
-  agents: (from: string, to: string) =>
-    api.get<AgentReportDto>(
-      `/reports/agents?${new URLSearchParams({ from, to }).toString()}`,
-    ),
+  agents: (from: string, to: string, filters: ReportFilters) =>
+    api.get<AgentReportDto>(`/reports/agents?${reportParams(from, to, filters).toString()}`),
   /**
    * As conversas que formam uma célula. `slice` traz o recorte já traduzido
    * para os filtros que a lista entende — status mais token de atendimento,
    * ou o intervalo de concluídas.
    */
-  sliceConversations: (slice: ReportSliceQuery, offset: number, limit: number) => {
+  sliceConversations: (
+    slice: ReportSliceQuery,
+    filters: ReportFilters,
+    offset: number,
+    limit: number,
+  ) => {
     const params = new URLSearchParams();
+    // Os MESMOS filtros da barra vão junto: sem eles o painel listaria o
+    // recorte inteiro e o número da célula pararia de bater com a lista.
+    // `departmentId` aqui é o que CRUZA, e não o `dept:` de `assignment`.
+    for (const id of filters.departmentId) params.append("departmentId", id);
+    for (const id of filters.instanceId) params.append("instanceId", id);
     // `archived` NÃO é mandado: o padrão da rota já é "não arquivadas", e o
     // parâmetro é lido com `z.coerce.boolean()` — a string "false" viraria
     // `true` e o painel listaria justamente o contrário do que a célula
@@ -480,6 +488,25 @@ export const reportsApi = {
     );
   },
 };
+
+/** Os filtros da barra do relatório, do jeito que as duas rotas os leem. */
+export interface ReportFilters {
+  /** Ids de departamento; `FILTER_NONE` é "sem departamento". */
+  departmentId: string[];
+  /** Ids de conexão (o chip de WhatsApp). */
+  instanceId: string[];
+}
+
+/**
+ * Parâmetro REPETIDO, e não separado por vírgula: é o formato que a Inbox e
+ * o Dashboard já usam. Lista vazia não escreve nada, que é o "todos".
+ */
+function reportParams(from: string, to: string, filters: ReportFilters): URLSearchParams {
+  const params = new URLSearchParams({ from, to });
+  for (const id of filters.departmentId) params.append("departmentId", id);
+  for (const id of filters.instanceId) params.append("instanceId", id);
+  return params;
+}
 
 /** O recorte de uma célula, já no vocabulário de `GET /conversations`. */
 export type ReportSliceQuery =

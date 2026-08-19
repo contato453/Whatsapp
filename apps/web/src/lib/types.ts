@@ -377,6 +377,8 @@ export interface AgentReportDto {
      */
     queue: QueueByStatusDto;
   };
+  /** Os filtros como a API os aplicou — a tela confere o que pediu. */
+  filters: { departmentId: string[]; instanceId: string[] };
   /** true quando o período estourou o teto e os números ficaram parciais */
   truncated: boolean;
 }

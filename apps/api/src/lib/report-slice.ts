@@ -1,4 +1,5 @@
 import type { Prisma } from "@azvchat/database";
+import { FILTER_NONE } from "@azvchat/shared";
 import { assignedToAllWhere, unassignedConversationWhere } from "./conversation-assignment.js";
 
 /**
@@ -98,4 +99,47 @@ export function resolvedInPeriodWhere(
   to: Date,
 ): Prisma.ConversationWhereInput {
   return { assignmentHistory: { some: resolvedHistoryWhere(from, to, performedByUserId) } };
+}
+
+/**
+ * Os filtros da BARRA do relatório: departamento e conexão (chip).
+ *
+ * **OU dentro do filtro, E entre filtros** — a regra da casa. Marcar Contábil
+ * e Fiscal mostra os dois; marcar Contábil junto de um chip mostra só o que
+ * está nos dois ao mesmo tempo. Lista vazia é "todos", nunca "nenhum".
+ *
+ * **Aqui departamento CRUZA com o responsável da linha, e é assim de
+ * propósito** — o mesmo desenho do Dashboard, e o oposto da Inbox. A célula
+ * do relatório é um NÚMERO, e "as conversas do Contábil MAIS as da Ana" não
+ * responde pergunta nenhuma (ainda conta duas vezes o trabalho dela dentro do
+ * Contábil). Cruzando, "Contábil + Ana" é "os números dela dentro do
+ * Contábil", que é o que a supervisão pergunta. Consequência aceita: marcar
+ * um departamento em que a pessoa não atende zera a linha dela, e está certo.
+ *
+ * Estes itens são ACRESCENTADOS ao `AND` que já carrega `conversationScope`,
+ * nunca postos no lugar dele: filtro refina o recorte, nunca o amplia.
+ */
+export interface ReportFilters {
+  /** Ids de departamento; `FILTER_NONE` é "sem departamento". */
+  departmentId: string[];
+  instanceId: string[];
+}
+
+export function reportFilterConditions(filters: ReportFilters): Prisma.ConversationWhereInput[] {
+  const conditions: Prisma.ConversationWhereInput[] = [];
+  if (filters.instanceId.length > 0) {
+    conditions.push({ whatsappInstanceId: { in: filters.instanceId } });
+  }
+  // "Sem departamento" é mais um ramo do mesmo OU, e não a ausência de
+  // filtro: a conversa que o número não classificou é um recorte que a
+  // supervisão pede junto dos outros, e sem este ramo não haveria como
+  // olhar só para ela.
+  const ids = filters.departmentId.filter((value) => value !== FILTER_NONE);
+  const ramos: Prisma.ConversationWhereInput[] = [
+    ...(filters.departmentId.includes(FILTER_NONE) ? [{ departmentId: null }] : []),
+    ...(ids.length > 0 ? [{ departmentId: { in: ids } }] : []),
+  ];
+  if (ramos.length === 1) conditions.push(ramos[0] as Prisma.ConversationWhereInput);
+  else if (ramos.length > 1) conditions.push({ OR: ramos });
+  return conditions;
 }

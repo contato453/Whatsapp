@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ExternalLink, Users, X } from "lucide-react";
 import { CONVERSATION_STATUS_LABELS } from "@azvchat/shared";
-import { reportsApi } from "@/lib/api";
+import { reportsApi, type ReportFilters } from "@/lib/api";
 import { rowLabel, type ReportSlice } from "@/lib/report-cells";
 import type { ConversationDto } from "@/lib/types";
 import { Button, EmptyState, Spinner } from "@/components/ui";
@@ -28,10 +28,17 @@ const PAGE_SIZE = 25;
 
 export function ReportSlicePanel({
   slice,
+  filters,
   onClose,
   reloadToken,
 }: {
   slice: ReportSlice;
+  /**
+   * Os filtros da barra. Vão para a listagem junto com o recorte da célula,
+   * senão o painel mostraria o recorte inteiro enquanto a célula mostra o
+   * filtrado — e o número deixaria de bater com a lista.
+   */
+  filters: ReportFilters;
   onClose: () => void;
   /** Muda a cada "Atualizar" da tela: o painel recarrega junto. */
   reloadToken: number;
@@ -44,13 +51,13 @@ export function ReportSlicePanel({
 
   const fetchPage = useCallback(
     async (offset: number) => {
-      const data = await reportsApi.sliceConversations(slice.query, offset, PAGE_SIZE);
+      const data = await reportsApi.sliceConversations(slice.query, filters, offset, PAGE_SIZE);
       setTotal(data.total);
       setConversations((atual) =>
         offset === 0 ? data.conversations : [...atual, ...data.conversations],
       );
     },
-    [slice.query],
+    [slice.query, filters],
   );
 
   // Recarrega do zero quando o recorte muda ou a tela é atualizada: painel
