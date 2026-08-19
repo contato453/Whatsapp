@@ -6,11 +6,14 @@ import type {
   AzevedoOsCompanyDto,
   AzevedoOsFacetsDto,
   ConfigurableRole,
+  ConversationStatus,
   ParticipantClientRole,
   PermissionAction,
 } from "@azvchat/shared";
 import type { DashboardFilters } from "./dashboard-filters";
 import type {
+  AgentReportDto,
+  ConversationDto,
   DashboardStatsDto,
   MessageDto,
   QuickReplyDto,
@@ -431,6 +434,63 @@ export const permissionsApi = {
       .put<{ overrides: RolePermissionOverrideDto[] }>("/permissions", { entries })
       .then((data) => data.overrides),
 };
+
+/**
+ * Relatório de atendimentos e o drill-down de cada célula.
+ *
+ * O painel lateral NÃO tem rota própria: ele reusa `GET /conversations` com
+ * os mesmos filtros da Inbox, e o predicado de cada célula sai de
+ * `lib/report-slice.ts` no servidor. Uma listagem só é o que garante que o
+ * painel nunca mostre conversa que a pessoa não veria na Inbox.
+ */
+export const reportsApi = {
+  agents: (from: string, to: string) =>
+    api.get<AgentReportDto>(
+      `/reports/agents?${new URLSearchParams({ from, to }).toString()}`,
+    ),
+  /**
+   * As conversas que formam uma célula. `slice` traz o recorte já traduzido
+   * para os filtros que a lista entende — status mais token de atendimento,
+   * ou o intervalo de concluídas.
+   */
+  sliceConversations: (slice: ReportSliceQuery, offset: number, limit: number) => {
+    const params = new URLSearchParams();
+    // `archived` NÃO é mandado: o padrão da rota já é "não arquivadas", e o
+    // parâmetro é lido com `z.coerce.boolean()` — a string "false" viraria
+    // `true` e o painel listaria justamente o contrário do que a célula
+    // conta, que ignora arquivada dos dois lados.
+    params.set("limit", String(limit));
+    params.set("offset", String(offset));
+    // Concluídas NÃO leva token de atendimento: a coluna conta quem CONCLUIU
+    // no período, e a conversa pode ter mudado de mão (ou ficado sem dono)
+    // depois disso. Filtrar pelo responsável de agora devolveria menos
+    // conversas do que a célula mostra.
+    if (slice.assignment) params.set("assignment", slice.assignment);
+    // Concluídas é do PERÍODO e mede o evento de conclusão, então não filtra
+    // status: a conversa concluída e reaberta continua sendo trabalho fechado
+    // dentro das datas. Os três status de fila, ao contrário, são de agora.
+    if (slice.status) params.set("status", slice.status);
+    if (slice.resolvedBy) {
+      params.set("resolvedBy", slice.resolvedBy);
+      params.set("resolvedFrom", slice.resolvedFrom);
+      params.set("resolvedTo", slice.resolvedTo);
+    }
+    return api.get<{ conversations: ConversationDto[]; total: number }>(
+      `/conversations?${params.toString()}`,
+    );
+  },
+};
+
+/** O recorte de uma célula, já no vocabulário de `GET /conversations`. */
+export type ReportSliceQuery =
+  | { assignment: string; status: ConversationStatus; resolvedBy?: undefined }
+  | {
+      assignment?: undefined;
+      status?: undefined;
+      resolvedBy: string;
+      resolvedFrom: string;
+      resolvedTo: string;
+    };
 
 export const attendanceSettingsApi = {
   get: () =>

@@ -393,10 +393,16 @@ GET    /conversations                     GET /conversations/:id
         UNIFICADO de departamento e responsável, em tokens: `none`,
         `all_users`, `no_department`, `dept:<uuid>`, `user:<uuid>` — ver a
         seção 13. A resposta traz `total`, que a barra mostra sempre)
-       [&taxRegime=<valor|none>][&payroll=<valor|none>][&unlinked=true][&overdue=true]
-       (`overdue` é a lista do card "Atrasados agora": não resolvidas, com a
-        última mensagem do cliente, esperando além do limite em tempo de
-        expediente. A régua é `lib/overdue.ts`, a MESMA do dashboard)
+       [&resolvedBy=<uuid>&resolvedFrom=&resolvedTo=]
+       (conversas CONCLUÍDAS por alguém dentro de um intervalo — o drill-down
+        da coluna "Concluídas" do relatório. Os três andam juntos ou nenhum
+        vem. Mede o EVENTO de conclusão, não o status atual nem o responsável
+        de agora: a conversa concluída ontem e reaberta hoje continua contando)
+       [&overdue=true]
+       (a lista do card "Atrasados agora": não resolvidas, com a última
+        mensagem do cliente, esperando além do limite em tempo de expediente.
+        A régua é `lib/overdue.ts`, a MESMA do dashboard)
+       [&taxRegime=<valor|none>][&payroll=<valor|none>][&unlinked=true]
        (recorte por característica do cliente no Azevedo-OS; `none` é "sem
         informação" e `unlinked` são as conversas sem empresa vinculada, que
         NÃO combina com os outros dois. A resposta ganha `companyFilter`
@@ -465,7 +471,15 @@ GET    /attendance-settings  (qualquer papel — o dashboard depende dela)
 PUT    /attendance-settings  (supervisor; grava SLA + expediente + janela de login,
        a semana inteira de uma vez, e vai para o AuditLog)
 
-GET    /search              GET /reports/agents   GET /audit-logs
+GET    /search              GET /audit-logs
+GET    /reports/agents?from=&to=
+       (relatório por atendente. Além das linhas de pessoa, devolve `unassigned`
+        e `allUsers`: as conversas SEM RESPONSÁVEL e as coletivas ("@todos"),
+        que antes ficavam fora do relatório inteiro. As duas só têm fila —
+        mensagens, tempo médio e concluídas são medidas de uma pessoa —, e
+        entram no `totals.queue`, que é o número do cabeçalho de cada coluna.
+        `conversationsResolved` conta CONVERSAS distintas concluídas no
+        período, e não linhas de histórico: é o que o painel consegue listar)
 GET    /dashboard/stats?period=today|7d|15d|30d|custom[&from=&to=]
        (o PERÍODO é o único filtro de valor único — intervalo não é conjunto)
        Os quatro demais aceitam LISTA (parâmetro repetido ou separado por vírgula):
@@ -684,6 +698,17 @@ nome técnico no código e neste documento.
   teclado) expande **sobrepondo** a página, para a Inbox não remontar a cada passada de
   mouse. A escolha é preferência de navegador em `localStorage` (`zapdesk.sidebar-collapsed`)
   — nada de coluna em `User` nem rota na API para isso.
+- **Relatório por atendente** (`app/(app)/reports/page.tsx` + regra pura em
+  `src/lib/report-cells.ts` + painel em `components/reports/slice-panel.tsx`): as três
+  colunas de fila têm célula colorida, com a cor saindo de `CONVERSATION_STATUS_COLORS`
+  (`@azvchat/shared`) e o tom acompanhando o volume relativo DENTRO da coluna. **Zero fica
+  apagado, sem cor e sem clique** — colorir célula vazia pinta a tabela inteira e some com
+  o sinal, e botão que não faz nada ensina a equipe a desconfiar dos que fazem. Concluídas
+  tem forma própria (contorno, não preenchimento) porque é do PERÍODO e as outras três são
+  de AGORA. Clicar numa célula com valor abre o painel lateral com as conversas daquele
+  recorte; em tela estreita ele vira sobreposição (`lg:static` no `aside`). O total de cada
+  coluna vai no cabeçalho ("ABERTO (35)") e soma a coluna inteira, incluindo as linhas de
+  **Sem responsável** e **@todos**, que ficam no topo da tabela.
 - Gráficos do dashboard em `src/components/dashboard/`: `chart-card.tsx` (moldura, legenda
   e o alternador gráfico/tabela), `messages-timeline.tsx` (barras divergentes por dia),
   `hours-heatmap.tsx` (mapa dia da semana × hora), `sparkline.tsx` (miniatura da série
@@ -1319,6 +1344,23 @@ sempre juntos.
   conversa que chega pelo socket não carrega o regime — por isso o `inbox-shell` para de
   INSERIR linha nova enquanto o recorte está ligado, e só atualiza o que o servidor já
   devolveu.
+- **A célula do relatório e o painel dela saem do MESMO arquivo**
+  (`apps/api/src/lib/report-slice.ts`). A contagem vem de um `groupBy` e a lista vem de
+  `GET /conversations`; se cada lado montar o recorte por conta própria, a célula diz "4"
+  e o painel lista 3 — o defeito que já custou a confiança da equipe nos cards do
+  Dashboard. O painel **não tem rota de listagem própria** de propósito: duas listagens de
+  conversa divergiriam no escopo, no serializer ou na paginação, e a que quase ninguém abre
+  seria a que passaria a mostrar demais. `apps/api/test/report-panel-consistency.test.ts`
+  roda as duas rotas sobre a mesma base e compara célula a célula.
+- **`archived=false` na URL significa ARQUIVADAS.** O parâmetro é lido com
+  `z.coerce.boolean()`, e `Boolean("false")` é `true` — quem quer as não arquivadas
+  **omite** o parâmetro, que já é o padrão. Mandá-lo achando que desliga o filtro devolve
+  exatamente o conjunto oposto, e a lista parece só "estranha", nunca errada.
+- **A coluna "Concluídas" mede o EVENTO, não o dono nem o status.** Ela conta as conversas
+  com um `resolved` no `ConversationAssignmentHistory` dentro do período, então o painel
+  dela **não** filtra por `status` nem pelo responsável de agora: a conversa concluída
+  ontem, reaberta hoje e já na mão de outra pessoa continua sendo trabalho fechado por quem
+  fechou. Filtrar por responsável ali faria o painel listar menos do que a célula mostra.
 - Ingestão é idempotente por `(conversationId, externalMessageId)` — não crie caminho
   paralelo de inserção de mensagem.
 - **Menção NÃO é formatação de texto.** Escrever "@Fulano" (ou até o número) na mensagem
@@ -1405,7 +1447,7 @@ inserção (o que não resolve fica destacado no composer, e avisa antes de envi
 botão de baixar em documento recebido; arrastar arquivo para a conversa e colar com Ctrl+V,
 os dois com prévia (miniatura, legenda, remover, adicionar, progresso por arquivo e
 retentativa do que falhou); link clicável no texto da mensagem (nova aba,
-com `noopener noreferrer`); dashboard; relatório por atendente; auditoria consultável;
+com `noopener noreferrer`); dashboard; relatório por atendente com células coloridas e clicáveis, linha de conversas sem responsável e de @todos, e painel lateral listando as conversas de cada recorte; auditoria consultável;
 perfil e troca de senha pelo próprio usuário; aviso de chamada recebida; som de
 notificação de mensagem recebida, com som e volume escolhidos por cada usuário; título da
 aba piscando com as conversas que receberam mensagem, até alguém abrir a Inbox; horário
