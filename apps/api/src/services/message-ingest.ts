@@ -284,6 +284,9 @@ export class MessageIngestService {
         instanceId: input.instanceId,
         externalMessageId: input.targetExternalMessageId,
         event: "message_edit_target_missing",
+        // Distingue "a conversa não existe" de "a conversa existe e a
+        // mensagem não" — são causas diferentes e o log precisa dizer qual.
+        conversationFound: conversation != null,
       });
       return null;
     }
@@ -295,7 +298,14 @@ export class MessageIngestService {
     // Idempotência: o mesmo evento chega pelos dois canais do Baileys
     // (upsert e update). Conteúdo igual ao que já está gravado não gera
     // versão nova nem reescreve nada.
-    if (message.content === input.newContent) return null;
+    if (message.content === input.newContent) {
+      this.logger.info({
+        instanceId: input.instanceId,
+        messageId: message.id,
+        event: "message_edit_noop",
+      });
+      return null;
+    }
 
     const editedAt = input.editedAt ?? new Date();
     const updated = await this.prisma.message.update({
