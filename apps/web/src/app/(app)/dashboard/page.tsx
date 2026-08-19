@@ -180,6 +180,18 @@ function archivedInboxHref(filters: DashboardFilters): string {
   return `/inbox?${params.toString()}`;
 }
 
+/**
+ * O card de atraso abre a lista das MESMAS conversas que ele contou: a régua
+ * do atraso é uma só (`api/src/lib/overdue.ts`), e a Inbox filtra por ela com
+ * `?overdue=true`. Aproximar por "as não resolvidas" abriria uma lista muito
+ * maior que o número do card, e ainda ordenada ao contrário do que interessa.
+ */
+function overdueInboxHref(filters: DashboardFilters): string {
+  const params = inboxScopeParams(filters);
+  params.set("overdue", "true");
+  return `/inbox?${params.toString()}`;
+}
+
 /** Espera em tempo de expediente, do jeito que se fala: "2h14", "45min". */
 function formatWaiting(minutes: number): string {
   if (minutes < 60) return `${minutes}min`;
@@ -982,6 +994,9 @@ export default function DashboardPage() {
           accent={stats && stats.overdue.count > 0 ? "#dc2626" : "#64748b"}
           alert={Boolean(stats && stats.overdue.count > 0)}
           pending={initialPending}
+          // Só vira link quando há o que abrir: um card zerado que leva a uma
+          // lista vazia é clique que não responde nada.
+          href={stats && stats.overdue.count > 0 ? overdueInboxHref(filters) : undefined}
           hint={
             <>
               {/* Este card não olha o período: é sempre o estado agora. */}
@@ -995,6 +1010,15 @@ export default function DashboardPage() {
                     mais antigo: {formatWaiting(stats.overdue.oldestWaitingMinutes)}
                   </span>
                 )}
+              {/* A lista abre exatamente estas conversas — mesma régua de
+                  atraso. Só o filtro de responsável não vai junto, porque na
+                  Inbox ele soma com o departamento em vez de cruzar. */}
+              {stats && stats.overdue.count > 0 && (
+                <span className="block text-slate-500">
+                  Clique para abrir a lista delas
+                  {carriesPartialScope ? " (sem o filtro de responsável)" : ""}.
+                </span>
+              )}
             </>
           }
         />

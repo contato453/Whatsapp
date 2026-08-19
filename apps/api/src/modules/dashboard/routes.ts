@@ -20,18 +20,17 @@ import {
 } from "../../lib/conversation-assignment.js";
 import { authenticate } from "../../lib/auth.js";
 import { assertKnownFilterIds, listaDe } from "../../lib/conversation-filters.js";
+import { scanOverdueConversations } from "../../lib/overdue.js";
 import { loadPermissions } from "../../lib/permissions.js";
 import { serializeDashboardStats, type DashboardTopUserRow } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
 import {
   civilDaysOfRange,
-  computeOverdue,
   foldHourly,
   foldTimeline,
   periodRange,
   safeTimeZone,
   type ActivityBucket,
-  type WaitingConversation,
 } from "./metrics.js";
 
 /** Filtro que aceita um id ou a ausência dele ("sem departamento", "sem responsável"). */
@@ -132,13 +131,6 @@ const COUNTABLE_MESSAGE = {
  * rota loga o estouro — o mesmo espírito do teto do relatório por atendente.
  */
 const MAX_CONVERSATIONS_SCANNED = 20_000;
-
-/** Última mensagem de cada conversa candidata a atraso. */
-interface LastMessageRow {
-  conversationId: string;
-  direction: "inbound" | "outbound";
-  timestamp: Date;
-}
 
 /**
  * Filtros escolhidos na tela, como condições de Prisma.
@@ -384,7 +376,7 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
 
     const rankingIds = topConversations.map((row) => row.conversationId);
 
-    const [rankingSplit, rankingConversations, overdueCandidates, activeConversations, sentByUser] =
+    const [rankingSplit, rankingConversations, overdue, activeConversations, sentByUser] =
       await Promise.all([
         // Depois a quebra entrada/saída, só das dez — de novo agregado no banco.
         rankingIds.length > 0
@@ -418,27 +410,15 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
             })
           : Promise.resolve([]),
         /**
-         * Candidatas a atraso. O card ignora o filtro de período — ele é sempre
-         * o estado agora —, mas respeita os filtros de número, departamento e
+         * Atrasadas agora. O card ignora o filtro de período — ele é sempre o
+         * estado agora —, mas respeita os filtros de número, departamento e
          * responsável: a tela inteira responde a eles.
          *
-         * O corte por tempo de relógio é só uma peneira: tempo de expediente
-         * nunca passa do tempo corrido, então nada que ainda não completou o
-         * limite no relógio pode estar atrasado. A conta de verdade, em tempo
-         * útil, roda depois, só sobre o que sobrou.
+         * A conta sai de `lib/overdue.ts`, a MESMA que o filtro "Atrasadas" da
+         * lista de conversas usa. Duas contas separadas fariam o clique no
+         * card abrir uma lista que não bate com o número dele.
          */
-        deps.prisma.conversation.findMany({
-          where: {
-            organizationId,
-            ...conversationFilter,
-            status: { not: "resolved" },
-            lastMessageAt: {
-              not: null,
-              lte: new Date(now.getTime() - settings.responseLimitMinutes * 60_000),
-            },
-          },
-          select: { id: true },
-        }),
+        scanOverdueConversations(deps.prisma, organizationId, conversationFilter, settings, now),
         /**
          * Conversas com responsável que tiveram movimento no período. Servem
          * para saber quanto o cliente mandou para cada pessoa: mensagem de
@@ -478,20 +458,13 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
           : Promise.resolve([]),
       ]);
 
-    const [waiting, activityBuckets] = await Promise.all([
-      loadWaitingConversations(
-        deps,
-        overdueCandidates.map((row) => row.id),
-      ),
-      loadActivityBuckets(
-        deps,
-        activeConversations.map((row) => row.id),
-        settings.timezone,
-        start,
-        end,
-      ),
-    ]);
-    const overdue = computeOverdue(waiting, settings, now);
+    const activityBuckets = await loadActivityBuckets(
+      deps,
+      activeConversations.map((row) => row.id),
+      settings.timezone,
+      start,
+      end,
+    );
     const timeline = foldTimeline(
       activityBuckets,
       civilDaysOfRange({ start, end }, now, settings.timezone),
@@ -580,7 +553,7 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
             query.departmentId.length +
             query.assignedUserId.length >
           0,
-        overdueCandidates: overdueCandidates.length,
+        overdue: overdue.count,
         durationMs: Date.now() - now.getTime(),
       },
       "dashboard_stats_computed",
@@ -759,38 +732,6 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
         AND NOT ("direction" = 'outbound' AND "status" = 'pending')
       GROUP BY 1, 2, 3, 4
     `);
-  }
-
-  /**
-   * Direção da última mensagem de cada conversa candidata.
-   *
-   * SQL cru porque o Prisma não faz "a última linha de cada grupo" — e sem
-   * isso seria uma consulta por conversa. O escopo de acesso continua valendo:
-   * os ids vêm de uma busca que já passou por `conversationScope` e pelos
-   * filtros da tela, e esta consulta não amplia o conjunto, só olha as
-   * mensagens deles.
-   *
-   * Nota interna não entra: ela vive em `internal_notes` e nunca foi
-   * mensagem, então não conta como resposta ao cliente — o que está certo,
-   * porque o cliente não recebeu nada. Mensagem apagada também não conta.
-   */
-  async function loadWaitingConversations(
-    { prisma }: AppDeps,
-    conversationIds: string[],
-  ): Promise<WaitingConversation[]> {
-    if (conversationIds.length === 0) return [];
-    const rows = await prisma.$queryRaw<LastMessageRow[]>(Prisma.sql`
-      SELECT DISTINCT ON ("conversationId")
-             "conversationId", "direction"::text AS "direction", "timestamp"
-      FROM "messages"
-      WHERE "conversationId" IN (${Prisma.join(conversationIds)})
-        AND "deletedAt" IS NULL
-        AND NOT ("direction" = 'outbound' AND "status" = 'pending')
-      ORDER BY "conversationId", "timestamp" DESC
-    `);
-    return rows
-      .filter((row) => row.direction === "inbound")
-      .map((row) => ({ conversationId: row.conversationId, lastInboundAt: row.timestamp }));
   }
 }
 

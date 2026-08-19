@@ -393,7 +393,10 @@ GET    /conversations                     GET /conversations/:id
         UNIFICADO de departamento e responsável, em tokens: `none`,
         `all_users`, `no_department`, `dept:<uuid>`, `user:<uuid>` — ver a
         seção 13. A resposta traz `total`, que a barra mostra sempre)
-       [&taxRegime=<valor|none>][&payroll=<valor|none>][&unlinked=true]
+       [&taxRegime=<valor|none>][&payroll=<valor|none>][&unlinked=true][&overdue=true]
+       (`overdue` é a lista do card "Atrasados agora": não resolvidas, com a
+        última mensagem do cliente, esperando além do limite em tempo de
+        expediente. A régua é `lib/overdue.ts`, a MESMA do dashboard)
        (recorte por característica do cliente no Azevedo-OS; `none` é "sem
         informação" e `unlinked` são as conversas sem empresa vinculada, que
         NÃO combina com os outros dois. A resposta ganha `companyFilter`
@@ -1204,6 +1207,19 @@ sempre juntos.
   moram em `packages/shared/src/dashboard-filters.ts`, o `AND` está em
   `dashboardFilterConditions` (`modules/dashboard/routes.ts`) e há teste que fica
   vermelho se os dois virarem um `OR`. **Não "uniformize" as duas telas.**
+- **A régua do atraso é UMA SÓ, em `apps/api/src/lib/overdue.ts`.** O card
+  "Atrasados agora" mostra o número e `GET /conversations?overdue=true` mostra quais
+  são — as duas pontas saem da mesma função, e o card é um link para ela. Duas contas
+  separadas fariam o clique abrir uma lista que não fecha com o número, e é esse tipo
+  de divergência que faz a equipe parar de confiar no painel. Aproximar por "as não
+  resolvidas" seria pior ainda: lista muito maior, e ordenada por última mensagem
+  **desc**, ou seja, com as mais atrasadas no fundo. Três consequências: o recorte sai
+  POR CIMA do `where` já escopado por `access.ts` (a função só estreita, nunca traz
+  conversa de volta); o casamento no cliente (`inbox-filters.ts`) **não avalia** o
+  atraso — o DTO não carrega a direção da última mensagem nem o expediente —, então
+  `hasServerOnlyFilter` impede a INSERÇÃO de linha nova enquanto o filtro está ligado,
+  do mesmo jeito que o recorte por empresa; e o card só vira link quando há atraso,
+  porque clique que abre lista vazia não responde nada.
 - **O card de infraestrutura do Dashboard conta NÚMEROS, não conversas.** Ele respeita
   o filtro de número (e antes nem isso: o escopo de acesso era espalhado por cima do
   filtro, os dois escreviam em `id`, e o card ignorava a escolha de quem não é admin),

@@ -37,6 +37,9 @@ const DEPTO_2 = "66666666-6666-4666-8666-666666666666";
 const PESSOA = "77777777-7777-4777-8777-777777777777";
 const ETIQUETA = "99999999-9999-4999-8999-999999999999";
 const INEXISTENTE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+/** Duas conversas para a varredura de atraso: uma esperando, outra respondida. */
+const ATRASADA = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const EM_DIA = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 
 interface Gravado {
   findManyWhere: Array<Record<string, unknown>>;
@@ -70,13 +73,31 @@ function fakePrisma(): PrismaClient {
     tag: catalogo("tag"),
     whatsAppInstance: catalogo("whatsAppInstance"),
     conversationRead: { findMany: async () => [] },
+    // Organização sem linha de parâmetros: a varredura de atraso cai nos
+    // padrões de shared (limite de 30 min, seg-sex).
+    attendanceSettings: { findUnique: async () => null },
     conversation: {
       findMany: async (args: Record<string, unknown>) => {
         gravado.findManyWhere.push(args.where as Record<string, unknown>);
+        // A varredura de atraso é a única que filtra por status != resolved
+        // pedindo só o id: ela recebe as duas candidatas.
+        const where = (args.where ?? {}) as { status?: unknown };
+        if (where.status !== undefined) return [{ id: ATRASADA }, { id: EM_DIA }];
         return [];
       },
       count: async () => 0,
     },
+    // Última mensagem de cada candidata. A do cliente está parada há 30 dias,
+    // bem além de qualquer limite — assim o teste não depende da hora em que
+    // roda, que decidiria sozinha quantos minutos de expediente já passaram.
+    $queryRaw: async () => [
+      {
+        conversationId: ATRASADA,
+        direction: "inbound",
+        timestamp: new Date(Date.now() - 30 * 86_400_000),
+      },
+      { conversationId: EM_DIA, direction: "outbound", timestamp: new Date() },
+    ],
   } as unknown as PrismaClient;
 }
 
@@ -327,6 +348,47 @@ describe("GET /conversations — item inválido é recusado", () => {
     const app = await buildApp();
     expect((await listar(app, `?tagId=${ETIQUETA}`)).statusCode).toBe(200);
     expect((await listar(app, `?tagId=${ETIQUETA}&tagId=${INEXISTENTE}`)).statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("`overdue=true` filtra pelos ids que a régua de atraso devolveu", async () => {
+    const app = await buildApp();
+    const resposta = await listar(app, "?overdue=true");
+    expect(resposta.statusCode).toBe(200);
+    const ultima = gravado.findManyWhere[gravado.findManyWhere.length - 1];
+    /**
+     * A mesma régua do card do dashboard (`lib/overdue.ts`): entra só quem
+     * está esperando resposta. A conversa cuja última mensagem é nossa fica
+     * de fora, senão o clique no card abriria uma lista maior que o número.
+     */
+    expect(fragmentos(ultima)).toContainEqual({ id: { in: [ATRASADA] } });
+    expect(JSON.stringify(fragmentos(ultima))).not.toContain(EM_DIA);
+    await app.close();
+  });
+
+  it("a varredura de atraso sai por cima do escopo de acesso, não no lugar dele", async () => {
+    const app = await buildApp();
+    await listar(app, "?overdue=true");
+    // A busca das candidatas é a primeira: ela já carrega o recorte do
+    // atendente, então o filtro nunca traz de volta conversa de outro.
+    const candidatas = gravado.findManyWhere[0];
+    expect(fragmentos(candidatas)).toContainEqual({
+      whatsappInstanceId: { in: [INSTANCIA] },
+    });
+    expect(fragmentos(candidatas)).toContainEqual({
+      OR: [{ assignedUserId: "user-agent" }, { assignedUserId: null }],
+    });
+    // E o recorte de arquivamento vale: arquivada não é atendimento atrasado.
+    expect(candidatas?.archivedAt).toBeNull();
+    await app.close();
+  });
+
+  it("atraso cruza com os demais filtros, como todo filtro da lista", async () => {
+    const app = await buildApp();
+    await listar(app, "?overdue=true&status=open");
+    const ultima = gravado.findManyWhere[gravado.findManyWhere.length - 1];
+    expect(fragmentos(ultima)).toContainEqual({ id: { in: [ATRASADA] } });
+    expect(fragmentos(ultima)).toContainEqual({ status: { in: ["open"] } });
     await app.close();
   });
 
