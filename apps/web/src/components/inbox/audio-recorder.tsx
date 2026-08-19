@@ -12,8 +12,15 @@ function formatDuration(seconds: number): string {
 }
 
 /**
- * Gravação de áudio pelo navegador (MediaRecorder). O arquivo sai em
- * WebM/Opus e a API converte para o formato de voz do WhatsApp.
+ * Gravação de áudio pelo navegador (MediaRecorder).
+ *
+ * Cada navegador grava num formato: Chrome e Edge entregam WebM/Opus, o
+ * Safari entrega MP4/AAC e só o Firefox entrega OGG/Opus, que é o que o
+ * WhatsApp exige numa mensagem de voz. Nada disso é decidido aqui: quem
+ * normaliza é a API, olhando os bytes do arquivo (ver
+ * `lib/outbound-audio.ts`). Converter no navegador daria um resultado
+ * diferente por máquina e por versão, e o nome do arquivo abaixo é só um
+ * rótulo, nunca a fonte da verdade sobre o formato.
  */
 export function AudioRecorder({
   disabled,

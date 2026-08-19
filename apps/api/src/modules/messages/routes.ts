@@ -21,7 +21,7 @@ import { requirePermission } from "../../lib/permissions.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import { extensionFromMime } from "../../lib/media-storage.js";
 import { mentionsSchema, resolveMentionTargets } from "../../lib/mentions.js";
-import { transcodeToOpusOgg } from "../../lib/audio-transcode.js";
+import { prepareOutboundAudio } from "../../lib/outbound-audio.js";
 import { convertToSticker } from "../../lib/sticker-convert.js";
 import {
   serializeConversation,
@@ -517,16 +517,29 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
 
     let result: Awaited<ReturnType<typeof deps.provider.sendText>>;
     if (original.mediaUrl) {
-      const data = await deps.storage.read(original.mediaUrl);
+      let data = await deps.storage.read(original.mediaUrl);
+      let mimeType = original.mimeType ?? "application/octet-stream";
+      const forwardType = outboundMediaTypeFromMime(original.mimeType);
+      let forwardSeconds: number | undefined;
+      // Mensagem antiga pode ter ficado guardada em WebM, de antes da
+      // normalização existir. Encaminhar sem converter repetiria o defeito
+      // no chat de outro cliente.
+      if (forwardType === "audio") {
+        const prepared = await prepareOutboundAudio(data, mimeType, false, deps.logger);
+        data = prepared.data;
+        mimeType = prepared.mimeType;
+        forwardSeconds = prepared.seconds;
+      }
       result = await deps.provider.sendMedia(
         target.whatsappInstanceId,
         target.externalChatId,
         {
           data,
-          mimeType: original.mimeType ?? "application/octet-stream",
+          mimeType,
           filename: original.filename ?? undefined,
           caption: original.content ?? undefined,
-          type: outboundMediaTypeFromMime(original.mimeType),
+          type: forwardType,
+          ...(forwardSeconds !== undefined ? { seconds: forwardSeconds } : {}),
         },
       );
     } else {
@@ -726,21 +739,28 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
         }
       }
 
-      // Mensagem de voz: o navegador grava em WebM/Opus e o WhatsApp espera
-      // OGG/Opus. Sem ffmpeg, envia como arquivo de áudio comum.
-      if (asVoiceNote && mimeType.startsWith("audio/") && !mimeType.includes("ogg")) {
-        const converted = await transcodeToOpusOgg(buffer, deps.logger);
-        if (converted) {
-          buffer = converted;
-          mimeType = "audio/ogg; codecs=opus";
-        } else {
-          asVoiceNote = false;
-          deps.logger.warn({
-            conversationId: id,
-            event: "voice_note_fallback",
-            reason: "ffmpeg indisponível — enviado como arquivo de áudio",
+      // Áudio: o navegador grava WebM (Chrome, Edge) ou MP4 (Safari), e o
+      // WhatsApp só toca mensagem de voz em OGG/Opus. A normalização olha os
+      // bytes, não o mime declarado, e falha em voz alta: mandar assim mesmo
+      // entrega ao cliente um áudio que ele não consegue ouvir.
+      let audioSeconds: number | undefined;
+      let audioWaveform: Uint8Array | undefined;
+      let originalMediaUrl: string | null = null;
+      if (!asSticker && outboundMediaTypeFromMime(mimeType) === "audio") {
+        const prepared = await prepareOutboundAudio(buffer, mimeType, asVoiceNote, deps.logger);
+        if (prepared.converted) {
+          // O original fica guardado para reprocessar se algo der errado; o
+          // que a Inbox mostra é o mesmo arquivo que saiu para o cliente.
+          originalMediaUrl = await deps.storage.save(buffer, {
+            instanceId: conversation.whatsappInstanceId,
+            extension: file.filename?.split(".").pop() ?? extensionFromMime(mimeType),
           });
         }
+        buffer = prepared.data;
+        mimeType = prepared.mimeType;
+        asVoiceNote = prepared.asVoiceNote;
+        audioSeconds = prepared.seconds;
+        audioWaveform = prepared.waveform;
       }
 
       const mediaType: MediaPayload["type"] =
@@ -755,12 +775,20 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
           caption,
           type: mediaType,
           asVoiceNote,
+          ...(audioSeconds !== undefined ? { seconds: audioSeconds } : {}),
+          ...(audioWaveform !== undefined ? { waveform: audioWaveform } : {}),
         },
       );
 
+      // Guarda o arquivo CONVERTIDO: reenviar (encaminhar) não converte de novo.
+      // No áudio convertido a extensão vem do mime, e não do nome que o
+      // navegador inventou: o arquivo é OGG e continuar chamando de .webm
+      // faria o player interno pedir um decodificador que não é o certo.
       const mediaUrl = await deps.storage.save(buffer, {
         instanceId: conversation.whatsappInstanceId,
-        extension: file.filename?.split(".").pop() ?? extensionFromMime(mimeType),
+        extension: originalMediaUrl
+          ? extensionFromMime(mimeType)
+          : (file.filename?.split(".").pop() ?? extensionFromMime(mimeType)),
       });
 
       const message = await deps.prisma.message.create({
@@ -778,6 +806,14 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
           timestamp: result.timestamp,
           status: "sent",
           sentByUserId: request.user.sub,
+          ...(originalMediaUrl || audioSeconds !== undefined
+            ? {
+                metadata: {
+                  ...(originalMediaUrl ? { originalMediaUrl } : {}),
+                  ...(audioSeconds !== undefined ? { audioSeconds } : {}),
+                },
+              }
+            : {}),
         },
       });
       await deps.prisma.conversation.update({
@@ -842,8 +878,30 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
         throw new ForbiddenError("Esta resposta não vale para o departamento desta conversa");
       }
 
-      const buffer = await deps.storage.read(quickReply.mediaUrl);
-      const mimeType = quickReply.mediaMimeType ?? "application/octet-stream";
+      let buffer = await deps.storage.read(quickReply.mediaUrl);
+      let mimeType = quickReply.mediaMimeType ?? "application/octet-stream";
+      let audioSeconds: number | undefined;
+      // Áudio de resposta rápida entra aqui como arquivo, sem flag de voz:
+      // quem cadastrou anexou um arquivo, não gravou no microfone. Converte
+      // só o que o WhatsApp não toca, e grava a conversão de volta na
+      // resposta para não repetir o ffmpeg a cada envio.
+      if (mediaType === "audio") {
+        const prepared = await prepareOutboundAudio(buffer, mimeType, false, deps.logger);
+        audioSeconds = prepared.seconds;
+        if (prepared.converted) {
+          const convertedUrl = await deps.storage.save(prepared.data, {
+            instanceId: `quick-replies-${request.user.organizationId}`,
+            extension: extensionFromMime(prepared.mimeType),
+          });
+          await deps.prisma.quickReply.update({
+            where: { id: quickReply.id },
+            data: { mediaUrl: convertedUrl, mediaMimeType: prepared.mimeType },
+          });
+          quickReply.mediaUrl = convertedUrl;
+        }
+        buffer = prepared.data;
+        mimeType = prepared.mimeType;
+      }
       // Áudio não tem legenda no WhatsApp — a tela envia o texto como
       // mensagem separada; gravar legenda aqui mostraria na Inbox um texto
       // que o cliente nunca recebeu.
@@ -860,6 +918,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
           filename: quickReply.mediaFilename ?? undefined,
           caption,
           type: mediaType,
+          ...(audioSeconds !== undefined ? { seconds: audioSeconds } : {}),
         },
       );
 
