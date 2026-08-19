@@ -33,6 +33,7 @@ import {
   type ScheduledPendingPayload,
   AZEVEDO_OS_FACET_NONE,
   conversationStatusIsValid,
+  isProtocolArtifact,
   ASSIGNMENT_NO_DEPARTMENT,
   departmentAssignmentToken,
   FILTER_NONE,
@@ -1354,19 +1355,24 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     const items: Array<
       | { kind: "message"; at: number; message: MessageDto; showSender: boolean }
       | { kind: "note"; at: number; note: NoteDto }
-    > = messages.map((message, index) => {
-      const previous = messages[index - 1];
-      const showSender =
-        !previous ||
-        previous.senderExternalId !== message.senderExternalId ||
-        previous.direction !== message.direction;
-      return {
-        kind: "message" as const,
-        at: new Date(message.timestamp).getTime(),
-        message,
-        showSender,
-      };
-    });
+    > = messages
+      // Bolha que nunca foi mensagem (pacote de protocolo gravado antes de a
+      // edição ser reconhecida) não entra na conversa: ela não tem texto nem
+      // arquivo, e desenhá-la só polui o histórico.
+      .filter((message) => !isProtocolArtifact(message.metadata))
+      .map((message, index, visiveis) => {
+        const previous = visiveis[index - 1];
+        const showSender =
+          !previous ||
+          previous.senderExternalId !== message.senderExternalId ||
+          previous.direction !== message.direction;
+        return {
+          kind: "message" as const,
+          at: new Date(message.timestamp).getTime(),
+          message,
+          showSender,
+        };
+      });
 
     const oldest = items[0]?.at ?? 0;
     for (const note of detail?.notes ?? []) {

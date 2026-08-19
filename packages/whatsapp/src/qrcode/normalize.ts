@@ -325,3 +325,143 @@ export function toDate(timestamp: number | LongLike | null | undefined): Date {
   if (!Number.isFinite(seconds) || seconds <= 0) return new Date();
   return new Date(seconds * 1000);
 }
+
+/**
+ * A mensagem tem alguma coisa para mostrar?
+ *
+ * Conteúdo classificado como `other`, sem texto e sem arquivo, é uma linha
+ * que a Inbox só sabe desenhar como "Mídia indisponível": sem frase para
+ * ler, sem arquivo para baixar, sem nada que o atendente possa fazer. Foi
+ * assim que os pacotes de protocolo viraram lixo no histórico, e é a última
+ * trava contra QUALQUER formato novo que o WhatsApp mande e que ainda não
+ * saibamos ler — não dá para prever o próximo, dá para garantir que ele não
+ * suje a conversa.
+ */
+export function isDisplayableContent(extracted: ExtractedContent | null): boolean {
+  if (!extracted) return false;
+  if (extracted.type !== "other") return true;
+  return Boolean(extracted.content) || extracted.hasMedia;
+}
+
+/**
+ * Valores de `proto.Message.ProtocolMessage.Type` que nos interessam.
+ * Ficam como constante local para este módulo continuar puro (e testável
+ * sem abrir socket): importar o enum do Baileys só para comparar dois
+ * números traria a biblioteca inteira para dentro das funções de
+ * normalização.
+ */
+const PROTOCOL_TYPE_REVOKE = 0;
+const PROTOCOL_TYPE_MESSAGE_EDIT = 14;
+
+/** O que um pacote de protocolo pede que façamos com uma mensagem JÁ existente. */
+export interface ProtocolAction {
+  kind: "revoke" | "edit";
+  /** Id da mensagem ORIGINAL — a que precisa ser atualizada. */
+  targetExternalMessageId: string;
+  /** Texto ou legenda novos. Só em "edit". */
+  newContent: string | null;
+  /** Momento da edição informado pelo WhatsApp, quando ele manda. */
+  editedAt: Date | null;
+}
+
+/**
+ * Procura o `protocolMessage` DESEMBRULHANDO os invólucros à prova de
+ * futuro no caminho.
+ *
+ * Editar e apagar não chegam como mensagem: chegam como pacote de
+ * protocolo, e o aparelho do cliente costuma embrulhá-lo em
+ * `editedMessage` (às vezes com um `message` no meio, às vezes sem). Ler
+ * `message.protocolMessage` direto, sem desembrulhar, é o que fazia a
+ * edição escapar do teste, cair no classificador de conteúdo e virar
+ * mensagem nova do tipo "other" — a bolha "Mídia indisponível".
+ */
+function findProtocolMessage(
+  rawMessage: proto.IMessage | null | undefined,
+  depth = 0,
+): proto.Message.IProtocolMessage | null {
+  if (!rawMessage || depth > 5) return null;
+  const message = rawMessage as Record<string, unknown>;
+  const direct = message.protocolMessage as proto.Message.IProtocolMessage | undefined;
+  if (direct) return direct;
+  const wrappers = [
+    "editedMessage",
+    "ephemeralMessage",
+    "viewOnceMessage",
+    "viewOnceMessageV2",
+    "viewOnceMessageV2Extension",
+    "documentWithCaptionMessage",
+  ] as const;
+  for (const key of wrappers) {
+    const wrapped = message[key] as { message?: proto.IMessage } | undefined;
+    if (!wrapped) continue;
+    // O invólucro pode trazer o conteúdo em `.message` ou já ser ele
+    // próprio o conteúdo — as duas formas aparecem conforme a versão do
+    // aplicativo, e recusar uma delas é perder a edição em silêncio.
+    const inner = wrapped.message ?? (wrapped as proto.IMessage);
+    const found = findProtocolMessage(inner, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Traduz um pacote de protocolo em ação sobre a mensagem original.
+ * Devolve null para todo o resto (troca de chave, ajuste de efêmera,
+ * sincronização), que não tem o que atualizar na Inbox.
+ */
+export function extractProtocolAction(
+  rawMessage: proto.IMessage | null | undefined,
+): ProtocolAction | null {
+  const protocolMessage = findProtocolMessage(rawMessage);
+  const targetExternalMessageId = protocolMessage?.key?.id;
+  if (!protocolMessage || !targetExternalMessageId) return null;
+
+  if (protocolMessage.type === PROTOCOL_TYPE_REVOKE) {
+    return { kind: "revoke", targetExternalMessageId, newContent: null, editedAt: null };
+  }
+
+  // O tipo é conferido, mas a presença do conteúdo novo também vale por
+  // si: versões diferentes do aplicativo já mandaram edição com outro
+  // código, e recusá-la por causa do número deixaria o texto velho na tela.
+  const edited = protocolMessage.editedMessage;
+  if (protocolMessage.type === PROTOCOL_TYPE_MESSAGE_EDIT || edited) {
+    return {
+      kind: "edit",
+      targetExternalMessageId,
+      // Aqui o conteúdo novo JÁ está desembrulhado (veio de dentro do
+      // protocolMessage), então classifica direto.
+      newContent: extractContent(edited)?.content ?? null,
+      editedAt: protocolMessage.timestampMs ? toEditDate(protocolMessage.timestampMs) : null,
+    };
+  }
+  return null;
+}
+
+/**
+ * Texto novo de uma edição entregue pelo `messages.update` do Baileys — do
+ * texto puro ou da legenda da mídia. A edição do WhatsApp substitui a
+ * mensagem inteira, então o conteúdo novo vem como uma mensagem completa;
+ * aqui só nos interessa a parte escrita, porque o arquivo em si não muda.
+ *
+ * O envelope `editedMessage` é EXIGIDO de propósito. Aquele mesmo evento
+ * também carrega a mensagem inteira em outras situações (o reenvio de
+ * mídia, por exemplo), e aceitar qualquer conteúdo faria a legenda de uma
+ * foto reaparecer como "edição" que ninguém fez.
+ */
+export function extractEditedContent(
+  rawMessage: proto.IMessage | null | undefined,
+): string | null {
+  const envelope = (rawMessage as Record<string, unknown> | null | undefined)?.editedMessage as
+    | { message?: proto.IMessage }
+    | undefined;
+  if (!envelope) return null;
+  const inner = envelope.message ?? (envelope as proto.IMessage);
+  return extractContent(inner)?.content ?? null;
+}
+
+/** Converte o `timestampMs` do pacote (número, string ou Long) em data. */
+function toEditDate(value: number | string | { toString(): string }): Date | null {
+  const millis = typeof value === "number" ? value : Number(value.toString());
+  if (!Number.isFinite(millis) || millis <= 0) return null;
+  return new Date(millis);
+}

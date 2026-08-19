@@ -587,6 +587,16 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   transformaria a foto do cliente em mensagem de texto. Por isso a rota lê o binário do
   storage e manda junto, e `mediaContent()` é compartilhado entre `sendMedia` e
   `editMessage`.
+- **Edição e exclusão FEITAS PELO CLIENTE chegam como pacote de protocolo**, nunca como
+  mensagem, e o pacote vem embrulhado (`editedMessage`, com ou sem um `message` no meio,
+  conforme a versão do aplicativo). `extractProtocolAction` (`qrcode/normalize.ts`)
+  desembrulha e traduz em `message-deleted` ou `message-edited` — este último com o id da
+  mensagem **ORIGINAL**, o texto (ou a legenda) novo e o `editedAt` informado pelo
+  WhatsApp. **São DOIS os canais de entrada, e os dois estão ligados de propósito**: o
+  `messages.upsert` e o `messages.update`, para onde o Baileys converte o pacote de
+  `MESSAGE_EDIT` e de `REVOKE`. Ouvir só o primeiro, ou ler do segundo apenas o `status`,
+  descarta a edição em silêncio — foi exatamente esse o defeito. Receber duas vezes não
+  incomoda: quem aplica é idempotente.
 - **FORMATO DE ÁUDIO: o WhatsApp toca mensagem de voz em OGG/Opus, mono, 16 kHz, com a
   flag `ptt` e a DURAÇÃO em segundos.** Nada disso é o que o navegador grava (ver a
   armadilha na seção 13), então todo áudio que sai é normalizado no SERVIDOR, por ffmpeg,
@@ -623,7 +633,12 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   `resumeSessions` no boot).
 - `apps/api/src/services/message-ingest.ts` é o pipeline idempotente: mensagem normalizada
   → conversa (upsert) → responsável padrão do departamento se estiver órfã → mensagem →
-  mídia → preview → publicação em tempo real.
+  mídia → preview → publicação em tempo real. É dele também o `applyEdit`, que **atualiza a
+  mensagem original** achada por `(conversationId, externalMessageId)`, guarda o conteúdo
+  ANTERIOR no histórico de versões (`metadata.versions`, via `appendMessageVersion` do
+  shared) e refaz a prévia quando a editada é a última da conversa. Original desconhecida
+  (anterior à conexão do número, ou nunca sincronizada) é ignorada com log
+  `message_edit_target_missing` — sem registro novo e sem bolha de erro.
 - `apps/api/src/services/scheduler.ts` roda as mensagens agendadas, com retentativa quando
   a instância está momentaneamente desconectada.
 - Sessões ficam em `WHATSAPP_SESSION_DIR` (volume persistente). **Deploy não exige novo QR.**
@@ -929,6 +944,18 @@ conhecê-la sozinhos. **Dado financeiro nunca entra**: ver a seção 13.
 4. Zod em params/query/body; erros pelas classes de `lib/errors.ts`;
 5. teste em `apps/api/test/`;
 6. método em `apps/web/src/lib/api.ts`.
+
+**Tratar um pacote de protocolo novo do WhatsApp** (editar, apagar, o que vier depois)
+1. `packages/whatsapp/src/qrcode/normalize.ts`: ensinar `extractProtocolAction` a
+   reconhecê-lo, DESEMBRULHANDO os invólucros — nada fora do pacote importa Baileys, nem
+   para entender o formato;
+2. emitir o evento normalizado nos DOIS pontos de recepção do provider (`messages.upsert`
+   e `messages.update`), porque a forma do pacote varia com a versão do aplicativo;
+3. o consumidor atualiza a mensagem existente em `message-ingest.ts` — **pacote de
+   protocolo nunca vira `Message` nova** — e devolve null quando não há o que fazer;
+4. publicar com `RealtimeEvents.MessageUpdated` e `conversationAudience()`, sem evento novo;
+5. teste em `packages/whatsapp/test/protocol-action.test.ts` (a forma do pacote) e em
+   `apps/api/test/message-edit-inbound.test.ts` (o efeito no banco).
 
 **Novo evento de tempo real**
 1. nome + payload em `packages/shared/src/realtime.ts`;
@@ -1445,7 +1472,11 @@ sempre juntos.
   porque recodificar o que já funciona só perde qualidade. Mesma regra na mídia da
   resposta rápida, normalizada **uma vez no cadastro** em vez de a cada envio.
 - Ingestão é idempotente por `(conversationId, externalMessageId)` — não crie caminho
-  paralelo de inserção de mensagem.
+  paralelo de inserção de mensagem. E **conteúdo que não dá para exibir não vira linha**:
+  `isDisplayableContent` (`qrcode/normalize.ts`) barra o que cai no fallback `other` sem
+  texto e sem arquivo, com log `message_without_content_skipped`. É a trava final contra o
+  próximo formato que o WhatsApp inventar — não dá para prever qual será, dá para garantir
+  que ele não suje a conversa com "Mídia indisponível".
 - **Menção NÃO é formatação de texto.** Escrever "@Fulano" (ou até o número) na mensagem
   não marca ninguém: quem notifica é a lista de identificadores em
   `contextInfo.mentionedJid`, que viaja **ao lado** do texto — do composer
@@ -1480,6 +1511,28 @@ sempre juntos.
   JID **com sufixo de aparelho** ("...:51@lid") — o provider o remove
   (`stripDeviceSuffix`, em `normalize.ts`) antes de emitir, senão a chamada não casaria
   com contato nem conversa e criaria conversa duplicada.
+- **EDIÇÃO CHEGA COMO PACOTE DE PROTOCOLO, E NUNCA PODE VIRAR MENSAGEM NOVA.** Quando o
+  cliente edita no celular, o WhatsApp não manda uma mensagem: manda um `protocolMessage`
+  apontando para a original, quase sempre embrulhado em `editedMessage`. Lido como
+  mensagem, ele escapa do teste de protocolo, cai no classificador de conteúdo e vira uma
+  linha de tipo `other` sem texto e sem mídia — a bolha **"Mídia indisponível"** — enquanto
+  a original segue exibindo o texto ANTIGO. **O defeito não é visual**: a atendente
+  continua lendo o valor, o CNPJ ou a competência que o cliente já corrigiu, e ninguém
+  percebe, porque nada fica vermelho. Consequências para qualquer mexida aqui: (1) o
+  reconhecimento DESEMBRULHA antes de testar (`extractProtocolAction`), e o `return` depois
+  de um pacote de protocolo é incondicional — mesmo sem entender o que ele pede, seguir
+  daqui cria lixo no histórico; (2) a edição é `update` da linha achada por
+  `(conversationId, externalMessageId)`, jamais `create`; (3) a mesma edição chega pelos
+  dois canais do Baileys, então quem aplica compara o conteúdo antes de gravar — igual ao
+  que já está lá é no-op, e é isso que impede versão duplicada; (4) **apagar é o mesmo
+  caminho** e quebra junto se um dos dois for mexido sozinho.
+- **O histórico de versões mora em `Message.metadata`, e guarda o conteúdo ANTERIOR.** Não
+  há coluna nova: a maioria das mensagens nunca é editada, e o `metadata` já viaja inteiro
+  no DTO e no `message:updated` — o histórico chegou à tela sem ampliar contrato de tempo
+  real nenhum. Quem lê e escreve é fonte única em `packages/shared/src/message-edit.ts`
+  (`readMessageVersions` / `appendMessageVersion`), e o `appendMessageVersion` PRESERVA o
+  resto do objeto: as marcações do "@" moram no mesmo lugar e sumiriam num spread
+  descuidado. Vale para os dois lados — edição do cliente e `PATCH /messages/:id` da equipe.
 - **A janela de edição é do WhatsApp, e vale nos dois lados.** Só dá para editar nos
   primeiros `MESSAGE_EDIT_WINDOW_MINUTES` (15) minutos, e só tipo com texto —
   `EDITABLE_MESSAGE_TYPES` (texto, imagem, vídeo, documento; áudio e figurinha não têm
@@ -1518,7 +1571,8 @@ responder citando; encaminhar; apagar; editar mensagem enviada pelo composer (te
 legenda de mídia, dentro da janela de 15 minutos do WhatsApp); gravação de áudio,
 normalizada no servidor para o OGG/Opus mono 16 kHz que o WhatsApp exige, com duração e
 waveform, e com recusa clara quando a conversão falha;
-enquetes; mensagens agendadas com retentativa; notas internas; etiquetas; atribuição com
+enquetes; edição e exclusão feitas pelo cliente refletidas na mensagem original, com marca
+"editada" e histórico das versões anteriores; mensagens agendadas com retentativa; notas internas; etiquetas; atribuição com
 histórico completo; quatro status de atendimento; leitura por usuário (cada pessoa com
 o próprio contador de não lidas, com "marcar como não lida" para reservar a conversa
 para depois); busca na conversa e busca global;

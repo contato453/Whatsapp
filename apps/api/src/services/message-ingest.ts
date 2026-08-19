@@ -1,10 +1,21 @@
-import type { PrismaClient, Prisma } from "@azvchat/database";
+import type { Message, PrismaClient, Prisma } from "@azvchat/database";
 import type { NormalizedMessage } from "@azvchat/shared";
-import { stripWhatsAppFormatting } from "@azvchat/shared";
+import { appendMessageVersion, stripWhatsAppFormatting } from "@azvchat/shared";
 import type { Logger } from "pino";
 import type { MediaStorage } from "../lib/media-storage.js";
 import { extensionFromMime } from "../lib/media-storage.js";
 import { eligibleAssigneeWhere } from "../lib/default-assignee.js";
+
+/** Mensagem atualizada mais a conversa, que quem emite usa para a audiência. */
+export interface EditResult {
+  message: Message;
+  conversation: {
+    id: string;
+    whatsappInstanceId: string;
+    departmentId: string | null;
+    assignedUserId: string | null;
+  };
+}
 
 export interface IngestResult {
   conversationId: string;
@@ -215,6 +226,124 @@ export class MessageIngestService {
     });
 
     return { conversationId: conversation.id, messageId: created.id, isNewMessage: true };
+  }
+
+  /**
+   * Aplica a edição que o cliente fez no celular.
+   *
+   * EDIÇÃO É ATUALIZAÇÃO, NUNCA MENSAGEM NOVA. O WhatsApp manda a edição
+   * como pacote de protocolo apontando para a mensagem original; tratá-la
+   * como mensagem de entrada criava uma bolha lixo no histórico e, pior,
+   * deixava a original com o texto ANTIGO na tela — a atendente seguia
+   * lendo o CNPJ, o valor ou a competência que o cliente já tinha corrigido.
+   *
+   * O conteúdo anterior vai para o histórico de versões em `metadata`
+   * (`appendMessageVersion`): num escritório contábil, saber o que estava
+   * escrito antes da correção é o que permite desfazer o que já foi feito
+   * com o dado errado.
+   *
+   * Devolve null quando não há o que atualizar — e isso inclui o caso da
+   * mensagem original desconhecida (anterior à conexão do número, ou nunca
+   * sincronizada): fica só o log, sem registro novo e sem bolha de erro.
+   */
+  async applyEdit(input: {
+    instanceId: string;
+    externalChatId: string;
+    targetExternalMessageId: string;
+    newContent: string;
+    editedAt: Date | null;
+  }): Promise<EditResult | null> {
+    const conversation = await this.prisma.conversation.findUnique({
+      where: {
+        whatsappInstanceId_externalChatId: {
+          whatsappInstanceId: input.instanceId,
+          externalChatId: input.externalChatId,
+        },
+      },
+      select: {
+        id: true,
+        whatsappInstanceId: true,
+        departmentId: true,
+        assignedUserId: true,
+      },
+    });
+    const message = conversation
+      ? await this.prisma.message.findUnique({
+          where: {
+            conversationId_externalMessageId: {
+              conversationId: conversation.id,
+              externalMessageId: input.targetExternalMessageId,
+            },
+          },
+        })
+      : null;
+
+    if (!conversation || !message) {
+      // Sem conteúdo de mensagem no log, só o identificador e o fato.
+      this.logger.info({
+        instanceId: input.instanceId,
+        externalMessageId: input.targetExternalMessageId,
+        event: "message_edit_target_missing",
+        // Distingue "a conversa não existe" de "a conversa existe e a
+        // mensagem não" — são causas diferentes e o log precisa dizer qual.
+        conversationFound: conversation != null,
+      });
+      return null;
+    }
+
+    // Apagada não volta atrás: a edição chegou depois do revoke, e
+    // ressuscitar o texto contrariaria o que o cliente pediu.
+    if (message.deletedAt) return null;
+
+    // Idempotência: o mesmo evento chega pelos dois canais do Baileys
+    // (upsert e update). Conteúdo igual ao que já está gravado não gera
+    // versão nova nem reescreve nada.
+    if (message.content === input.newContent) {
+      this.logger.info({
+        instanceId: input.instanceId,
+        messageId: message.id,
+        event: "message_edit_noop",
+      });
+      return null;
+    }
+
+    const editedAt = input.editedAt ?? new Date();
+    const updated = await this.prisma.message.update({
+      where: { id: message.id },
+      data: {
+        content: input.newContent,
+        editedAt,
+        metadata: appendMessageVersion(
+          message.metadata,
+          message.content,
+          editedAt,
+        ) as Prisma.InputJsonValue,
+      },
+    });
+
+    // A prévia da lista mostra a última mensagem da conversa. Se foi ela
+    // que mudou, a lista precisa acompanhar — senão a Inbox continuaria
+    // anunciando o texto que o cliente já corrigiu.
+    const last = await this.prisma.message.findFirst({
+      where: { conversationId: conversation.id, deletedAt: null },
+      orderBy: { timestamp: "desc" },
+      select: { id: true },
+    });
+    if (last?.id === updated.id) {
+      await this.prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { lastMessagePreview: buildPreview(updated) },
+      });
+    }
+
+    this.logger.info({
+      instanceId: input.instanceId,
+      conversationId: conversation.id,
+      messageId: updated.id,
+      event: "message_edit_applied",
+    });
+
+    return { message: updated, conversation };
   }
 
   /**

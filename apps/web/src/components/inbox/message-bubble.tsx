@@ -24,7 +24,11 @@ import {
   Video,
   XCircle,
 } from "lucide-react";
-import { isEditableMessageType, isWithinEditWindow } from "@azvchat/shared";
+import {
+  isEditableMessageType,
+  isWithinEditWindow,
+  readMessageVersions,
+} from "@azvchat/shared";
 import { fetchMediaBlobUrl } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { documentKindLabel, downloadMessageMedia } from "@/lib/media-download";
@@ -64,6 +68,63 @@ function senderColor(key: string): string {
   let hash = 0;
   for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) | 0;
   return SENDER_COLORS[Math.abs(hash) % SENDER_COLORS.length] ?? "#0f766e";
+}
+
+/**
+ * Marca "editada" ao lado do horário, no estilo do WhatsApp — discreta, sem
+ * ocupar linha própria.
+ *
+ * Diferente do aplicativo, ela abre o que a mensagem dizia ANTES: o cliente
+ * que corrige um valor, um CNPJ ou uma competência costuma corrigir
+ * justamente o dado que a atendente já usou, e ver a versão anterior é o que
+ * permite achar o que foi feito com o dado errado. Com várias edições, a
+ * lista vem inteira, da mais antiga para a mais recente.
+ *
+ * É um botão (e não só hover) porque em telefone e tablet não existe passar
+ * o mouse: o toque dá foco, e o `focus-within` do balão abre a lista igual.
+ */
+function EditedMark({ message, outbound }: { message: MessageDto; outbound: boolean }) {
+  const versions = useMemo(() => readMessageVersions(message.metadata), [message.metadata]);
+  if (versions.length === 0) {
+    return <span className="italic">editada</span>;
+  }
+  return (
+    <span className="group/edited relative flex">
+      <button
+        type="button"
+        className={cn(
+          "italic underline decoration-dotted underline-offset-2",
+          outbound ? "text-chat-sent-meta" : "text-slate-400",
+        )}
+        aria-label={`Editada ${versions.length} ${versions.length === 1 ? "vez" : "vezes"}. Ver o conteúdo anterior.`}
+      >
+        editada
+      </button>
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute bottom-full right-0 z-50 mb-1 w-64 max-w-[70vw] space-y-1.5 rounded-md bg-slate-800 p-2 text-left text-[11px] font-normal not-italic text-white opacity-0 shadow-lg transition-opacity duration-150 group-focus-within/edited:opacity-100 group-hover/edited:opacity-100 motion-reduce:transition-none"
+      >
+        <span className="block font-medium text-slate-300">
+          {versions.length === 1 ? "Conteúdo anterior" : "Versões anteriores"}
+        </span>
+        {versions.map((version, index) => (
+          <span key={`${version.at}-${index}`} className="block">
+            <span className="block text-slate-400">
+              {new Date(version.at).toLocaleString("pt-BR", {
+                day: "2-digit",
+                month: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </span>
+            <span className="block whitespace-pre-wrap break-words">
+              {version.content ?? "(sem texto)"}
+            </span>
+          </span>
+        ))}
+      </span>
+    </span>
+  );
 }
 
 function MediaContent({
@@ -434,7 +495,9 @@ export function MessageBubble({
             outbound ? "text-chat-sent-meta" : "text-slate-400",
           )}
         >
-          {message.editedAt && !message.deletedAt && <span className="italic">editada</span>}
+          {message.editedAt && !message.deletedAt && (
+            <EditedMark message={message} outbound={outbound} />
+          )}
           {new Date(message.timestamp).toLocaleTimeString("pt-BR", {
             hour: "2-digit",
             minute: "2-digit",

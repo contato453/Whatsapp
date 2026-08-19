@@ -41,12 +41,15 @@ export interface WhatsAppProviderEvents {
     externalChatId: string;
     targetExternalMessageId: string;
   }) => void;
-  /** Alguém editou o texto de uma mensagem */
+  /** Alguém editou o texto (ou a legenda) de uma mensagem já enviada */
   "message-edited": (event: {
     instanceId: string;
     externalChatId: string;
+    /** Id da mensagem ORIGINAL — edição é atualização, nunca mensagem nova */
     targetExternalMessageId: string;
     newText: string;
+    /** Momento informado pelo WhatsApp; nulo quando o pacote não traz */
+    editedAt: Date | null;
   }) => void;
   /** Chamada de voz/vídeo registrada no chat */
   call: (event: CallEvent) => void;

@@ -412,22 +412,47 @@ export class InstanceManager {
       });
     });
 
-    // Cliente editou o texto de uma mensagem
+    // Cliente editou o texto (ou a legenda) de uma mensagem.
+    //
+    // Quem atualiza é o pipeline de ingestão, e não este handler: edição é
+    // ATUALIZAÇÃO da mensagem original, então ela tem que passar pelo mesmo
+    // lugar que grava mensagem, com a mesma chave
+    // (conversationId, externalMessageId) e a mesma idempotência. O evento
+    // chega pelos dois canais do Baileys e pode repetir — `applyEdit`
+    // devolve null quando não há o que fazer, e aí nada é publicado.
     this.provider.on("message-edited", (event) => {
       void this.withOrg(event.instanceId, async (organizationId) => {
-        const message = await this.findMessageByExternalId(
-          event.instanceId,
-          event.externalChatId,
-          event.targetExternalMessageId,
-        );
-        if (!message || message.deletedAt) return;
-        const updated = await this.prisma.message.update({
-          where: { id: message.id },
-          data: { content: event.newText, editedAt: new Date() },
+        const result = await this.ingest.applyEdit({
+          instanceId: event.instanceId,
+          externalChatId: event.externalChatId,
+          targetExternalMessageId: event.targetExternalMessageId,
+          newContent: event.newText,
+          editedAt: event.editedAt,
         });
+        if (!result) return;
         this.io
-          .to(conversationAudience(organizationId, message.conversation))
-          .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
+          .to(conversationAudience(organizationId, result.conversation))
+          .emit(RealtimeEvents.MessageUpdated, serializeMessage(result.message));
+        // A prévia da lista pode ter mudado junto: quem está com a Inbox
+        // aberta precisa ver a linha acompanhar o texto novo.
+        const conversation = await this.prisma.conversation.findUnique({
+          where: { id: result.conversation.id },
+          include: {
+            assignedUser: true,
+            department: true,
+            instance: true,
+            tags: { include: { tag: true } },
+          },
+        });
+        if (!conversation) return;
+        const personName = await resolveConversationPersonName(
+          this.prisma,
+          organizationId,
+          conversation,
+        );
+        this.io
+          .to(conversationAudience(organizationId, conversation))
+          .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation, personName));
       });
     });
 

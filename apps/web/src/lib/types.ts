@@ -214,6 +214,13 @@ export interface MessageDto {
      * não diz quem foi notificado.
      */
     mentions?: string[];
+    /**
+     * Histórico de edições: o que a mensagem dizia ANTES de cada correção,
+     * do mais antigo para o mais recente. Chega pelo mesmo `metadata` que
+     * já viajava no DTO, então o evento `message:updated` não mudou de
+     * forma. Leia com `readMessageVersions` de `@azvchat/shared`.
+     */
+    versions?: Array<{ content: string | null; at: string }>;
   } | null;
 }
 

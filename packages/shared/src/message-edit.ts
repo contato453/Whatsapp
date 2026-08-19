@@ -40,3 +40,80 @@ export function isWithinEditWindow(
 
 export const MESSAGE_EDIT_EXPIRED_MESSAGE =
   `O WhatsApp só aceita edição nos primeiros ${MESSAGE_EDIT_WINDOW_MINUTES} minutos após o envio.`;
+
+/**
+ * Histórico de versões de uma mensagem editada.
+ *
+ * Ele mora em `Message.metadata`, e não em coluna nova, por dois motivos:
+ * é dado de exibição de um caso raro (a maioria das mensagens nunca é
+ * editada, e uma coluna nula em toda linha não se paga) e o `metadata` já
+ * viaja inteiro no DTO e no evento `message:updated` — o histórico chega à
+ * tela sem ampliar contrato de tempo real nenhum.
+ *
+ * Guardamos o conteúdo ANTERIOR, e não o novo: num escritório contábil, o
+ * cliente que corrige um CNPJ, um valor ou uma competência costuma corrigir
+ * exatamente o dado que a atendente já usou. Saber o que estava escrito
+ * antes é o que permite desfazer o erro do lado de cá.
+ */
+export const MESSAGE_VERSIONS_METADATA_KEY = "versions";
+
+export interface MessageVersion {
+  /** O que a mensagem dizia ANTES desta edição. */
+  content: string | null;
+  /** Quando esta versão foi substituída, em ISO 8601. */
+  at: string;
+}
+
+/** Lê o histórico gravado no `metadata`, tolerando lixo e formato antigo. */
+export function readMessageVersions(metadata: unknown): MessageVersion[] {
+  if (!metadata || typeof metadata !== "object") return [];
+  const raw = (metadata as Record<string, unknown>)[MESSAGE_VERSIONS_METADATA_KEY];
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const { content, at } = entry as { content?: unknown; at?: unknown };
+    if (typeof at !== "string") return [];
+    return [{ content: typeof content === "string" ? content : null, at }];
+  });
+}
+
+/**
+ * Acrescenta uma versão ao histórico, preservando o resto do `metadata`
+ * (as marcações do "@" moram no mesmo objeto e não podem ser perdidas).
+ *
+ * Não há limite de versões: o WhatsApp já limita a edição a poucos minutos,
+ * então a lista não cresce sem fim na prática.
+ */
+export function appendMessageVersion(
+  metadata: unknown,
+  previousContent: string | null,
+  replacedAt: Date | string,
+): Record<string, unknown> {
+  const base =
+    metadata && typeof metadata === "object" && !Array.isArray(metadata)
+      ? { ...(metadata as Record<string, unknown>) }
+      : {};
+  const at = replacedAt instanceof Date ? replacedAt.toISOString() : replacedAt;
+  base[MESSAGE_VERSIONS_METADATA_KEY] = [
+    ...readMessageVersions(metadata),
+    { content: previousContent, at },
+  ];
+  return base;
+}
+
+/**
+ * Marca das bolhas que NUNCA foram mensagem: pacotes de protocolo de edição
+ * gravados por engano, antes de a edição ser reconhecida. Elas ficam no
+ * banco (nada de exclusão física), apenas com `deletedAt` e esta marca.
+ *
+ * Sem a marca, a linha apagada renderizaria "Esta mensagem foi apagada" —
+ * dizendo ao atendente que o cliente apagou algo que ele nunca mandou. Com
+ * ela, a linha simplesmente não é desenhada, que é o que "ocultar" quer
+ * dizer aqui.
+ */
+export const PROTOCOL_ARTIFACT_METADATA_KEY = "protocolArtifact";
+
+export function isProtocolArtifact(metadata: unknown): boolean {
+  if (!metadata || typeof metadata !== "object") return false;
+  return (metadata as Record<string, unknown>)[PROTOCOL_ARTIFACT_METADATA_KEY] === true;
+}
