@@ -143,6 +143,10 @@ export const tagsApi = {
 /**
  * Cadastro do participante de grupo feito pela equipe. Os dois campos são
  * opcionais: enviar só `clientRole` não mexe no nome, e vice-versa.
+ *
+ * A edição grava no registro da PESSOA (único na organização): vale para
+ * todos os grupos dela e para a conversa individual — `affectedGroups` diz
+ * quantos grupos foram alcançados.
  */
 export interface GroupParticipantInput {
   customName: string | null;
@@ -151,7 +155,7 @@ export interface GroupParticipantInput {
 
 export const groupParticipantsApi = {
   update: (id: string, input: Partial<GroupParticipantInput>) =>
-    api.patch<{ ok: boolean }>(`/group-participants/${id}`, input),
+    api.patch<{ ok: boolean; affectedGroups: number }>(`/group-participants/${id}`, input),
 };
 
 export interface QuickReplyInput extends DepartmentTargetInput {

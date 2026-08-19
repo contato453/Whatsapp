@@ -74,7 +74,9 @@ function titleAsName(
  *   a. a conversa individual daquele chat — `customTitle` (escolha da equipe,
  *      que o sync nunca toca) e depois `title` quando ele é nome de verdade;
  *   b. o `Contact` — quem está salvo na agenda do número conectado;
- *   c. o `GroupParticipant` — `customName` antes de `name` (pushName), pela
+ *   c. a pessoa nos grupos — o nome dado pela equipe primeiro (o registro da
+ *      PESSOA em `PersonProfile`, único na organização; sem ele, o legado
+ *      `customName` da linha do grupo), depois o `name` (pushName), pela
  *      mesma razão do custom da conversa: é o que a casa controla.
  *
  * A ordem vai do que a equipe decidiu para o que veio sozinho do WhatsApp.
@@ -86,6 +88,8 @@ function titleAsName(
 export async function resolveCallerIdentity(
   prisma: PrismaClient,
   input: {
+    /** Dono do número: o registro da PESSOA é único por organização. */
+    organizationId: string;
     whatsappInstanceId: string;
     callerExternalId: string | null;
     /** Telefone extraído do JID — só existe quando ele é "@s.whatsapp.net". */
@@ -142,9 +146,30 @@ export async function resolveCallerIdentity(
       })
     : [];
 
-  const participantName = participations
-    .map((entry) => cleanName(entry.customName) ?? cleanName(entry.name))
-    .find((value) => value != null);
+  // Nome definido pela equipe no nível da PESSOA (vale em todos os grupos):
+  // registro presente vale inteiro, mesmo nulo — é decisão, não ausência.
+  const profile = input.callerExternalId
+    ? await prisma.personProfile.findUnique({
+        where: {
+          organizationId_externalId: {
+            organizationId: input.organizationId,
+            externalId: input.callerExternalId,
+          },
+        },
+        select: { customName: true },
+      })
+    : null;
+
+  // O que a equipe decidiu primeiro (registro da pessoa, senão o legado por
+  // grupo), depois o pushName visto em alguma participação.
+  const teamName = profile
+    ? cleanName(profile.customName)
+    : (participations.map((entry) => cleanName(entry.customName)).find((value) => value != null) ??
+      null);
+  const participantName =
+    teamName ??
+    participations.map((entry) => cleanName(entry.name)).find((value) => value != null) ??
+    null;
 
   const name =
     (input.conversation ? titleAsName(input.conversation) : null) ??

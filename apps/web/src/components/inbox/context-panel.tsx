@@ -109,6 +109,18 @@ function GroupDescription({ text }: { text: string }) {
   );
 }
 
+/**
+ * O aviso que impede a surpresa: a edição do participante grava no registro
+ * da PESSOA e vale para o sistema inteiro — todos os grupos dela e a conversa
+ * individual. O número de grupos vem da API para a promessa ser exata:
+ * ninguém pode mudar dado de cinco grupos achando que mudou de um.
+ */
+function avisoEdicaoGlobal(groupCount: number): string {
+  return groupCount > 1
+    ? `Vale para o sistema inteiro: os ${groupCount} grupos desta pessoa serão atualizados, e a conversa individual também.`
+    : "Vale para o sistema inteiro: todos os grupos desta pessoa e a conversa individual dela mostrarão o novo valor.";
+}
+
 export function ContextPanel({
   detail,
   departments,
@@ -560,19 +572,27 @@ export function ContextPanel({
                     <div className="min-w-0 flex-1">
                       {/* Nome quando conhecido; o telefone aparece logo abaixo */}
                       {renamingParticipant === participant.id ? (
-                        <input
-                          autoFocus
-                          className="w-full rounded-lg border border-slate-300 px-2 py-0.5 text-xs text-slate-700 focus:border-brand-600 focus:outline-none"
-                          defaultValue={participant.customName ?? ""}
-                          placeholder={participant.whatsappName ?? "Nome do participante"}
-                          onBlur={(event) =>
-                            void salvarParticipante(participant.id, event.target.value)
-                          }
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") event.currentTarget.blur();
-                            if (event.key === "Escape") setRenamingParticipant(null);
-                          }}
-                        />
+                        <>
+                          <input
+                            autoFocus
+                            className="w-full rounded-lg border border-slate-300 px-2 py-0.5 text-xs text-slate-700 focus:border-brand-600 focus:outline-none"
+                            defaultValue={participant.customName ?? ""}
+                            placeholder={participant.whatsappName ?? "Nome do participante"}
+                            onBlur={(event) =>
+                              void salvarParticipante(participant.id, event.target.value)
+                            }
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") event.currentTarget.blur();
+                              if (event.key === "Escape") setRenamingParticipant(null);
+                            }}
+                          />
+                          {/* Aviso ANTES de salvar: a edição é da PESSOA, não
+                              deste grupo — ninguém pode mudar cinco grupos
+                              achando que mudou um. */}
+                          <p className="mt-0.5 text-[11px] text-amber-700">
+                            {avisoEdicaoGlobal(participant.groupCount)}
+                          </p>
+                        </>
                       ) : (
                         <p className="truncate text-slate-700">{nomeExibido}</p>
                       )}
@@ -643,7 +663,12 @@ export function ContextPanel({
                     )}
                   </div>
                   {rolePickerFor === participant.id && (
-                    <div className="ml-8 mt-1 flex flex-wrap items-center gap-1">
+                    <div className="ml-8 mt-1 space-y-1">
+                      {/* Mesmo aviso do nome: o papel também é da PESSOA. */}
+                      <p className="text-[11px] text-amber-700">
+                        {avisoEdicaoGlobal(participant.groupCount)}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-1">
                       {PARTICIPANT_CLIENT_ROLES.map((papel) => (
                         <button
                           key={papel}
@@ -671,6 +696,7 @@ export function ContextPanel({
                       >
                         Sem marcação
                       </button>
+                      </div>
                     </div>
                   )}
                 </div>

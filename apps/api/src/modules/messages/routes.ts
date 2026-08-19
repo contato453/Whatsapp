@@ -28,6 +28,7 @@ import {
   serializeMessage,
   type QuotedPreview,
 } from "../../lib/serialize.js";
+import { resolveConversationPersonName } from "../../lib/person-profile.js";
 import { resolveSenders, type SenderDirectory } from "../../lib/sender-directory.js";
 import { applySignature, type Signer } from "../../lib/signature.js";
 import { conversationAudience } from "../../realtime/socket.js";
@@ -69,12 +70,21 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       deps.prisma.message.findUnique({ where: { id: messageId } }),
     ]);
     if (!conversation || !message) return;
+    // Conversa individual sai com o nome da PESSOA no título — sem isso o
+    // DTO da mensagem sobrescreveria o nome corrigido na lista.
+    const personName = await resolveConversationPersonName(
+      deps.prisma,
+      organizationId,
+      conversation,
+    );
     const room = conversationAudience(organizationId, conversation);
     deps.io.to(room).emit(RealtimeEvents.MessageNew, {
-      conversation: serializeConversation(conversation),
+      conversation: serializeConversation(conversation, personName),
       message: serializeMessage(message),
     });
-    deps.io.to(room).emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation));
+    deps.io
+      .to(room)
+      .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation, personName));
   }
 
   /**

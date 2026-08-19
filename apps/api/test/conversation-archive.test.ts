@@ -12,6 +12,7 @@ import { MessageIngestService } from "../src/services/message-ingest.js";
 import type { MediaStorage } from "../src/lib/media-storage.js";
 import type { AppDeps } from "../src/types.js";
 import { rolePermissionStub } from "./helpers/permissions.js";
+import { personProfileStub } from "./helpers/person-profile.js";
 
 /**
  * O que estes testes fixam sobre o arquivamento:
@@ -78,6 +79,7 @@ function baseConversation(overrides: Record<string, unknown> = {}) {
 function fakeConversationPrisma(conversation: Record<string, unknown> | null): PrismaClient {
   return {
     rolePermission: rolePermissionStub,
+    personProfile: personProfileStub,
     userWhatsAppInstance: { findMany: async () => [] },
     userDepartment: { findMany: async () => [] },
     conversation: {
@@ -494,6 +496,7 @@ describe("GET /search (arquivada continua aparecendo)", () => {
   it("a busca de conversas não filtra por arquivamento", async () => {
     const prisma = {
     rolePermission: rolePermissionStub,
+      personProfile: personProfileStub,
       userWhatsAppInstance: { findMany: async () => [] },
       userDepartment: { findMany: async () => [] },
       conversation: {

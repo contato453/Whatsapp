@@ -242,6 +242,11 @@ export interface GroupDetailDto {
     isAdmin: boolean;
     /** Papel da pessoa dentro do cliente, marcado pela equipe. */
     clientRole: ParticipantClientRole | null;
+    /**
+     * Em quantos grupos da organização a pessoa está. A edição vale para
+     * todos eles (é o aviso mostrado antes de salvar); 1 é o piso.
+     */
+    groupCount: number;
     hasAvatar: boolean;
   }>;
 }
