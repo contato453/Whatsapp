@@ -33,7 +33,9 @@ import {
   chatTypeFromJid,
   directionFromKey,
   extractContent,
+  extractEditedContent,
   extractMentionedJids,
+  extractProtocolAction,
   extractQuotedMessageId,
   extractSender,
   isGroupJid,
@@ -212,6 +214,12 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
 
     socket.ev.on("messages.update", (updates) => {
       for (const update of updates) {
+        // ESTE é o canal por onde a edição chega. O Baileys intercepta o
+        // pacote de protocolo e o converte em "messages.update", com o id
+        // da mensagem ORIGINAL na chave e o conteúdo novo embrulhado em
+        // `editedMessage` — enquanto este listener só olhava `status`, toda
+        // edição feita pelo cliente era descartada aqui, em silêncio.
+        if (this.handleMessageMutation(instanceId, update.key, update.update)) continue;
         this.handleMessageStatusUpdate(instanceId, update.key, update.update?.status ?? undefined);
       }
     });
@@ -387,31 +395,30 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     const remoteJid = message.key?.remoteJid;
     if (!remoteJid || isIgnorableJid(remoteJid)) return;
 
-    // Apagar/editar chegam como protocolMessage — viram eventos próprios.
-    const protocolMessage = message.message?.protocolMessage;
-    if (protocolMessage?.key?.id) {
-      // type 0 = REVOKE (apagada para todos)
-      if (protocolMessage.type === 0) {
+    // Apagar/editar NUNCA são mensagem: chegam como pacote de protocolo e
+    // viram eventos próprios. A busca desembrulha os invólucros no caminho
+    // — sem isso a edição escapava do teste e ia parar no classificador de
+    // conteúdo, que a transformava numa mensagem "other" sem texto e sem
+    // mídia (a bolha "Mídia indisponível" que a equipe via).
+    const protocolAction = extractProtocolAction(message.message);
+    if (protocolAction) {
+      if (protocolAction.kind === "revoke") {
         this.emit("message-deleted", {
           instanceId,
           externalChatId: remoteJid,
-          targetExternalMessageId: protocolMessage.key.id,
+          targetExternalMessageId: protocolAction.targetExternalMessageId,
         });
-        return;
-      }
-      // Edição: o novo conteúdo vem em editedMessage
-      const editedText =
-        protocolMessage.editedMessage?.conversation ??
-        protocolMessage.editedMessage?.extendedTextMessage?.text;
-      if (editedText) {
+      } else if (protocolAction.newContent) {
         this.emit("message-edited", {
           instanceId,
           externalChatId: remoteJid,
-          targetExternalMessageId: protocolMessage.key.id,
-          newText: editedText,
+          targetExternalMessageId: protocolAction.targetExternalMessageId,
+          newText: protocolAction.newContent,
+          editedAt: protocolAction.editedAt,
         });
-        return;
       }
+      // Pacote de protocolo nunca vira bolha, mesmo quando não soubemos o
+      // que ele pede: seguir daqui criaria mensagem lixo no histórico.
       return;
     }
 
@@ -484,6 +491,50 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
       direction: normalized.direction,
     });
     this.emit("message", normalized);
+  }
+
+  /**
+   * Trata o `messages.update` que o Baileys emite quando o pacote de
+   * protocolo é de EDIÇÃO ou de APAGAR. Devolve true quando o evento era
+   * disso — aí ele não é um aviso de status e não deve seguir adiante.
+   *
+   * O mesmo par edição/exclusão também pode aparecer no `messages.upsert`,
+   * e é de propósito que os dois caminhos emitem: a forma do pacote varia
+   * com a versão do aplicativo do cliente, e perder a edição é pior do que
+   * recebê-la duas vezes. Quem consome é idempotente.
+   */
+  private handleMessageMutation(
+    instanceId: string,
+    key: WAMessage["key"] | undefined,
+    update: Partial<WAMessage> | undefined,
+  ): boolean {
+    if (!key?.remoteJid || !key.id || !update) return false;
+    if (isIgnorableJid(key.remoteJid)) return false;
+
+    // WebMessageInfo.StubType.REVOKE = 1 (não confundir com o REVOKE = 0 do
+    // ProtocolMessage.Type: são duas tabelas diferentes do protocolo).
+    if (update.messageStubType === 1) {
+      this.emit("message-deleted", {
+        instanceId,
+        externalChatId: key.remoteJid,
+        targetExternalMessageId: key.id,
+      });
+      return true;
+    }
+
+    // A chave já vem com o id da mensagem ORIGINAL, trocado pelo Baileys, e
+    // o conteúdo novo chega embrulhado em `editedMessage`.
+    if (!update.message) return false;
+    const newText = extractEditedContent(update.message);
+    if (!newText) return false;
+    this.emit("message-edited", {
+      instanceId,
+      externalChatId: key.remoteJid,
+      targetExternalMessageId: key.id,
+      newText,
+      editedAt: update.messageTimestamp ? toDate(update.messageTimestamp) : null,
+    });
+    return true;
   }
 
   private handleMessageStatusUpdate(

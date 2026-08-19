@@ -1,8 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
+import type { Prisma } from "@azvchat/database";
 import type { MediaPayload, QuotedMessageRef } from "@azvchat/shared";
 import {
   MESSAGE_EDIT_EXPIRED_MESSAGE,
+  appendMessageVersion,
   isEditableMessageType,
   isWithinEditWindow,
   departmentResourceAppliesTo,
@@ -480,9 +482,20 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       content,
       media ? { media } : undefined,
     );
+    // Mesmo histórico da edição feita pelo cliente: o que a mensagem dizia
+    // ANTES fica guardado, e a marca "editada" vale para os dois lados.
+    const editedAt = new Date();
     const updated = await deps.prisma.message.update({
       where: { id },
-      data: { content, editedAt: new Date() },
+      data: {
+        content,
+        editedAt,
+        metadata: appendMessageVersion(
+          message.metadata,
+          message.content,
+          editedAt,
+        ) as Prisma.InputJsonValue,
+      },
     });
     deps.audit.record({
       organizationId: request.user.organizationId,
