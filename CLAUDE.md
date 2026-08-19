@@ -472,8 +472,12 @@ PUT    /attendance-settings  (supervisor; grava SLA + expediente + janela de log
        a semana inteira de uma vez, e vai para o AuditLog)
 
 GET    /search              GET /audit-logs
-GET    /reports/agents?from=&to=
-       (relatório por atendente. Além das linhas de pessoa, devolve `unassigned`
+GET    /reports/agents?from=&to=[&departmentId=<uuid|none>][&instanceId=<uuid>]
+       (os dois filtros aceitam LISTA, somam dentro de si e CRUZAM entre si —
+        e cruzam também com o responsável da linha, como no Dashboard e ao
+        contrário da Inbox. Entram por cima de `conversationScope`. A resposta
+        devolve `filters` com o que a API aplicou.
+        Relatório por atendente. Além das linhas de pessoa, devolve `unassigned`
         e `allUsers`: as conversas SEM RESPONSÁVEL e as coletivas ("@todos"),
         que antes ficavam fora do relatório inteiro. As duas só têm fila —
         mensagens, tempo médio e concluídas são medidas de uma pessoa —, e
@@ -708,7 +712,12 @@ nome técnico no código e neste documento.
   de AGORA. Clicar numa célula com valor abre o painel lateral com as conversas daquele
   recorte; em tela estreita ele vira sobreposição (`lg:static` no `aside`). O total de cada
   coluna vai no cabeçalho ("ABERTO (35)") e soma a coluna inteira, incluindo as linhas de
-  **Sem responsável** e **@todos**, que ficam no topo da tabela.
+  **Sem responsável** e **@todos**, que ficam no topo da tabela. A barra tem dois
+  filtros em `MultiSelect` (departamento, com "Sem departamento", e conexão), que
+  somam dentro de si e CRUZAM entre si e com a linha; eles valem para a tabela, os
+  cards e o painel de uma vez, e trocá-los fecha o painel aberto. Não são
+  persistidos de propósito: o período desta tela também não é, e persistir só
+  metade do recorte faria a tela voltar num estado que ninguém escolheu.
 - Gráficos do dashboard em `src/components/dashboard/`: `chart-card.tsx` (moldura, legenda
   e o alternador gráfico/tabela), `messages-timeline.tsx` (barras divergentes por dia),
   `hours-heatmap.tsx` (mapa dia da semana × hora), `sparkline.tsx` (miniatura da série
@@ -1352,6 +1361,17 @@ sempre juntos.
   conversa divergiriam no escopo, no serializer ou na paginação, e a que quase ninguém abre
   seria a que passaria a mostrar demais. `apps/api/test/report-panel-consistency.test.ts`
   roda as duas rotas sobre a mesma base e compara célula a célula.
+- **Existem DUAS formas de filtrar por departamento em `GET /conversations`, e
+  elas fazem coisas opostas.** O `dept:<uuid>` dentro de `assignment` é o da
+  TRIAGEM: soma com o responsável, porque na Inbox a pergunta é "o Contábil inteiro
+  MAIS a fulana". O parâmetro `departmentId` é o da ANÁLISE: cruza, porque no
+  relatório a pergunta é "os números dela DENTRO do Contábil", e o resultado é um
+  número, não uma lista. É a mesma divergência que o Dashboard já carrega, pelo
+  mesmo motivo. A Inbox **nunca** manda `departmentId`; se um dia mandar, a
+  multisseleção dela passa a devolver vazio em quase toda marcação múltipla, e o
+  defeito parece "o filtro não acha nada" em vez de "a regra está trocada". Quem
+  monta os dois é fonte única: `assignmentFilterWhere` (soma) e
+  `reportFilterConditions` (cruza), e há teste fixando que continuam diferentes.
 - **`archived=false` na URL significa ARQUIVADAS.** O parâmetro é lido com
   `z.coerce.boolean()`, e `Boolean("false")` é `true` — quem quer as não arquivadas
   **omite** o parâmetro, que já é o padrão. Mandá-lo achando que desliga o filtro devolve

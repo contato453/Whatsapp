@@ -10,6 +10,7 @@ import {
   canManageInternalNote,
   CONVERSATION_STATUSES,
   EXTERNAL_REFERENCE_SOURCES,
+  FILTER_NONE,
   PARTICIPANT_CLIENT_ROLES,
   RealtimeEvents,
 } from "@azvchat/shared";
@@ -49,7 +50,7 @@ import {
   unreadConversationWhere,
 } from "../../lib/conversation-reads.js";
 import { assertKnownFilterIds, listaDe } from "../../lib/conversation-filters.js";
-import { resolvedInPeriodWhere } from "../../lib/report-slice.js";
+import { reportFilterConditions, resolvedInPeriodWhere } from "../../lib/report-slice.js";
 import { loadAttendanceSettings } from "../../lib/attendance-settings.js";
 import { scanOverdueConversations } from "../../lib/overdue.js";
 import { canApplyToConversation } from "../../lib/department-resource.js";
@@ -147,6 +148,24 @@ const listQuerySchema = z.object({
   resolvedFrom: z.string().datetime().optional(),
   resolvedTo: z.string().datetime().optional(),
   /**
+   * Departamento que **CRUZA** com os demais filtros, em vez de somar.
+   *
+   * **Não confunda com o `dept:<uuid>` de `assignment`**, logo acima: aquele
+   * é o da triagem da Inbox, onde departamento e responsável viraram um
+   * filtro só que SOMA ("quero ver o Contábil inteiro MAIS a fulana"). Este
+   * é o da análise, onde a pergunta é "os números dela DENTRO do Contábil" —
+   * a mesma divergência que o Dashboard já carrega, e pelo mesmo motivo
+   * (seção 13 do CLAUDE.md).
+   *
+   * Existe porque o painel do relatório precisa listar exatamente o que a
+   * célula conta, e a célula cruza. A Inbox nunca manda este parâmetro; se
+   * um dia mandar, a multisseleção dela passa a devolver vazio em quase toda
+   * marcação múltipla — é o erro que este comentário existe para impedir.
+   *
+   * `none` é "sem departamento", igual ao do Dashboard.
+   */
+  departmentId: listaDe(z.union([z.string().uuid(), z.literal(FILTER_NONE)])),
+  /**
    * Só as ATRASADAS: não resolvidas, com a última mensagem do cliente,
    * esperando há mais que o limite em tempo de expediente. É o atalho do card
    * "Atrasados agora" do dashboard, e a conta é a MESMA (`lib/overdue.ts`) —
@@ -204,7 +223,11 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     // que a pessoa marcou. A tela poda o item extinto antes de mandar, então
     // chegar aqui um id desconhecido significa link torto ou estado corrompido.
     await assertKnownFilterIds(deps.prisma, request.user.organizationId, {
-      departmentIds: assignment.departmentIds,
+      departmentIds: [
+        ...assignment.departmentIds,
+        // O filtro que cruza passa pela mesma conferência do que soma.
+        ...query.departmentId.filter((value) => value !== FILTER_NONE),
+      ],
       // O responsável do recorte de concluídas passa pela mesma conferência:
       // id que não existe é recusado, nunca ignorado em silêncio.
       userIds: [...assignment.userIds, ...(query.resolvedBy ? [query.resolvedBy] : [])],
@@ -261,6 +284,11 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     if (query.tagId.length > 0) filtros.push({ tags: { some: { tagId: { in: query.tagId } } } });
     const atendimento = assignmentFilterWhere(assignment);
     if (atendimento) filtros.push(atendimento);
+    // Os filtros da barra do relatório (departamento que cruza, e o chip já
+    // coberto por `instanceId` acima). Mesmo construtor da contagem da
+    // célula, para o painel nunca listar um conjunto diferente.
+    filtros.push(...reportFilterConditions({ departmentId: query.departmentId, instanceId: [] }));
+
     // O predicado sai de `lib/report-slice.ts`, o mesmo arquivo que a
     // contagem da célula usa: é assim que o número e a lista não divergem.
     if (query.resolvedBy && query.resolvedFrom && query.resolvedTo) {

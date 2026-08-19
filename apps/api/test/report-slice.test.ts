@@ -5,6 +5,8 @@ import type { PrismaClient } from "@azvchat/database";
 import {
   ASSIGNMENT_ALL_USERS,
   ASSIGNMENT_UNASSIGNED,
+  FILTER_NONE,
+  departmentAssignmentToken,
   userAssignmentToken,
 } from "@azvchat/shared";
 import { registerErrorHandler } from "../src/lib/errors.js";
@@ -15,6 +17,7 @@ import { reportRoutes } from "../src/modules/reports/routes.js";
 import { bucketQueueEntries } from "../src/modules/reports/metrics.js";
 import {
   REPORT_QUEUE_STATUSES,
+  reportFilterConditions,
   reportQueueCellWhere,
   reportRowWhere,
   resolvedHistoryWhere,
@@ -40,6 +43,7 @@ import type { AppDeps } from "../src/types.js";
 
 const INSTANCIA = "44444444-4444-4444-8444-444444444444";
 const DEPTO = "55555555-5555-4555-8555-555555555555";
+const DEPTO_2 = "66666666-6666-4666-8666-666666666666";
 const PESSOA = "77777777-7777-4777-8777-777777777777";
 const DESDE = "2026-08-01T00:00:00.000Z";
 const ATE = "2026-08-19T23:59:59.000Z";
@@ -63,7 +67,13 @@ function fakePrisma(): PrismaClient {
     userWhatsAppInstance: { findMany: async () => [{ whatsappInstanceId: INSTANCIA }] },
     userDepartment: { findMany: async () => [{ departmentId: DEPTO }] },
     rolePermission: { findMany: async () => [] },
-    department: { findMany: async () => [{ id: DEPTO }] },
+    department: {
+      findMany: async (args: { where?: { id?: { in: string[] } } }) => {
+        const pedidos = args.where?.id?.in;
+        const existentes = [{ id: DEPTO }, { id: DEPTO_2 }];
+        return pedidos ? existentes.filter((row) => pedidos.includes(row.id)) : existentes;
+      },
+    },
     user: {
       findMany: async (args: { where?: { id?: { in: string[] } } }) => {
         const pedidos = args.where?.id?.in;
@@ -86,7 +96,12 @@ function fakePrisma(): PrismaClient {
       },
     },
     tag: { findMany: async () => [] },
-    whatsAppInstance: { findMany: async () => [] },
+    whatsAppInstance: {
+      findMany: async (args: { where?: { id?: { in: string[] } } }) => {
+        const pedidos = args.where?.id?.in;
+        return pedidos ? pedidos.filter((id) => id === INSTANCIA).map((id) => ({ id })) : [];
+      },
+    },
     conversationRead: { findMany: async () => [] },
     message: {
       findMany: async () => [],
@@ -317,5 +332,89 @@ describe("bucketQueueEntries — a mesma partição de report-slice", () => {
       assignedUserId: null,
       assignedToAll: false,
     });
+  });
+});
+
+describe("filtros da barra do relatório: departamento e conexão", () => {
+  it("os dois CRUZAM entre si e somam dentro de si", () => {
+    const conditions = reportFilterConditions({
+      departmentId: [DEPTO, DEPTO_2],
+      instanceId: [INSTANCIA],
+    });
+    // Dois itens no `AND`: um por filtro. Dentro do de departamento, os dois
+    // ids somam num `in` só.
+    expect(conditions).toHaveLength(2);
+    expect(conditions).toContainEqual({ whatsappInstanceId: { in: [INSTANCIA] } });
+    expect(conditions).toContainEqual({ departmentId: { in: [DEPTO, DEPTO_2] } });
+  });
+
+  it("'sem departamento' é mais um ramo do OU, e não a ausência de filtro", () => {
+    const conditions = reportFilterConditions({
+      departmentId: [FILTER_NONE, DEPTO],
+      instanceId: [],
+    });
+    expect(conditions).toEqual([
+      { OR: [{ departmentId: null }, { departmentId: { in: [DEPTO] } }] },
+    ]);
+  });
+
+  it("lista vazia não gera condição — é 'todos', nunca 'nenhum'", () => {
+    expect(reportFilterConditions({ departmentId: [], instanceId: [] })).toEqual([]);
+  });
+
+  it("o relatório aplica os filtros POR CIMA do escopo de acesso", async () => {
+    const app = await buildApp();
+    const resposta = await pedir(
+      app,
+      `/reports/agents?from=${DESDE}&to=${ATE}&departmentId=${DEPTO}&instanceId=${INSTANCIA}`,
+    );
+    expect(resposta.statusCode).toBe(200);
+    const partes = fragmentos(gravado.queueGroupBy[0]);
+    // O escopo do supervisor continua inteiro ao lado dos filtros: o recorte
+    // refina, nunca amplia.
+    expect(partes).toContainEqual({ whatsappInstanceId: { in: [INSTANCIA] } });
+    expect(partes).toContainEqual({ departmentId: { in: [DEPTO] } });
+    expect(partes.some((parte) => "OR" in parte)).toBe(true);
+    await app.close();
+  });
+
+  it("o painel leva os MESMOS filtros, com o departamento que CRUZA", async () => {
+    const app = await buildApp();
+    const resposta = await pedir(
+      app,
+      `/conversations?status=open&assignment=${encodeURIComponent(userAssignmentToken(PESSOA))}&departmentId=${DEPTO}&instanceId=${INSTANCIA}`,
+    );
+    expect(resposta.statusCode).toBe(200);
+    const partes = fragmentos(gravado.listWhere[0]);
+    // Item PRÓPRIO no `AND`, e não um ramo dentro do `assignment`: fundido
+    // ali ele SOMARIA com o responsável, e o painel listaria o departamento
+    // inteiro em vez das conversas daquela pessoa dentro dele.
+    expect(partes).toContainEqual({ departmentId: { in: [DEPTO] } });
+    expect(partes).toContainEqual({ assignedUserId: { in: [PESSOA] } });
+    await app.close();
+  });
+
+  it("o `dept:` de assignment continua SOMANDO — as duas formas não se misturam", async () => {
+    const app = await buildApp();
+    await pedir(
+      app,
+      `/conversations?assignment=${encodeURIComponent(departmentAssignmentToken(DEPTO))},${encodeURIComponent(userAssignmentToken(PESSOA))}`,
+    );
+    const partes = fragmentos(gravado.listWhere[0]);
+    // O da triagem vira UM item com `OR` dentro; o que cruza seria dois itens.
+    expect(partes).toContainEqual({
+      OR: [{ departmentId: { in: [DEPTO] } }, { assignedUserId: { in: [PESSOA] } }],
+    });
+    await app.close();
+  });
+
+  it("departamento que não existe é RECUSADO no relatório, não ignorado", async () => {
+    const app = await buildApp();
+    const resposta = await pedir(
+      app,
+      `/reports/agents?from=${DESDE}&to=${ATE}&departmentId=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+    );
+    expect(resposta.statusCode).toBe(400);
+    await app.close();
   });
 });
