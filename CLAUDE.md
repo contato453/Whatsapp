@@ -600,6 +600,17 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   API atendendo o resto normalmente. **Falha na conversão INTERROMPE o envio** com 422
   `audio_conversion_failed` e uma frase em português; enviar assim mesmo é o defeito que
   isso veio consertar.
+- **A MENSAGEM DE VOZ NÃO SAI PELO `sendMessage` do Baileys**, e sim por
+  `relayVoiceNote` (`qrcode-provider.ts`), que monta a mensagem com
+  `generateWAMessage`, devolve a waveform e chama `relayMessage`. O motivo é uma perda
+  silenciosa: com `ptt` ligado, o Baileys recalcula a waveform chamando `audio-decode`,
+  uma biblioteca que ele **não declara como dependência**. O import falha, o erro é
+  engolido, a função devolve `undefined` e isso **sobrescreve a waveform que a API
+  calculou**. Esse trecho do Baileys só roda quando `ptt === true`, então atinge a
+  mensagem de voz e nada mais. O desvio vale **só** para ela: imagem, vídeo, documento e
+  áudio comum continuam no `sendMessage` de sempre. Quem relaya também precisa reemitir
+  `messages.upsert` com tipo `append`, que é o que o `sendMessage` faria, senão a
+  mensagem de voz seria a única que o resto do sistema não veria passar.
 - **Quem decide o mime type do áudio são os BYTES, nunca a flag de quem chamou**
   (`resolveAudioDeclaration`, em `packages/whatsapp/src/audio/container.ts`).
   `asVoiceNote` com bytes que não são OGG/Opus **lança**, e não degrada: era exatamente
@@ -1418,6 +1429,15 @@ sempre juntos.
   `Message.metadata.originalMediaUrl` para reprocessar. O ffmpeg é dependência da imagem
   da API (`apps/api/Dockerfile`) e do CI, e os testes de conversão se **pulam sozinhos**
   onde ele não existe.
+- **`ptt: true` e `ptt: false` percorrem caminhos DIFERENTES no Baileys, e foi isso que
+  separou o defeito.** Com os mesmos bytes OGG/Opus e o mesmo mime type, o áudio
+  anexado (`ptt: false`) tocava no celular e a mensagem de voz (`ptt: true`) chegava
+  como "Este áudio não está mais disponível". Container, codec, upload, sessão e
+  `mediaKey` são idênticos nos dois, então nada disso podia ser a causa: a única
+  variável era a flag. O que se achou nesse recorte foi a waveform apagada em silêncio
+  (ver a seção 8). **Ao investigar áudio quebrado, a primeira coisa a fazer é mandar o
+  MESMO arquivo pelo clipe e pelo microfone**: se um funciona e o outro não, o problema
+  está no que só a mensagem de voz percorre, e não no formato.
 - **Arquivo de áudio ANEXADO do computador continua arquivo, e não vira mensagem de voz.**
   Quem clicou no clipe escolheu um arquivo; transformar um mp3 de dez minutos em áudio de
   voz mudaria o que a pessoa quis mandar. Ele só troca de container quando o WhatsApp não
