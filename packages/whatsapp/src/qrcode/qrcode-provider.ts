@@ -28,6 +28,7 @@ import type {
   QuotedMessageRef,
   SendTextOptions,
 } from "@azvchat/shared";
+import { detectAudioContainer, resolveAudioDeclaration } from "../audio/container.js";
 import type { MessageTarget, WhatsAppProvider, WhatsAppProviderEvents } from "../provider.js";
 import {
   chatTypeFromJid,
@@ -785,13 +786,23 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
       case "video":
         content = { video: media.data, mimetype: media.mimeType, caption: media.caption };
         break;
-      case "audio":
+      case "audio": {
+        // Mime type e flag de voz saem dos BYTES, nunca do que quem chamou
+        // pediu: ver resolveAudioDeclaration.
+        const { mimetype, ptt } = resolveAudioDeclaration(
+          media.data,
+          media.mimeType,
+          media.asVoiceNote ?? false,
+        );
         content = {
           audio: media.data,
-          mimetype: media.asVoiceNote ? "audio/ogg; codecs=opus" : media.mimeType,
-          ptt: media.asVoiceNote ?? false,
+          mimetype,
+          ptt,
+          ...(media.seconds !== undefined ? { seconds: media.seconds } : {}),
+          ...(media.waveform !== undefined ? { waveform: media.waveform } : {}),
         };
         break;
+      }
       case "sticker":
         content = { sticker: media.data };
         break;
@@ -827,6 +838,9 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
       chatId,
       mediaType: media.type,
       messageId: result?.key?.id,
+      ...(media.type === "audio"
+        ? { audioContainer: detectAudioContainer(media.data), seconds: media.seconds }
+        : {}),
     });
     return {
       externalMessageId: result?.key?.id ?? `local-${Date.now()}`,

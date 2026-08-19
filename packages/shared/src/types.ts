@@ -20,8 +20,19 @@ export interface MediaPayload {
   caption?: string;
   /** Tipo lógico da mídia */
   type: "image" | "audio" | "video" | "document" | "sticker";
-  /** Enviar áudio como mensagem de voz (PTT) */
+  /**
+   * Enviar áudio como mensagem de voz (PTT). Só vale com bytes em OGG/Opus:
+   * a flag e o mime type declarado precisam concordar, senão parte dos
+   * aparelhos mostra o áudio como indisponível.
+   */
   asVoiceNote?: boolean;
+  /**
+   * Duração do áudio em segundos. Sem ela, parte dos clientes desenha a
+   * mensagem de voz como quebrada.
+   */
+  seconds?: number;
+  /** Barrinhas do player de voz. Cosmético: ausente, o áudio toca igual. */
+  waveform?: Uint8Array;
 }
 
 export interface MessageResult {

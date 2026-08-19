@@ -597,6 +597,26 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   `MESSAGE_EDIT` e de `REVOKE`. Ouvir só o primeiro, ou ler do segundo apenas o `status`,
   descarta a edição em silêncio — foi exatamente esse o defeito. Receber duas vezes não
   incomoda: quem aplica é idempotente.
+- **FORMATO DE ÁUDIO: o WhatsApp toca mensagem de voz em OGG/Opus, mono, 16 kHz, com a
+  flag `ptt` e a DURAÇÃO em segundos.** Nada disso é o que o navegador grava (ver a
+  armadilha na seção 13), então todo áudio que sai é normalizado no SERVIDOR, por ffmpeg,
+  antes do envio: `packages/whatsapp/src/audio/normalize-audio.ts`
+  (`normalizeAudioForWhatsApp`) é a fonte única, e `apps/api/src/lib/outbound-audio.ts`
+  (`prepareOutboundAudio`) é o que as rotas chamam. Dois perfis: `voice` (microfone,
+  OGG/Opus mono 16 kHz, `ptt` ligado, com waveform) e `file` (arquivo anexado, que
+  **continua arquivo** e só troca de container quando o WhatsApp não sabe tocar o que
+  veio). O ffmpeg roda como processo separado lendo e escrevendo por pipe, então o laço de
+  eventos nunca fica preso: dois minutos de áudio convertem em cerca de 3 segundos com a
+  API atendendo o resto normalmente. **Falha na conversão INTERROMPE o envio** com 422
+  `audio_conversion_failed` e uma frase em português; enviar assim mesmo é o defeito que
+  isso veio consertar.
+- **Quem decide o mime type do áudio são os BYTES, nunca a flag de quem chamou**
+  (`resolveAudioDeclaration`, em `packages/whatsapp/src/audio/container.ts`).
+  `asVoiceNote` com bytes que não são OGG/Opus **lança**, e não degrada: era exatamente
+  essa combinação (flag pedindo voz, WebM no arquivo, mime anunciando OGG) que fazia o
+  áudio chegar como indisponível no celular do cliente. Conhecimento sobre formato aceito
+  mora aqui em `packages/whatsapp`, junto com o Baileys, e a API o consome pelas funções
+  exportadas: nada fora do pacote precisa saber o que o WhatsApp aceita.
 - `apps/api/src/services/instance-manager.ts` orquestra provider ⇄ banco ⇄ socket
   (registro de instância, sync de chats/grupos/contatos, fotos, reconexão com backoff,
   `resumeSessions` no boot).
@@ -1408,6 +1428,29 @@ sempre juntos.
   dela **não** filtra por `status` nem pelo responsável de agora: a conversa concluída
   ontem, reaberta hoje e já na mão de outra pessoa continua sendo trabalho fechado por quem
   fechou. Filtrar por responsável ali faria o painel listar menos do que a célula mostra.
+- **O NAVEGADOR GRAVA WEBM E O WHATSAPP ESPERA OGG/OPUS.** `new MediaRecorder(stream)`
+  sem `mimeType` (que é o caso do `audio-recorder.tsx`) entrega WebM/Opus no Chrome e no
+  Edge, MP4/AAC no Safari, e só no Firefox entrega OGG/Opus. **O WhatsApp não decodifica
+  WebM**: o áudio chega no celular do cliente como indisponível, pedindo para reenviar, e
+  o pior é que **este lado registra sucesso** (a mensagem sai, o status vira `sent`, o
+  atendente não vê nada) e o arquivo **toca dentro do AZVCHAT**, porque o navegador
+  reproduz WebM sem esforço. O defeito só aparece do outro lado, dias depois, pelo cliente
+  reclamando. Consequências para qualquer mexida aqui: (1) a conversão é no SERVIDOR, uma
+  só, e não no navegador, senão o resultado passa a variar por máquina e por versão;
+  (2) **nunca faça a conversão opcional** com fallback silencioso para o arquivo original,
+  que foi a forma anterior desta falha; (3) o mime type declarado ao WhatsApp sai dos
+  bytes, e `ptt` só liga com OGG/Opus de verdade; (4) a **duração** vai junto, senão parte
+  dos clientes desenha a mensagem de voz quebrada mesmo com o container certo; (5) o
+  arquivo guardado é o CONVERTIDO (encaminhar não converte de novo), e o original fica em
+  `Message.metadata.originalMediaUrl` para reprocessar. O ffmpeg é dependência da imagem
+  da API (`apps/api/Dockerfile`) e do CI, e os testes de conversão se **pulam sozinhos**
+  onde ele não existe.
+- **Arquivo de áudio ANEXADO do computador continua arquivo, e não vira mensagem de voz.**
+  Quem clicou no clipe escolheu um arquivo; transformar um mp3 de dez minutos em áudio de
+  voz mudaria o que a pessoa quis mandar. Ele só troca de container quando o WhatsApp não
+  sabe tocar o que veio (WAV, WebM, FLAC): mp3, m4a, AMR e OGG/Opus seguem byte a byte,
+  porque recodificar o que já funciona só perde qualidade. Mesma regra na mídia da
+  resposta rápida, normalizada **uma vez no cadastro** em vez de a cada envio.
 - Ingestão é idempotente por `(conversationId, externalMessageId)` — não crie caminho
   paralelo de inserção de mensagem.
 - **Menção NÃO é formatação de texto.** Escrever "@Fulano" (ou até o número) na mensagem
@@ -1501,7 +1544,9 @@ sempre juntos.
 persistida e retomada após restart; sync de chats/contatos/grupos e fotos; recebimento e
 envio de texto, imagem, áudio, vídeo, documento, figurinha, localização, contato; reações;
 responder citando; encaminhar; apagar; editar mensagem enviada pelo composer (texto e
-legenda de mídia, dentro da janela de 15 minutos do WhatsApp); gravação de áudio (ffmpeg, com fallback);
+legenda de mídia, dentro da janela de 15 minutos do WhatsApp); gravação de áudio,
+normalizada no servidor para o OGG/Opus mono 16 kHz que o WhatsApp exige, com duração e
+waveform, e com recusa clara quando a conversão falha;
 enquetes; edição e exclusão feitas pelo cliente refletidas na mensagem original, com marca
 "editada" e histórico das versões anteriores; mensagens agendadas com retentativa; notas internas; etiquetas; atribuição com
 histórico completo; quatro status de atendimento; leitura por usuário (cada pessoa com

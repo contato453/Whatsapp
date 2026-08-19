@@ -48,6 +48,13 @@ jobs:
           git config --global url."https://github.com/".insteadOf "git@github.com:"
           git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
 
+      - name: Instalar ffmpeg
+        # Mesma ferramenta da imagem da API: é ela que converte o áudio
+        # gravado no navegador para o OGG/Opus que o WhatsApp toca. Sem ela
+        # os testes de conversão passariam PULADOS, e a regressão que fez o
+        # áudio chegar quebrado no celular voltaria em verde.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Instalar dependências
         run: pnpm install --frozen-lockfile
 

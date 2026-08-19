@@ -15,6 +15,7 @@ import {
 } from "../../lib/department-resource.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
 import { extensionFromMime } from "../../lib/media-storage.js";
+import { prepareOutboundAudio } from "../../lib/outbound-audio.js";
 import { serializeQuickReply } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
 
@@ -292,10 +293,10 @@ export async function quickReplyRoutes(app: FastifyInstance, deps: AppDeps): Pro
     if (!file) {
       throw new AppError("Arquivo é obrigatório", 400, "file_required");
     }
-    const buffer = await file.toBuffer();
+    let buffer = await file.toBuffer();
     // A base do mime decide o tipo; documento fica de fora de propósito —
     // resposta rápida é conteúdo padronizado, não repositório de arquivos.
-    const mimeType = file.mimetype || "application/octet-stream";
+    let mimeType = file.mimetype || "application/octet-stream";
     const mediaType = quickReplyMediaTypeFromMime(mimeType);
     if (!mediaType) {
       throw new AppError(
@@ -305,11 +306,25 @@ export async function quickReplyRoutes(app: FastifyInstance, deps: AppDeps): Pro
       );
     }
 
+    // Áudio é normalizado UMA VEZ, no cadastro: a resposta rápida é enviada
+    // muitas vezes, e converter a cada envio pagaria o ffmpeg de novo sem
+    // motivo. Container que o WhatsApp não toca (WebM, WAV) vira OGG/Opus
+    // aqui; mp3 e m4a ficam como estão.
+    let audioConvertido = false;
+    if (mediaType === "audio") {
+      const prepared = await prepareOutboundAudio(buffer, mimeType, false, deps.logger);
+      buffer = prepared.data;
+      mimeType = prepared.mimeType;
+      audioConvertido = prepared.converted;
+    }
+
     // O diretório é da organização, não de um número: a mídia da resposta
     // não pertence a instância alguma e sobrevive à exclusão de qualquer uma.
     const mediaUrl = await deps.storage.save(buffer, {
       instanceId: `quick-replies-${request.user.organizationId}`,
-      extension: file.filename?.split(".").pop() ?? extensionFromMime(mimeType),
+      extension: audioConvertido
+        ? extensionFromMime(mimeType)
+        : (file.filename?.split(".").pop() ?? extensionFromMime(mimeType)),
     });
 
     const updated = await deps.prisma.quickReply.update({
