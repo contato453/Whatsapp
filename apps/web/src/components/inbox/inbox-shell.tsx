@@ -78,6 +78,13 @@ import { Avatar, Button, EmptyState, Input, Modal, Spinner, Textarea } from "@/c
 import { appliesToConversation } from "@/components/department-picker";
 import { ArchivedBanner } from "./archived-banner";
 import { ConversationListItem } from "./conversation-list";
+import {
+  pendingUnresolved,
+  resolveQuickReplyForConversation,
+  unresolvedWarning,
+  type QuickReplyUnresolved,
+} from "./quick-reply-variables";
+import { useConversationCompany } from "./use-conversation-company";
 import { useUnreadCounts } from "./use-unread-counts";
 import { FilterBar } from "./filter-bar";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
@@ -247,6 +254,13 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
    * contando como uso; apagar o rascunho inteiro e escrever outra coisa, não.
    */
   const [appliedQuickReplyId, setAppliedQuickReplyId] = useState<string | null>(null);
+  /**
+   * Variáveis da resposta rápida que não puderam ser resolvidas na inserção
+   * (conversa sem empresa vinculada, campo em branco no cadastro, Azevedo-OS
+   * fora do ar). Ficam no texto como "[Rótulo]", destacadas aqui embaixo do
+   * composer, e viram um aviso antes do envio — nunca um bloqueio.
+   */
+  const [unresolvedVariables, setUnresolvedVariables] = useState<QuickReplyUnresolved[]>([]);
 
   /** Supervisor e admin enxergam vários números/departamentos; usuário, não. */
   const canFilterScope = me?.role === "admin" || me?.role === "supervisor";
@@ -511,6 +525,10 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     // Rascunho restaurado não é o atalho recém-aplicado: o uso só conta na
     // conversa em que a pessoa escolheu a resposta.
     setAppliedQuickReplyId(null);
+    // O aviso de variável por preencher é da resposta inserida nesta
+    // conversa: os dados vêm da empresa dela, e levar o aviso junto falaria
+    // de um cliente que não é mais o da tela.
+    setUnresolvedVariables([]);
     // Rascunho é por conversa, e volta com o modo em que foi escrito: nota
     // interna restaurada em modo mensagem mandaria para o cliente um texto
     // escrito para a equipe ler. Sem isso, o texto de um cliente também
@@ -920,6 +938,12 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     const usedQuickReplyId = composerMode === "message" ? appliedQuickReplyId : null;
     if (!conversationId || sending) return;
     if (draft.trim().length === 0 && !pendingMedia?.media) return;
+    // Variável da resposta rápida que ficou por preencher: avisa e deixa
+    // seguir. Bloquear seria pior — o marcador pode estar ali de propósito
+    // (a pessoa preferiu escrever o valor de outro jeito), e uma trava
+    // impediria o atendimento por causa de um colchete.
+    const naoResolvidas = composerMode === "message" ? pendingUnresolved(draft, unresolvedVariables) : [];
+    if (naoResolvidas.length > 0 && !window.confirm(unresolvedWarning(naoResolvidas))) return;
     setSending(true);
     const content = draft.trim();
     // Guardadas antes de limpar o campo: limpar o rascunho zera as marcações,
@@ -928,6 +952,10 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     // Some do composer e do armazenamento juntos: rascunho já enviado que
     // voltasse no próximo login seria mandado duas vezes ao cliente.
     updateDraft("", composerMode, []);
+    // O aviso pertence ao texto que acabou de sair. Ele volta junto com o
+    // rascunho quando o envio falha (o texto é devolvido logo abaixo), e a
+    // conferência é sempre contra o que está no campo.
+    setUnresolvedVariables([]);
 
     // Modo nota interna: grava sem enviar nada ao WhatsApp.
     if (composerMode === "note") {
@@ -966,8 +994,10 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         setAppliedQuickReplyId(null);
       } catch (err) {
         // Nada saiu: devolve o texto (regravado como rascunho, pelo
-        // updateDraft) e mantém o anexo para tentar de novo.
+        // updateDraft) e mantém o anexo para tentar de novo. O aviso de
+        // variável volta com ele — o texto devolvido é o mesmo.
         updateDraft(content, "message");
+        setUnresolvedVariables(naoResolvidas);
         window.alert(err instanceof Error ? err.message : "Falha ao enviar a mídia");
         setSending(false);
         return;
@@ -983,6 +1013,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
           // O áudio saiu; só o texto falhou. Devolver o rascunho sem o
           // anexo evita reenviar o áudio em duplicidade no retry.
           updateDraft(content, "message");
+          setUnresolvedVariables(naoResolvidas);
           window.alert(
             err instanceof Error
               ? `O áudio foi enviado, mas o texto falhou: ${err.message}`
@@ -1014,6 +1045,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       }
     } catch (err) {
       updateDraft(content, "message", sentMentions);
+      setUnresolvedVariables(naoResolvidas);
       window.alert(err instanceof Error ? err.message : "Falha ao enviar mensagem");
     } finally {
       setSending(false);
@@ -1146,6 +1178,14 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
 
   const conversation = detail?.conversation;
   const isGroup = conversation?.type === "group";
+  /**
+   * Empresa vinculada do Azevedo-OS, buscada UMA vez por conversa: o card do
+   * painel de contexto a desenha e o composer resolve as variáveis da
+   * resposta rápida com ela. Sem isso, cada "/atalho" custaria uma viagem
+   * nova ao portal — e uma resposta rápida que espera a rede deixa de ser
+   * rápida.
+   */
+  const companyState = useConversationCompany(conversation ?? null);
 
   /** Liga o remetente de cada mensagem ao participante, para exibir a foto. */
   const participantBySender = useMemo(() => {
@@ -1232,8 +1272,28 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     if (slashQuery === null) setQuickReplyDismissed(false);
   }, [slashQuery]);
 
+  /**
+   * Variáveis que continuam sem preencher no texto que está no composer
+   * AGORA. Preencher "[CNPJ]" na mão tira o aviso na mesma tecla; apagar o
+   * rascunho inteiro também.
+   */
+  const variaveisPendentes = pendingUnresolved(draft, unresolvedVariables);
+
   function applyQuickReply(reply: QuickReplyDto) {
-    updateDraft(reply.content);
+    /*
+     * A resolução das variáveis acontece AQUI, na inserção, e não no envio.
+     * Assim o texto final aparece no composer e a atendente corrige antes do
+     * Enter; resolvendo no envio, um nome errado ou um campo em branco só
+     * apareceria com a mensagem já no celular do cliente. A regra em si mora
+     * em `quick-reply-variables.ts` — daqui sai só a chamada.
+     */
+    const resolvido = resolveQuickReplyForConversation(reply.content, {
+      conversation: conversation ?? null,
+      company: companyState.company,
+      me,
+    });
+    setUnresolvedVariables(resolvido.unresolved);
+    updateDraft(resolvido.text);
     // A mídia não sai na hora: vira anexo pendente ao lado do texto, para a
     // pessoa revisar antes do Enter final.
     setQuickReplyMedia(reply.media ? reply : null);
@@ -1758,6 +1818,26 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                   hasParticipants={groupParticipants.length > 0}
                 />
               )}
+              {/* Variável da resposta rápida que não resolveu. Ela ficou no
+                  texto como "[Rótulo]", e não como vazio: campo apagado em
+                  silêncio abriria um buraco na frase que ninguém veria. */}
+              {variaveisPendentes.length > 0 && composerMode === "message" && (
+                <div className="mb-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-700">
+                  <p>
+                    Preencha antes de enviar:{" "}
+                    {variaveisPendentes.map((item) => item.placeholder).join(", ")}
+                  </p>
+                  {/* O motivo importa: sem ele, a atendente fica procurando no
+                      cadastro do cliente um dado que o portal simplesmente não
+                      respondeu. O resto do texto entrou normalmente. */}
+                  {companyState.error && (
+                    <p className="mt-0.5">
+                      Os dados da empresa não vieram do Azevedo-OS agora — preencha à mão ou
+                      tente de novo pelo painel ao lado.
+                    </p>
+                  )}
+                </div>
+              )}
               {/* Aviso ANTES do envio: com "@todos" num grupo em que alguém
                   não tem telefone conhecido, a mensagem sai para os demais —
                   ninguém descobre a falha depois de mandar. */}
@@ -2089,6 +2169,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
             detail={detail}
             departments={departments}
             tags={tags}
+            companyState={companyState}
             onChanged={loadDetail}
             onEditNote={noteActions.edit}
             onDeleteNote={noteActions.delete}

@@ -1,6 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { quickReplyMediaTypeFromMime } from "@azvchat/shared";
+import {
+  quickReplyMediaTypeFromMime,
+  unknownQuickReplyVariables,
+  unknownQuickReplyVariablesMessage,
+} from "@azvchat/shared";
 import { accessibleDepartmentIds, departmentResourceScope } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
 import { loadPermissions, requirePermission } from "../../lib/permissions.js";
@@ -33,7 +37,26 @@ const quickReplyFieldsSchema = z.object({
       "Use apenas letras minúsculas, números, hífen e underline (sem espaços)",
     ),
   title: z.string().max(80).optional(),
-  content: z.string().min(1).max(4000),
+  /**
+   * O texto aceita variáveis do catálogo (`{{empresa.cnpj}}`), e só as do
+   * catálogo. Nome inexistente é RECUSADO aqui, e não corrigido em silêncio:
+   * salvo assim, ele sairia com as chaves literais na mensagem do cliente, e
+   * o defeito só apareceria no celular dele. A tela valida com a MESMA
+   * função — recusar e esconder andam juntos.
+   */
+  content: z
+    .string()
+    .min(1)
+    .max(4000)
+    .superRefine((value, ctx) => {
+      const unknown = unknownQuickReplyVariables(value);
+      if (unknown.length > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: unknownQuickReplyVariablesMessage(unknown),
+        });
+      }
+    }),
   /** Vale para todos os departamentos. Ligada, `departmentIds` fica vazio. */
   isGeneral: z.boolean().default(false),
   departmentIds: z.array(z.string().uuid()).default([]),

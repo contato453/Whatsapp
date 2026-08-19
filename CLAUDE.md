@@ -83,7 +83,7 @@ Scripts raiz: `pnpm dev` (api 4000 + web 3000), `pnpm lint`, `pnpm typecheck`,
 | **Responsável** | `Conversation.assignedUserId` — quem assumiu o atendimento. |
 | **Nota interna** | `InternalNote` — texto que aparece intercalado no chat, **nunca vai para o WhatsApp**. |
 | **Etiqueta** | `Tag` — rótulo da conversa. Vale para todos (`isGeneral`) ou para vários departamentos (N:N). |
-| **Resposta rápida** | `QuickReply` — texto disparado por `/atalho` no composer, com mídia opcional (imagem, áudio ou vídeo) que sai junto. |
+| **Resposta rápida** | `QuickReply` — texto disparado por `/atalho` no composer, com mídia opcional (imagem, áudio ou vídeo) que sai junto e com **variáveis** (`{{empresa.cnpj}}`) resolvidas na inserção. |
 | **Participante** | `GroupParticipant` — quem está no grupo, com nome, telefone, foto e flag de admin. |
 | **`externalId` / `externalChatId` / JID** | Identificador do WhatsApp (ex.: `5511999@s.whatsapp.net`, `...@g.us`, `...@lid`). |
 | **LID** | Identificador anônimo novo do WhatsApp. `packages/whatsapp/src/qrcode/normalize.ts` cuida disso; número de LID **não** é telefone e não deve ser exibido como tal. |
@@ -800,6 +800,25 @@ nome técnico no código e neste documento.
    `data/` está no `.gitignore`.
 9. Antes de terminar qualquer alteração: `pnpm typecheck && pnpm lint && pnpm test`.
 
+### Catálogo de variáveis da resposta rápida
+
+Fonte única em `packages/shared/src/quick-reply-variables.ts` — a tela de cadastro monta o
+menu com ele, a API valida o texto com ele (`unknownQuickReplyVariables`, no Zod de
+`POST|PATCH /quick-replies`) e o composer resolve a substituição com ele. Sintaxe:
+**chaves duplas**, `{{empresa.cnpj}}` — não colide com a formatação do WhatsApp
+(`*_~` e crase) nem com os marcadores de colchete que a equipe já escreve à mão.
+
+| Grupo | Variáveis |
+| --- | --- |
+| Empresa (do Azevedo-OS) | `empresa.razao_social`, `empresa.nome_fantasia`, `empresa.numero`, `empresa.cnpj`, `empresa.situacao`, `empresa.regime_tributario`, `empresa.folha_pagamento` |
+| Conversa | `conversa.nome` (`customTitle` vence `title`), `conversa.telefone`, `conversa.departamento`, `conversa.responsavel` |
+| Atendente | `atendente.primeiro_nome` |
+| Data (calculadas) | `data.hoje` (DD/MM/AAAA), `data.competencia` (MM/AAAA do mês corrente), `data.competencia_anterior` |
+
+Variável nova entra no catálogo com nome técnico, rótulo, descrição, grupo, exemplo (para
+a pré-visualização do cadastro) e a função que resolve — os três consumidores passam a
+conhecê-la sozinhos. **Dado financeiro nunca entra**: ver a seção 13.
+
 ---
 
 ## 11. Ambiente, deploy e CI
@@ -1021,6 +1040,35 @@ sempre juntos.
   de Respostas rápidas mostra "Último uso"/"Nunca usada" em cada linha, e o filtro por
   departamento da tela usa a mesma régua do composer (`appliesToConversation`): filtrar
   por um departamento inclui as respostas gerais, e "Somente gerais" isola as gerais.
+- **A VARIÁVEL DA RESPOSTA RÁPIDA É RESOLVIDA NA INSERÇÃO, NUNCA NO ENVIO.** Quando a
+  atendente digita o `/atalho`, o texto já cai no composer com a razão social, o CNPJ e o
+  resto preenchidos — ela LÊ o que o cliente vai receber e corrige antes do Enter.
+  Resolvendo no envio, a substituição aconteceria depois do último ponto em que alguém
+  poderia revisar, e nome errado ou competência trocada só apareceriam com a mensagem já
+  no celular do cliente, onde não se desfaz. O custo aceito é o texto envelhecer entre
+  inserir e enviar. Consequências para qualquer mexida aqui: (1) a resolução usa a empresa
+  que a tela JÁ tem em mãos (`useConversationCompany`, o mesmo carregamento que alimenta o
+  card do painel de contexto) — nada de consulta nova ao Azevedo-OS por inserção, senão a
+  resposta rápida passa a esperar a rede; (2) variável que não resolveu **não vira vazio**
+  (buraco na frase que ninguém vê) **nem continua como `{{chave}}`** (o nome técnico
+  chegaria ao cliente): vira `[Rótulo]`, destacado numa faixa âmbar embaixo do composer;
+  (3) sobrando `[Rótulo]` na hora do envio, a tela **avisa e deixa seguir** — o marcador
+  pode estar ali de propósito, e travar o envio por causa de um colchete seria pior; (4) o
+  aviso é conferido contra o TEXTO do composer, então preencher à mão o apaga na mesma
+  tecla. Sem empresa vinculada, com campo em branco no cadastro e com o portal fora do ar,
+  o comportamento é o mesmo — muda só a linha extra do aviso, que nomeia o portal mudo. A
+  regra pura mora em `@azvchat/shared` e a cola da tela em
+  `components/inbox/quick-reply-variables.ts`, fora do `inbox-shell.tsx`.
+- **NENHUM DADO FINANCEIRO VIRA VARIÁVEL.** Honorário, inadimplência e valor de contrato
+  existem no Azevedo-OS, e a integração até conseguiria trazê-los. Lá esses campos são do
+  Financeiro e da Diretoria; uma variável aqui os entregaria a qualquer atendente com um
+  atalho de duas letras — seria a porta dos fundos daquela regra, aberta de dentro do
+  AZVCHAT. Não estão no catálogo, e há teste que fica vermelho se alguém os acrescentar.
+  Quem precisar do dado pede a liberação lá, não uma variável aqui.
+- **Marcador escrito à mão NÃO é convertido sozinho.** Texto antigo com "[nome do cliente]"
+  continua exatamente como está: o trecho entre colchetes pode ser um recado de verdade, e
+  trocá-lo na cara dura mudaria a mensagem que a equipe escreveu. A tela de cadastro aponta
+  o marcador e oferece a variável correspondente; quem decide é quem cadastra.
 - **Mídia de resposta rápida**: `QuickReply.mediaUrl` é chave do `MediaStorage` (diretório
   `quick-replies-<organizationId>`, sem vínculo com número) e **nunca sai da API** — o
   binário vem por `GET /quick-replies/:id/media`, autenticado. Só imagem, áudio e vídeo
@@ -1352,7 +1400,8 @@ número (enviadas e recebidas); edição de participante valendo para a PESSOA i
 (nome e papel corrigidos uma vez aparecem em todos os grupos dela e na conversa
 individual, com aviso da contagem antes de salvar);
 respostas rápidas com `/`, inclusive com mídia anexada (imagem, áudio ou vídeo) que sai
-junto com o texto; mídia ampliada em tela cheia com navegação por teclado e download;
+junto com o texto e com variáveis de empresa, conversa, atendente e data preenchidas na
+inserção (o que não resolve fica destacado no composer, e avisa antes de enviar); mídia ampliada em tela cheia com navegação por teclado e download;
 botão de baixar em documento recebido; arrastar arquivo para a conversa e colar com Ctrl+V,
 os dois com prévia (miniatura, legenda, remover, adicionar, progresso por arquivo e
 retentativa do que falhou); link clicável no texto da mensagem (nova aba,

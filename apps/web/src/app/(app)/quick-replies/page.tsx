@@ -15,9 +15,17 @@ import {
   Zap,
 } from "lucide-react";
 import {
+  QUICK_REPLY_MANUAL_PLACEHOLDER_HINT,
   QUICK_REPLY_MEDIA_TYPE_LABELS,
+  detectManualPlaceholders,
+  previewQuickReplyTemplate,
   quickReplyMediaTypeFromMime,
+  quickReplyTemplateHasVariables,
+  quickReplyVariableToken,
+  unknownQuickReplyVariables,
+  unknownQuickReplyVariablesMessage,
   type QuickReplyMediaType,
+  type QuickReplyVariable,
 } from "@azvchat/shared";
 import { quickRepliesApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -31,6 +39,7 @@ import {
   canManageScopedItem,
   useMyDepartments,
 } from "@/components/department-picker";
+import { VariablePicker } from "@/components/quick-replies/variable-picker";
 
 const EMPTY_FORM = {
   shortcut: "",
@@ -68,6 +77,10 @@ export default function QuickRepliesPage() {
   const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [mediaRemoved, setMediaRemoved] = useState(false);
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
+  // O menu de variáveis escreve no ponto do cursor: sem a referência ao
+  // campo, ele só saberia acrescentar no fim, e quem está no meio da frase
+  // teria de recortar e colar.
+  const contentRef = useRef<HTMLTextAreaElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // A lista nasce recolhida: com mensagem inteira aberta cabiam três respostas
@@ -145,6 +158,48 @@ export default function QuickRepliesPage() {
     setMediaFile(file);
     setMediaRemoved(false);
   }
+
+  /**
+   * Escreve a variável no ponto do cursor (ou por cima da seleção) e devolve
+   * o cursor para depois dela — quem está no meio da frase continua de onde
+   * parou, sem recortar e colar.
+   */
+  function insertVariable(variable: QuickReplyVariable) {
+    const token = quickReplyVariableToken(variable.name);
+    const field = contentRef.current;
+    if (!field) {
+      setForm((current) => ({ ...current, content: current.content + token }));
+      return;
+    }
+    const start = field.selectionStart;
+    const end = field.selectionEnd;
+    const texto = form.content;
+    const novo = `${texto.slice(0, start)}${token}${texto.slice(end)}`;
+    setForm((current) => ({ ...current, content: novo }));
+    // O valor só chega ao campo no próximo render: mover o cursor antes
+    // disso o levaria para uma posição do texto antigo.
+    requestAnimationFrame(() => {
+      field.focus();
+      const posicao = start + token.length;
+      field.setSelectionRange(posicao, posicao);
+    });
+  }
+
+  /**
+   * Variáveis escritas com nome que não existe no catálogo. O salvamento é
+   * BLOQUEADO por elas: texto salvo assim sairia com as chaves literais na
+   * mensagem do cliente, e o erro só apareceria no celular dele. A API
+   * recusa com a MESMA função — esconder e recusar andam juntos.
+   */
+  const unknownVariables = unknownQuickReplyVariables(form.content);
+
+  /**
+   * Marcadores escritos à mão ("[nome do cliente]"). Nada é convertido
+   * sozinho: o texto entre colchetes pode ser um recado de verdade, e trocar
+   * por variável na cara dura mudaria a mensagem que a equipe escreveu. A
+   * tela aponta e sugere; a decisão é de quem cadastra.
+   */
+  const manualPlaceholders = detectManualPlaceholders(form.content);
 
   /**
    * Ligar "vale para todos" limpa a seleção, desligar volta ao vazio: são os
@@ -404,13 +459,74 @@ export default function QuickRepliesPage() {
               : "A resposta aparece para quem atua em qualquer um dos departamentos marcados."}
           </p>
           <Field label="Mensagem">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <p className="text-xs text-slate-400">
+                Use variáveis para personalizar por conversa. Elas são preenchidas quando o
+                atalho é inserido no composer.
+              </p>
+              <VariablePicker onInsert={insertVariable} />
+            </div>
             <Textarea
+              ref={contentRef}
               rows={5}
               value={form.content}
               onChange={(event) => setForm({ ...form, content: event.target.value })}
               placeholder="Texto completo que será inserido na conversa"
             />
           </Field>
+          {/* Nome fora do catálogo: aponta qual está errado e trava o salvar.
+              Mensagem genérica obrigaria a pessoa a caçar o erro no texto. */}
+          {unknownVariables.length > 0 && (
+            <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
+              {unknownQuickReplyVariablesMessage(unknownVariables)}. Use o menu &quot;Inserir
+              variável&quot; para escolher uma existente.
+            </p>
+          )}
+          {/* Marcador escrito à mão: sugestão, nunca conversão automática. */}
+          {manualPlaceholders.length > 0 && (
+            <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              <p>{QUICK_REPLY_MANUAL_PLACEHOLDER_HINT}</p>
+              <ul className="mt-1 space-y-0.5">
+                {manualPlaceholders.map((item) => (
+                  <li key={item.raw}>
+                    <span className="font-mono">{item.raw}</span>
+                    {item.suggestion && (
+                      <>
+                        {" → "}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setForm((current) => ({
+                              ...current,
+                              content: current.content.split(item.raw).join(
+                                quickReplyVariableToken(item.suggestion?.name ?? ""),
+                              ),
+                            }))
+                          }
+                          className="font-medium underline"
+                        >
+                          trocar por {item.suggestion.label}
+                        </button>
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {/* Pré-visualização com dados de exemplo: o texto real depende da
+              conversa, e mostrar o resultado aqui é o que evita descobrir o
+              erro de redação com a mensagem já enviada. */}
+          {quickReplyTemplateHasVariables(form.content) && (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <p className="text-[11px] uppercase tracking-wide text-slate-400">
+                Pré-visualização (dados de exemplo)
+              </p>
+              <p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">
+                {previewQuickReplyTemplate(form.content)}
+              </p>
+            </div>
+          )}
           <Field label="Mídia (opcional — imagem, áudio ou vídeo)">
             {(() => {
               // Ordem de exibição: arquivo recém-escolhido vence a mídia já
@@ -486,6 +602,7 @@ export default function QuickRepliesPage() {
               busy ||
               form.shortcut.length === 0 ||
               form.content.trim().length === 0 ||
+              unknownVariables.length > 0 ||
               (!form.isGeneral && form.departmentIds.length === 0)
             }
             onClick={() => void save()}

@@ -9,6 +9,7 @@ export * from "./mentions.js";
 export * from "./message-edit.js";
 export * from "./permissions.js";
 export * from "./phone.js";
+export * from "./quick-reply-variables.js";
 export * from "./types.js";
 export * from "./realtime.js";
 export * from "./whatsapp-format.js";

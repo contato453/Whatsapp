@@ -45,6 +45,7 @@ import { AzevedoOsCard } from "./azevedo-os-card";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
 import { InternalNotePanelItem, useCanManageNote } from "./internal-note";
 import { AssigneeSelect } from "./assignee-select";
+import type { ConversationCompanyState } from "./use-conversation-company";
 
 /**
  * Telefone de uma conversa individual. O endereço do WhatsApp vem como
@@ -125,6 +126,7 @@ export function ContextPanel({
   detail,
   departments,
   tags,
+  companyState,
   onChanged,
   onEditNote,
   onDeleteNote,
@@ -132,6 +134,11 @@ export function ContextPanel({
   detail: ConversationDetailDto;
   departments: DepartmentDto[];
   tags: TagDto[];
+  /**
+   * Empresa do Azevedo-OS, carregada uma vez pela tela: o card a desenha e
+   * o composer resolve as variáveis da resposta rápida com ela.
+   */
+  companyState: ConversationCompanyState;
   onChanged: () => void;
   /** Os mesmos handlers do cartão da conversa — nada de segundo fluxo aqui. */
   onEditNote: (note: NoteDto) => void;
@@ -457,6 +464,7 @@ export function ContextPanel({
       */}
       <AzevedoOsCard
         conversation={conversation}
+        companyState={companyState}
         // Vincular e trocar são chaves SEPARADAS: preencher conversa vazia
         // é rotina; mexer em vínculo já feito por outra pessoa anexa a
         // conversa ao cliente errado quando dá errado.

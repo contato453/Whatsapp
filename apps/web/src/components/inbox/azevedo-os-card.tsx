@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Building2, ExternalLink, Link2, Link2Off, RefreshCw } from "lucide-react";
 import {
   AZEVEDO_OS_SOURCE,
@@ -13,14 +13,19 @@ import { ApiError, azevedoOsApi } from "@/lib/api";
 import { azevedoOsErrorMessage, azevedoOsStatusDotClass } from "@/lib/azevedo-os";
 import type { ConversationDto } from "@/lib/types";
 import { Button, Input, Modal, Spinner } from "@/components/ui";
+import type { ConversationCompanyState } from "./use-conversation-company";
 
 /**
  * Card "Cliente Azevedo-OS" do painel de contexto.
  *
  * O Azevedo-OS é a fonte da verdade do cadastro: o AZVCHAT guarda só o
  * ponteiro para a empresa e busca o resto na hora de exibir. Por isso o
- * card carrega sozinho, com o seu próprio estado de espera e de erro — se
- * o Azevedo-OS estiver fora do ar, quem para é este bloco, e não a Inbox.
+ * card tem o seu próprio estado de espera e de erro — se o Azevedo-OS
+ * estiver fora do ar, quem para é este bloco, e não a Inbox.
+ *
+ * O carregamento em si saiu daqui para `useConversationCompany`: o composer
+ * também precisa da empresa, para resolver as variáveis da resposta rápida,
+ * e duas buscas para a mesma conversa custariam duas viagens ao portal.
  */
 
 /** Rótulo + valor. O item inteiro some quando o Azevedo-OS não informou. */
@@ -171,11 +176,14 @@ function SearchModal({
 
 export function AzevedoOsCard({
   conversation,
+  companyState,
   canLink,
   canRelink,
   onChanged,
 }: {
   conversation: ConversationDto;
+  /** Empresa já carregada pela tela — o card desenha, não busca. */
+  companyState: ConversationCompanyState;
   /**
    * Chave `azevedo_os.link`: preencher empresa em conversa SEM empresa.
    * É rotina de classificação de quem atende.
@@ -191,33 +199,9 @@ export function AzevedoOsCard({
 }) {
   const linked =
     conversation.externalSource === AZEVEDO_OS_SOURCE && !!conversation.externalReference;
-  const [company, setCompany] = useState<AzevedoOsCompanyDto | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { company, loading, error, reload: carregar } = companyState;
   const [busy, setBusy] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-
-  const carregar = useCallback(() => {
-    if (!linked) {
-      setCompany(null);
-      setError(null);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    azevedoOsApi
-      .company(conversation.id)
-      .then(setCompany)
-      .catch((err) => {
-        setCompany(null);
-        setError(azevedoOsErrorMessage(err instanceof ApiError ? err.code : undefined));
-      })
-      .finally(() => setLoading(false));
-    // A busca refaz quando muda a conversa E quando muda a empresa vinculada:
-    // trocar de empresa sem recarregar deixaria o card mostrando a anterior.
-  }, [conversation.id, conversation.externalReference, linked]);
-
-  useEffect(carregar, [carregar]);
 
   async function desvincular() {
     if (!window.confirm("Desvincular a empresa desta conversa? As mensagens não são afetadas.")) {
