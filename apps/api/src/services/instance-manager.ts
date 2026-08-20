@@ -494,16 +494,27 @@ export class InstanceManager {
         // Testar é seguro: a etiqueta do AES-GCM só confere com a chave
         // exata, então nenhuma combinação errada produz texto plausível. O
         // log registra a vencedora, e é ela que vai permitir enxugar isto.
-        const [contato, instancia] = await Promise.all([
-          original.senderExternalId
-            ? this.prisma.contact.findFirst({
-                where: {
-                  whatsappInstanceId: event.instanceId,
-                  externalId: original.senderExternalId,
-                },
-                select: { phoneNumber: true },
-              })
-            : Promise.resolve(null),
+        const identificadores = [
+          original.senderExternalId,
+          event.targetRemoteJid,
+          event.originalSenderExternalId,
+          event.editorExternalId,
+          event.externalChatId,
+        ].filter((value): value is string => Boolean(value));
+        const [contatos, participantes, perfis, instancia] = await Promise.all([
+          this.prisma.contact.findMany({
+            where: { whatsappInstanceId: event.instanceId, externalId: { in: identificadores } },
+            select: { phoneNumber: true },
+          }),
+          this.prisma.groupParticipant.findMany({
+            where: { externalContactId: { in: identificadores } },
+            select: { phoneNumber: true },
+            take: 5,
+          }),
+          this.prisma.personProfile.findMany({
+            where: { organizationId, externalId: { in: identificadores } },
+            select: { phoneNumber: true },
+          }),
           this.prisma.whatsAppInstance.findUnique({
             where: { id: event.instanceId },
             select: { phoneNumber: true },
@@ -511,14 +522,19 @@ export class InstanceManager {
         ]);
         const comoTelefone = (phone: string | null | undefined): string =>
           phone ? `${phone.replace(/\D/g, "")}@s.whatsapp.net` : "";
-        const pessoais = [
-          original.senderExternalId ?? "",
-          comoTelefone(original.senderPhone),
-          comoTelefone(contato?.phoneNumber),
-          event.externalChatId,
-          event.originalSenderExternalId ?? "",
-        ];
-        const nossos = [event.targetRemoteJid ?? "", comoTelefone(instancia?.phoneNumber)];
+        // Todo identificador que o sistema conhece daquela pessoa e do
+        // próprio chip, nos DOIS formatos. Testar todos contra todos custa
+        // um HMAC por par e remove a adivinhação: só a chave certa passa
+        // pela etiqueta do AES-GCM.
+        const telefones = [
+          original.senderPhone,
+          ...contatos.map((c) => c.phoneNumber),
+          ...participantes.map((p) => p.phoneNumber),
+          ...perfis.map((p) => p.phoneNumber),
+          instancia?.phoneNumber ?? null,
+        ].map(comoTelefone);
+        const pessoais = [...identificadores, ...telefones];
+        const nossos: string[] = [];
         const decrypted = decryptEditedText({
           encPayload: event.encPayload,
           encIv: event.encIv,
