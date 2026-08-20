@@ -35,37 +35,29 @@ export interface PreparedOutboundAudio {
 }
 
 /**
- * A MENSAGEM DE VOZ ESTÁ DESLIGADA, E ISSO É DECISÃO, NÃO ESQUECIMENTO.
+ * A mensagem de voz está LIGADA, e o interruptor existe por causa do que
+ * custou chegar até aqui.
  *
- * O que o escritório mediu, com o mesmo arquivo nos dois caminhos: bytes
- * OGG/Opus com `ptt: false` (anexado pelo clipe) tocam no celular do cliente,
- * e os MESMOS bytes com `ptt: true` chegam como "Este áudio não está mais
- * disponível. Peça para reenviá-lo". Container, codec, mime type, duração,
- * upload, sessão e `mediaKey` são idênticos nos dois: a única variável é a
- * flag. Imagem e vídeo pelo mesmo socket nunca falharam.
+ * O áudio gravado no AZVCHAT chegava no celular do cliente como "Este áudio
+ * não está mais disponível. Peça para reenviá-lo", com o envio reportado como
+ * sucesso deste lado. Foram DUAS causas somadas, e a segunda só apareceu
+ * depois da primeira ser corrigida:
  *
- * Não achamos o que o WhatsApp recusa numa mensagem de voz vinda daqui.
- * Sabemos que não é o formato (o áudio já sai no OGG/Opus mono 16 kHz que ele
- * exige) nem a waveform apagada pelo Baileys (corrigida, e não resolveu). O
- * `whatsapp-web.js`, que é outra biblioteca, tem relato do mesmo sintoma, o
- * que aponta para o lado do WhatsApp e não para o nosso código.
+ * 1. o navegador grava WebM, que o WhatsApp não decodifica;
+ * 2. o WebM do MediaRecorder carrega ATRASO DE CODEC, e o ffmpeg levava esse
+ *    atraso para o OGG convertido (`start_pts` 336 em vez de 0). Ver
+ *    `TIMELINE_LIMPA`, em packages/whatsapp/src/audio/normalize-audio.ts.
  *
- * Entre entregar áudio que toca e entregar a bolha bonita que ninguém
- * consegue ouvir, fica o áudio que toca. A gravação do microfone continua
- * sendo normalizada como voz (mono 16 kHz, que é o certo para fala e mantém o
- * arquivo pequeno) e sai como ARQUIVO DE ÁUDIO: o cliente vê um player comum,
- * sem a onda e sem o 1.5x.
+ * O que NÃO era causa, e chegou a parecer: a flag `ptt`. Ela foi suspeita
+ * porque o arquivo anexado pelo clipe tocava e a gravação não, mas as duas
+ * coisas diferiam também na linha de tempo. Com o atraso zerado, a mensagem de
+ * voz passou a ser entregue normalmente. Se um dia o sintoma voltar, o teste
+ * que separa é mandar o MESMO arquivo pelo clipe e pelo microfone.
  *
- * O QUE DE FATO CONSERTOU O ÁUDIO FOI OUTRA COISA: o atraso de codec que o
- * WebM do navegador arrasta para a saída da conversão. Isso importa aqui
- * porque TODA tentativa com `ptt` ligado aconteceu antes daquela correção: a
- * mensagem de voz nunca foi testada com a linha de tempo limpa, e é bem
- * possível que o `ptt` fosse inocente o tempo todo.
- *
- * PARA RELIGAR: ponha esta constante em `true` e mande UM áudio para um
- * celular de verdade. Se tocar, a mensagem de voz voltou. Nada mais precisa
- * mudar: o caminho de `ptt` continua inteiro e testado, inclusive o desvio de
- * `relayVoiceNote` que devolve a waveform que o Baileys apaga.
+ * PARA DESLIGAR, se o WhatsApp voltar a recusar mensagem de voz: ponha esta
+ * constante em `false`. A gravação passa a sair como arquivo de áudio comum,
+ * que toca do mesmo jeito, só sem a onda e sem o 1.5x. É uma linha, e o
+ * escritório continua trabalhando enquanto se investiga.
  */
 export const VOICE_NOTE_ENABLED = true;
 
@@ -88,15 +80,14 @@ export async function prepareOutboundAudio(
 ): Promise<PreparedOutboundAudio> {
   // A CONVERSÃO É SEMPRE A DE ARQUIVO, mesmo na mensagem de voz.
   //
-  // Essa é a forma de bytes que se provou entregue neste número: OGG/Opus em
-  // 48 kHz, linha de tempo zerada e sem waveform. O perfil de voz produz mono
-  // 16 kHz com `-application voip`, e a waveform é campo à parte, então usá-lo
-  // trocaria TRÊS coisas de uma vez ao religar `VOICE_NOTE_ENABLED`, e um
-  // envio que falhasse não diria qual delas foi. Mantendo o perfil de arquivo,
-  // religar a voz mexe em uma variável só: a flag.
-  //
-  // Se a voz se confirmar entregue, aí sim vale experimentar o perfil de voz,
-  // um passo de cada vez.
+  // Essa é a forma de bytes provada em produção: OGG/Opus 48 kHz, linha de
+  // tempo zerada e sem waveform. O perfil de voz (mono 16 kHz,
+  // `-application voip`, com waveform) é o que o WhatsApp usa nas mensagens
+  // dele e geraria arquivo menor, mas trocá-lo mexe em três coisas de uma vez
+  // sobre algo que hoje funciona. Se alguém quiser esse ganho, troque UMA
+  // variável por vez e mande um áudio de verdade a cada passo: foi assim que
+  // este defeito acabou sendo isolado, depois de várias tentativas em que
+  // mais de uma coisa mudava junto.
   const asVoiceNote = fromMicrophone && VOICE_NOTE_ENABLED;
   const profile: AudioNormalizationProfile = "file";
   try {
