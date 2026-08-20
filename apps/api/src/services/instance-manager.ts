@@ -4,8 +4,9 @@ import type {
   ProviderChat,
   ProviderGroup,
 } from "@azvchat/shared";
-import { RealtimeEvents, type CallIncomingPayload } from "@azvchat/shared";
+import { RealtimeEvents, readMessageSecret, type CallIncomingPayload } from "@azvchat/shared";
 import type { WhatsAppProvider } from "@azvchat/whatsapp";
+import { decryptEditedText } from "@azvchat/whatsapp";
 import type { Server } from "socket.io";
 import type { Logger } from "pino";
 import { conversationAudience, instanceAudience } from "../realtime/socket.js";
@@ -435,6 +436,84 @@ export class InstanceManager {
           .emit(RealtimeEvents.MessageUpdated, serializeMessage(result.message));
         // A prévia da lista pode ter mudado junto: quem está com a Inbox
         // aberta precisa ver a linha acompanhar o texto novo.
+        const conversation = await this.prisma.conversation.findUnique({
+          where: { id: result.conversation.id },
+          include: {
+            assignedUser: true,
+            department: true,
+            instance: true,
+            tags: { include: { tag: true } },
+          },
+        });
+        if (!conversation) return;
+        const personName = await resolveConversationPersonName(
+          this.prisma,
+          organizationId,
+          conversation,
+        );
+        this.io
+          .to(conversationAudience(organizationId, conversation))
+          .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation, personName));
+      });
+    });
+
+    /**
+     * Edição CIFRADA. O WhatsApp trocou o mecanismo: em vez do texto novo em
+     * claro, manda um envelope cuja chave é derivada do `messageSecret` da
+     * mensagem ORIGINAL. O provider reconhece e repassa; abrir é aqui,
+     * porque o segredo mora no banco, junto da mensagem que ele protege.
+     *
+     * Mensagem que chegou antes de passarmos a guardar o segredo não tem
+     * como ser aberta — é o desenho do protocolo, não um defeito nosso, e
+     * por isso o caso é registrado no log e ignorado sem bolha de erro.
+     */
+    this.provider.on("message-edit-encrypted", (event) => {
+      void this.withOrg(event.instanceId, async (organizationId) => {
+        const original = await this.findMessageByExternalId(
+          event.instanceId,
+          event.externalChatId,
+          event.targetExternalMessageId,
+        );
+        if (!original || original.deletedAt) return;
+        const secret = readMessageSecret(original.metadata);
+        if (!secret) {
+          this.logger.info({
+            instanceId: event.instanceId,
+            messageId: original.id,
+            event: "message_edit_secret_missing",
+          });
+          return;
+        }
+        const newText = decryptEditedText({
+          encPayload: event.encPayload,
+          encIv: event.encIv,
+          messageSecret: Buffer.from(secret, "base64"),
+          targetExternalMessageId: event.targetExternalMessageId,
+          // O autor da original sai do que gravamos na ingestão, que vale
+          // também em grupo, onde o pacote não informa quem foi.
+          originalSenderJid:
+            original.senderExternalId ?? event.originalSenderExternalId ?? event.externalChatId,
+          editorJid: event.editorExternalId,
+        });
+        if (!newText) {
+          this.logger.warn({
+            instanceId: event.instanceId,
+            messageId: original.id,
+            event: "message_edit_decrypt_failed",
+          });
+          return;
+        }
+        const result = await this.ingest.applyEdit({
+          instanceId: event.instanceId,
+          externalChatId: event.externalChatId,
+          targetExternalMessageId: event.targetExternalMessageId,
+          newContent: newText,
+          editedAt: event.editedAt,
+        });
+        if (!result) return;
+        this.io
+          .to(conversationAudience(organizationId, result.conversation))
+          .emit(RealtimeEvents.MessageUpdated, serializeMessage(result.message));
         const conversation = await this.prisma.conversation.findUnique({
           where: { id: result.conversation.id },
           include: {

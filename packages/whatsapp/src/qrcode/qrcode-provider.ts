@@ -33,6 +33,7 @@ import type {
 import { detectAudioContainer, resolveAudioDeclaration } from "../audio/container.js";
 import type { MessageTarget, WhatsAppProvider, WhatsAppProviderEvents } from "../provider.js";
 import type { ProtocolAction } from "./normalize.js";
+import { extractMessageSecret, extractSecretEncryptedEdit } from "./message-secret.js";
 import {
   chatTypeFromJid,
   directionFromKey,
@@ -414,6 +415,35 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
       return;
     }
 
+    // Edição CIFRADA: o WhatsApp trocou o mecanismo e passou a mandar o
+    // texto novo num envelope, com a chave derivada do segredo da mensagem
+    // original. Aqui só se reconhece e se repassa — abrir exige aquele
+    // segredo, que está no banco.
+    const encryptedEdit = extractSecretEncryptedEdit(unwrapMessage(message.message));
+    if (encryptedEdit) {
+      const editor = message.key?.fromMe
+        ? (state.ownJid ?? "")
+        : (message.key?.participant ?? remoteJid);
+      this.emit("message-edit-encrypted", {
+        instanceId,
+        externalChatId: remoteJid,
+        targetExternalMessageId: encryptedEdit.targetExternalMessageId,
+        encPayload: encryptedEdit.encPayload,
+        encIv: encryptedEdit.encIv,
+        editorExternalId: stripDeviceSuffix(editor),
+        // Em conversa individual o autor da original é o próprio chat; em
+        // grupo o pacote não diz, e quem resolve é o banco.
+        originalSenderExternalId:
+          encryptedEdit.targetFromMe && state.ownJid
+            ? stripDeviceSuffix(state.ownJid)
+            : isGroupJid(remoteJid)
+              ? null
+              : stripDeviceSuffix(remoteJid),
+        editedAt: message.messageTimestamp ? toDate(message.messageTimestamp) : null,
+      });
+      return;
+    }
+
     // Reações vêm como mensagens; viram evento próprio.
     const reaction = unwrapMessage(message.message)?.reactionMessage;
     if (reaction?.key?.id) {
@@ -461,6 +491,7 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
       return;
     }
 
+    const messageSecret = extractMessageSecret(message.message);
     const { senderExternalId, senderPhone } = extractSender(message.key, state.ownJid);
     const socket = state.socket;
 
@@ -490,6 +521,10 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
           }
         : null,
       mentionedExternalIds: extractMentionedJids(message.message),
+      // Sem este segredo não há como abrir a EDIÇÃO que o cliente fizer
+      // depois nesta mensagem: o WhatsApp cifra o texto novo com uma chave
+      // derivada dele.
+      ...(messageSecret ? { messageSecret } : {}),
       ...(extracted.pollOptions ? { pollOptions: extracted.pollOptions } : {}),
       timestamp: toDate(message.messageTimestamp),
       media: extracted.hasMedia && socket

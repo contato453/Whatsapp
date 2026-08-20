@@ -572,7 +572,8 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
 (API oficial) sem tocar em regra de negócio.
 
 - Eventos do provider (normalizados): `qr`, `status`, `message`, `message-status`,
-  `message-reaction`, `message-deleted`, `message-edited`, `call`, `chats-sync`,
+  `message-reaction`, `message-deleted`, `message-edited`, `message-edit-encrypted`,
+  `call`, `chats-sync`,
   `contacts-sync`, `groups-sync`.
 - **Marcação de participantes ("@")**: `sendText` recebe um 5º parâmetro opcional
   `options?: SendTextOptions` (`@azvchat/shared`) com `mentionedExternalIds` — os JIDs que
@@ -602,6 +603,23 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   Reconhecer o pacote e não achar o texto é a pior falha das duas: não sobra bolha lixo
   para denunciar, e a mensagem velha continua na tela. Por isso esse caso, e só ele, loga
   `message_edit_without_content` com as CHAVES do pacote — nunca o conteúdo.
+- **A EDIÇÃO FEITA PELO CLIENTE CHEGA CIFRADA, e nenhuma versão do Baileys abre.** O
+  WhatsApp trocou o mecanismo: em vez do `protocolMessage` com o texto novo em claro, manda
+  um `secretEncryptedMessage` (`secretEncType = MESSAGE_EDIT`) com a chave da mensagem
+  ORIGINAL e um payload cifrado. A chave sai de HKDF-SHA256 sem sal sobre o
+  `messageContextInfo.messageSecret` da ORIGINAL, com o "info" sendo
+  `id da original + JID de quem a mandou + JID de quem editou + "Message Edit"`, nessa
+  ordem, e sem AAD (voto de enquete tem AAD; copiá-lo de lá faz a etiqueta nunca conferir).
+  Tudo isso mora em `packages/whatsapp/src/qrcode/message-secret.ts`, e a API consome
+  `decryptEditedText`, que devolve TEXTO — nada fora do pacote conhece o formato.
+  Consequências: (1) o `messageSecret` de toda mensagem recebida é gravado em
+  `Message.metadata` (`MESSAGE_SECRET_METADATA_KEY`), senão a edição dela nunca poderá ser
+  aberta; (2) mensagem anterior a essa gravação **não tem** como ter a edição lida — é o
+  desenho do protocolo, não defeito, e o caso vira log `message_edit_secret_missing`;
+  (3) errar qualquer um dos quatro campos da derivação faz o AES-GCM recusar em SILÊNCIO,
+  com o mesmo sintoma de não ter recebido nada, e por isso `test/message-secret.test.ts`
+  cifra com o mesmo esquema e confere que a função abre. O caminho antigo do
+  `protocolMessage` continua ligado: aparelho desatualizado ainda o usa.
 - **A LISTA DE INVÓLUCROS É UMA APOSTA, e por isso existe a BUSCA PROFUNDA.** Enumerar
   `editedMessage`, `ephemeralMessage`, `viewOnce...` cobre o que o WhatsApp já usou, não o
   que ele vai usar: em produção o pacote de edição chegou dentro de uma chave fora da

@@ -1,6 +1,7 @@
 import type { Message, PrismaClient, Prisma } from "@azvchat/database";
 import type { NormalizedMessage, QuotedSnapshot } from "@azvchat/shared";
 import {
+  MESSAGE_SECRET_METADATA_KEY,
   appendMessageVersion,
   quotedSenderLabel,
   stripWhatsAppFormatting,
@@ -173,6 +174,12 @@ export class MessageIngestService {
     const quotedSnapshot = await this.buildQuotedSnapshot(conversation, message);
     if (quotedSnapshot) {
       metadata = withQuotedSnapshot(metadata, quotedSnapshot);
+    }
+    // Segredo da mensagem: é dele que sai a chave da EDIÇÃO que o cliente
+    // fizer nela depois. Sem guardar aqui, a edição chega e não há como
+    // lê-la — o WhatsApp não manda o texto novo em claro.
+    if (message.messageSecret) {
+      metadata = { ...(metadata ?? {}), [MESSAGE_SECRET_METADATA_KEY]: message.messageSecret };
     }
 
     const created = await this.prisma.message.create({

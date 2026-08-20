@@ -109,6 +109,15 @@ export interface NormalizedMessage {
    * Pode conter JID de telefone ou identificador interno ("@lid").
    */
   mentionedExternalIds: string[];
+  /**
+   * Segredo da mensagem, em base64, quando o WhatsApp o envia.
+   *
+   * Guardá-lo é o que torna possível abrir a EDIÇÃO que o cliente faz
+   * depois: o WhatsApp cifra o texto novo com uma chave derivada dele. Sem
+   * o segredo da original não existe caminho para ler a edição dela — não é
+   * limitação nossa, é o desenho do protocolo.
+   */
+  messageSecret?: string;
   /** Opções da enquete, quando type === "poll" */
   pollOptions?: string[];
   timestamp: Date;

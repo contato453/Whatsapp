@@ -51,6 +51,27 @@ export interface WhatsAppProviderEvents {
     /** Momento informado pelo WhatsApp; nulo quando o pacote não traz */
     editedAt: Date | null;
   }) => void;
+  /**
+   * Alguém editou uma mensagem, e o WhatsApp entregou o texto novo CIFRADO.
+   *
+   * Só a chave sai daqui: abrir o payload exige o `messageSecret` da
+   * mensagem ORIGINAL, que está no banco, e por isso a decifragem acontece
+   * de fora — com a função que este pacote exporta, para que nada fora dele
+   * conheça o formato.
+   */
+  "message-edit-encrypted": (event: {
+    instanceId: string;
+    externalChatId: string;
+    /** Id da mensagem ORIGINAL, a que precisa ser atualizada */
+    targetExternalMessageId: string;
+    encPayload: Uint8Array;
+    encIv: Uint8Array;
+    /** Quem fez a edição, sem sufixo de aparelho */
+    editorExternalId: string;
+    /** Quem mandou a original, quando o pacote permite saber */
+    originalSenderExternalId: string | null;
+    editedAt: Date | null;
+  }) => void;
   /** Chamada de voz/vídeo registrada no chat */
   call: (event: CallEvent) => void;
   "chats-sync": (event: { instanceId: string; chats: ProviderChat[] }) => void;

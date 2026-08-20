@@ -117,3 +117,23 @@ export function isProtocolArtifact(metadata: unknown): boolean {
   if (!metadata || typeof metadata !== "object") return false;
   return (metadata as Record<string, unknown>)[PROTOCOL_ARTIFACT_METADATA_KEY] === true;
 }
+
+/**
+ * Segredo por mensagem, guardado no `metadata`.
+ *
+ * O WhatsApp cifra a edição feita pelo cliente com uma chave derivada deste
+ * valor. Sem ele, a edição chega e não há como lê-la. Fica no `metadata`
+ * pelo mesmo motivo do histórico de versões: nem toda mensagem tem, e uma
+ * coluna nula em milhares de linhas não se paga.
+ *
+ * NÃO é chave de conta nem de sessão: cada segredo serve a UMA mensagem, e
+ * quem tem acesso ao banco já lê o conteúdo dela em texto puro. Guardá-lo
+ * não amplia o que um banco vazado entregaria.
+ */
+export const MESSAGE_SECRET_METADATA_KEY = "messageSecret";
+
+export function readMessageSecret(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  const value = (metadata as Record<string, unknown>)[MESSAGE_SECRET_METADATA_KEY];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}

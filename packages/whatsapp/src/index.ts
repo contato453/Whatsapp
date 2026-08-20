@@ -19,3 +19,9 @@ export {
   type AudioNormalizationProfile,
   type NormalizedAudio,
 } from "./audio/normalize-audio.js";
+/**
+ * Edição CIFRADA feita pelo cliente: o WhatsApp entrega o texto novo num
+ * envelope cuja chave sai do segredo da mensagem original. A API consome
+ * esta função e continua sem conhecer o formato do WhatsApp.
+ */
+export { decryptEditedText } from "./qrcode/message-secret.js";
