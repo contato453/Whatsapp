@@ -627,9 +627,13 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   `audio_conversion_failed` e uma frase em português; enviar assim mesmo é o defeito que
   isso veio consertar.
 - **A MENSAGEM DE VOZ ESTÁ DESLIGADA** (`VOICE_NOTE_ENABLED = false`, em
-  `apps/api/src/lib/outbound-audio.ts`, onde está o porquê inteiro). A gravação do
-  microfone continua normalizada como voz (OGG/Opus mono 16 kHz) e sai como **arquivo de
-  áudio**: player comum, sem a onda e sem o 1.5x. O que se mediu: os MESMOS bytes com
+  `apps/api/src/lib/outbound-audio.ts`, onde está o porquê inteiro). Com ela desligada, a
+  gravação do microfone percorre **exatamente** o caminho do arquivo anexado: mesmo perfil
+  de conversão (OGG/Opus 48 kHz, `-application audio`) e **sem waveform**. Não basta
+  desligar a flag: perfil de voz produz mono 16 kHz com `-application voip`, e waveform é
+  campo de mensagem de voz. Qualquer um dos dois deixa a gravação diferente do anexo, e o
+  anexo é o único caminho comprovadamente entregue. Na tela do cliente vira um player
+  comum, sem a onda e sem o 1.5x. O que se mediu: os MESMOS bytes com
   `ptt: false` tocam no celular do cliente e com `ptt: true` chegam como "Este áudio não
   está mais disponível", com imagem e vídeo passando normalmente pelo mesmo socket.
   Formato e waveform foram descartados como causa. Para religar, ponha a constante em
@@ -1490,6 +1494,19 @@ sempre juntos.
   (ver a seção 8). **Ao investigar áudio quebrado, a primeira coisa a fazer é mandar o
   MESMO arquivo pelo clipe e pelo microfone**: se um funciona e o outro não, o problema
   está no que só a mensagem de voz percorre, e não no formato.
+- **O WEBM DO NAVEGADOR CARREGA ATRASO DE CODEC, E ELE VAZA PARA A SAÍDA.** Convertendo
+  o WebM do MediaRecorder, o OGG saía com `start_pts` 336; o mesmo comando partindo de um
+  WAV do computador saía com `start_pts` 0. Era a última diferença estrutural entre o áudio
+  gravado e o arquivo anexado, e o anexado é o caminho comprovadamente entregue. Por isso
+  a conversão passa `-af aresample=async=1:first_pts=0` (`TIMELINE_LIMPA`, em
+  `normalize-audio.ts`) nos dois perfis: para quem já começa em zero é inócuo, e para a
+  gravação torna a saída indistinguível da de um arquivo. Há teste que compara os dois
+  caminhos com ffprobe.
+- **WAVEFORM É CAMPO DE MENSAGEM DE VOZ, e áudio comum não leva.** Mandar `waveform` com
+  `ptt: false` produz uma combinação que nenhum cliente oficial gera. Aconteceu aqui, e o
+  log registrou (`voiceNote: false` ao lado de `waveform: 64`) num envio que o cliente não
+  conseguiu ouvir. `mediaContent` (`qrcode-provider.ts`) só inclui a waveform quando o
+  `ptt` sai verdadeiro.
 - **Arquivo de áudio ANEXADO do computador continua arquivo, e não vira mensagem de voz.**
   Quem clicou no clipe escolheu um arquivo; transformar um mp3 de dez minutos em áudio de
   voz mudaria o que a pessoa quis mandar. Ele só troca de container quando o WhatsApp não
@@ -1551,6 +1568,22 @@ sempre juntos.
   dois canais do Baileys, então quem aplica compara o conteúdo antes de gravar — igual ao
   que já está lá é no-op, e é isso que impede versão duplicada; (4) **apagar é o mesmo
   caminho** e quebra junto se um dos dois for mexido sozinho.
+- **O resumo da mensagem citada (reply) mora em `Message.metadata.quoted`, congelado na
+  gravação.** A referência (`Message.quotedMessageId`, id externo da original) sozinha só
+  desenha o bloco quando a original está no banco — e resposta a mensagem anterior à
+  conexão do número chegava sem citação nenhuma, descartada em silêncio. O resumo (id
+  local quando conhecido, autor, trecho, tipo) é gravado pela ingestão (a partir do
+  `contextInfo.quotedMessage` do payload) e pelo envio (a partir da original), e
+  `serializeMessage` cai nele quando ninguém passou a leitura ao vivo — era a falta desse
+  fallback que fazia a resposta RECÉM-ENVIADA aparecer sem o bloco (a resposta do POST e
+  o `message:new` serializam sem `loadQuotedPreviews`), mesmo com a citação chegando
+  certinha no celular do cliente. A leitura ao vivo continua preferida quando existe
+  (nome corrigido pela equipe, id para o clique navegar — `GET .../messages/around`
+  aceita `messageId` além de `at`). Fonte única de leitura/escrita e dos rótulos por tipo
+  ("🎤 Áudio" no lugar de bloco vazio): `packages/shared/src/message-quote.ts`
+  (`readQuotedSnapshot` / `withQuotedSnapshot` / `quotedSenderLabel` /
+  `quotedPreviewText`). **Citação nunca é descartada em silêncio**: sem original no
+  banco o bloco aparece do mesmo jeito, só sem navegação.
 - **O histórico de versões mora em `Message.metadata`, e guarda o conteúdo ANTERIOR.** Não
   há coluna nova: a maioria das mensagens nunca é editada, e o `metadata` já viaja inteiro
   no DTO e no `message:updated` — o histórico chegou à tela sem ampliar contrato de tempo

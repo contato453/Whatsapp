@@ -250,6 +250,38 @@ export function extractQuotedMessageId(
   return contextInfoOf(rawMessage)?.stanzaId ?? null;
 }
 
+export interface QuotedContext {
+  externalMessageId: string;
+  /** JID de quem escreveu a original, sem o sufixo de aparelho. */
+  participantExternalId: string | null;
+  content: string | null;
+  type: MessageType;
+}
+
+/**
+ * O contexto COMPLETO da citação, e não só o id.
+ *
+ * O `contextInfo` traz a própria mensagem citada (`quotedMessage`), e é ela
+ * que salva o bloco quando a original nunca foi sincronizada: guardar só o
+ * `stanzaId` era o que fazia a resposta a uma mensagem antiga chegar à
+ * Inbox sem citação nenhuma, em silêncio. O conteúdo passa pelo MESMO
+ * classificador das mensagens normais — citação de áudio vira tipo `audio`,
+ * de imagem vira `image` com a legenda, e assim por diante.
+ */
+export function extractQuotedContext(
+  rawMessage: proto.IMessage | null | undefined,
+): QuotedContext | null {
+  const info = contextInfoOf(rawMessage);
+  if (!info?.stanzaId) return null;
+  const extracted = info.quotedMessage ? extractContent(info.quotedMessage) : null;
+  return {
+    externalMessageId: info.stanzaId,
+    participantExternalId: info.participant ? stripDeviceSuffix(info.participant) : null,
+    content: extracted?.content ?? null,
+    type: extracted?.type ?? "other",
+  };
+}
+
 /**
  * Quem a mensagem marcou.
  *

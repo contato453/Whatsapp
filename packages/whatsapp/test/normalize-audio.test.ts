@@ -124,3 +124,45 @@ describe("normalizeAudioForWhatsApp", () => {
     30_000,
   );
 });
+
+/**
+ * O WebM do navegador carrega atraso de codec, e sem tratamento o OGG saía com
+ * `start_pts` diferente de zero, enquanto o mesmo comando partindo de um
+ * arquivo do computador saía em zero. Era a última diferença estrutural entre
+ * a gravação e o anexo que toca no celular do cliente.
+ */
+describe("linha de tempo do áudio convertido", () => {
+  it.skipIf(!temFfmpeg)(
+    "a saída começa em zero, venha de WebM do navegador ou de WAV do computador",
+    async () => {
+      const webm = gerar([
+        "sine=frequency=440:duration=2",
+        "-c:a", "libopus", "-ar", "48000", "-ac", "1", "-f", "webm", "-live", "1",
+      ]);
+      const wav = gerar(["sine=frequency=440:duration=2", "-c:a", "pcm_s16le", "-f", "wav"]);
+
+      const daGravacao = await normalizeAudioForWhatsApp(webm, { profile: "file", logger });
+      const doArquivo = await normalizeAudioForWhatsApp(wav, { profile: "file", logger });
+
+      expect(inicioEmPts(daGravacao.data)).toBe(0);
+      expect(inicioEmPts(daGravacao.data)).toBe(inicioEmPts(doArquivo.data));
+    },
+    60_000,
+  );
+});
+
+/** `start_pts` do arquivo pronto, lido pelo ffprobe. */
+function inicioEmPts(buffer: Buffer): number {
+  const saida = execFileSync(
+    "ffprobe",
+    [
+      "-hide_banner", "-loglevel", "error",
+      "-select_streams", "a:0",
+      "-show_entries", "stream=start_pts",
+      "-of", "csv=p=0",
+      "pipe:0",
+    ],
+    { input: buffer, maxBuffer: 16 * 1024 * 1024 },
+  );
+  return Number(saida.toString().trim());
+}

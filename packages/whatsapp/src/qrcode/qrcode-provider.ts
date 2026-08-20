@@ -40,7 +40,7 @@ import {
   extractEditedContent,
   extractMentionedJids,
   extractProtocolAction,
-  extractQuotedMessageId,
+  extractQuotedContext,
   extractSender,
   isDisplayableContent,
   isGroupJid,
@@ -464,6 +464,11 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     const { senderExternalId, senderPhone } = extractSender(message.key, state.ownJid);
     const socket = state.socket;
 
+    // O contexto inteiro da citação, não só o id: é o `quotedMessage` do
+    // payload que permite exibir o bloco quando a original nunca foi
+    // sincronizada (mensagem anterior à conexão do número).
+    const quotedContext = extractQuotedContext(message.message);
+
     const normalized: NormalizedMessage = {
       instanceId,
       externalMessageId: message.key?.id ?? `unknown-${Date.now()}`,
@@ -476,7 +481,14 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
       senderExternalId,
       senderPhone,
       senderName: message.pushName ?? null,
-      quotedExternalMessageId: extractQuotedMessageId(message.message),
+      quotedExternalMessageId: quotedContext?.externalMessageId ?? null,
+      quotedInfo: quotedContext
+        ? {
+            participantExternalId: quotedContext.participantExternalId,
+            content: quotedContext.content,
+            type: quotedContext.type,
+          }
+        : null,
       mentionedExternalIds: extractMentionedJids(message.message),
       ...(extracted.pollOptions ? { pollOptions: extracted.pollOptions } : {}),
       timestamp: toDate(message.messageTimestamp),
@@ -859,7 +871,11 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
           mimetype,
           ptt,
           ...(media.seconds !== undefined ? { seconds: media.seconds } : {}),
-          ...(media.waveform !== undefined ? { waveform: media.waveform } : {}),
+          // Waveform é campo de MENSAGEM DE VOZ. Mandá-la num áudio comum
+          // produz uma combinação que nenhum cliente oficial gera, e o
+          // objetivo aqui é o áudio comum sair idêntico ao arquivo anexado,
+          // que é o que comprovadamente toca no celular do cliente.
+          ...(ptt && media.waveform !== undefined ? { waveform: media.waveform } : {}),
         };
         break;
       }

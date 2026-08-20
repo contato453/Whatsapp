@@ -80,15 +80,22 @@ export async function prepareOutboundAudio(
   fromMicrophone: boolean,
   logger: Logger,
 ): Promise<PreparedOutboundAudio> {
-  const profile: AudioNormalizationProfile = fromMicrophone ? "voice" : "file";
+  // Com a mensagem de voz desligada, a gravação do microfone percorre
+  // EXATAMENTE o caminho do arquivo anexado, que é o único comprovadamente
+  // entregue neste número. Não basta desligar a flag: o perfil de voz produz
+  // OGG/Opus mono 16 kHz com `-application voip`, e a waveform é campo de
+  // mensagem de voz. Qualquer um dos dois deixaria a gravação diferente do
+  // anexo que funciona, e a diferença é justamente o que estamos caçando.
+  const asVoiceNote = fromMicrophone && VOICE_NOTE_ENABLED;
+  const profile: AudioNormalizationProfile = asVoiceNote ? "voice" : "file";
   try {
     const normalized = await normalizeAudioForWhatsApp(buffer, { profile, logger });
     return {
       data: normalized.data,
       mimeType: normalized.mimeType || fallbackMimeType,
-      asVoiceNote: fromMicrophone && VOICE_NOTE_ENABLED,
+      asVoiceNote,
       seconds: normalized.seconds,
-      waveform: normalized.waveform,
+      waveform: asVoiceNote ? normalized.waveform : undefined,
       converted: normalized.converted,
       sourceContainer: normalized.sourceContainer,
     };

@@ -13,6 +13,7 @@ import {
   formatPhone,
   PARTICIPANT_WITHOUT_NAME_LABEL,
   quickReplyMediaTypeFromMime,
+  readQuotedSnapshot,
   type AttendanceSettings,
   type ConnectionStatus,
   type ConversationStatus,
@@ -548,7 +549,11 @@ export function serializeMessage(
       senderName: entry.senderName,
       fromMe: entry.fromMe,
     })) ?? [],
-    quoted: quoted ?? null,
+    // Sem a leitura ao vivo (resposta do POST, eventos de tempo real, ou
+    // original fora do banco), vale o resumo congelado no metadata — era a
+    // falta deste fallback que fazia a resposta recém-enviada aparecer sem
+    // o bloco de citação. Citação nunca é descartada em silêncio.
+    quoted: quoted ?? readQuotedSnapshot(message.metadata),
     senderExternalId: message.senderExternalId,
     senderName: message.senderName ?? sender?.name ?? null,
     senderPhone: message.senderPhone ?? sender?.phoneNumber ?? null,

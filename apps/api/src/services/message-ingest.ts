@@ -1,6 +1,11 @@
 import type { Message, PrismaClient, Prisma } from "@azvchat/database";
-import type { NormalizedMessage } from "@azvchat/shared";
-import { appendMessageVersion, stripWhatsAppFormatting } from "@azvchat/shared";
+import type { NormalizedMessage, QuotedSnapshot } from "@azvchat/shared";
+import {
+  appendMessageVersion,
+  quotedSenderLabel,
+  stripWhatsAppFormatting,
+  withQuotedSnapshot,
+} from "@azvchat/shared";
 import type { Logger } from "pino";
 import type { MediaStorage } from "../lib/media-storage.js";
 import { extensionFromMime } from "../lib/media-storage.js";
@@ -157,6 +162,19 @@ export class MessageIngestService {
       }
     }
 
+    // Quem a mensagem marcou. Guardado porque o texto sozinho não diz:
+    // ele traz "@5511999998888", e é esta lista que permite à Inbox
+    // exibir o NOME do participante no lugar do número.
+    let metadata: Record<string, unknown> | null = message.mentionedExternalIds?.length
+      ? { mentions: message.mentionedExternalIds }
+      : null;
+    // Resumo da citação, congelado agora: é o que mantém o bloco de pé
+    // quando a original não está (ou deixar de estar) no banco.
+    const quotedSnapshot = await this.buildQuotedSnapshot(conversation, message);
+    if (quotedSnapshot) {
+      metadata = withQuotedSnapshot(metadata, quotedSnapshot);
+    }
+
     const created = await this.prisma.message.create({
       data: {
         organizationId: context.organizationId,
@@ -174,12 +192,7 @@ export class MessageIngestService {
         quotedMessageId: message.quotedExternalMessageId,
         timestamp: message.timestamp,
         status: isInbound ? "delivered" : "sent",
-        // Quem a mensagem marcou. Guardado porque o texto sozinho não diz:
-        // ele traz "@5511999998888", e é esta lista que permite à Inbox
-        // exibir o NOME do participante no lugar do número.
-        ...(message.mentionedExternalIds?.length
-          ? { metadata: { mentions: message.mentionedExternalIds } }
-          : {}),
+        ...(metadata ? { metadata: metadata as Prisma.InputJsonValue } : {}),
       },
     });
 
@@ -226,6 +239,74 @@ export class MessageIngestService {
     });
 
     return { conversationId: conversation.id, messageId: created.id, isNewMessage: true };
+  }
+
+  /**
+   * Resumo da mensagem citada, gravado junto com a resposta que chega.
+   *
+   * Com a original no banco, o resumo sai dela (e leva o id local, que é o
+   * que faz o clique no bloco navegar). Sem ela — resposta a mensagem
+   * anterior à conexão do número —, o resumo sai do PRÓPRIO payload do
+   * WhatsApp (`quotedInfo`): antes disso a citação era descartada em
+   * silêncio, e o atendente lia a resposta sem saber resposta a quê.
+   */
+  private async buildQuotedSnapshot(
+    conversation: {
+      id: string;
+      type: string;
+      title: string;
+      externalChatId: string;
+      whatsappInstanceId: string;
+    },
+    message: NormalizedMessage,
+  ): Promise<QuotedSnapshot | null> {
+    if (!message.quotedExternalMessageId) return null;
+
+    const original = await this.prisma.message.findUnique({
+      where: {
+        conversationId_externalMessageId: {
+          conversationId: conversation.id,
+          externalMessageId: message.quotedExternalMessageId,
+        },
+      },
+      select: { id: true, senderName: true, senderPhone: true, content: true, type: true, direction: true },
+    });
+    if (original) {
+      return {
+        id: original.id,
+        senderName: quotedSenderLabel(original),
+        content: original.content,
+        type: original.type,
+      };
+    }
+
+    const info = message.quotedInfo;
+    if (!info) return null;
+
+    // Original desconhecida: o autor sai do cadastro que já temos — o
+    // participante do grupo, ou o título da conversa individual quando quem
+    // foi citado é o próprio cliente. Sem fonte, o bloco mostra o conteúdo
+    // com o rótulo genérico, que ainda é melhor que citação nenhuma.
+    let senderName: string | null = null;
+    if (info.participantExternalId) {
+      if (conversation.type === "group") {
+        const participant = await this.prisma.groupParticipant.findFirst({
+          where: {
+            externalContactId: info.participantExternalId,
+            group: {
+              whatsappInstanceId: conversation.whatsappInstanceId,
+              externalId: conversation.externalChatId,
+            },
+          },
+          select: { customName: true, name: true },
+        });
+        senderName = participant?.customName ?? participant?.name ?? null;
+      } else if (info.participantExternalId === conversation.externalChatId) {
+        senderName = conversation.title;
+      }
+    }
+
+    return { id: null, senderName, content: info.content, type: info.type };
   }
 
   /**

@@ -4,6 +4,7 @@ import {
   directionFromKey,
   extractContent,
   extractMentionedJids,
+  extractQuotedContext,
   extractQuotedMessageId,
   extractSender,
   isGroupJid,
@@ -164,6 +165,89 @@ describe("extractQuotedMessageId", () => {
 
   it("retorna null quando não há citação", () => {
     expect(extractQuotedMessageId({ conversation: "oi" })).toBeNull();
+  });
+});
+
+describe("extractQuotedContext", () => {
+  it("traz o conteúdo citado junto com o id — é ele que salva o bloco quando a original nunca foi sincronizada", () => {
+    const message = {
+      extendedTextMessage: {
+        text: "resposta",
+        contextInfo: {
+          stanzaId: "ABC123",
+          participant: "5511999998888@s.whatsapp.net",
+          quotedMessage: { conversation: "mensagem original" },
+        },
+      },
+    };
+    expect(extractQuotedContext(message)).toEqual({
+      externalMessageId: "ABC123",
+      participantExternalId: "5511999998888@s.whatsapp.net",
+      content: "mensagem original",
+      type: "text",
+    });
+  });
+
+  it("citação de mídia sai com o TIPO — citar um áudio não pode virar bloco vazio", () => {
+    const message = {
+      extendedTextMessage: {
+        text: "sobre esse áudio",
+        contextInfo: {
+          stanzaId: "AUD1",
+          participant: "5511988887777@s.whatsapp.net",
+          quotedMessage: { audioMessage: { mimetype: "audio/ogg" } },
+        },
+      },
+    };
+    const quoted = extractQuotedContext(message);
+    expect(quoted?.type).toBe("audio");
+    expect(quoted?.content).toBeNull();
+  });
+
+  it("legenda da mídia citada vira o conteúdo", () => {
+    const message = {
+      extendedTextMessage: {
+        text: "essa foto",
+        contextInfo: {
+          stanzaId: "IMG1",
+          quotedMessage: { imageMessage: { caption: "boleto de agosto" } },
+        },
+      },
+    };
+    const quoted = extractQuotedContext(message);
+    expect(quoted?.type).toBe("image");
+    expect(quoted?.content).toBe("boleto de agosto");
+  });
+
+  it("remove o sufixo de aparelho do participante — o cadastro guarda o JID sem ele", () => {
+    const message = {
+      extendedTextMessage: {
+        text: "resposta",
+        contextInfo: {
+          stanzaId: "LID1",
+          participant: "123456789012:51@lid",
+          quotedMessage: { conversation: "original" },
+        },
+      },
+    };
+    expect(extractQuotedContext(message)?.participantExternalId).toBe("123456789012@lid");
+  });
+
+  it("citação sem quotedMessage no payload ainda traz o id, com tipo genérico", () => {
+    const message = {
+      extendedTextMessage: { text: "resposta", contextInfo: { stanzaId: "SEM1" } },
+    };
+    expect(extractQuotedContext(message)).toEqual({
+      externalMessageId: "SEM1",
+      participantExternalId: null,
+      content: null,
+      type: "other",
+    });
+  });
+
+  it("mensagem sem citação devolve null", () => {
+    expect(extractQuotedContext({ conversation: "oi" })).toBeNull();
+    expect(extractQuotedContext(null)).toBeNull();
   });
 });
 

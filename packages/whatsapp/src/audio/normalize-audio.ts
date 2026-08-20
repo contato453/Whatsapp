@@ -112,13 +112,29 @@ function runFfmpeg(args: string[], input: Buffer): Promise<Buffer> {
   });
 }
 
+/**
+ * O WebM que o navegador grava começa com atraso de codec, e o ffmpeg carrega
+ * esse atraso para a saída: o OGG sai com `start_pts` 336 em vez de 0. O mesmo
+ * comando, partindo de um WAV do computador, produz `start_pts` 0. Era a única
+ * diferença estrutural que sobrava entre a gravação e o arquivo anexado, e o
+ * anexado é o que comprovadamente toca no celular do cliente.
+ *
+ * `first_pts=0` zera esse offset, e a saída passa a ser indistinguível da que
+ * vem de um arquivo. Para quem já começa em zero é inócuo.
+ */
+const TIMELINE_LIMPA = ["-af", "aresample=async=1:first_pts=0"];
+
 function encodeArgs(profile: AudioNormalizationProfile): string[] {
   // Voz: exatamente o que o WhatsApp usa nas próprias mensagens de voz.
   // Arquivo: o áudio pode ser música ou uma gravação de reunião, então
   // mantém a taxa e os canais da origem para não estragar o material.
   return profile === "voice"
-    ? ["-c:a", "libopus", "-b:a", "24k", "-ar", "16000", "-ac", "1", "-application", "voip"]
-    : ["-c:a", "libopus", "-b:a", "96k", "-ar", "48000"];
+    ? [
+        ...TIMELINE_LIMPA,
+        "-c:a", "libopus", "-b:a", "24k", "-ar", "16000", "-ac", "1",
+        "-application", "voip",
+      ]
+    : [...TIMELINE_LIMPA, "-c:a", "libopus", "-b:a", "96k", "-ar", "48000"];
 }
 
 /** Duração e waveform saem da MESMA decodificação: um passe de PCM. */
