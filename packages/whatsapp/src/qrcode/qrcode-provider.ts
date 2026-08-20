@@ -79,9 +79,36 @@ export interface QrCodeProviderOptions {
   logger?: Logger;
   /** Proxy HTTPS opcional para o WebSocket do WhatsApp (ambientes restritos) */
   proxyUrl?: string;
+  /**
+   * Versão do WhatsApp Web anunciada na conexão, no formato "2.3000.1234567".
+   *
+   * Por padrão anunciamos a mais recente, que é o certo — mas é ela que faz
+   * o servidor entregar recursos novos, e um deles (a edição CIFRADA) o
+   * Baileys ainda não sabe abrir. Fixar uma versão anterior faz o WhatsApp
+   * voltar a mandar a edição em claro, no formato que já tratamos.
+   *
+   * É uma alavanca de emergência, não o caminho normal: versão antiga
+   * demais acaba recusada pelo servidor, e a escolha afeta a conexão
+   * inteira, não só a edição. Some do caminho quando o valor não é definido.
+   */
+  webVersion?: string;
 }
 
 const MAX_RECONNECT_DELAY_MS = 60_000;
+
+/**
+ * Lê "2.3000.1234567" em três números. Valor torto é ignorado em silêncio:
+ * derrubar a conexão por causa de uma variável mal digitada seria pior do
+ * que seguir com a versão mais recente, que é o padrão.
+ */
+function parseWebVersion(value: string | undefined): [number, number, number] | undefined {
+  if (!value) return undefined;
+  const parts = value.trim().split(".").map(Number);
+  if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part) || part < 0)) {
+    return undefined;
+  }
+  return [parts[0] as number, parts[1] as number, parts[2] as number];
+}
 
 /**
  * Implementação do WhatsAppProvider baseada em sessão via QR Code,
@@ -94,11 +121,14 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
   private readonly sessions = new Map<string, SessionState>();
   private readonly emitter = new EventEmitter();
   private readonly sessionDir: string;
+  /** Versão do WhatsApp Web fixada por configuração, quando houver. */
+  private readonly webVersion: [number, number, number] | undefined;
   private readonly logger: Logger;
   private readonly proxyAgent: HttpsProxyAgent<string> | undefined;
 
   constructor(options: QrCodeProviderOptions) {
     this.sessionDir = options.sessionDir;
+    this.webVersion = parseWebVersion(options.webVersion);
     this.logger = options.logger ?? pino({ level: process.env.LOG_LEVEL ?? "info" });
     this.proxyAgent = options.proxyUrl ? new HttpsProxyAgent(options.proxyUrl) : undefined;
     this.emitter.setMaxListeners(50);
@@ -173,13 +203,24 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     await mkdir(this.authDir(instanceId), { recursive: true });
     const { state: authState, saveCreds } = await useMultiFileAuthState(this.authDir(instanceId));
 
-    let version: [number, number, number] | undefined;
-    try {
-      const fetched = await fetchLatestBaileysVersion();
-      version = fetched.version as [number, number, number];
-    } catch {
-      // offline/bloqueado: usa a versão embutida do Baileys
-      version = undefined;
+    // A versão fixada, quando existe, vence a mais recente: é a alavanca
+    // para o servidor voltar a mandar a edição no formato antigo.
+    let version: [number, number, number] | undefined = this.webVersion;
+    if (!version) {
+      try {
+        const fetched = await fetchLatestBaileysVersion();
+        version = fetched.version as [number, number, number];
+      } catch {
+        // offline/bloqueado: usa a versão embutida do Baileys
+        version = undefined;
+      }
+    }
+    if (this.webVersion) {
+      this.logger.info({
+        instanceId,
+        event: "whatsapp_web_version_pinned",
+        version: this.webVersion.join("."),
+      });
     }
 
     const socket = makeWASocket({

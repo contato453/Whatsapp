@@ -45,6 +45,7 @@ async function main(): Promise<void> {
     sessionDir: config.sessionDir,
     logger: logger.child({ module: "whatsapp-provider" }),
     proxyUrl: config.WHATSAPP_PROXY_URL,
+    webVersion: config.WHATSAPP_WEB_VERSION,
   });
 
   // Container mutável: io e instanceManager dependem do servidor HTTP,

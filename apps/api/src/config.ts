@@ -25,6 +25,12 @@ const envSchema = z.object({
   WEB_ORIGIN: z.string().default("http://localhost:3000"),
   WHATSAPP_SESSION_DIR: z.string().default("./data/sessions"),
   WHATSAPP_PROXY_URL: z.string().optional(),
+  /**
+   * Fixa a versão do WhatsApp Web anunciada na conexão ("2.3000.1234567").
+   * Alavanca de emergência: sem ela anunciamos a mais recente, que é o
+   * normal, mas é a que faz o servidor mandar a edição já cifrada.
+   */
+  WHATSAPP_WEB_VERSION: z.string().optional(),
   MEDIA_DIR: z.string().default("./data/media"),
   // O padrão vem do shared: a tela barra o arquivo grande na prévia com o
   // mesmo número, antes de subir byte nenhum. Apertar ou soltar o limite
