@@ -4,7 +4,11 @@ import { describe, expect, it } from "vitest";
 import pino from "pino";
 import { detectAudioContainer } from "@azvchat/whatsapp";
 import { AppError } from "../src/lib/errors.js";
-import { AUDIO_PREPARE_FAILED_MESSAGE, prepareOutboundAudio } from "../src/lib/outbound-audio.js";
+import {
+  AUDIO_PREPARE_FAILED_MESSAGE,
+  VOICE_NOTE_ENABLED,
+  prepareOutboundAudio,
+} from "../src/lib/outbound-audio.js";
 
 const logger = pino({ level: "silent" });
 const temFfmpeg = spawnSync("ffmpeg", ["-version"]).status === 0;
@@ -38,7 +42,7 @@ describe("prepareOutboundAudio", () => {
   });
 
   it.skipIf(!temFfmpeg)(
-    "gravação do microfone vira mensagem de voz em OGG/Opus com duração",
+    "gravação do microfone é normalizada para OGG/Opus com duração",
     async () => {
       const webm = gerar([
         "sine=frequency=440:duration=2",
@@ -47,9 +51,26 @@ describe("prepareOutboundAudio", () => {
       const pronto = await prepareOutboundAudio(webm, "audio/webm", true, logger);
       expect(detectAudioContainer(pronto.data)).toBe("ogg-opus");
       expect(pronto.mimeType).toBe("audio/ogg; codecs=opus");
-      expect(pronto.asVoiceNote).toBe(true);
       expect(pronto.seconds).toBe(2);
       expect(pronto.converted).toBe(true);
+    },
+    30_000,
+  );
+
+  it.skipIf(!temFfmpeg)(
+    "com a mensagem de voz desligada, a gravação sai como ARQUIVO de áudio",
+    async () => {
+      // A decisão e o porquê estão em lib/outbound-audio.ts: bytes idênticos
+      // com ptt ligado chegam como "áudio indisponível" no celular do cliente,
+      // e com ptt desligado tocam. Entre a bolha bonita que ninguém ouve e o
+      // player comum que funciona, fica o que funciona.
+      const webm = gerar([
+        "sine=frequency=440:duration=2",
+        "-c:a", "libopus", "-ar", "48000", "-ac", "1", "-f", "webm", "-live", "1",
+      ]);
+      const pronto = await prepareOutboundAudio(webm, "audio/webm", true, logger);
+      expect(pronto.asVoiceNote).toBe(VOICE_NOTE_ENABLED);
+      expect(VOICE_NOTE_ENABLED).toBe(false);
     },
     30_000,
   );

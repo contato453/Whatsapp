@@ -35,10 +35,40 @@ export interface PreparedOutboundAudio {
 }
 
 /**
- * `asVoiceNote` diz de onde o áudio veio, e não o que ele é: o microfone do
- * composer manda true e vira mensagem de voz; arquivo anexado do computador
- * manda false e continua arquivo de áudio, convertido só quando o WhatsApp
- * não sabe tocar o container (WAV, WebM, FLAC).
+ * A MENSAGEM DE VOZ ESTÁ DESLIGADA, E ISSO É DECISÃO, NÃO ESQUECIMENTO.
+ *
+ * O que o escritório mediu, com o mesmo arquivo nos dois caminhos: bytes
+ * OGG/Opus com `ptt: false` (anexado pelo clipe) tocam no celular do cliente,
+ * e os MESMOS bytes com `ptt: true` chegam como "Este áudio não está mais
+ * disponível. Peça para reenviá-lo". Container, codec, mime type, duração,
+ * upload, sessão e `mediaKey` são idênticos nos dois: a única variável é a
+ * flag. Imagem e vídeo pelo mesmo socket nunca falharam.
+ *
+ * Não achamos o que o WhatsApp recusa numa mensagem de voz vinda daqui.
+ * Sabemos que não é o formato (o áudio já sai no OGG/Opus mono 16 kHz que ele
+ * exige) nem a waveform apagada pelo Baileys (corrigida, e não resolveu). O
+ * `whatsapp-web.js`, que é outra biblioteca, tem relato do mesmo sintoma, o
+ * que aponta para o lado do WhatsApp e não para o nosso código.
+ *
+ * Entre entregar áudio que toca e entregar a bolha bonita que ninguém
+ * consegue ouvir, fica o áudio que toca. A gravação do microfone continua
+ * sendo normalizada como voz (mono 16 kHz, que é o certo para fala e mantém o
+ * arquivo pequeno) e sai como ARQUIVO DE ÁUDIO: o cliente vê um player comum,
+ * sem a onda e sem o 1.5x.
+ *
+ * PARA RELIGAR: ponha esta constante em `true` e mande UM áudio para um
+ * celular de verdade. Se tocar, a mensagem de voz voltou. Nada mais precisa
+ * mudar: o caminho de `ptt` continua inteiro e testado, inclusive o desvio de
+ * `relayVoiceNote` que devolve a waveform que o Baileys apaga.
+ */
+export const VOICE_NOTE_ENABLED = false;
+
+/**
+ * `fromMicrophone` diz de ONDE o áudio veio, e não o que ele vira: o microfone
+ * do composer manda true e é normalizado como voz; arquivo anexado do
+ * computador manda false e continua arquivo, convertido só quando o WhatsApp
+ * não sabe tocar o container (WAV, WebM, FLAC). Quem decide se ele sai COMO
+ * mensagem de voz é `VOICE_NOTE_ENABLED`, logo acima.
  *
  * Falhar aqui interrompe o envio de propósito. Mandar assim mesmo produz o
  * defeito que esta função existe para acabar: mensagem entregue, atendente
@@ -47,16 +77,16 @@ export interface PreparedOutboundAudio {
 export async function prepareOutboundAudio(
   buffer: Buffer,
   fallbackMimeType: string,
-  asVoiceNote: boolean,
+  fromMicrophone: boolean,
   logger: Logger,
 ): Promise<PreparedOutboundAudio> {
-  const profile: AudioNormalizationProfile = asVoiceNote ? "voice" : "file";
+  const profile: AudioNormalizationProfile = fromMicrophone ? "voice" : "file";
   try {
     const normalized = await normalizeAudioForWhatsApp(buffer, { profile, logger });
     return {
       data: normalized.data,
       mimeType: normalized.mimeType || fallbackMimeType,
-      asVoiceNote,
+      asVoiceNote: fromMicrophone && VOICE_NOTE_ENABLED,
       seconds: normalized.seconds,
       waveform: normalized.waveform,
       converted: normalized.converted,
