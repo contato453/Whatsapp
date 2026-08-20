@@ -628,6 +628,14 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   com o mesmo sintoma de não ter recebido nada, e por isso `test/message-secret.test.ts`
   cifra com o mesmo esquema e confere que a função abre. O caminho antigo do
   `protocolMessage` continua ligado: aparelho desatualizado ainda o usa.
+- **NÃO FIXE A VERSÃO DO WHATSAPP WEB PARA CONTORNAR A EDIÇÃO CIFRADA. JÁ FOI TENTADO E
+  DERRUBOU O SISTEMA.** O raciocínio é sedutor: é por anunciarmos a versão mais recente
+  que o servidor manda a edição cifrada, então fixar uma anterior faria voltar o formato em
+  claro, que já tratamos. Na prática o WhatsApp **recusa a conexão** com versão antiga, e o
+  número inteiro sai do ar — não é degradação, é queda. Em 20/08/2026 isso desconectou a
+  produção e só voltou removendo a variável e reconstruindo. A alavanca foi retirada do
+  código de propósito: `fetchLatestBaileysVersion` é o único caminho, e a espera pelo
+  suporte do Baileys ao envelope cifrado é o caminho certo.
 - **A LISTA DE INVÓLUCROS É UMA APOSTA, e por isso existe a BUSCA PROFUNDA.** Enumerar
   `editedMessage`, `ephemeralMessage`, `viewOnce...` cobre o que o WhatsApp já usou, não o
   que ele vai usar: em produção o pacote de edição chegou dentro de uma chave fora da

@@ -39,10 +39,6 @@ services:
       WHATSAPP_SESSION_DIR: /app/data/sessions
       MEDIA_DIR: /app/data/media
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      # Vazia = anunciamos a versão mais recente do WhatsApp Web, que é o
-      # normal. Preenchida, fixa a versão: alavanca para o servidor voltar a
-      # mandar a edição do cliente em claro, no formato que já tratamos.
-      WHATSAPP_WEB_VERSION: ${WHATSAPP_WEB_VERSION:-}
       # Integração de leitura com o Azevedo-OS. Vazias = desligada; o token
       # fica só no processo da API (o serviço web nem o recebe).
       AZEVEDO_OS_API_URL: ${AZEVEDO_OS_API_URL:-}
