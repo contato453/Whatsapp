@@ -5,6 +5,8 @@ import makeWASocketImport, {
   DisconnectReason,
   downloadMediaMessage,
   fetchLatestBaileysVersion,
+  generateMessageIDV2,
+  generateWAMessage,
   useMultiFileAuthState,
   type AnyMessageContent,
   type ConnectionState,
@@ -856,6 +858,52 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     return content;
   }
 
+  /**
+   * Envia a mensagem de voz montando a mensagem aqui, em vez de pelo
+   * `sendMessage` do Baileys.
+   *
+   * O motivo é uma perda silenciosa: com `ptt` ligado, o Baileys recalcula a
+   * waveform por conta própria (`Utils/messages.js`) chamando `audio-decode`,
+   * uma biblioteca que ele NÃO declara como dependência. O import falha, o
+   * erro é engolido, a função devolve `undefined` e isso sobrescreve a
+   * waveform que a API calculou. Resultado: toda mensagem de voz saía sem
+   * waveform, e só a mensagem de voz, porque esse trecho do Baileys só roda
+   * quando `ptt === true`.
+   *
+   * Montando a mensagem e relayando, a waveform que sai é a nossa. O caminho
+   * vale SÓ para mensagem de voz: imagem, vídeo, documento e áudio comum
+   * continuam no `sendMessage` de sempre, que funciona.
+   */
+  private async relayVoiceNote(
+    socket: WASocket,
+    chatId: string,
+    content: AnyMessageContent,
+    media: MediaPayload,
+    quoted?: QuotedMessageRef,
+  ): Promise<WAMessage> {
+    const userJid = socket.user?.id;
+    const fullMsg = await generateWAMessage(chatId, content, {
+      logger: this.logger.child({ module: "baileys" }, { level: "warn" }),
+      userJid: userJid ?? "",
+      upload: socket.waUploadToServer,
+      messageId: generateMessageIDV2(userJid),
+      ...(quoted ? { quoted: this.buildQuoted(chatId, quoted) } : {}),
+    });
+    const audio = fullMsg.message?.audioMessage;
+    if (audio && media.waveform) {
+      audio.waveform = media.waveform;
+    }
+    if (!fullMsg.message || !fullMsg.key.id) {
+      throw new Error("Não foi possível montar a mensagem de voz");
+    }
+    await socket.relayMessage(chatId, fullMsg.message, { messageId: fullMsg.key.id });
+    // O `sendMessage` publica a própria mensagem em `messages.upsert` com o
+    // tipo "append", e o resto do sistema escuta esse evento. Sem reemitir,
+    // a mensagem de voz seria a única que não aparece por ali.
+    socket.ev.emit("messages.upsert", { messages: [fullMsg], type: "append" });
+    return fullMsg;
+  }
+
   async sendMedia(
     instanceId: string,
     chatId: string,
@@ -864,11 +912,14 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
   ): Promise<MessageResult> {
     const socket = this.requireSocket(instanceId);
     const content = this.mediaContent(media);
-    const result = await socket.sendMessage(
-      chatId,
-      content,
-      quoted ? { quoted: this.buildQuoted(chatId, quoted) } : undefined,
-    );
+    const isVoiceNote = media.type === "audio" && "ptt" in content && content.ptt === true;
+    const result = isVoiceNote
+      ? await this.relayVoiceNote(socket, chatId, content, media, quoted)
+      : await socket.sendMessage(
+          chatId,
+          content,
+          quoted ? { quoted: this.buildQuoted(chatId, quoted) } : undefined,
+        );
     this.logger.info({
       instanceId,
       event: "media_sent",
@@ -876,7 +927,12 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
       mediaType: media.type,
       messageId: result?.key?.id,
       ...(media.type === "audio"
-        ? { audioContainer: detectAudioContainer(media.data), seconds: media.seconds }
+        ? {
+            audioContainer: detectAudioContainer(media.data),
+            seconds: media.seconds,
+            voiceNote: isVoiceNote,
+            waveform: media.waveform?.length ?? 0,
+          }
         : {}),
     });
     return {
