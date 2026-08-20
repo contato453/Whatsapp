@@ -616,6 +616,10 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   `Message.metadata` (`MESSAGE_SECRET_METADATA_KEY`), senão a edição dela nunca poderá ser
   aberta; (2) mensagem anterior a essa gravação **não tem** como ter a edição lida — é o
   desenho do protocolo, não defeito, e o caso vira log `message_edit_secret_missing`;
+  **quando a abertura falha, a bolha AVISA** (`EDIT_CONTENT_UNAVAILABLE_METADATA_KEY`, chip
+  âmbar "editada pelo cliente"): o texto antigo continua na tela, porque é o que temos, mas
+  ninguém age achando que está atualizado — silêncio aqui é o defeito original na sua forma
+  mais perigosa, e nunca é opção;
   (3) o JID de quem mandou e de quem editou é passado como LISTA DE CANDIDATOS, porque o
   WhatsApp endereça a mesma pessoa ora pelo telefone, ora pelo `@lid`, e o que gravamos nem
   sempre é o que ele usou na chave — a etiqueta do AES-GCM só confere com o certo, então
