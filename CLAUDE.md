@@ -1535,6 +1535,22 @@ sempre juntos.
   dois canais do Baileys, então quem aplica compara o conteúdo antes de gravar — igual ao
   que já está lá é no-op, e é isso que impede versão duplicada; (4) **apagar é o mesmo
   caminho** e quebra junto se um dos dois for mexido sozinho.
+- **O resumo da mensagem citada (reply) mora em `Message.metadata.quoted`, congelado na
+  gravação.** A referência (`Message.quotedMessageId`, id externo da original) sozinha só
+  desenha o bloco quando a original está no banco — e resposta a mensagem anterior à
+  conexão do número chegava sem citação nenhuma, descartada em silêncio. O resumo (id
+  local quando conhecido, autor, trecho, tipo) é gravado pela ingestão (a partir do
+  `contextInfo.quotedMessage` do payload) e pelo envio (a partir da original), e
+  `serializeMessage` cai nele quando ninguém passou a leitura ao vivo — era a falta desse
+  fallback que fazia a resposta RECÉM-ENVIADA aparecer sem o bloco (a resposta do POST e
+  o `message:new` serializam sem `loadQuotedPreviews`), mesmo com a citação chegando
+  certinha no celular do cliente. A leitura ao vivo continua preferida quando existe
+  (nome corrigido pela equipe, id para o clique navegar — `GET .../messages/around`
+  aceita `messageId` além de `at`). Fonte única de leitura/escrita e dos rótulos por tipo
+  ("🎤 Áudio" no lugar de bloco vazio): `packages/shared/src/message-quote.ts`
+  (`readQuotedSnapshot` / `withQuotedSnapshot` / `quotedSenderLabel` /
+  `quotedPreviewText`). **Citação nunca é descartada em silêncio**: sem original no
+  banco o bloco aparece do mesmo jeito, só sem navegação.
 - **O histórico de versões mora em `Message.metadata`, e guarda o conteúdo ANTERIOR.** Não
   há coluna nova: a maioria das mensagens nunca é editada, e o `metadata` já viaja inteiro
   no DTO e no `message:updated` — o histórico chegou à tela sem ampliar contrato de tempo

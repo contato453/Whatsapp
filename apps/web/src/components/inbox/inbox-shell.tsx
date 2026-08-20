@@ -600,6 +600,40 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     setTimeout(() => setHighlightId(null), 3000);
   }
 
+  /**
+   * Vai até a mensagem citada num bloco de reply. Se ela já está carregada,
+   * só rola e destaca; senão pede a janela em torno dela — o bloco só é
+   * clicável quando a original existe no banco, então o 404 aqui é raro
+   * (original sumiu entre o clique e a resposta) e não pode derrubar a tela.
+   */
+  async function jumpToQuotedMessage(quotedMessageId: string) {
+    if (!conversationId) return;
+    const scrollToQuoted = () => {
+      setHighlightId(quotedMessageId);
+      setTimeout(() => {
+        document.getElementById(`message-${quotedMessageId}`)?.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+      }, 100);
+      setTimeout(() => setHighlightId(null), 3000);
+    };
+    if (messages?.some((entry) => entry.id === quotedMessageId)) {
+      scrollToQuoted();
+      return;
+    }
+    try {
+      const data = await api.get<{ messages: MessageDto[]; hasMore: boolean }>(
+        `/conversations/${conversationId}/messages/around?messageId=${quotedMessageId}`,
+      );
+      setMessages(data.messages);
+      setHasMore(data.hasMore);
+      scrollToQuoted();
+    } catch {
+      // A citação continua legível na bolha; navegar é o extra que falhou.
+    }
+  }
+
   /** Carrega o trecho anterior do histórico (paginação para trás). */
   async function loadOlderMessages() {
     if (!conversationId || !messages?.length || loadingMore) return;
@@ -1676,6 +1710,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                       onEdit={(message) => startEdit(message)}
                       onDelete={(message) => void handleDelete(message)}
                       onOpenMedia={(message) => setLightboxMessageId(message.id)}
+                      onQuotedClick={(quotedId) => void jumpToQuotedMessage(quotedId)}
                       senderAvatar={senderAvatarFor(item.message)}
                       mentionNames={mentionNames}
                     />

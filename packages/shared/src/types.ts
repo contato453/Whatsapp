@@ -90,6 +90,20 @@ export interface NormalizedMessage {
   senderName: string | null;
   quotedExternalMessageId: string | null;
   /**
+   * O que o payload do WhatsApp diz sobre a mensagem citada
+   * (`contextInfo.quotedMessage`). É o que permite exibir o bloco de
+   * citação mesmo quando a original nunca esteve no banco — resposta a
+   * mensagem anterior à conexão do número. Nulo quando a mensagem não é
+   * uma resposta.
+   */
+  quotedInfo?: {
+    /** JID de quem escreveu a original (sem sufixo de aparelho). */
+    participantExternalId: string | null;
+    /** Texto ou legenda da original, quando o payload os traz. */
+    content: string | null;
+    type: MessageType;
+  } | null;
+  /**
    * Quem a mensagem marcou ("@"). Vem do `contextInfo` do WhatsApp, e não do
    * texto: é esta lista que notifica, o nome escrito na frase é só enfeite.
    * Pode conter JID de telefone ou identificador interno ("@lid").

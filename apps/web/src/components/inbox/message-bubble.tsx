@@ -27,6 +27,7 @@ import {
 import {
   isEditableMessageType,
   isWithinEditWindow,
+  quotedPreviewText,
   readMessageVersions,
 } from "@azvchat/shared";
 import { fetchMediaBlobUrl } from "@/lib/api";
@@ -294,6 +295,7 @@ export function MessageBubble({
   onEdit,
   onDelete,
   onOpenMedia,
+  onQuotedClick,
   senderAvatar,
   mentionNames,
 }: {
@@ -307,6 +309,12 @@ export function MessageBubble({
   onDelete: (message: MessageDto) => void;
   /** Clique em imagem/vídeo/figurinha — abre a lightbox de tela cheia. */
   onOpenMedia?: (message: MessageDto) => void;
+  /**
+   * Clique no bloco de citação — navega até a mensagem original. Só é
+   * oferecido quando a original existe no banco (`quoted.id`); citação de
+   * mensagem anterior à conexão do número fica visível, mas sem link.
+   */
+  onQuotedClick?: (quotedMessageId: string) => void;
   /** Foto de quem enviou — exibida ao lado das mensagens recebidas */
   senderAvatar?: ReactNode;
   /**
@@ -396,20 +404,39 @@ export function MessageBubble({
           <p className="mb-0.5 text-xs font-semibold text-chat-sent-meta">{message.senderName}</p>
         )}
 
-        {/* Pré-visualização da mensagem citada */}
-        {message.quoted && (
-          <div
-            className={cn(
-              "mb-1.5 border-l-2 py-0.5 pl-2 text-xs",
-              outbound ? "border-brand-600 text-chat-sent-meta" : "border-brand-400 text-slate-500",
-            )}
-          >
-            <p className="font-semibold">{message.quoted.senderName ?? "Mensagem"}</p>
-            <p className="line-clamp-2">
-              {message.quoted.content ?? `[${message.quoted.type}]`}
-            </p>
-          </div>
-        )}
+        {/* Pré-visualização da mensagem citada. Vira botão quando a original
+            existe no banco (clicar navega até ela); sem a original o bloco
+            continua aparecendo com o resumo guardado — citação nunca some. */}
+        {message.quoted &&
+          (() => {
+            const quotedId = message.quoted.id;
+            const inner = (
+              <>
+                <p className="font-semibold">{message.quoted.senderName ?? "Mensagem"}</p>
+                <p className="line-clamp-2">
+                  {quotedPreviewText(message.quoted.content, message.quoted.type)}
+                </p>
+              </>
+            );
+            const tone = outbound
+              ? "border-brand-600 text-chat-sent-meta"
+              : "border-brand-400 text-slate-500";
+            return quotedId && onQuotedClick ? (
+              <button
+                type="button"
+                onClick={() => onQuotedClick(quotedId)}
+                title="Ir até a mensagem original"
+                className={cn(
+                  "mb-1.5 block w-full cursor-pointer rounded-r border-l-2 py-0.5 pl-2 text-left text-xs transition-colors hover:bg-black/5",
+                  tone,
+                )}
+              >
+                {inner}
+              </button>
+            ) : (
+              <div className={cn("mb-1.5 border-l-2 py-0.5 pl-2 text-xs", tone)}>{inner}</div>
+            );
+          })()}
 
         {message.deletedAt ? (
           <p
