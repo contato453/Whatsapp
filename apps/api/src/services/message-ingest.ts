@@ -1,7 +1,9 @@
 import type { Message, PrismaClient, Prisma } from "@azvchat/database";
 import type { NormalizedMessage, QuotedSnapshot } from "@azvchat/shared";
 import {
+  EDIT_CONTENT_UNAVAILABLE_METADATA_KEY,
   MESSAGE_SECRET_METADATA_KEY,
+  isEditContentUnavailable,
   appendMessageVersion,
   quotedSenderLabel,
   stripWhatsAppFormatting,
@@ -431,6 +433,65 @@ export class MessageIngestService {
       event: "message_edit_applied",
     });
 
+    return { message: updated, conversation };
+  }
+
+  /**
+   * Marca que o cliente editou a mensagem, quando não foi possível ler o
+   * texto novo.
+   *
+   * O WhatsApp cifra a edição, e há casos em que a abertura falha. Deixar a
+   * bolha intacta seria o defeito original de volta, e o pior dele: a
+   * atendente lendo um valor que o cliente já corrigiu, sem nada na tela
+   * avisando. A mensagem mantém o conteúdo anterior, que é o que temos, mas
+   * passa a exibir o aviso.
+   *
+   * Idempotente: a mesma edição chega mais de uma vez e a marca não se
+   * repete.
+   */
+  async markEditUnavailable(input: {
+    instanceId: string;
+    externalChatId: string;
+    targetExternalMessageId: string;
+    editedAt: Date | null;
+  }): Promise<EditResult | null> {
+    const conversation = await this.prisma.conversation.findUnique({
+      where: {
+        whatsappInstanceId_externalChatId: {
+          whatsappInstanceId: input.instanceId,
+          externalChatId: input.externalChatId,
+        },
+      },
+      select: { id: true, whatsappInstanceId: true, departmentId: true, assignedUserId: true },
+    });
+    if (!conversation) return null;
+    const message = await this.prisma.message.findUnique({
+      where: {
+        conversationId_externalMessageId: {
+          conversationId: conversation.id,
+          externalMessageId: input.targetExternalMessageId,
+        },
+      },
+    });
+    if (!message || message.deletedAt) return null;
+    if (isEditContentUnavailable(message.metadata)) return null;
+
+    const metadata = {
+      ...((message.metadata as Record<string, unknown> | null) ?? {}),
+      [EDIT_CONTENT_UNAVAILABLE_METADATA_KEY]: true,
+    };
+    const updated = await this.prisma.message.update({
+      where: { id: message.id },
+      data: {
+        editedAt: input.editedAt ?? new Date(),
+        metadata: metadata as Prisma.InputJsonValue,
+      },
+    });
+    this.logger.info({
+      instanceId: input.instanceId,
+      messageId: updated.id,
+      event: "message_edit_marked_unavailable",
+    });
     return { message: updated, conversation };
   }
 

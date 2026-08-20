@@ -137,3 +137,31 @@ export function readMessageSecret(metadata: unknown): string | null {
   const value = (metadata as Record<string, unknown>)[MESSAGE_SECRET_METADATA_KEY];
   return typeof value === "string" && value.length > 0 ? value : null;
 }
+
+
+/**
+ * Marca de "o cliente editou, e não conseguimos ler o texto novo".
+ *
+ * Existe porque o WhatsApp passou a cifrar a edição com uma chave derivada
+ * do segredo da mensagem original, e há casos em que a abertura falha: a
+ * mensagem é anterior a guardarmos esse segredo, ou o identificador que ele
+ * usou na derivação não é nenhum dos que conhecemos.
+ *
+ * Sem a marca, o pior desfecho volta: a atendente segue lendo o valor, o
+ * CNPJ ou a competência que o cliente já corrigiu, sem nada na tela
+ * denunciando isso. Com ela, o texto antigo continua visível (é o que temos)
+ * mas ninguém age achando que está atualizado.
+ */
+export const EDIT_CONTENT_UNAVAILABLE_METADATA_KEY = "editedContentUnavailable";
+
+export function isEditContentUnavailable(metadata: unknown): boolean {
+  if (!metadata || typeof metadata !== "object") return false;
+  return (
+    (metadata as Record<string, unknown>)[EDIT_CONTENT_UNAVAILABLE_METADATA_KEY] === true
+  );
+}
+
+export const EDIT_CONTENT_UNAVAILABLE_LABEL = "editada pelo cliente";
+
+export const EDIT_CONTENT_UNAVAILABLE_HINT =
+  "O cliente editou esta mensagem e o WhatsApp não entregou o texto novo. O que aparece aqui é o conteúdo anterior: confirme no WhatsApp antes de usar.";

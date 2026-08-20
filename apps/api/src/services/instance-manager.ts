@@ -482,6 +482,7 @@ export class InstanceManager {
             messageId: original.id,
             event: "message_edit_secret_missing",
           });
+          await this.publishEditUnavailable(organizationId, event);
           return;
         }
         // O WhatsApp endereça a mesma pessoa de DUAS formas — pelo telefone
@@ -556,6 +557,10 @@ export class InstanceManager {
             ),
             targetId: event.targetExternalMessageId,
           });
+          // Não conseguimos o texto novo, mas a atendente PRECISA saber que
+          // o que está na tela envelheceu. Silêncio aqui é o defeito
+          // original de volta, na sua forma mais perigosa.
+          await this.publishEditUnavailable(organizationId, event);
           return;
         }
         this.logger.info({
@@ -662,6 +667,31 @@ export class InstanceManager {
   }
 
   /** Localiza uma mensagem persistida a partir do id externo do WhatsApp. */
+  /**
+   * Marca a mensagem como editada sem texto novo e publica, para a Inbox
+   * avisar na hora que o conteúdo exibido envelheceu.
+   */
+  private async publishEditUnavailable(
+    organizationId: string,
+    event: {
+      instanceId: string;
+      externalChatId: string;
+      targetExternalMessageId: string;
+      editedAt: Date | null;
+    },
+  ): Promise<void> {
+    const marked = await this.ingest.markEditUnavailable({
+      instanceId: event.instanceId,
+      externalChatId: event.externalChatId,
+      targetExternalMessageId: event.targetExternalMessageId,
+      editedAt: event.editedAt,
+    });
+    if (!marked) return;
+    this.io
+      .to(conversationAudience(organizationId, marked.conversation))
+      .emit(RealtimeEvents.MessageUpdated, serializeMessage(marked.message));
+  }
+
   private async findMessageByExternalId(
     instanceId: string,
     externalChatId: string,

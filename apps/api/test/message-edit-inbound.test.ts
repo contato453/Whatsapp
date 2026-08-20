@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import type { PrismaClient } from "@azvchat/database";
 import type { Logger } from "pino";
-import { readMessageVersions } from "@azvchat/shared";
+import { isEditContentUnavailable, readMessageVersions } from "@azvchat/shared";
 import { MessageIngestService } from "../src/services/message-ingest.js";
 import type { MediaStorage } from "../src/lib/media-storage.js";
 
@@ -241,5 +241,49 @@ describe("aplicação da edição recebida", () => {
     expect(estado.updates[0]?.content).toBe("competência 08/2026");
     expect(estado.updates[0]).not.toHaveProperty("mediaUrl");
     expect(estado.mensagem?.mediaUrl).toBe("chave-no-storage");
+  });
+});
+
+describe("edição que não pôde ser lida", () => {
+  it("marca a mensagem para a atendente saber que o texto envelheceu", async () => {
+    const resultado = await buildIngest().markEditUnavailable({
+      instanceId: "inst-1",
+      externalChatId: "5511999@s.whatsapp.net",
+      targetExternalMessageId: "wamid-1",
+      editedAt: new Date("2026-08-20T10:00:00Z"),
+    });
+    expect(resultado).not.toBeNull();
+    expect(estado.criadas).toBe(0);
+    expect(estado.updates[0]?.editedAt).toEqual(new Date("2026-08-20T10:00:00Z"));
+    expect(isEditContentUnavailable(estado.updates[0]?.metadata)).toBe(true);
+    // O conteúdo anterior continua na tela: é o que temos, e apagá-lo
+    // deixaria a atendente sem nada em vez de com algo desatualizado.
+    expect(estado.updates[0]).not.toHaveProperty("content");
+  });
+
+  it("marcar duas vezes não repete a marca", async () => {
+    const ingest = buildIngest();
+    const entrada = {
+      instanceId: "inst-1",
+      externalChatId: "5511999@s.whatsapp.net",
+      targetExternalMessageId: "wamid-1",
+      editedAt: null,
+    };
+    expect(await ingest.markEditUnavailable(entrada)).not.toBeNull();
+    expect(await ingest.markEditUnavailable(entrada)).toBeNull();
+    expect(estado.updates).toHaveLength(1);
+  });
+
+  it("preserva o histórico de versões que já existia", async () => {
+    estado.mensagem = mensagemOriginal({
+      metadata: { versions: [{ content: "antigo", at: "2026-08-19T10:00:00.000Z" }] },
+    });
+    await buildIngest().markEditUnavailable({
+      instanceId: "inst-1",
+      externalChatId: "5511999@s.whatsapp.net",
+      targetExternalMessageId: "wamid-1",
+      editedAt: null,
+    });
+    expect(readMessageVersions(estado.updates[0]?.metadata)).toHaveLength(1);
   });
 });

@@ -221,6 +221,12 @@ export interface MessageDto {
      * forma. Leia com `readMessageVersions` de `@azvchat/shared`.
      */
     versions?: Array<{ content: string | null; at: string }>;
+    /**
+     * O cliente editou e o WhatsApp não entregou o texto novo. A bolha
+     * mostra o conteúdo anterior com aviso, em vez de fingir que está
+     * atualizada.
+     */
+    editedContentUnavailable?: boolean;
   } | null;
 }
 

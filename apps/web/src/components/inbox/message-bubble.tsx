@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  AlertTriangle,
   Ban,
   BarChart3,
   Check,
@@ -25,6 +26,9 @@ import {
   XCircle,
 } from "lucide-react";
 import {
+  EDIT_CONTENT_UNAVAILABLE_HINT,
+  EDIT_CONTENT_UNAVAILABLE_LABEL,
+  isEditContentUnavailable,
   isEditableMessageType,
   isWithinEditWindow,
   quotedPreviewText,
@@ -86,6 +90,28 @@ function senderColor(key: string): string {
  */
 function EditedMark({ message, outbound }: { message: MessageDto; outbound: boolean }) {
   const versions = useMemo(() => readMessageVersions(message.metadata), [message.metadata]);
+  // O cliente editou e o WhatsApp não entregou o texto novo. O aviso é
+  // âmbar e não some no meio da linha do horário: o risco aqui não é
+  // estético, é a atendente usar um valor que já foi corrigido.
+  if (isEditContentUnavailable(message.metadata)) {
+    return (
+      <span className="group/edited relative flex">
+        <button
+          type="button"
+          className="flex items-center gap-1 rounded bg-amber-100 px-1 font-medium not-italic text-amber-800"
+          aria-label={EDIT_CONTENT_UNAVAILABLE_HINT}
+        >
+          <AlertTriangle className="h-3 w-3" /> {EDIT_CONTENT_UNAVAILABLE_LABEL}
+        </button>
+        <span
+          role="tooltip"
+          className="pointer-events-none absolute bottom-full right-0 z-50 mb-1 w-64 max-w-[70vw] rounded-md bg-slate-800 p-2 text-left text-[11px] font-normal not-italic text-white opacity-0 shadow-lg transition-opacity duration-150 group-focus-within/edited:opacity-100 group-hover/edited:opacity-100 motion-reduce:transition-none"
+        >
+          {EDIT_CONTENT_UNAVAILABLE_HINT}
+        </span>
+      </span>
+    );
+  }
   if (versions.length === 0) {
     return <span className="italic">editada</span>;
   }
