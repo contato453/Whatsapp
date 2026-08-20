@@ -484,28 +484,48 @@ export class InstanceManager {
           });
           return;
         }
-        // O WhatsApp endereça a mesma pessoa ora pelo telefone, ora pelo
-        // identificador interno ("@lid"), e a chave da edição é derivada do
-        // JID que ELE usou — que nem sempre é o que gravamos. Por isso os
-        // candidatos: a etiqueta do AES-GCM só confere com o certo, então
-        // não há risco de abrir errado, e o log registra qual venceu.
+        // O WhatsApp endereça a mesma pessoa de DUAS formas — pelo telefone
+        // (`@s.whatsapp.net`) e pelo identificador interno (`@lid`) — e a
+        // chave da edição é derivada do JID que O APARELHO DELE usou, que
+        // não é necessariamente o que chega para nós. O telefone entra na
+        // lista porque o aparelho conhece o próprio número e tende a usá-lo,
+        // enquanto o `@lid` é como nós o enxergamos.
+        //
+        // Testar é seguro: a etiqueta do AES-GCM só confere com a chave
+        // exata, então nenhuma combinação errada produz texto plausível. O
+        // log registra a vencedora, e é ela que vai permitir enxugar isto.
+        const [contato, instancia] = await Promise.all([
+          original.senderExternalId
+            ? this.prisma.contact.findFirst({
+                where: {
+                  whatsappInstanceId: event.instanceId,
+                  externalId: original.senderExternalId,
+                },
+                select: { phoneNumber: true },
+              })
+            : Promise.resolve(null),
+          this.prisma.whatsAppInstance.findUnique({
+            where: { id: event.instanceId },
+            select: { phoneNumber: true },
+          }),
+        ]);
+        const comoTelefone = (phone: string | null | undefined): string =>
+          phone ? `${phone.replace(/\D/g, "")}@s.whatsapp.net` : "";
+        const pessoais = [
+          original.senderExternalId ?? "",
+          comoTelefone(original.senderPhone),
+          comoTelefone(contato?.phoneNumber),
+          event.externalChatId,
+          event.originalSenderExternalId ?? "",
+        ];
+        const nossos = [event.targetRemoteJid ?? "", comoTelefone(instancia?.phoneNumber)];
         const decrypted = decryptEditedText({
           encPayload: event.encPayload,
           encIv: event.encIv,
           messageSecret: Buffer.from(secret, "base64"),
           targetExternalMessageId: event.targetExternalMessageId,
-          originalSenderCandidates: [
-            event.targetRemoteJid ?? "",
-            original.senderExternalId ?? "",
-            event.originalSenderExternalId ?? "",
-            event.externalChatId,
-          ],
-          editorCandidates: [
-            event.editorExternalId,
-            event.targetRemoteJid ?? "",
-            original.senderExternalId ?? "",
-            event.externalChatId,
-          ],
+          originalSenderCandidates: [...pessoais, ...nossos],
+          editorCandidates: [event.editorExternalId, ...pessoais, ...nossos],
         });
         if (!decrypted) {
           this.logger.warn({
@@ -515,12 +535,10 @@ export class InstanceManager {
             // Nomes de campo e comprimento, nunca o conteúdo: é o que
             // permite ver se o segredo veio inteiro e quais JIDs tentamos.
             secretBytes: Buffer.from(secret, "base64").length,
-            candidates: {
-              target: event.targetRemoteJid,
-              stored: original.senderExternalId,
-              editor: event.editorExternalId,
-              chat: event.externalChatId,
-            },
+            candidates: [...new Set([...pessoais, ...nossos, event.editorExternalId])].filter(
+              (value) => value.length > 0,
+            ),
+            targetId: event.targetExternalMessageId,
           });
           return;
         }
