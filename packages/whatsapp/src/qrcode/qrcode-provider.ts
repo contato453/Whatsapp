@@ -39,7 +39,7 @@ import {
   extractEditedContent,
   extractMentionedJids,
   extractProtocolAction,
-  extractQuotedMessageId,
+  extractQuotedContext,
   extractSender,
   isDisplayableContent,
   isGroupJid,
@@ -223,17 +223,6 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
         // da mensagem ORIGINAL na chave e o conteúdo novo embrulhado em
         // `editedMessage` — enquanto este listener só olhava `status`, toda
         // edição feita pelo cliente era descartada aqui, em silêncio.
-        // Mesmo rastro do lado do "messages.update": sem ele não dá para
-        // distinguir "o evento não chegou" de "chegou e não casou".
-        if (update.update?.message || update.update?.messageStubType != null) {
-          this.logger.info({
-            instanceId,
-            messageId: update.key?.id ?? null,
-            event: "message_update_received",
-            stubType: update.update.messageStubType ?? null,
-            shape: Object.keys((update.update.message ?? {}) as Record<string, unknown>),
-          });
-        }
         if (this.handleMessageMutation(instanceId, update.key, update.update)) continue;
         this.handleMessageStatusUpdate(instanceId, update.key, update.update?.status ?? undefined);
       }
@@ -417,19 +406,18 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     // mídia (a bolha "Mídia indisponível" que a equipe via).
     const protocolAction = extractProtocolAction(message.message);
     if (protocolAction) {
-      // Rastro da FORMA do pacote, nunca do conteúdo: só as chaves do
-      // objeto e se o texto novo veio junto. É o que permite descobrir a
-      // variação que o aparelho do cliente manda sem nunca escrever a
-      // mensagem dele no log.
-      this.logger.info({
-        instanceId,
-        messageId: message.key?.id ?? null,
-        event: "protocol_action_received",
-        kind: protocolAction.kind,
-        hasNewContent: protocolAction.newContent != null,
-        target: protocolAction.targetExternalMessageId,
-        shape: Object.keys((message.message ?? {}) as Record<string, unknown>),
-      });
+      // Edição reconhecida e SEM texto novo é a falha silenciosa desta
+      // história: nada vira bolha, nada é atualizado e ninguém percebe. Só
+      // esse caso deixa rastro, e da FORMA do pacote (as chaves do objeto),
+      // nunca do conteúdo da mensagem do cliente.
+      if (protocolAction.kind === "edit" && protocolAction.newContent == null) {
+        this.logger.warn({
+          instanceId,
+          messageId: message.key?.id ?? null,
+          event: "message_edit_without_content",
+          shape: Object.keys((message.message ?? {}) as Record<string, unknown>),
+        });
+      }
       if (protocolAction.kind === "revoke") {
         this.emit("message-deleted", {
           instanceId,
@@ -486,6 +474,11 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     const { senderExternalId, senderPhone } = extractSender(message.key, state.ownJid);
     const socket = state.socket;
 
+    // O contexto inteiro da citação, não só o id: é o `quotedMessage` do
+    // payload que permite exibir o bloco quando a original nunca foi
+    // sincronizada (mensagem anterior à conexão do número).
+    const quotedContext = extractQuotedContext(message.message);
+
     const normalized: NormalizedMessage = {
       instanceId,
       externalMessageId: message.key?.id ?? `unknown-${Date.now()}`,
@@ -498,7 +491,14 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
       senderExternalId,
       senderPhone,
       senderName: message.pushName ?? null,
-      quotedExternalMessageId: extractQuotedMessageId(message.message),
+      quotedExternalMessageId: quotedContext?.externalMessageId ?? null,
+      quotedInfo: quotedContext
+        ? {
+            participantExternalId: quotedContext.participantExternalId,
+            content: quotedContext.content,
+            type: quotedContext.type,
+          }
+        : null,
       mentionedExternalIds: extractMentionedJids(message.message),
       ...(extracted.pollOptions ? { pollOptions: extracted.pollOptions } : {}),
       timestamp: toDate(message.messageTimestamp),

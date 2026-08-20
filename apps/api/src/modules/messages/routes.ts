@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Prisma } from "@azvchat/database";
-import type { MediaPayload, QuotedMessageRef } from "@azvchat/shared";
+import type { MediaPayload, QuotedMessageRef, QuotedSnapshot } from "@azvchat/shared";
 import {
   MESSAGE_EDIT_EXPIRED_MESSAGE,
   appendMessageVersion,
@@ -10,6 +10,8 @@ import {
   departmentResourceAppliesTo,
   outboundMediaTypeFromMime,
   quickReplyMediaTypeFromMime,
+  quotedSenderLabel,
+  withQuotedSnapshot,
   RealtimeEvents,
 } from "@azvchat/shared";
 import {
@@ -150,10 +152,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
         original.externalMessageId as string,
         {
           id: original.id,
-          senderName:
-            original.direction === "outbound"
-              ? (original.senderName ?? "Você")
-              : (original.senderName ?? original.senderPhone),
+          senderName: quotedSenderLabel(original),
           content: original.content,
           type: original.type,
         },
@@ -228,9 +227,26 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
    */
   app.get("/conversations/:id/messages/around", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const { at } = z.object({ at: z.string().datetime() }).parse(request.query);
+    // `at` veio da busca; `messageId` veio do clique no bloco de citação,
+    // que só conhece o id local da original. Um dos dois é obrigatório.
+    const { at, messageId } = z
+      .object({ at: z.string().datetime().optional(), messageId: z.string().uuid().optional() })
+      .refine((query) => query.at != null || query.messageId != null, {
+        message: "Informe at ou messageId",
+      })
+      .parse(request.query);
     const conversation = await findConversationOr404(id, request.user);
-    const pivot = new Date(at);
+    let pivot: Date;
+    if (messageId) {
+      const target = await deps.prisma.message.findFirst({
+        where: { id: messageId, conversationId: id },
+        select: { timestamp: true },
+      });
+      if (!target) throw new NotFoundError("Mensagem");
+      pivot = target.timestamp;
+    } else {
+      pivot = new Date(at as string);
+    }
     const [before, after] = await Promise.all([
       deps.prisma.message.findMany({
         where: { conversationId: id, timestamp: { lte: pivot } },
@@ -646,6 +662,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
     // Reply: monta a referência da mensagem citada a partir do que temos salvo.
     let quoted: QuotedMessageRef | undefined;
     let quotedExternalId: string | null = null;
+    let quotedSnapshot: QuotedSnapshot | null = null;
     if (replyToMessageId) {
       const original = await deps.prisma.message.findFirst({
         where: { id: replyToMessageId, conversationId: id },
@@ -658,6 +675,15 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
             conversation.type === "group" ? original.senderExternalId : null,
           fromMe: original.direction === "outbound",
           text: original.content,
+        };
+        // Resumo congelado no metadata: é ele que faz o bloco de citação
+        // aparecer JÁ na resposta do POST e no `message:new` — a leitura ao
+        // vivo só acontece ao recarregar a lista.
+        quotedSnapshot = {
+          id: original.id,
+          senderName: quotedSenderLabel(original),
+          content: original.content,
+          type: original.type,
         };
       }
     }
@@ -675,6 +701,14 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       mentionedJids.length > 0 ? { mentionedExternalIds: mentionedJids } : undefined,
     );
 
+    // Sem a lista de marcados a mensagem enviada voltaria à tela com o número
+    // cru; o resumo da citação divide o mesmo objeto, preservando um ao outro.
+    let outgoingMetadata: Record<string, unknown> | null =
+      mentionedJids.length > 0 ? { mentions: mentionedJids } : null;
+    if (quotedSnapshot) {
+      outgoingMetadata = withQuotedSnapshot(outgoingMetadata, quotedSnapshot);
+    }
+
     const message = await deps.prisma.message.create({
       data: {
         organizationId: request.user.organizationId,
@@ -688,9 +722,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
         timestamp: result.timestamp,
         status: "sent",
         sentByUserId: request.user.sub,
-        // Sem isto a mensagem enviada voltaria à tela com o número cru: é a
-        // lista que permite exibir o nome de quem foi marcado.
-        ...(mentionedJids.length > 0 ? { metadata: { mentions: mentionedJids } } : {}),
+        ...(outgoingMetadata ? { metadata: outgoingMetadata as Prisma.InputJsonValue } : {}),
       },
     });
     await deps.prisma.conversation.update({
