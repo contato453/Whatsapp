@@ -467,6 +467,9 @@ export const reportsApi = {
     // parâmetro é lido com `z.coerce.boolean()` — a string "false" viraria
     // `true` e o painel listaria justamente o contrário do que a célula
     // conta, que ignora arquivada dos dois lados.
+    // O relatório não conta departamento interno; o painel também não pode
+    // listá-lo, senão a célula diz "4" e a lista mostra 5.
+    params.set("excludeInternal", "true");
     params.set("limit", String(limit));
     params.set("offset", String(offset));
     // Concluídas NÃO leva token de atendimento: a coluna conta quem CONCLUIU

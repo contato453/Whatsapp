@@ -50,11 +50,33 @@ const USER_B = "3333cccc-3333-4333-8333-333333333333";
 const DESCONHECIDO = "99999999-9999-4999-8999-999999999999";
 
 /** Devolve só os ids pedidos que existem — é o que a conferência compara. */
+/**
+ * A busca das candidatas a atraso, entre as várias `conversation.findMany` da
+ * rota. O que a identifica é o `status`: ela é a única que pede "não
+ * resolvidas". Antes ela era procurada pelo `select` sem `title`, o que a
+ * confundia com a janela do mapa de calor assim que a ordem das consultas
+ * mudava — e a ordem muda com qualquer `await` novo na rota.
+ */
+function candidatasDeAtraso(
+  chamadas: Array<Record<string, unknown>>,
+): Record<string, unknown> | undefined {
+  return chamadas.find(
+    (args) => ((args.where ?? {}) as { status?: unknown }).status !== undefined,
+  );
+}
+
 function existentes(conhecidos: string[], args: Record<string, unknown>): Array<{ id: string }> {
   const where = (args.where ?? {}) as { id?: { in?: string[] } };
   const pedidos = where.id?.in ?? [];
   return pedidos.filter((id) => conhecidos.includes(id)).map((id) => ({ id }));
 }
+
+/**
+ * Departamentos marcados como internos neste cenário. Vazio por padrão: o
+ * comportamento normal da tela não muda, e o teste do interno liga o que
+ * precisa antes de montar o app.
+ */
+let internos: string[] = [];
 
 const STATUS_BUCKETS = [
   { status: "open", _count: { _all: 7 } },
@@ -112,8 +134,13 @@ function fakePrisma(): PrismaClient {
       },
     },
     department: {
-      findMany: async (args: Record<string, unknown>) =>
-        existentes([DEPARTMENT_A, DEPARTMENT_B], args),
+      findMany: async (args: Record<string, unknown>) => {
+        // A pergunta "quais departamentos são internos?" tem resposta própria:
+        // o cenário padrão não tem nenhum, e o teste do interno liga um.
+        const where = (args.where ?? {}) as { isInternal?: boolean };
+        if (where.isInternal) return internos.map((id) => ({ id }));
+        return existentes([DEPARTMENT_A, DEPARTMENT_B], args);
+      },
     },
     tag: { findMany: async () => [] },
     whatsAppInstance: {
@@ -232,6 +259,7 @@ function conditionsOf(where: Record<string, unknown>): Array<Record<string, unkn
 
 describe("GET /dashboard/stats", () => {
   beforeEach(() => {
+    internos = [];
     recorded = {
       rawQueries: [],
       conversationGroupBy: [],
@@ -387,14 +415,44 @@ describe("GET /dashboard/stats", () => {
         OR: [{ assignedUserId: "user-agent" }, { assignedUserId: null }],
       });
     }
-    const candidatas = recorded.conversationFindMany.find(
-      (args) => !("title" in ((args.select as Record<string, unknown>) ?? {})),
-    );
+    const candidatas = candidatasDeAtraso(recorded.conversationFindMany);
     const where = candidatas?.where as Record<string, unknown>;
     expect(where.status).toEqual({ not: "resolved" });
     expect(conditionsOf(where)).toContainEqual({
       OR: [{ assignedUserId: "user-agent" }, { assignedUserId: null }],
     });
+    await app.close();
+  });
+
+  it("departamento interno sai de TODA contagem da tela, inclusive do atraso", async () => {
+    internos = [DEPARTMENT_B];
+    const app = await buildTestApp();
+    await stats(app, "admin");
+    const recorte = {
+      OR: [{ departmentId: null }, { departmentId: { notIn: [DEPARTMENT_B] } }],
+    };
+    // Grupo interno não é atendimento a cliente: ele não pode entrar em card,
+    // gráfico nem no card de atraso. Se uma consulta nova nascer sem o
+    // recorte, o painel volta a contar conversa nossa como cliente esperando.
+    expect(conditionsOf(recorded.conversationGroupBy[0]?.where as Record<string, unknown>))
+      .toContainEqual(recorte);
+    for (const args of recorded.conversationCount) {
+      expect(conditionsOf(args.where as Record<string, unknown>)).toContainEqual(recorte);
+    }
+    for (const args of recorded.messageCount) {
+      const where = args.where as { conversation?: Record<string, unknown> };
+      expect(conditionsOf(where.conversation ?? {})).toContainEqual(recorte);
+    }
+    const candidatas = candidatasDeAtraso(recorded.conversationFindMany);
+    expect(conditionsOf(candidatas?.where as Record<string, unknown>)).toContainEqual(recorte);
+    await app.close();
+  });
+
+  it("sem departamento interno nenhum, nada é acrescentado à consulta", async () => {
+    const app = await buildTestApp();
+    await stats(app, "admin");
+    // Um `AND` com objeto vazio dentro não filtra nada e só polui a consulta.
+    expect(JSON.stringify(recorded.conversationGroupBy[0]?.where)).not.toContain("notIn");
     await app.close();
   });
 
@@ -639,10 +697,7 @@ describe("GET /dashboard/stats", () => {
     const app = await buildTestApp();
     const departmentId = DEPARTMENT_A;
     await stats(app, "admin", `?departmentId=${departmentId}`);
-    const candidatas = recorded.conversationFindMany.find((args) => {
-      const select = (args.select as Record<string, unknown>) ?? {};
-      return !("title" in select) && !("assignedUserId" in select);
-    });
+    const candidatas = candidatasDeAtraso(recorded.conversationFindMany);
     expect(conditionsOf(candidatas?.where as Record<string, unknown>)).toContainEqual({
       departmentId: { in: [departmentId] },
     });

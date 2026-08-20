@@ -21,6 +21,10 @@ import {
 import { authenticate } from "../../lib/auth.js";
 import { assertKnownFilterIds, listaDe } from "../../lib/conversation-filters.js";
 import { scanOverdueConversations } from "../../lib/overdue.js";
+import {
+  excludeInternalDepartments,
+  loadInternalDepartmentIds,
+} from "../../lib/internal-department.js";
 import { loadPermissions } from "../../lib/permissions.js";
 import { serializeDashboardStats, type DashboardTopUserRow } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
@@ -149,6 +153,7 @@ function scopedConversationWhere(
   access: Parameters<typeof conversationScope>[0],
   query: StatsQuery,
   archive: "active" | "archived",
+  internalDepartmentIds: string[],
 ): Prisma.ConversationWhereInput {
   const scope = conversationScope(access);
   const conditions = [
@@ -157,6 +162,11 @@ function scopedConversationWhere(
     ...(Object.keys(scope).length > 0 ? [scope] : []),
     ...dashboardFilterConditions(query),
     { archivedAt: archive === "active" ? null : { not: null } },
+    // Departamento interno não entra em número nenhum — nem no card de
+    // arquivadas. Como o recorte é montado UMA vez e usado por todas as
+    // consultas da tela, cards, gráficos e mapa de horas contam a mesma
+    // coisa por construção.
+    ...excludeInternalDepartments(internalDepartmentIds),
   ];
   return { AND: conditions };
 }
@@ -289,7 +299,16 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
       query.instanceId.length > 0
         ? { AND: [instanceScopeWhere, { id: { in: query.instanceId } }] }
         : instanceScopeWhere;
-    const conversationFilter = scopedConversationWhere(access, query, "active");
+    // Quais departamentos são internos. Lido a cada requisição, como os
+    // parâmetros de atendimento: marcar um departamento tem que limpar o
+    // número na atualização seguinte, e não depois de reiniciar o container.
+    const internalDepartmentIds = await loadInternalDepartmentIds(deps.prisma, organizationId);
+    const conversationFilter = scopedConversationWhere(
+      access,
+      query,
+      "active",
+      internalDepartmentIds,
+    );
     const messageFilter = { conversation: conversationFilter };
 
     // Números de desempenho da equipe são de supervisor para cima, igual ao
@@ -333,7 +352,10 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
          * resto da tela.
          */
         deps.prisma.conversation.count({
-          where: { organizationId, ...scopedConversationWhere(access, query, "archived") },
+          where: {
+            organizationId,
+            ...scopedConversationWhere(access, query, "archived", internalDepartmentIds),
+          },
         }),
         deps.prisma.whatsAppInstance.groupBy({
           by: ["status"],

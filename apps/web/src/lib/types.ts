@@ -96,6 +96,13 @@ export interface DepartmentDto {
   /** Responsável padrão: assume as conversas que entram sem ninguém */
   defaultAssigneeId: string | null;
   /**
+   * Departamento interno: as conversas dele ficam fora dos NÚMEROS
+   * (dashboard, atrasados agora, relatório por atendente). Não é
+   * arquivamento — elas continuam na lista, contando não lidas e tocando o
+   * som —, e não muda quem enxerga o quê.
+   */
+  isInternal: boolean;
+  /**
    * Quem atua no departamento, supervisores primeiro. Só vem na listagem
    * completa (/departments); em /departments/mine fica ausente.
    */

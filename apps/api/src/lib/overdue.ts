@@ -6,6 +6,7 @@ import {
   type OverdueResult,
   type WaitingConversation,
 } from "../modules/dashboard/metrics.js";
+import { internalDepartmentConditions } from "./internal-department.js";
 
 /**
  * Quem está atrasado AGORA — a fonte única da resposta, para o dashboard e
@@ -24,6 +25,13 @@ import {
  * O recorte de acesso NÃO mora aqui: quem chama passa o `where` já escopado
  * por `access.ts` (mais os filtros da tela), e esta função só estreita o
  * conjunto. Ela nunca traz de volta conversa que a pessoa não enxergaria.
+ *
+ * **Departamento interno fica de fora, e a exclusão mora AQUI DENTRO** — nas
+ * duas pontas de uma vez. Grupo interno é o pior caso do atraso: a última
+ * mensagem dele é quase sempre de entrada, ninguém "responde" a ela, e a
+ * conversa acumularia atraso para sempre. Se cada ponta aplicasse a regra por
+ * conta própria, bastaria uma esquecer para o clique no card abrir uma lista
+ * que não fecha com o número.
  */
 export interface OverdueScan extends OverdueResult {
   /** Ids das atrasadas, para a lista filtrar por eles. */
@@ -50,10 +58,18 @@ export async function scanOverdueConversations(
    * relógio pode estar atrasado. A conta de verdade, em tempo útil, roda
    * depois, só sobre o que sobrou.
    */
+  const recebido = Array.isArray(conversationWhere.AND)
+    ? conversationWhere.AND
+    : conversationWhere.AND
+      ? [conversationWhere.AND]
+      : [];
   const candidatas = await prisma.conversation.findMany({
     where: {
       organizationId,
       ...conversationWhere,
+      // O `AND` de quem chamou já carrega `conversationScope`: os itens novos
+      // são ACRESCENTADOS a ele, nunca postos no lugar dele.
+      AND: [...recebido, ...(await internalDepartmentConditions(prisma, organizationId))],
       status: { not: "resolved" },
       lastMessageAt: {
         not: null,
