@@ -16,6 +16,7 @@ import type {
   ConversationDto,
   DashboardStatsDto,
   MessageDto,
+  PinnedItemDto,
   QuickReplyDto,
   RolePermissionOverrideDto,
   TagDto,
@@ -255,6 +256,31 @@ export const messagesApi = {
     api
       .patch<{ message: MessageDto }>(`/messages/${messageId}`, { content })
       .then((data) => data.message),
+};
+
+/**
+ * Fixação (pin) — INTERNA ao AZVCHAT, nunca sai daqui em direção ao
+ * WhatsApp. `replaceItemId` é o id do registro de fixação (não da mensagem
+ * nem da nota) mais antigo, oferecido pela tela quando o limite de 3 já foi
+ * atingido e a equipe escolhe substituir.
+ */
+export const pinnedItemsApi = {
+  pinMessage: (messageId: string, replaceItemId?: string) =>
+    api.post<{ items: PinnedItemDto[] }>(
+      `/messages/${messageId}/pin`,
+      replaceItemId ? { replaceItemId } : {},
+    ),
+  unpinMessage: (messageId: string) =>
+    api.post<{ items: PinnedItemDto[] }>(`/messages/${messageId}/unpin`),
+  pinNote: (conversationId: string, noteId: string, replaceItemId?: string) =>
+    api.post<{ items: PinnedItemDto[] }>(
+      `/conversations/${conversationId}/notes/${noteId}/pin`,
+      replaceItemId ? { replaceItemId } : {},
+    ),
+  unpinNote: (conversationId: string, noteId: string) =>
+    api.post<{ items: PinnedItemDto[] }>(
+      `/conversations/${conversationId}/notes/${noteId}/unpin`,
+    ),
 };
 
 /**

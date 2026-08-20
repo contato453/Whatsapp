@@ -26,10 +26,17 @@ import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import { extensionFromMime } from "../../lib/media-storage.js";
 import { mentionsSchema, resolveMentionTargets } from "../../lib/mentions.js";
 import { prepareOutboundAudio } from "../../lib/outbound-audio.js";
+import {
+  pinItem,
+  pinnedItemsIfMessagePinned,
+  unpinItem,
+  unpinMessageIfPinned,
+} from "../../lib/pinned-items.js";
 import { convertToSticker } from "../../lib/sticker-convert.js";
 import {
   serializeConversation,
   serializeMessage,
+  serializePinnedItems,
   type QuotedPreview,
 } from "../../lib/serialize.js";
 import { resolveConversationPersonName } from "../../lib/person-profile.js";
@@ -89,6 +96,27 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
     deps.io
       .to(room)
       .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation, personName));
+  }
+
+  /**
+   * Reenvia a lista de fixadas para todo mundo com a conversa aberta.
+   * Evento próprio (`conversation:pinned-items`), não `message:updated`: a
+   * fixação pode ser de uma NOTA interna, que não é `Message`.
+   */
+  function emitPinnedItems(
+    organizationId: string,
+    conversation: {
+      id: string;
+      whatsappInstanceId: string;
+      departmentId: string | null;
+      assignedUserId: string | null;
+    },
+    items: Parameters<typeof serializePinnedItems>[0],
+  ): void {
+    deps.io.to(conversationAudience(organizationId, conversation)).emit(RealtimeEvents.PinnedItems, {
+      conversationId: conversation.id,
+      items: serializePinnedItems(items),
+    });
   }
 
   /**
@@ -438,6 +466,14 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
     deps.io
       .to(conversationAudience(request.user.organizationId, message.conversation))
       .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
+    // Mensagem fixada e apagada não pode continuar destacada no topo: a
+    // faixa sumiria só no próximo reload, mostrando até lá uma referência
+    // quebrada. Sem auditoria própria — não foi "alguém desafixando", foi
+    // consequência de apagar; o log de `message.deleted` já cobre o motivo.
+    const freedByDelete = await unpinMessageIfPinned(deps.prisma, message.conversationId, id);
+    if (freedByDelete) {
+      emitPinnedItems(request.user.organizationId, message.conversation, freedByDelete);
+    }
     return { ok: true };
   });
 
@@ -523,8 +559,104 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
     deps.io
       .to(conversationAudience(request.user.organizationId, message.conversation))
       .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
+    // Mensagem fixada mostra o conteúdo na própria faixa (é o uso principal:
+    // o link em destaque) — editar sem atualizar a faixa deixaria a equipe
+    // lendo um texto que o cliente já não vê mais.
+    const refreshedByEdit = await pinnedItemsIfMessagePinned(deps.prisma, message.conversationId, id);
+    if (refreshedByEdit) {
+      emitPinnedItems(request.user.organizationId, message.conversation, refreshedByEdit);
+    }
     return { message: serializeMessage(updated) };
   });
+
+  /** Fixa uma mensagem no topo da conversa — só para a equipe, nunca vai ao
+   * WhatsApp (ver `pinned-items.ts` para o porquê). */
+  app.post(
+    "/messages/:id/pin",
+    { preHandler: requirePermission(deps, "message.pin") },
+    async (request, reply) => {
+      const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+      const { replaceItemId } = z
+        .object({ replaceItemId: z.string().uuid().optional() })
+        .parse(request.body ?? {});
+      const access = await loadConversationAccess(deps.prisma, request.user);
+      const message = await deps.prisma.message.findFirst({
+        where: {
+          id,
+          organizationId: request.user.organizationId,
+          conversation: conversationScope(access),
+        },
+        include: { conversation: true },
+      });
+      if (!message) throw new NotFoundError("Mensagem");
+
+      const result = await pinItem(deps.prisma, {
+        organizationId: request.user.organizationId,
+        conversationId: message.conversationId,
+        target: { kind: "message", id },
+        userId: request.user.sub,
+        replaceItemId,
+      });
+      if (!result.alreadyPinned) {
+        deps.audit.record({
+          organizationId: request.user.organizationId,
+          userId: request.user.sub,
+          action: "message.pinned",
+          entityType: "Message",
+          entityId: id,
+          metadata: { conversationId: message.conversationId },
+        });
+        if (result.replaced) {
+          deps.audit.record({
+            organizationId: request.user.organizationId,
+            userId: request.user.sub,
+            action: "message.unpinned",
+            entityType: result.replaced.messageId ? "Message" : "InternalNote",
+            entityId: (result.replaced.messageId ?? result.replaced.noteId) as string,
+            metadata: { conversationId: message.conversationId, replacedBy: id },
+          });
+        }
+        emitPinnedItems(request.user.organizationId, message.conversation, result.items);
+      }
+      return reply.status(201).send({ items: serializePinnedItems(result.items) });
+    },
+  );
+
+  /** Desafixa uma mensagem — pelo menu da bolha ou pela própria faixa. */
+  app.post(
+    "/messages/:id/unpin",
+    { preHandler: requirePermission(deps, "message.pin") },
+    async (request) => {
+      const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+      const access = await loadConversationAccess(deps.prisma, request.user);
+      const message = await deps.prisma.message.findFirst({
+        where: {
+          id,
+          organizationId: request.user.organizationId,
+          conversation: conversationScope(access),
+        },
+        include: { conversation: true },
+      });
+      if (!message) throw new NotFoundError("Mensagem");
+
+      const result = await unpinItem(deps.prisma, {
+        conversationId: message.conversationId,
+        target: { kind: "message", id },
+      });
+      if (result.removed) {
+        deps.audit.record({
+          organizationId: request.user.organizationId,
+          userId: request.user.sub,
+          action: "message.unpinned",
+          entityType: "Message",
+          entityId: id,
+          metadata: { conversationId: message.conversationId },
+        });
+        emitPinnedItems(request.user.organizationId, message.conversation, result.items);
+      }
+      return { items: serializePinnedItems(result.items) };
+    },
+  );
 
   /** Encaminha uma mensagem (texto ou mídia) para outra conversa. */
   app.post("/messages/:id/forward", { preHandler: authenticate }, async (request, reply) => {

@@ -21,6 +21,18 @@ export const RealtimeEvents = {
   ConversationRead: "conversation:read",
   GroupParticipants: "group:participants",
   InternalNote: "note:new",
+  /**
+   * Fixações (pin) da conversa mudaram — fixar, desafixar ou substituir a
+   * mais antiga. Carrega a LISTA INTEIRA (no máximo 3, ver `MAX_PINNED_ITEMS`
+   * em `lib/pinned-items.ts` na API), porque reenviar tudo é mais simples do
+   * que sincronizar patches e o tamanho já é pequeno por construção. Evento
+   * próprio, e não `conversation:updated`: aquele DTO é o da LISTA da Inbox,
+   * publicado a cada card, e carregar fixações nele pagaria a consulta em
+   * toda linha — o mesmo motivo pelo qual `scheduledPendingCount` fica de
+   * fora dele. Também não é `message:updated`: fixação pode ser de uma NOTA
+   * interna, que não é `Message`.
+   */
+  PinnedItems: "conversation:pinned-items",
   InstanceStatus: "instance:status",
   InstanceQr: "instance:qr",
   /** Quantos agendamentos pendentes a conversa tem agora. */

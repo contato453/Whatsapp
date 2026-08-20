@@ -298,12 +298,29 @@ export interface AssignmentHistoryDto {
 }
 
 /**
+ * Fixação (pin) de mensagem OU nota interna, nunca as duas — `kind` diz
+ * qual dos dois vem preenchido. Fixação é INTERNA ao AZVCHAT: destaca algo
+ * no topo da conversa só para a equipe, e nunca é enviada ao WhatsApp.
+ */
+export interface PinnedItemDto {
+  id: string;
+  kind: "message" | "note";
+  pinnedAt: string;
+  pinnedBy: UserDirectoryDto | null;
+  message: MessageDto | null;
+  note: NoteDto | null;
+}
+
+/**
  * Conversa aberta: o DTO da lista mais o que só o detalhe carrega.
- * `scheduledPendingCount` não existe na lista de propósito (um count por
- * linha sairia caro na tela mais usada).
+ * `scheduledPendingCount` e `pinnedItems` não existem na lista de
+ * propósito (um count/consulta a mais por linha sairia caro na tela mais
+ * usada). Depois da carga inicial, `pinnedItems` é mantido em dia pelo
+ * evento `conversation:pinned-items`.
  */
 export interface ConversationDetailConversationDto extends ConversationDto {
   scheduledPendingCount: number;
+  pinnedItems: PinnedItemDto[];
 }
 
 export interface ConversationDetailDto {

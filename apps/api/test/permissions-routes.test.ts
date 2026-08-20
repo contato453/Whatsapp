@@ -165,6 +165,10 @@ function fakePrisma(
         };
       },
     },
+    // A rota confere se a mensagem apagada estava fixada (e devolve a
+    // lista atual mesmo sem remover nada) — sem fixação nenhuma neste
+    // teste, então as duas nunca acham linha.
+    pinnedItem: { findFirst: async () => null, findMany: async () => [] },
     $transaction: async (arg: unknown) =>
       typeof arg === "function"
         ? (arg as (tx: unknown) => Promise<unknown>)({

@@ -42,10 +42,12 @@ import {
 } from "@azvchat/shared";
 import {
   api,
+  ApiError,
   azevedoOsApi,
   conversationMediaApi,
   conversationReadApi,
   messagesApi,
+  pinnedItemsApi,
   quickRepliesApi,
 } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
@@ -72,6 +74,7 @@ import type {
   InstanceDto,
   MessageDto,
   NoteDto,
+  PinnedItemDto,
   QuickReplyDto,
   TagDto,
 } from "@/lib/types";
@@ -105,6 +108,7 @@ import {
   internalNoteActions,
   useCanManageNote,
 } from "./internal-note";
+import { PinnedBanner } from "./pinned-banner";
 import { StatusSelect } from "./status-select";
 
 /** Status que a Inbox aceita receber pela URL, vindo dos cards do dashboard. */
@@ -119,7 +123,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const socket = useSocket();
-  const { user: me } = useAuth();
+  const { user: me, can } = useAuth();
 
   const [conversations, setConversations] = useState<ConversationDto[] | null>(null);
   /**
@@ -503,6 +507,24 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   }, [conversationId]);
 
   /**
+   * Grava a lista de fixadas recebida (da resposta do POST ou do evento
+   * `conversation:pinned-items`) direto no detalhe da conversa aberta. É a
+   * MESMA lista para as duas fontes — o servidor sempre reenvia tudo, nunca
+   * um patch — então aplicar aqui cobre os dois casos com o mesmo código.
+   * Definida antes do efeito de tempo real de propósito: o array de
+   * dependências do `useEffect` avalia esta referência na hora da
+   * renderização, e um `const` usado antes de ser declarado no mesmo corpo
+   * de função quebra em tempo de execução.
+   */
+  const applyPinnedItems = useCallback((items: PinnedItemDto[]) => {
+    setDetail((current) =>
+      current
+        ? { ...current, conversation: { ...current.conversation, pinnedItems: items } }
+        : current,
+    );
+  }, []);
+
+  /**
    * Editar e excluir nota: a MESMA implementação para o cartão do chat e para
    * o item do painel lateral. Ela recarrega o detalhe, e como os dois leem
    * `detail.notes`, mexer num lugar atualiza o outro na hora.
@@ -728,10 +750,12 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
             ? {
                 ...current,
                 // O evento de conversa não carrega o contador de
-                // agendamentos; preserva o que o detalhe já trouxe.
+                // agendamentos nem as fixadas; preserva o que o detalhe já
+                // trouxe (fixadas têm evento próprio, `conversation:pinned-items`).
                 conversation: {
                   ...payload,
                   scheduledPendingCount: current.conversation.scheduledPendingCount,
+                  pinnedItems: current.conversation.pinnedItems,
                 },
               }
             : current,
@@ -802,6 +826,12 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
           : current,
       );
     };
+    // Fixações mudaram (fixar, desafixar, substituir a mais antiga) — a
+    // MESMA lista inteira reaplicada, nunca um patch.
+    const onPinnedItems = (payload: { conversationId: string; items: PinnedItemDto[] }) => {
+      if (payload.conversationId !== conversationId) return;
+      applyPinnedItems(payload.items);
+    };
     socket.on(RealtimeEvents.MessageNew, onMessageNew);
     socket.on(RealtimeEvents.ConversationUpdated, onConversationUpdated);
     socket.on(RealtimeEvents.MessageStatus, onMessageStatus);
@@ -811,6 +841,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     socket.on(RealtimeEvents.MessageUpdated, onMessageUpdated);
     socket.on(RealtimeEvents.InternalNote, onNote);
     socket.on(RealtimeEvents.ScheduledPending, onScheduledPending);
+    socket.on(RealtimeEvents.PinnedItems, onPinnedItems);
     return () => {
       socket.off(RealtimeEvents.MessageNew, onMessageNew);
       socket.off(RealtimeEvents.ConversationUpdated, onConversationUpdated);
@@ -821,6 +852,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       socket.off(RealtimeEvents.MessageUpdated, onMessageUpdated);
       socket.off(RealtimeEvents.InternalNote, onNote);
       socket.off(RealtimeEvents.ScheduledPending, onScheduledPending);
+      socket.off(RealtimeEvents.PinnedItems, onPinnedItems);
     };
     // `filters`/`meId` entram nas dependências porque os handlers casam a
     // conversa com o filtro ativo — reassinar os listeners é barato e a
@@ -834,6 +866,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     unreadCountsRef,
     bumpUnreadCount,
     setUnreadCount,
+    applyPinnedItems,
   ]);
 
   /**
@@ -1169,6 +1202,93 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     }
   }
 
+  type PinTarget = { kind: "message"; id: string } | { kind: "note"; id: string };
+
+  /**
+   * Fixa mensagem OU nota — o alvo decide qual rota chamar, o resto do
+   * fluxo (limite de 3, oferecer substituir a mais antiga) é o mesmo para
+   * os dois. Fixação é interna ao AZVCHAT: nada aqui chama o WhatsApp.
+   */
+  async function handlePin(target: PinTarget, replaceItemId?: string) {
+    if (!conversationId) return;
+    try {
+      const data =
+        target.kind === "message"
+          ? await pinnedItemsApi.pinMessage(target.id, replaceItemId)
+          : await pinnedItemsApi.pinNote(conversationId, target.id, replaceItemId);
+      applyPinnedItems(data.items);
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "pin_limit_reached") {
+        const oldest = detail?.conversation.pinnedItems[0];
+        if (
+          oldest &&
+          window.confirm(
+            "Limite de 3 mensagens fixadas nesta conversa. Substituir a mais antiga pela nova?",
+          )
+        ) {
+          void handlePin(target, oldest.id);
+        }
+        return;
+      }
+      window.alert(err instanceof Error ? err.message : "Falha ao fixar");
+    }
+  }
+
+  async function handleUnpin(target: PinTarget) {
+    if (!conversationId) return;
+    try {
+      const data =
+        target.kind === "message"
+          ? await pinnedItemsApi.unpinMessage(target.id)
+          : await pinnedItemsApi.unpinNote(conversationId, target.id);
+      applyPinnedItems(data.items);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Falha ao desafixar");
+    }
+  }
+
+  /**
+   * Clique na faixa fixa — rola até a mensagem ou nota original, com
+   * destaque momentâneo. Mensagem muito antiga (fora do trecho já
+   * carregado) usa o MESMO caminho da busca (`.../messages/around`), para
+   * não deixar o clique sem efeito.
+   */
+  async function jumpToPinnedItem(item: PinnedItemDto) {
+    if (!conversationId) return;
+    const targetId = item.kind === "message" ? item.message?.id : item.note?.id;
+    if (!targetId) return;
+    const highlightAndScroll = () => {
+      setHighlightId(targetId);
+      setTimeout(() => {
+        document.getElementById(`${item.kind}-${targetId}`)?.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+      }, 100);
+      setTimeout(() => setHighlightId(null), 3000);
+    };
+    // Nota interna: a lista já carregada (até 50) é o único trecho que
+    // existe — não há paginação própria de nota, então o clique só rola.
+    if (item.kind === "note") {
+      highlightAndScroll();
+      return;
+    }
+    if (messages?.some((entry) => entry.id === targetId)) {
+      highlightAndScroll();
+      return;
+    }
+    try {
+      const data = await api.get<{ messages: MessageDto[]; hasMore: boolean }>(
+        `/conversations/${conversationId}/messages/around?messageId=${targetId}`,
+      );
+      setMessages(data.messages);
+      setHasMore(data.hasMore);
+      highlightAndScroll();
+    } catch {
+      // A faixa continua legível; navegar até a mensagem é o extra que falhou.
+    }
+  }
+
   /** Envia um áudio gravado no navegador como mensagem de voz. */
   async function sendVoiceNote(file: File) {
     if (!conversationId) return;
@@ -1379,6 +1499,19 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     }
     if (me) saveDraft(me.id, id, { text: "", mode: "message" });
   }
+
+  // Mesma chave do menu de Permissões para os dois alvos (mensagem e nota):
+  // é a mesma faixa, o mesmo "destacar no topo".
+  const canPinItems = can("message.pin");
+  const pinnedItems = detail?.conversation.pinnedItems ?? [];
+  const pinnedMessageIds = useMemo(
+    () => new Set(pinnedItems.filter((item) => item.kind === "message").map((item) => item.message?.id)),
+    [pinnedItems],
+  );
+  const pinnedNoteIds = useMemo(
+    () => new Set(pinnedItems.filter((item) => item.kind === "note").map((item) => item.note?.id)),
+    [pinnedItems],
+  );
 
   /**
    * Linha do tempo: mensagens do WhatsApp e notas internas da equipe
@@ -1617,6 +1750,20 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
               }}
             />
 
+            {/* Faixa fixa: nenhuma fixada, sem faixa, sem espaço ocupado. */}
+            <PinnedBanner
+              items={pinnedItems}
+              canManage={canPinItems}
+              onJump={(item) => void jumpToPinnedItem(item)}
+              onUnpin={(item) =>
+                void handleUnpin(
+                  item.kind === "message"
+                    ? { kind: "message", id: item.message?.id ?? "" }
+                    : { kind: "note", id: item.note?.id ?? "" },
+                )
+              }
+            />
+
             {/* Busca dentro da conversa */}
             {chatSearchOpen && (
               <div className="border-b border-slate-200 bg-white px-4 py-2">
@@ -1701,6 +1848,8 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                       message={item.message}
                       isGroup={isGroup ?? false}
                       showSender={item.showSender}
+                      pinned={pinnedMessageIds.has(item.message.id)}
+                      canPin={canPinItems}
                       onReact={(message, emoji) => void handleReact(message, emoji)}
                       onReply={(message) => {
                         setReplyTo(message);
@@ -1709,6 +1858,8 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                       onForward={(message) => setForwarding(message)}
                       onEdit={(message) => startEdit(message)}
                       onDelete={(message) => void handleDelete(message)}
+                      onPin={(message) => void handlePin({ kind: "message", id: message.id })}
+                      onUnpin={(message) => void handleUnpin({ kind: "message", id: message.id })}
                       onOpenMedia={(message) => setLightboxMessageId(message.id)}
                       onQuotedClick={(quotedId) => void jumpToQuotedMessage(quotedId)}
                       senderAvatar={senderAvatarFor(item.message)}
@@ -1716,15 +1867,27 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                     />
                     </div>
                   ) : (
-                    <InternalNoteBubble
+                    <div
                       key={`note-${item.note.id}`}
+                      id={`note-${item.note.id}`}
+                      className={cn(
+                        "rounded-xl transition-colors",
+                        highlightId === item.note.id && "bg-amber-100/70 ring-2 ring-amber-300",
+                      )}
+                    >
+                    <InternalNoteBubble
                       note={item.note}
                       // `useCanManageNote` já decide pela chave do catálogo:
                       // nota própria sempre, nota de terceiro por permissão.
                       canManage={canManageNote(item.note)}
+                      pinned={pinnedNoteIds.has(item.note.id)}
+                      canPin={canPinItems}
                       onEdit={noteActions.edit}
                       onDelete={noteActions.delete}
+                      onPin={(note) => void handlePin({ kind: "note", id: note.id })}
+                      onUnpin={(note) => void handleUnpin({ kind: "note", id: note.id })}
                     />
+                    </div>
                   ),
                 )
               )}
@@ -2214,6 +2377,8 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
             onChanged={loadDetail}
             onEditNote={noteActions.edit}
             onDeleteNote={noteActions.delete}
+            onPinNote={(note) => void handlePin({ kind: "note", id: note.id })}
+            onUnpinNote={(note) => void handleUnpin({ kind: "note", id: note.id })}
           />
         </div>
       )}

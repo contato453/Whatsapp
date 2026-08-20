@@ -200,6 +200,22 @@ snake_case e id `uuid`.
   `sentByUserId`, `deletedAt`/`deletedByUserId`, `editedAt`, `metadata` (Json, ex.: opções
   de enquete). Única por `(conversationId, externalMessageId)` → ingestão idempotente.
 - `MessageReaction` — única por `(messageId, senderExternalId)`.
+- `PinnedItem` — **fixação de mensagem ("pin"), INTERNA ao AZVCHAT e nunca propagada ao
+  WhatsApp** (não usa o recurso de pin do Baileys, não chama o provider). É a faixa fixa no
+  topo da conversa, para a equipe destacar link de formulário, de pasta ou de agendamento sem
+  rolar a conversa inteira para achar de novo. Alvo **polimórfico**: `messageId` OU `noteId`,
+  nunca os dois (constraint `pinned_items_one_target` na migration) — nota interna também
+  pode ser fixada, e ela não é `Message`. `pinnedByUserId` (nulo = quem fixou não existe mais
+  no cadastro, mesmo padrão de `archivedByUserId`) e `pinnedAt` **sem prazo de validade**, de
+  propósito: diferente do WhatsApp, fica até alguém desafixar. Teto de `MAX_PINNED_ITEMS` (3)
+  por conversa, aplicado em `lib/pinned-items.ts` — a quarta é recusada com 409
+  `pin_limit_reached`, e a tela oferece substituir a mais antiga (`replaceItemId`, troca as
+  duas numa transação só). Mensagem apagada (pelo cliente ou por nós) **desafixa sozinha**
+  (`unpinMessageIfPinned`, chamado nos dois pontos de exclusão); nota interna é apagada
+  fisicamente, então o `ON DELETE CASCADE` do banco já resolve sozinho. Fonte única de
+  leitura/escrita e da serialização: `apps/api/src/lib/pinned-items.ts` e
+  `serializePinnedItem(s)` (`lib/serialize.ts`). Nada aqui encosta em `lib/access.ts`: quem
+  já enxerga a conversa enxerga a fixação, sem recorte a mais.
 - `InternalNote`, `Tag` + `ConversationTag` + `TagDepartment`, `QuickReply` +
   `QuickReplyDepartment`, `ScheduledMessage`
   (`pending|sent|failed|canceled`, com `attempts`), `ConversationAssignmentHistory`
@@ -452,6 +468,9 @@ POST   /conversations/:id/resolve         POST /conversations/:id/reopen
 GET    /conversations/:id/files
 POST   /conversations/:id/tags/:tagId     DELETE /conversations/:id/tags/:tagId
 POST   /conversations/:id/notes           PATCH|DELETE /conversations/:id/notes/:noteId
+POST   /conversations/:id/notes/:noteId/pin    POST /conversations/:id/notes/:noteId/unpin
+       (fixa/desafixa uma NOTA interna — mesma faixa das mensagens, papel mínimo
+        agent (chave `message.pin`); ver POST /messages/:id/pin logo abaixo)
 
 GET    /conversations/:id/messages        GET /conversations/:id/messages/search
 GET    /conversations/:id/messages/around POST /conversations/:id/messages
@@ -465,6 +484,13 @@ PATCH  /messages/:id                      DELETE /messages/:id
        (editar: só o que saiu daqui, tipo com texto e dentro da janela de 15 min do
         WhatsApp; em mídia o que muda é a legenda e o arquivo é remandado do storage)
 POST   /messages/:id/forward              GET  /messages/:id/media
+POST   /messages/:id/pin                  POST /messages/:id/unpin
+       (fixação (pin) INTERNA ao AZVCHAT — nunca chama o provider nem usa o pin do
+        WhatsApp. Papel mínimo agent (`message.pin`, padrão liberado). Teto de 3 por
+        conversa: acima disso devolve 409 `pin_limit_reached`; body opcional
+        `{ replaceItemId }` troca a mais antiga pela nova numa transação só.
+        Resposta `{ items }` é a LISTA INTEIRA das fixadas, sempre — a mesma que sai
+        em `serializeConversationDetail` e no evento `conversation:pinned-items`)
 
 GET    /tags                POST /tags            PATCH|DELETE /tags/:id
 GET    /quick-replies       POST /quick-replies   PATCH|DELETE /quick-replies/:id
@@ -529,8 +555,17 @@ sempre `RealtimeEvents.X`:
 
 `message:new`, `message:status`, `message:reaction`, `message:updated`, `call:incoming`,
 `conversation:updated`, `conversation:read`, `group:participants`, `note:new`,
-`instance:status`, `instance:qr`, `scheduled:pending`, `session:closing`,
-`session:closed`.
+`conversation:pinned-items`, `instance:status`, `instance:qr`, `scheduled:pending`,
+`session:closing`, `session:closed`.
+
+`conversation:pinned-items` (`{ conversationId, items }`) sai sempre que a fixação (pin) de
+uma conversa muda — fixar, desafixar, substituir a mais antiga, ou a mensagem fixada ser
+apagada/editada. `items` é a **lista inteira** das fixadas (no máximo 3), nunca um patch: é
+mais simples reenviar tudo do que sincronizar incrementalmente, e o tamanho já é pequeno por
+construção. Evento próprio, e não `conversation:updated` nem `message:updated`: o primeiro é
+o DTO leve da lista da Inbox (carregar fixações nele pagaria a consulta em toda linha, o
+mesmo motivo de `scheduledPendingCount` ficar fora), e o segundo não serve porque a fixação
+pode ser de uma NOTA interna, que não é `Message`.
 
 `call:incoming` avisa que uma ligação está tocando (o sistema nunca atende nem recusa) e
 chega com a identidade de quem liga **já resolvida pela API** — a tela só desenha, sem
@@ -1664,6 +1699,16 @@ sempre juntos.
   WhatsApp recusaria a edição e nós gravaríamos o texto novo assim mesmo — a Inbox passaria
   a mostrar ao atendente uma frase que o cliente nunca recebeu, e ninguém perceberia.
   Editar mídia é editar a **legenda**, e o arquivo é remandado do storage (ver a seção 8).
+- **FIXAÇÃO (PIN) É INTERNA AO AZVCHAT, E NUNCA VAI PARA O WHATSAPP.** A faixa fixa no
+  topo da conversa (`PinnedItem`) é para a EQUIPE destacar link de formulário, de pasta ou
+  de agendamento — o recurso de pin do próprio WhatsApp não é usado, e nenhum caminho de
+  fixar/desafixar chama `deps.provider`. O motivo é o mesmo da nota interna: no WhatsApp,
+  fixar em GRUPO fixa para todos os participantes, e o cliente veria o escritório fixando
+  coisas no chat dele — algo que a equipe nunca pediu e não deveria acontecer sozinho. Pelo
+  mesmo motivo, a fixação **não expira**: link de formulário precisa continuar no topo até
+  alguém desafixar, diferente do pin do WhatsApp (que soma prazo). `apps/api/test/
+  pinned-items.test.ts` cobre que a rota de fixar não chama o provider — quem mexer aqui e
+  acrescentar uma chamada a `deps.provider` quebra esse teste de propósito.
 - Mensagem apagada mantém a linha (`deletedAt`) para histórico/auditoria — não faça
   `delete` físico.
 - **Conversa arquivada NÃO desarquiva com mensagem nova** — de propósito, e diferente
@@ -1717,7 +1762,10 @@ aba piscando com as conversas que receberam mensagem, até alguém abrir a Inbox
 permitido de login por dia da semana, aplicado a quem não é supervisor, com aviso 5 minutos
 antes e encerramento da sessão no fechamento; departamento marcado como interno, cujas
 conversas ficam fora do dashboard, do card de atrasados e do relatório por atendente sem
-sair da lista de conversas nem perder o aviso de mensagem nova.
+sair da lista de conversas nem perder o aviso de mensagem nova; fixar mensagem (ou nota
+interna) no topo da conversa, faixa interna que nunca vai ao WhatsApp, com até 3 fixadas
+por conversa, sem prazo de validade, navegação entre elas e atualização em tempo real para
+todo mundo com a conversa aberta.
 
 **Falta** (ordem sugerida): validar o pareamento QR em rede aberta (o ambiente de
 desenvolvimento bloqueia `web.whatsapp.com`); votos de enquete agregados na Inbox;

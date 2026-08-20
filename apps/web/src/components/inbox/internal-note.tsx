@@ -1,6 +1,6 @@
 "use client";
 
-import { Pencil, StickyNote, Trash2 } from "lucide-react";
+import { Pencil, Pin, PinOff, StickyNote, Trash2 } from "lucide-react";
 import { canManageInternalNote } from "@azvchat/shared";
 import { api } from "@/lib/api";
 import { cn, formatDateTime } from "@/lib/utils";
@@ -22,16 +22,31 @@ import { useAuth } from "@/lib/auth-context";
  * continua chegando pelo `note:new`, como antes.
  */
 
-/** Botões de editar e excluir. Um só desenho para os dois lugares. */
+/**
+ * Botões de fixar/desafixar, editar e excluir. Um só desenho para os dois
+ * lugares — `canManage` e `canPin` são chaves INDEPENDENTES (a de nota é
+ * "é sua, ou você é supervisor/admin"; a de fixar é o catálogo
+ * `message.pin`), então cada bloco de botões aparece por conta própria.
+ */
 function InternalNoteActions({
   note,
+  canManage,
+  pinned,
+  canPin,
   onEdit,
   onDelete,
+  onPin,
+  onUnpin,
   className,
 }: {
   note: NoteDto;
+  canManage: boolean;
+  pinned: boolean;
+  canPin: boolean;
   onEdit: (note: NoteDto) => void;
   onDelete: (note: NoteDto) => void;
+  onPin: (note: NoteDto) => void;
+  onUnpin: (note: NoteDto) => void;
   className?: string;
 }) {
   return (
@@ -41,22 +56,46 @@ function InternalNoteActions({
         className,
       )}
     >
-      <button
-        type="button"
-        onClick={() => onEdit(note)}
-        title="Editar nota"
-        className="rounded p-1 text-amber-600/70 hover:bg-amber-100 hover:text-amber-800"
-      >
-        <Pencil className="h-3 w-3" />
-      </button>
-      <button
-        type="button"
-        onClick={() => onDelete(note)}
-        title="Apagar nota"
-        className="rounded p-1 text-amber-600/70 hover:bg-red-50 hover:text-red-600"
-      >
-        <Trash2 className="h-3 w-3" />
-      </button>
+      {canPin &&
+        (pinned ? (
+          <button
+            type="button"
+            onClick={() => onUnpin(note)}
+            title="Desafixar nota"
+            className="rounded p-1 text-amber-600/70 hover:bg-amber-100 hover:text-amber-800"
+          >
+            <PinOff className="h-3 w-3" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onPin(note)}
+            title="Fixar nota no topo da conversa"
+            className="rounded p-1 text-amber-600/70 hover:bg-amber-100 hover:text-amber-800"
+          >
+            <Pin className="h-3 w-3" />
+          </button>
+        ))}
+      {canManage && (
+        <>
+          <button
+            type="button"
+            onClick={() => onEdit(note)}
+            title="Editar nota"
+            className="rounded p-1 text-amber-600/70 hover:bg-amber-100 hover:text-amber-800"
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+          <button
+            type="button"
+            onClick={() => onDelete(note)}
+            title="Apagar nota"
+            className="rounded p-1 text-amber-600/70 hover:bg-red-50 hover:text-red-600"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -83,19 +122,28 @@ export function useCanManageNote(): (note: NoteDto) => boolean {
 export function InternalNoteBubble({
   note,
   canManage,
+  pinned,
+  canPin,
   onEdit,
   onDelete,
+  onPin,
+  onUnpin,
 }: {
   note: NoteDto;
   canManage: boolean;
+  pinned: boolean;
+  canPin: boolean;
   onEdit: (note: NoteDto) => void;
   onDelete: (note: NoteDto) => void;
+  onPin: (note: NoteDto) => void;
+  onUnpin: (note: NoteDto) => void;
 }) {
   return (
     <div className="group flex justify-center py-1">
       <div className="relative max-w-[80%] rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 shadow-sm">
         <p className="mb-0.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
           <StickyNote className="h-3 w-3" /> Nota interna
+          {pinned && <Pin className="h-3 w-3" aria-label="Nota fixada" />}
         </p>
         <p className="whitespace-pre-wrap break-words text-sm text-slate-700">{note.content}</p>
         <p className="mt-1 text-[10px] text-amber-600/80">
@@ -107,7 +155,18 @@ export function InternalNoteBubble({
             minute: "2-digit",
           })}
         </p>
-        {canManage && <InternalNoteActions note={note} onEdit={onEdit} onDelete={onDelete} />}
+        {(canManage || canPin) && (
+          <InternalNoteActions
+            note={note}
+            canManage={canManage}
+            pinned={pinned}
+            canPin={canPin}
+            onEdit={onEdit}
+            onDelete={onDelete}
+            onPin={onPin}
+            onUnpin={onUnpin}
+          />
+        )}
       </div>
     </div>
   );
@@ -121,26 +180,48 @@ export function InternalNoteBubble({
 export function InternalNotePanelItem({
   note,
   canManage,
+  pinned,
+  canPin,
   onEdit,
   onDelete,
+  onPin,
+  onUnpin,
 }: {
   note: NoteDto;
   canManage: boolean;
+  pinned: boolean;
+  canPin: boolean;
   onEdit: (note: NoteDto) => void;
   onDelete: (note: NoteDto) => void;
+  onPin: (note: NoteDto) => void;
+  onUnpin: (note: NoteDto) => void;
 }) {
   return (
     <div
       className={cn(
         "group relative rounded-lg border-l-2 border-amber-400 bg-amber-50 p-2.5",
-        canManage && "pr-12",
+        (canManage || canPin) && "pr-12",
       )}
     >
-      <p className="whitespace-pre-wrap break-words text-xs text-slate-700">{note.content}</p>
+      <p className="flex items-center gap-1 whitespace-pre-wrap break-words text-xs text-slate-700">
+        {note.content}
+        {pinned && <Pin className="h-3 w-3 shrink-0 text-amber-600" aria-label="Nota fixada" />}
+      </p>
       <p className="mt-1 text-[10px] text-slate-400">
         {note.user?.name ?? "—"} · {formatDateTime(note.createdAt)}
       </p>
-      {canManage && <InternalNoteActions note={note} onEdit={onEdit} onDelete={onDelete} />}
+      {(canManage || canPin) && (
+        <InternalNoteActions
+          note={note}
+          canManage={canManage}
+          pinned={pinned}
+          canPin={canPin}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          onPin={onPin}
+          onUnpin={onUnpin}
+        />
+      )}
     </div>
   );
 }
