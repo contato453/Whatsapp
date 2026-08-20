@@ -644,14 +644,16 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   API atendendo o resto normalmente. **Falha na conversão INTERROMPE o envio** com 422
   `audio_conversion_failed` e uma frase em português; enviar assim mesmo é o defeito que
   isso veio consertar.
-- **A MENSAGEM DE VOZ ESTÁ DESLIGADA** (`VOICE_NOTE_ENABLED = false`, em
-  `apps/api/src/lib/outbound-audio.ts`, onde está o porquê inteiro). Com ela desligada, a
-  gravação do microfone percorre **exatamente** o caminho do arquivo anexado: mesmo perfil
-  de conversão (OGG/Opus 48 kHz, `-application audio`) e **sem waveform**. Não basta
-  desligar a flag: perfil de voz produz mono 16 kHz com `-application voip`, e waveform é
-  campo de mensagem de voz. Qualquer um dos dois deixa a gravação diferente do anexo, e o
-  anexo é o único caminho comprovadamente entregue. Na tela do cliente vira um player
-  comum, sem a onda e sem o 1.5x. O que se mediu: os MESMOS bytes com
+- **A MENSAGEM DE VOZ ESTÁ EM VALIDAÇÃO** (`VOICE_NOTE_ENABLED`, em
+  `apps/api/src/lib/outbound-audio.ts`, onde está o histórico inteiro). Ela ficou desligada
+  enquanto o áudio não chegava, e voltou a ser testada depois que a correção do atraso de
+  codec fez o áudio tocar: todas as tentativas anteriores com `ptt` aconteceram com a linha
+  de tempo suja, então o `ptt` pode ter sido inocente o tempo todo. **A CONVERSÃO É SEMPRE
+  A DE ARQUIVO** (OGG/Opus 48 kHz, linha de tempo zerada, sem waveform), inclusive na
+  mensagem de voz: essa é a forma de bytes que se provou entregue, e usar o perfil de voz
+  (mono 16 kHz, `-application voip`, com waveform) trocaria três coisas ao mesmo tempo, de
+  modo que um envio falho não diria qual delas foi. Religar a voz mexe em **uma variável**,
+  a flag. Com ela desligada, a bolha no cliente é um player comum, sem a onda e sem o 1.5x. O que se mediu: os MESMOS bytes com
   `ptt: false` tocam no celular do cliente e com `ptt: true` chegam como "Este áudio não
   está mais disponível", com imagem e vídeo passando normalmente pelo mesmo socket.
   Formato e waveform foram descartados como causa. **O que consertou o áudio foi outra

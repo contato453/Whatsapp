@@ -74,11 +74,12 @@ describe("prepareOutboundAudio", () => {
   );
 
   it.skipIf(!temFfmpeg)(
-    "com a voz desligada, a gravação fica IDÊNTICA a um arquivo anexado",
+    "a gravação e o arquivo anexado produzem bytes com a MESMA forma",
     async () => {
-      // Não basta desligar a flag: o perfil de voz produz mono 16 kHz e uma
-      // waveform, e as duas coisas deixariam a gravação diferente do anexo
-      // que comprovadamente toca no celular do cliente.
+      // Os dois caminhos usam o perfil de arquivo, que é a forma de bytes
+      // comprovadamente entregue. Vale mesmo com a mensagem de voz ligada:
+      // ali muda a flag, e não a conversão. Perfil de voz produziria mono
+      // 16 kHz e waveform, deixando a gravação diferente do anexo.
       const webm = gerar([
         "sine=frequency=440:duration=2",
         "-c:a", "libopus", "-ar", "48000", "-ac", "1", "-f", "webm", "-live", "1",
@@ -94,7 +95,7 @@ describe("prepareOutboundAudio", () => {
   );
 
   it.skipIf(!temFfmpeg)(
-    "com a mensagem de voz desligada, a gravação sai como ARQUIVO de áudio",
+    "a gravação só vira mensagem de voz se VOICE_NOTE_ENABLED permitir",
     async () => {
       // A decisão e o porquê estão em lib/outbound-audio.ts: bytes idênticos
       // com ptt ligado chegam como "áudio indisponível" no celular do cliente,
@@ -105,8 +106,9 @@ describe("prepareOutboundAudio", () => {
         "-c:a", "libopus", "-ar", "48000", "-ac", "1", "-f", "webm", "-live", "1",
       ]);
       const pronto = await prepareOutboundAudio(webm, "audio/webm", true, logger);
+      // Quem manda é a constante, e não o "true" de quem chamou: a gravação
+      // só vira mensagem de voz quando o sistema estiver com ela ligada.
       expect(pronto.asVoiceNote).toBe(VOICE_NOTE_ENABLED);
-      expect(VOICE_NOTE_ENABLED).toBe(false);
     },
     30_000,
   );

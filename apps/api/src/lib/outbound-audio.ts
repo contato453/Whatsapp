@@ -67,7 +67,7 @@ export interface PreparedOutboundAudio {
  * mudar: o caminho de `ptt` continua inteiro e testado, inclusive o desvio de
  * `relayVoiceNote` que devolve a waveform que o Baileys apaga.
  */
-export const VOICE_NOTE_ENABLED = false;
+export const VOICE_NOTE_ENABLED = true;
 
 /**
  * `fromMicrophone` diz de ONDE o áudio veio, e não o que ele vira: o microfone
@@ -86,14 +86,19 @@ export async function prepareOutboundAudio(
   fromMicrophone: boolean,
   logger: Logger,
 ): Promise<PreparedOutboundAudio> {
-  // Com a mensagem de voz desligada, a gravação do microfone percorre
-  // EXATAMENTE o caminho do arquivo anexado, que é o único comprovadamente
-  // entregue neste número. Não basta desligar a flag: o perfil de voz produz
-  // OGG/Opus mono 16 kHz com `-application voip`, e a waveform é campo de
-  // mensagem de voz. Qualquer um dos dois deixaria a gravação diferente do
-  // anexo que funciona, e a diferença é justamente o que estamos caçando.
+  // A CONVERSÃO É SEMPRE A DE ARQUIVO, mesmo na mensagem de voz.
+  //
+  // Essa é a forma de bytes que se provou entregue neste número: OGG/Opus em
+  // 48 kHz, linha de tempo zerada e sem waveform. O perfil de voz produz mono
+  // 16 kHz com `-application voip`, e a waveform é campo à parte, então usá-lo
+  // trocaria TRÊS coisas de uma vez ao religar `VOICE_NOTE_ENABLED`, e um
+  // envio que falhasse não diria qual delas foi. Mantendo o perfil de arquivo,
+  // religar a voz mexe em uma variável só: a flag.
+  //
+  // Se a voz se confirmar entregue, aí sim vale experimentar o perfil de voz,
+  // um passo de cada vez.
   const asVoiceNote = fromMicrophone && VOICE_NOTE_ENABLED;
-  const profile: AudioNormalizationProfile = asVoiceNote ? "voice" : "file";
+  const profile: AudioNormalizationProfile = "file";
   try {
     const normalized = await normalizeAudioForWhatsApp(buffer, { profile, logger });
     return {
