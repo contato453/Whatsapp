@@ -72,6 +72,13 @@ export interface WhatsAppProviderEvents {
     originalSenderExternalId: string | null;
     /** JID da conversa como veio na CHAVE da original, que é o que o WhatsApp usou */
     targetRemoteJid: string | null;
+    /**
+     * Todos os identificadores que a CHAVE do pacote carrega: o telefone e o
+     * identificador interno, de quem enviou e de quem participa. O WhatsApp
+     * manda os dois formatos, e é de um deles que ele deriva a chave da
+     * edição — sem isso, só temos o que gravamos, que nem sempre é o mesmo.
+     */
+    keyCandidates: string[];
     editedAt: Date | null;
   }) => void;
   /** Chamada de voz/vídeo registrada no chat */

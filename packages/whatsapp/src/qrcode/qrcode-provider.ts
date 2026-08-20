@@ -444,6 +444,20 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
             : isGroupJid(remoteJid)
               ? null
               : stripDeviceSuffix(remoteJid),
+        // O Baileys anexa à chave o telefone e o identificador interno, de
+        // quem enviou e de quem participa. São eles os candidatos autênticos
+        // da derivação — muito melhores do que remontar um JID a partir do
+        // telefone que gravamos.
+        keyCandidates: [
+          message.key?.senderPn,
+          message.key?.senderLid,
+          message.key?.participantPn,
+          message.key?.participantLid,
+          message.key?.participant,
+          message.key?.remoteJid,
+        ]
+          .filter((value): value is string => typeof value === "string" && value.length > 0)
+          .map(stripDeviceSuffix),
         targetRemoteJid: encryptedEdit.targetRemoteJid
           ? stripDeviceSuffix(encryptedEdit.targetRemoteJid)
           : null,

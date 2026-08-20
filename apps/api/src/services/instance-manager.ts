@@ -518,7 +518,11 @@ export class InstanceManager {
         // Testar é seguro: a etiqueta do AES-GCM só confere com a chave
         // exata, então nenhuma combinação errada produz texto plausível. O
         // log registra a vencedora, e é ela que vai permitir enxugar isto.
+        // Os identificadores que vêm na CHAVE do pacote entram primeiro:
+        // são os que o WhatsApp de fato usa, nos dois formatos (telefone e
+        // interno). Depois vêm os que gravamos, que podem estar defasados.
         const identificadores = [
+          ...event.keyCandidates,
           original.senderExternalId,
           event.targetRemoteJid,
           event.originalSenderExternalId,
