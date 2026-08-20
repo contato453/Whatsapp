@@ -1,6 +1,6 @@
 import { createDecipheriv, createHmac } from "node:crypto";
 import { proto } from "@whiskeysockets/baileys";
-import { extractContent } from "./normalize.js";
+import { findEditedText, messageKeyPaths } from "./normalize.js";
 
 /**
  * Abertura do envelope `secretEncryptedMessage`, que é como o WhatsApp
@@ -44,6 +44,12 @@ const MESSAGE_EDIT_USE_CASES = [
 
 /** O AES-GCM do WhatsApp guarda a etiqueta de autenticação nos últimos 16 bytes. */
 const GCM_TAG_LENGTH = 16;
+
+/** O que saiu do envelope depois de a autenticação conferir. */
+export interface OpenedEnvelope {
+  message: proto.IMessage;
+  plaintextBytes: number;
+}
 
 export interface SecretEncryptedEdit {
   /** Id da mensagem ORIGINAL, que é a que precisa ser atualizada. */
@@ -104,7 +110,7 @@ export function decryptSecretEncryptedEdit(input: {
   usedAad?: boolean;
   /** Rótulo do caso de uso; o padrão é o que o whatsmeow usa. */
   useCase?: string;
-}): proto.IMessage | null {
+}): OpenedEnvelope | null {
   const info = Buffer.concat([
     Buffer.from(input.targetExternalMessageId),
     Buffer.from(input.originalSenderJid),
@@ -116,8 +122,10 @@ export function decryptSecretEncryptedEdit(input: {
     const aad = input.usedAad
       ? Buffer.from(`${input.targetExternalMessageId}\u0000${input.editorJid}`)
       : null;
+    // Se o AES-GCM não lançou, a etiqueta de autenticação conferiu: a chave
+    // está CERTA. Isso é a prova, e não o formato do que veio dentro.
     const plaintext = aesGcmDecrypt(input.encPayload, key, input.encIv, aad);
-    return proto.Message.decode(plaintext);
+    return { message: proto.Message.decode(plaintext), plaintextBytes: plaintext.length };
   } catch {
     // Chave errada, payload de outro recurso ou formato novo: em qualquer
     // caso não há mensagem para aplicar. Quem chama decide o que registrar
@@ -172,13 +180,21 @@ function aesGcmDecrypt(
  * isto aqui no dia em que o WhatsApp parar de alternar os dois formatos.
  */
 export interface DecryptedEdit {
-  text: string;
+  /**
+   * Texto novo. Pode ser nulo mesmo com a chave CERTA: a autenticação é que
+   * prova o acerto, e o conteúdo pode vir num formato que ainda não sabemos
+   * ler. Quem chama registra esse caso em vez de tratá-lo como falha de
+   * chave, que foi o erro que escondeu o problema por várias rodadas.
+   */
+  text: string | null;
   originalSenderJid: string;
   editorJid: string;
   usedAad: boolean;
   useCase: string;
   /** Quantas combinações foram testadas até acertar. */
   attempts: number;
+  /** Caminhos das chaves do que veio dentro, para diagnóstico. */
+  plaintextKeys: string[];
 }
 
 export function decryptEditedText(input: {
@@ -202,7 +218,7 @@ export function decryptEditedText(input: {
         // WhatsApp passar a exigi-lo aqui também.
         for (const usedAad of [false, true]) {
           attempts += 1;
-          const message = decryptSecretEncryptedEdit({
+          const opened = decryptSecretEncryptedEdit({
             encPayload: input.encPayload,
             encIv: input.encIv,
             messageSecret: input.messageSecret,
@@ -212,8 +228,19 @@ export function decryptEditedText(input: {
             usedAad,
             useCase,
           });
-          const text = message ? (extractContent(message)?.content ?? null) : null;
-          if (text) return { text, originalSenderJid, editorJid, usedAad, useCase, attempts };
+          if (!opened) continue;
+          // Abriu. O texto sai de busca profunda porque o conteúdo pode vir
+          // embrulhado, e devolver aqui mesmo com texto nulo é o que separa
+          // "chave errada" de "chave certa, formato inesperado".
+          return {
+            text: findEditedText(opened.message),
+            originalSenderJid,
+            editorJid,
+            usedAad,
+            useCase,
+            attempts,
+            plaintextKeys: messageKeyPaths(opened.message),
+          };
         }
       }
     }

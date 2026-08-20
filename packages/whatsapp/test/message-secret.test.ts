@@ -224,3 +224,39 @@ describe("varredura de rótulos", () => {
     expect(achado?.useCase).toBe("Edit");
   });
 });
+
+
+describe("chave certa com conteúdo em formato inesperado", () => {
+  it("abre e devolve o resultado, em vez de tratar como chave errada", () => {
+    // Este era o defeito: só considerar sucesso quando o texto saía no
+    // formato esperado fazia descartar uma decifragem CORRETA e seguir
+    // tentando, registrando "falhou" no fim.
+    const segredo = randomBytes(32);
+    const info = Buffer.concat([
+      Buffer.from(ORIGINAL_ID),
+      Buffer.from(AUTOR),
+      Buffer.from(AUTOR),
+      Buffer.from("Message Edit"),
+    ]);
+    const chave = derivarChave(segredo, info);
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", chave, iv);
+    // Conteúdo embrulhado num nível a mais do que o extrator simples lê.
+    const conteudo = proto.Message.encode({
+      editedMessage: { message: { extendedTextMessage: { text: "valor certo" } } },
+    }).finish();
+    const corpo = Buffer.concat([cipher.update(conteudo), cipher.final()]);
+    const achado = decryptEditedText({
+      encPayload: Buffer.concat([corpo, cipher.getAuthTag()]),
+      encIv: iv,
+      messageSecret: segredo,
+      targetExternalMessageId: ORIGINAL_ID,
+      originalSenderCandidates: [AUTOR],
+      editorCandidates: [AUTOR],
+    });
+    expect(achado).not.toBeNull();
+    expect(achado?.text).toBe("valor certo");
+    // Uma tentativa: a autenticação conferiu de primeira.
+    expect(achado?.attempts).toBe(1);
+  });
+});

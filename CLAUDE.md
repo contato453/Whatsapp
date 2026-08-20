@@ -624,6 +624,12 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   WhatsApp endereça a mesma pessoa ora pelo telefone, ora pelo `@lid`, e o que gravamos nem
   sempre é o que ele usou na chave — a etiqueta do AES-GCM só confere com o certo, então
   testar não abre errado, e o log `message_edit_decrypted` registra a combinação vencedora;
+  (3b) **quem prova que a chave está certa é a ETIQUETA DE AUTENTICAÇÃO do AES-GCM, nunca o
+  formato do que veio dentro.** Considerar sucesso só quando o texto sai no formato
+  esperado descarta decifragem CORRETA cujo conteúdo veio embrulhado, e o sintoma é
+  idêntico ao de chave errada — foi esse engano que escondeu o problema por várias rodadas.
+  Abriu e não achou texto vira log `message_edit_opened_without_text` com os CAMINHOS das
+  chaves, que é outra investigação, não a mesma;
   (4) errar qualquer um dos quatro campos da derivação faz o AES-GCM recusar em SILÊNCIO,
   com o mesmo sintoma de não ter recebido nada, e por isso `test/message-secret.test.ts`
   cifra com o mesmo esquema e confere que a função abre. O caminho antigo do

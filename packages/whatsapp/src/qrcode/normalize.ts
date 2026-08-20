@@ -510,7 +510,7 @@ export function extractProtocolAction(
  * atual é testado ANTES dos filhos, para que o texto da mensagem vença o de
  * uma citação embutida nela.
  */
-function findEditedText(value: unknown, depth = 0): string | null {
+export function findEditedText(value: unknown, depth = 0): string | null {
   if (!value || typeof value !== "object" || depth > 6) return null;
   const here = extractContent(value as proto.IMessage);
   if (here?.content) return here.content;

@@ -598,6 +598,21 @@ export class InstanceManager {
           });
           return;
         }
+        // Abriu, mas sem texto reconhecível dentro: a chave estava certa e o
+        // conteúdo veio num formato que ainda não sabemos ler. Registrar os
+        // CAMINHOS das chaves resolve isso na próxima, e tratar como falha
+        // de chave foi o que escondeu o problema por várias rodadas.
+        if (!decrypted.text) {
+          this.logger.warn({
+            instanceId: event.instanceId,
+            messageId: original.id,
+            event: "message_edit_opened_without_text",
+            useCase: decrypted.useCase,
+            plaintextKeys: decrypted.plaintextKeys,
+          });
+          await this.publishEditUnavailable(organizationId, event);
+          return;
+        }
         this.logger.info({
           instanceId: event.instanceId,
           messageId: original.id,
