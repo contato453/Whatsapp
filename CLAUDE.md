@@ -615,6 +615,15 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   API atendendo o resto normalmente. **Falha na conversão INTERROMPE o envio** com 422
   `audio_conversion_failed` e uma frase em português; enviar assim mesmo é o defeito que
   isso veio consertar.
+- **A MENSAGEM DE VOZ ESTÁ DESLIGADA** (`VOICE_NOTE_ENABLED = false`, em
+  `apps/api/src/lib/outbound-audio.ts`, onde está o porquê inteiro). A gravação do
+  microfone continua normalizada como voz (OGG/Opus mono 16 kHz) e sai como **arquivo de
+  áudio**: player comum, sem a onda e sem o 1.5x. O que se mediu: os MESMOS bytes com
+  `ptt: false` tocam no celular do cliente e com `ptt: true` chegam como "Este áudio não
+  está mais disponível", com imagem e vídeo passando normalmente pelo mesmo socket.
+  Formato e waveform foram descartados como causa. Para religar, ponha a constante em
+  `true` e mande UM áudio para um celular de verdade; o caminho de `ptt` continua inteiro
+  e testado.
 - **A MENSAGEM DE VOZ NÃO SAI PELO `sendMessage` do Baileys**, e sim por
   `relayVoiceNote` (`qrcode-provider.ts`), que monta a mensagem com
   `generateWAMessage`, devolve a waveform e chama `relayMessage`. O motivo é uma perda
@@ -1462,7 +1471,7 @@ sempre juntos.
   da API (`apps/api/Dockerfile`) e do CI, e os testes de conversão se **pulam sozinhos**
   onde ele não existe.
 - **`ptt: true` e `ptt: false` percorrem caminhos DIFERENTES no Baileys, e foi isso que
-  separou o defeito.** Com os mesmos bytes OGG/Opus e o mesmo mime type, o áudio
+  separou o defeito** (e é por isso que a mensagem de voz está desligada; ver a seção 8). Com os mesmos bytes OGG/Opus e o mesmo mime type, o áudio
   anexado (`ptt: false`) tocava no celular e a mensagem de voz (`ptt: true`) chegava
   como "Este áudio não está mais disponível". Container, codec, upload, sessão e
   `mediaKey` são idênticos nos dois, então nada disso podia ser a causa: a única
@@ -1574,8 +1583,9 @@ persistida e retomada após restart; sync de chats/contatos/grupos e fotos; rece
 envio de texto, imagem, áudio, vídeo, documento, figurinha, localização, contato; reações;
 responder citando; encaminhar; apagar; editar mensagem enviada pelo composer (texto e
 legenda de mídia, dentro da janela de 15 minutos do WhatsApp); gravação de áudio,
-normalizada no servidor para o OGG/Opus mono 16 kHz que o WhatsApp exige, com duração e
-waveform, e com recusa clara quando a conversão falha;
+normalizada no servidor para o OGG/Opus mono 16 kHz que o WhatsApp exige, com recusa
+clara quando a conversão falha (sai como arquivo de áudio, e não como mensagem de voz:
+ver `VOICE_NOTE_ENABLED` na seção 8);
 enquetes; edição e exclusão feitas pelo cliente refletidas na mensagem original, com marca
 "editada" e histórico das versões anteriores; mensagens agendadas com retentativa; notas internas; etiquetas; atribuição com
 histórico completo; quatro status de atendimento; leitura por usuário (cada pessoa com

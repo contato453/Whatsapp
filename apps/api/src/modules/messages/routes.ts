@@ -753,9 +753,11 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       }
 
       // Áudio: o navegador grava WebM (Chrome, Edge) ou MP4 (Safari), e o
-      // WhatsApp só toca mensagem de voz em OGG/Opus. A normalização olha os
-      // bytes, não o mime declarado, e falha em voz alta: mandar assim mesmo
-      // entrega ao cliente um áudio que ele não consegue ouvir.
+      // WhatsApp só toca OGG/Opus. A normalização olha os bytes, não o mime
+      // declarado, e falha em voz alta: mandar assim mesmo entrega ao cliente
+      // um áudio que ele não consegue ouvir. Se sai como mensagem de voz ou
+      // como arquivo de áudio quem decide é `VOICE_NOTE_ENABLED`, em
+      // lib/outbound-audio.ts, onde está o porquê.
       let audioSeconds: number | undefined;
       let audioWaveform: Uint8Array | undefined;
       let originalMediaUrl: string | null = null;
