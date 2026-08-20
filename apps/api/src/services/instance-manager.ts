@@ -602,7 +602,13 @@ export class InstanceManager {
           instanceId: event.instanceId,
           messageId: original.id,
           event: "message_edit_decrypted",
+          // A combinação vencedora: é ela que permite encolher a busca
+          // depois, em vez de manter a varredura para sempre.
           usedAad: decrypted.usedAad,
+          useCase: decrypted.useCase,
+          originalSenderJid: decrypted.originalSenderJid,
+          editorJid: decrypted.editorJid,
+          attempts: decrypted.attempts,
         });
         const newText = decrypted.text;
         const result = await this.ingest.applyEdit({

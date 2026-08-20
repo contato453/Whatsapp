@@ -174,6 +174,7 @@ describe("candidatos de JID", () => {
     expect(achado?.originalSenderJid).toBe(lid);
     expect(achado?.editorJid).toBe(lid);
     expect(achado?.usedAad).toBe(false);
+    expect(achado?.useCase).toBe("Message Edit");
   });
 
   it("nenhum candidato serve devolve nulo", () => {
@@ -188,5 +189,38 @@ describe("candidatos de JID", () => {
         editorCandidates: [AUTOR, "199887766@lid"],
       }),
     ).toBeNull();
+  });
+});
+
+
+describe("varredura de rótulos", () => {
+  it("acha o texto quando o WhatsApp usa outro rótulo de caso de uso", () => {
+    // Este é o único campo da derivação que não deu para conferir contra
+    // fonte independente. Com os identificadores certos já descartados em
+    // produção, ele passou a ser o suspeito — e testar custa um HMAC.
+    const segredo = randomBytes(32);
+    const info = Buffer.concat([
+      Buffer.from(ORIGINAL_ID),
+      Buffer.from(AUTOR),
+      Buffer.from(AUTOR),
+      Buffer.from("Edit"),
+    ]);
+    const chave = derivarChave(segredo, info);
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", chave, iv);
+    const corpo = Buffer.concat([
+      cipher.update(proto.Message.encode({ conversation: "texto certo" }).finish()),
+      cipher.final(),
+    ]);
+    const achado = decryptEditedText({
+      encPayload: Buffer.concat([corpo, cipher.getAuthTag()]),
+      encIv: iv,
+      messageSecret: segredo,
+      targetExternalMessageId: ORIGINAL_ID,
+      originalSenderCandidates: [AUTOR],
+      editorCandidates: [AUTOR],
+    });
+    expect(achado?.text).toBe("texto certo");
+    expect(achado?.useCase).toBe("Edit");
   });
 });

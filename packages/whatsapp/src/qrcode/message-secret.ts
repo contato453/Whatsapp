@@ -20,8 +20,27 @@ import { extractContent } from "./normalize.js";
  * é o desenho do WhatsApp.
  */
 
-/** Rótulo do caso de uso na derivação. Cada recurso tem o seu, e trocá-lo muda a chave. */
-const MESSAGE_EDIT_USE_CASE = "Message Edit";
+/**
+ * Rótulos de caso de uso testados na derivação.
+ *
+ * "Message Edit" é o que o whatsmeow usa, e é o primeiro. Os demais entram
+ * porque este é o ÚNICO campo da derivação que não deu para conferir contra
+ * uma fonte independente: os quatro identificadores certos já foram
+ * testados em produção, nos dois formatos, e nenhum abriu — o que aponta
+ * para o rótulo, e não para o JID.
+ *
+ * Testar é seguro e barato: a etiqueta do AES-GCM só confere com a chave
+ * exata, então rótulo errado nunca produz texto plausível. Quando um deles
+ * funcionar, o log registra qual foi e a lista pode encolher para ele.
+ */
+const MESSAGE_EDIT_USE_CASES = [
+  "Message Edit",
+  "Edit",
+  "Enc Message Edit",
+  "Message Secret Message",
+  "Msg Edit",
+  "Event Edit",
+] as const;
 
 /** O AES-GCM do WhatsApp guarda a etiqueta de autenticação nos últimos 16 bytes. */
 const GCM_TAG_LENGTH = 16;
@@ -83,12 +102,14 @@ export function decryptSecretEncryptedEdit(input: {
   editorJid: string;
   /** Voto de enquete leva dado autenticado; a edição, não. */
   usedAad?: boolean;
+  /** Rótulo do caso de uso; o padrão é o que o whatsmeow usa. */
+  useCase?: string;
 }): proto.IMessage | null {
   const info = Buffer.concat([
     Buffer.from(input.targetExternalMessageId),
     Buffer.from(input.originalSenderJid),
     Buffer.from(input.editorJid),
-    Buffer.from(MESSAGE_EDIT_USE_CASE),
+    Buffer.from(input.useCase ?? MESSAGE_EDIT_USE_CASES[0]),
   ]);
   const key = hkdf(input.messageSecret, info);
   try {
@@ -155,6 +176,9 @@ export interface DecryptedEdit {
   originalSenderJid: string;
   editorJid: string;
   usedAad: boolean;
+  useCase: string;
+  /** Quantas combinações foram testadas até acertar. */
+  attempts: number;
 }
 
 export function decryptEditedText(input: {
@@ -169,23 +193,28 @@ export function decryptEditedText(input: {
 }): DecryptedEdit | null {
   const autores = unique(input.originalSenderCandidates);
   const editores = unique(input.editorCandidates);
-  for (const originalSenderJid of autores) {
-    for (const editorJid of editores) {
-      // O AAD é do voto de enquete, não da edição. Ele entra na lista
-      // mesmo assim porque custa uma tentativa e cobre a hipótese de o
-      // WhatsApp passar a exigi-lo aqui também.
-      for (const usedAad of [false, true]) {
-        const message = decryptSecretEncryptedEdit({
-          encPayload: input.encPayload,
-          encIv: input.encIv,
-          messageSecret: input.messageSecret,
-          targetExternalMessageId: input.targetExternalMessageId,
-          originalSenderJid,
-          editorJid,
-          usedAad,
-        });
-        const text = message ? (extractContent(message)?.content ?? null) : null;
-        if (text) return { text, originalSenderJid, editorJid, usedAad };
+  let attempts = 0;
+  for (const useCase of MESSAGE_EDIT_USE_CASES) {
+    for (const originalSenderJid of autores) {
+      for (const editorJid of editores) {
+        // O AAD é do voto de enquete, não da edição. Ele entra na lista
+        // mesmo assim porque custa uma tentativa e cobre a hipótese de o
+        // WhatsApp passar a exigi-lo aqui também.
+        for (const usedAad of [false, true]) {
+          attempts += 1;
+          const message = decryptSecretEncryptedEdit({
+            encPayload: input.encPayload,
+            encIv: input.encIv,
+            messageSecret: input.messageSecret,
+            targetExternalMessageId: input.targetExternalMessageId,
+            originalSenderJid,
+            editorJid,
+            usedAad,
+            useCase,
+          });
+          const text = message ? (extractContent(message)?.content ?? null) : null;
+          if (text) return { text, originalSenderJid, editorJid, usedAad, useCase, attempts };
+        }
       }
     }
   }
