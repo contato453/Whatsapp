@@ -428,11 +428,35 @@ export function extractProtocolAction(
     return {
       kind: "edit",
       targetExternalMessageId,
-      // Aqui o conteúdo novo JÁ está desembrulhado (veio de dentro do
-      // protocolMessage), então classifica direto.
-      newContent: extractContent(edited)?.content ?? null,
+      // Primeiro o lugar de sempre; depois, busca funda no pacote inteiro.
+      // O aninhamento do conteúdo novo VARIA com a versão do aplicativo, e
+      // sem o texto a edição é reconhecida (não vira lixo) mas some em
+      // silêncio, deixando o texto velho na tela do atendente — que é o
+      // defeito que estamos consertando, só que mais difícil de ver.
+      newContent: extractContent(edited)?.content ?? findEditedText(protocolMessage),
       editedAt: protocolMessage.timestampMs ? toEditDate(protocolMessage.timestampMs) : null,
     };
+  }
+  return null;
+}
+
+/**
+ * Procura o texto novo em QUALQUER profundidade dentro do pacote de edição.
+ *
+ * Dentro de um pacote de tipo edição o único texto que existe é o texto
+ * novo, então varrer é seguro — e é melhor do que depender de acertar o
+ * aninhamento exato, que muda de uma versão do WhatsApp para outra. O nível
+ * atual é testado ANTES dos filhos, para que o texto da mensagem vença o de
+ * uma citação embutida nela.
+ */
+function findEditedText(value: unknown, depth = 0): string | null {
+  if (!value || typeof value !== "object" || depth > 6) return null;
+  const here = extractContent(value as proto.IMessage);
+  if (here?.content) return here.content;
+  for (const inner of Object.values(value as Record<string, unknown>)) {
+    if (!inner || typeof inner !== "object") continue;
+    const found = findEditedText(inner, depth + 1);
+    if (found) return found;
   }
   return null;
 }

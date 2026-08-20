@@ -179,3 +179,32 @@ describe("isDisplayableContent", () => {
     expect(isDisplayableContent(extractContent(asMessage({ stickerMessage: {} })))).toBe(true);
   });
 });
+
+describe("aninhamento inesperado do conteúdo novo", () => {
+  it("acha o texto novo mesmo em profundidade que não prevíamos", () => {
+    // Não dá para prever como cada versão do aplicativo aninha o conteúdo.
+    // Reconhecer o pacote e perder o texto é o pior desfecho: sem bolha
+    // lixo, mas com o texto velho na tela e ninguém percebendo.
+    const acao = extractProtocolAction(
+      asMessage({
+        editedMessage: {
+          protocolMessage: {
+            key: { id: ORIGINAL },
+            type: 14,
+            editedMessage: { message: { extendedTextMessage: { text: "Testando 5.2" } } },
+          },
+        },
+      }),
+    );
+    expect(acao?.kind).toBe("edit");
+    expect(acao?.newContent).toBe("Testando 5.2");
+  });
+
+  it("pacote de edição sem texto algum continua sem conteúdo", () => {
+    const acao = extractProtocolAction(
+      asMessage({ protocolMessage: { key: { id: ORIGINAL }, type: 14, editedMessage: {} } }),
+    );
+    expect(acao?.kind).toBe("edit");
+    expect(acao?.newContent).toBeNull();
+  });
+});
