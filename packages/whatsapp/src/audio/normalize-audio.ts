@@ -124,17 +124,21 @@ function runFfmpeg(args: string[], input: Buffer): Promise<Buffer> {
  */
 const TIMELINE_LIMPA = ["-af", "aresample=async=1:first_pts=0"];
 
-function encodeArgs(profile: AudioNormalizationProfile): string[] {
+function encodeArgs(profile: AudioNormalizationProfile, bitrate?: string): string[] {
   // Voz: exatamente o que o WhatsApp usa nas próprias mensagens de voz.
   // Arquivo: o áudio pode ser música ou uma gravação de reunião, então
   // mantém a taxa e os canais da origem para não estragar o material.
+  //
+  // `bitrate` sobrescreve só esse número, sem mexer em taxa de amostragem nem
+  // em canais. Existe para baixar o peso da gravação do microfone sem tocar na
+  // cadeia de resampling, que é onde morava o atraso de codec deste defeito.
   return profile === "voice"
     ? [
         ...TIMELINE_LIMPA,
-        "-c:a", "libopus", "-b:a", "24k", "-ar", "16000", "-ac", "1",
+        "-c:a", "libopus", "-b:a", bitrate ?? "24k", "-ar", "16000", "-ac", "1",
         "-application", "voip",
       ]
-    : [...TIMELINE_LIMPA, "-c:a", "libopus", "-b:a", "96k", "-ar", "48000"];
+    : [...TIMELINE_LIMPA, "-c:a", "libopus", "-b:a", bitrate ?? "96k", "-ar", "48000"];
 }
 
 /** Duração e waveform saem da MESMA decodificação: um passe de PCM. */
@@ -190,6 +194,8 @@ async function describeAudio(
 export interface NormalizeAudioOptions {
   profile: AudioNormalizationProfile;
   logger: Logger;
+  /** Sobrescreve o bitrate do perfil, e só ele. */
+  bitrate?: string;
 }
 
 /**
@@ -202,7 +208,7 @@ export interface NormalizeAudioOptions {
  */
 export async function normalizeAudioForWhatsApp(
   input: Buffer,
-  { profile, logger }: NormalizeAudioOptions,
+  { profile, logger, bitrate }: NormalizeAudioOptions,
 ): Promise<NormalizedAudio> {
   const sourceContainer = detectAudioContainer(input);
   const precisaConverter =
@@ -233,7 +239,7 @@ export async function normalizeAudioForWhatsApp(
       "-hide_banner", "-loglevel", "error",
       "-i", "pipe:0",
       "-vn",
-      ...encodeArgs(profile),
+      ...encodeArgs(profile, bitrate),
       "-f", "ogg",
       "pipe:1",
     ],
