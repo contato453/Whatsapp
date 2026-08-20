@@ -596,7 +596,12 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   `messages.upsert` e o `messages.update`, para onde o Baileys converte o pacote de
   `MESSAGE_EDIT` e de `REVOKE`. Ouvir só o primeiro, ou ler do segundo apenas o `status`,
   descarta a edição em silêncio — foi exatamente esse o defeito. Receber duas vezes não
-  incomoda: quem aplica é idempotente.
+  incomoda: quem aplica é idempotente. **O ANINHAMENTO DO TEXTO NOVO VARIA com a versão do
+  aplicativo**, então `findEditedText` varre o pacote inteiro em vez de apostar num
+  caminho fixo (dentro de um pacote de edição o único texto que existe é o novo).
+  Reconhecer o pacote e não achar o texto é a pior falha das duas: não sobra bolha lixo
+  para denunciar, e a mensagem velha continua na tela. Por isso esse caso, e só ele, loga
+  `message_edit_without_content` com as CHAVES do pacote — nunca o conteúdo.
 - **FORMATO DE ÁUDIO: o WhatsApp toca mensagem de voz em OGG/Opus, mono, 16 kHz, com a
   flag `ptt` e a DURAÇÃO em segundos.** Nada disso é o que o navegador grava (ver a
   armadilha na seção 13), então todo áudio que sai é normalizado no SERVIDOR, por ffmpeg,
