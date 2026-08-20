@@ -70,6 +70,8 @@ export interface WhatsAppProviderEvents {
     editorExternalId: string;
     /** Quem mandou a original, quando o pacote permite saber */
     originalSenderExternalId: string | null;
+    /** JID da conversa como veio na CHAVE da original, que é o que o WhatsApp usou */
+    targetRemoteJid: string | null;
     editedAt: Date | null;
   }) => void;
   /** Chamada de voz/vídeo registrada no chat */

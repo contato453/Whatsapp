@@ -439,6 +439,9 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
             : isGroupJid(remoteJid)
               ? null
               : stripDeviceSuffix(remoteJid),
+        targetRemoteJid: encryptedEdit.targetRemoteJid
+          ? stripDeviceSuffix(encryptedEdit.targetRemoteJid)
+          : null,
         editedAt: message.messageTimestamp ? toDate(message.messageTimestamp) : null,
       });
       return;

@@ -55,10 +55,10 @@ describe("edição cifrada", () => {
       encIv,
       messageSecret: segredo,
       targetExternalMessageId: ORIGINAL_ID,
-      originalSenderJid: AUTOR,
-      editorJid: AUTOR,
+      originalSenderCandidates: [AUTOR],
+      editorCandidates: [AUTOR],
     });
-    expect(texto).toBe("CNPJ 11.222.333/0001-44");
+    expect(texto?.text).toBe("CNPJ 11.222.333/0001-44");
   });
 
   it("segredo errado não abre, e não explode", () => {
@@ -69,8 +69,8 @@ describe("edição cifrada", () => {
         encIv,
         messageSecret: randomBytes(32),
         targetExternalMessageId: ORIGINAL_ID,
-        originalSenderJid: AUTOR,
-        editorJid: AUTOR,
+        originalSenderCandidates: [AUTOR],
+        editorCandidates: [AUTOR],
       }),
     ).toBeNull();
   });
@@ -85,12 +85,14 @@ describe("edição cifrada", () => {
       encIv,
       messageSecret: segredo,
       targetExternalMessageId: ORIGINAL_ID,
-      originalSenderJid: AUTOR,
-      editorJid: AUTOR,
+      originalSenderCandidates: [AUTOR],
+      editorCandidates: [AUTOR],
     };
     expect(decryptEditedText({ ...base, targetExternalMessageId: "outro" })).toBeNull();
-    expect(decryptEditedText({ ...base, originalSenderJid: "5511@s.whatsapp.net" })).toBeNull();
-    expect(decryptEditedText({ ...base, editorJid: "5511@s.whatsapp.net" })).toBeNull();
+    expect(
+      decryptEditedText({ ...base, originalSenderCandidates: ["5511@s.whatsapp.net"] }),
+    ).toBeNull();
+    expect(decryptEditedText({ ...base, editorCandidates: ["5511@s.whatsapp.net"] })).toBeNull();
   });
 
   it("abre também quando quem edita não é quem mandou", () => {
@@ -103,9 +105,9 @@ describe("edição cifrada", () => {
         encIv,
         messageSecret: segredo,
         targetExternalMessageId: ORIGINAL_ID,
-        originalSenderJid: AUTOR,
-        editorJid: editor,
-      }),
+        originalSenderCandidates: [AUTOR],
+        editorCandidates: [editor],
+      })?.text,
     ).toBe("corrigido");
   });
 });
@@ -148,5 +150,43 @@ describe("extractMessageSecret", () => {
   it("mensagem sem segredo devolve nulo", () => {
     expect(extractMessageSecret({ conversation: "oi" } as proto.IMessage)).toBeNull();
     expect(extractMessageSecret(null)).toBeNull();
+  });
+});
+
+describe("candidatos de JID", () => {
+  it("acha a combinação certa no meio das erradas, e diz qual foi", () => {
+    // O WhatsApp endereça a mesma pessoa ora por telefone, ora por "@lid",
+    // e o que gravamos nem sempre é o que ele usou na chave. Testar é
+    // barato e não abre errado: a etiqueta do GCM só confere com a chave
+    // exata.
+    const segredo = randomBytes(32);
+    const lid = "199887766@lid";
+    const { encPayload, encIv } = cifrarEdicao("texto novo", segredo, lid, lid);
+    const achado = decryptEditedText({
+      encPayload,
+      encIv,
+      messageSecret: segredo,
+      targetExternalMessageId: ORIGINAL_ID,
+      originalSenderCandidates: [AUTOR, lid],
+      editorCandidates: [AUTOR, lid],
+    });
+    expect(achado?.text).toBe("texto novo");
+    expect(achado?.originalSenderJid).toBe(lid);
+    expect(achado?.editorJid).toBe(lid);
+    expect(achado?.usedAad).toBe(false);
+  });
+
+  it("nenhum candidato serve devolve nulo", () => {
+    const { encPayload, encIv } = cifrarEdicao("x", randomBytes(32), AUTOR, AUTOR);
+    expect(
+      decryptEditedText({
+        encPayload,
+        encIv,
+        messageSecret: randomBytes(32),
+        targetExternalMessageId: ORIGINAL_ID,
+        originalSenderCandidates: [AUTOR, "199887766@lid"],
+        editorCandidates: [AUTOR, "199887766@lid"],
+      }),
+    ).toBeNull();
   });
 });

@@ -616,7 +616,11 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   `Message.metadata` (`MESSAGE_SECRET_METADATA_KEY`), senão a edição dela nunca poderá ser
   aberta; (2) mensagem anterior a essa gravação **não tem** como ter a edição lida — é o
   desenho do protocolo, não defeito, e o caso vira log `message_edit_secret_missing`;
-  (3) errar qualquer um dos quatro campos da derivação faz o AES-GCM recusar em SILÊNCIO,
+  (3) o JID de quem mandou e de quem editou é passado como LISTA DE CANDIDATOS, porque o
+  WhatsApp endereça a mesma pessoa ora pelo telefone, ora pelo `@lid`, e o que gravamos nem
+  sempre é o que ele usou na chave — a etiqueta do AES-GCM só confere com o certo, então
+  testar não abre errado, e o log `message_edit_decrypted` registra a combinação vencedora;
+  (4) errar qualquer um dos quatro campos da derivação faz o AES-GCM recusar em SILÊNCIO,
   com o mesmo sintoma de não ter recebido nada, e por isso `test/message-secret.test.ts`
   cifra com o mesmo esquema e confere que a função abre. O caminho antigo do
   `protocolMessage` continua ligado: aparelho desatualizado ainda o usa.

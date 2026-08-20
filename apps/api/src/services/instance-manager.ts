@@ -484,25 +484,53 @@ export class InstanceManager {
           });
           return;
         }
-        const newText = decryptEditedText({
+        // O WhatsApp endereça a mesma pessoa ora pelo telefone, ora pelo
+        // identificador interno ("@lid"), e a chave da edição é derivada do
+        // JID que ELE usou — que nem sempre é o que gravamos. Por isso os
+        // candidatos: a etiqueta do AES-GCM só confere com o certo, então
+        // não há risco de abrir errado, e o log registra qual venceu.
+        const decrypted = decryptEditedText({
           encPayload: event.encPayload,
           encIv: event.encIv,
           messageSecret: Buffer.from(secret, "base64"),
           targetExternalMessageId: event.targetExternalMessageId,
-          // O autor da original sai do que gravamos na ingestão, que vale
-          // também em grupo, onde o pacote não informa quem foi.
-          originalSenderJid:
-            original.senderExternalId ?? event.originalSenderExternalId ?? event.externalChatId,
-          editorJid: event.editorExternalId,
+          originalSenderCandidates: [
+            event.targetRemoteJid ?? "",
+            original.senderExternalId ?? "",
+            event.originalSenderExternalId ?? "",
+            event.externalChatId,
+          ],
+          editorCandidates: [
+            event.editorExternalId,
+            event.targetRemoteJid ?? "",
+            original.senderExternalId ?? "",
+            event.externalChatId,
+          ],
         });
-        if (!newText) {
+        if (!decrypted) {
           this.logger.warn({
             instanceId: event.instanceId,
             messageId: original.id,
             event: "message_edit_decrypt_failed",
+            // Nomes de campo e comprimento, nunca o conteúdo: é o que
+            // permite ver se o segredo veio inteiro e quais JIDs tentamos.
+            secretBytes: Buffer.from(secret, "base64").length,
+            candidates: {
+              target: event.targetRemoteJid,
+              stored: original.senderExternalId,
+              editor: event.editorExternalId,
+              chat: event.externalChatId,
+            },
           });
           return;
         }
+        this.logger.info({
+          instanceId: event.instanceId,
+          messageId: original.id,
+          event: "message_edit_decrypted",
+          usedAad: decrypted.usedAad,
+        });
+        const newText = decrypted.text;
         const result = await this.ingest.applyEdit({
           instanceId: event.instanceId,
           externalChatId: event.externalChatId,

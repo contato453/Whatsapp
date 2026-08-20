@@ -81,6 +81,8 @@ export function decryptSecretEncryptedEdit(input: {
   originalSenderJid: string;
   /** JID de quem fez a edição, sem sufixo de aparelho. */
   editorJid: string;
+  /** Voto de enquete leva dado autenticado; a edição, não. */
+  usedAad?: boolean;
 }): proto.IMessage | null {
   const info = Buffer.concat([
     Buffer.from(input.targetExternalMessageId),
@@ -90,7 +92,10 @@ export function decryptSecretEncryptedEdit(input: {
   ]);
   const key = hkdf(input.messageSecret, info);
   try {
-    const plaintext = aesGcmDecrypt(input.encPayload, key, input.encIv);
+    const aad = input.usedAad
+      ? Buffer.from(`${input.targetExternalMessageId}\u0000${input.editorJid}`)
+      : null;
+    const plaintext = aesGcmDecrypt(input.encPayload, key, input.encIv, aad);
     return proto.Message.decode(plaintext);
   } catch {
     // Chave errada, payload de outro recurso ou formato novo: em qualquer
@@ -113,11 +118,15 @@ function hkdf(ikm: Uint8Array, info: Buffer): Buffer {
     .subarray(0, 32);
 }
 
-function aesGcmDecrypt(payload: Uint8Array, key: Buffer, iv: Uint8Array): Buffer {
+function aesGcmDecrypt(
+  payload: Uint8Array,
+  key: Buffer,
+  iv: Uint8Array,
+  aad: Buffer | null,
+): Buffer {
   const data = Buffer.from(payload);
   const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(iv));
-  // Edição não leva dado adicional autenticado; voto de enquete leva, e
-  // copiar o AAD de lá faria a etiqueta nunca conferir.
+  if (aad) decipher.setAAD(aad);
   decipher.setAuthTag(data.subarray(data.length - GCM_TAG_LENGTH));
   return Buffer.concat([
     decipher.update(data.subarray(0, data.length - GCM_TAG_LENGTH)),
@@ -128,21 +137,63 @@ function aesGcmDecrypt(payload: Uint8Array, key: Buffer, iv: Uint8Array): Buffer
 /**
  * Texto novo de uma edição cifrada, já pronto para a aplicação.
  *
- * É esta a função que a API consome: ela devolve texto, e não uma estrutura
- * do Baileys, para que a regra arquitetural continue valendo — nada fora
- * deste pacote conhece o formato do WhatsApp.
+ * Recebe CANDIDATOS de JID em vez de um valor só, e devolve qual combinação
+ * funcionou. O motivo é concreto: a derivação usa o JID de quem mandou a
+ * original e o de quem editou, e hoje o WhatsApp endereça a mesma pessoa ora
+ * pelo telefone (`@s.whatsapp.net`), ora pelo identificador interno
+ * (`@lid`) — e o que gravamos no banco nem sempre é o mesmo que ele usou na
+ * chave. Errar produz uma chave diferente e o AES-GCM recusa em SILÊNCIO,
+ * com o mesmo sintoma de não ter recebido nada.
+ *
+ * Testar é barato (um HMAC e um AES por tentativa) e não tem risco de abrir
+ * errado: a etiqueta de autenticação só confere com a chave certa. Quem
+ * chama registra a combinação vencedora, e é isso que permite simplificar
+ * isto aqui no dia em que o WhatsApp parar de alternar os dois formatos.
  */
+export interface DecryptedEdit {
+  text: string;
+  originalSenderJid: string;
+  editorJid: string;
+  usedAad: boolean;
+}
+
 export function decryptEditedText(input: {
   encPayload: Uint8Array;
   encIv: Uint8Array;
   messageSecret: Uint8Array;
   targetExternalMessageId: string;
-  originalSenderJid: string;
-  editorJid: string;
-}): string | null {
-  const message = decryptSecretEncryptedEdit(input);
-  if (!message) return null;
-  return extractContent(message)?.content ?? null;
+  /** JIDs possíveis de quem mandou a original, em ordem de probabilidade. */
+  originalSenderCandidates: readonly string[];
+  /** JIDs possíveis de quem editou. */
+  editorCandidates: readonly string[];
+}): DecryptedEdit | null {
+  const autores = unique(input.originalSenderCandidates);
+  const editores = unique(input.editorCandidates);
+  for (const originalSenderJid of autores) {
+    for (const editorJid of editores) {
+      // O AAD é do voto de enquete, não da edição. Ele entra na lista
+      // mesmo assim porque custa uma tentativa e cobre a hipótese de o
+      // WhatsApp passar a exigi-lo aqui também.
+      for (const usedAad of [false, true]) {
+        const message = decryptSecretEncryptedEdit({
+          encPayload: input.encPayload,
+          encIv: input.encIv,
+          messageSecret: input.messageSecret,
+          targetExternalMessageId: input.targetExternalMessageId,
+          originalSenderJid,
+          editorJid,
+          usedAad,
+        });
+        const text = message ? (extractContent(message)?.content ?? null) : null;
+        if (text) return { text, originalSenderJid, editorJid, usedAad };
+      }
+    }
+  }
+  return null;
+}
+
+function unique(values: readonly string[]): string[] {
+  return [...new Set(values.filter((value) => value.length > 0))];
 }
 
 /**
