@@ -648,25 +648,15 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   API atendendo o resto normalmente. **Falha na conversão INTERROMPE o envio** com 422
   `audio_conversion_failed` e uma frase em português; enviar assim mesmo é o defeito que
   isso veio consertar.
-- **A MENSAGEM DE VOZ ESTÁ EM VALIDAÇÃO** (`VOICE_NOTE_ENABLED`, em
-  `apps/api/src/lib/outbound-audio.ts`, onde está o histórico inteiro). Ela ficou desligada
-  enquanto o áudio não chegava, e voltou a ser testada depois que a correção do atraso de
-  codec fez o áudio tocar: todas as tentativas anteriores com `ptt` aconteceram com a linha
-  de tempo suja, então o `ptt` pode ter sido inocente o tempo todo. **A CONVERSÃO É SEMPRE
-  A DE ARQUIVO** (OGG/Opus 48 kHz, linha de tempo zerada, sem waveform), inclusive na
-  mensagem de voz: essa é a forma de bytes que se provou entregue, e usar o perfil de voz
-  (mono 16 kHz, `-application voip`, com waveform) trocaria três coisas ao mesmo tempo, de
-  modo que um envio falho não diria qual delas foi. Religar a voz mexe em **uma variável**,
-  a flag. Com ela desligada, a bolha no cliente é um player comum, sem a onda e sem o 1.5x. O que se mediu: os MESMOS bytes com
-  `ptt: false` tocam no celular do cliente e com `ptt: true` chegam como "Este áudio não
-  está mais disponível", com imagem e vídeo passando normalmente pelo mesmo socket.
-  Formato e waveform foram descartados como causa. **O que consertou o áudio foi outra
-  coisa: o atraso de codec que o WebM arrasta (ver a seção 13).** Consequência importante:
-  toda tentativa com `ptt` ligado aconteceu ANTES dessa correção, ou seja, a mensagem de
-  voz nunca foi testada com a linha de tempo limpa, e é plausível que o `ptt` fosse
-  inocente o tempo todo. Para religar, ponha a constante em `true` e mande UM áudio para
-  um celular de verdade; o caminho de `ptt` continua inteiro e testado, inclusive o
-  `relayVoiceNote`.
+- **A MENSAGEM DE VOZ ESTÁ LIGADA** (`VOICE_NOTE_ENABLED`, em
+  `apps/api/src/lib/outbound-audio.ts`, com o histórico inteiro). **A CONVERSÃO É SEMPRE A
+  DE ARQUIVO**, inclusive na mensagem de voz: OGG/Opus 48 kHz, linha de tempo zerada e sem
+  waveform, que é a forma de bytes provada em produção. O perfil de voz (mono 16 kHz,
+  `-application voip`, com waveform) é o que o WhatsApp usa e daria arquivo menor, mas
+  trocá-lo mexe em três coisas de uma vez sobre algo que funciona: se for experimentar,
+  troque UMA variável por vez e mande um áudio de verdade a cada passo. Desligar a
+  constante faz a gravação sair como arquivo de áudio comum, que toca do mesmo jeito, só
+  sem a onda e sem o 1.5x.
 - **A MENSAGEM DE VOZ NÃO SAI PELO `sendMessage` do Baileys**, e sim por
   `relayVoiceNote` (`qrcode-provider.ts`), que monta a mensagem com
   `generateWAMessage`, devolve a waveform e chama `relayMessage`. O motivo é uma perda
@@ -1513,28 +1503,15 @@ sempre juntos.
   `Message.metadata.originalMediaUrl` para reprocessar. O ffmpeg é dependência da imagem
   da API (`apps/api/Dockerfile`) e do CI, e os testes de conversão se **pulam sozinhos**
   onde ele não existe.
-- **`ptt: true` e `ptt: false` percorrem caminhos DIFERENTES no Baileys, e foi isso que
-  separou o defeito** (e é por isso que a mensagem de voz está desligada; ver a seção 8). Com os mesmos bytes OGG/Opus e o mesmo mime type, o áudio
-  anexado (`ptt: false`) tocava no celular e a mensagem de voz (`ptt: true`) chegava
-  como "Este áudio não está mais disponível". Container, codec, upload, sessão e
-  `mediaKey` são idênticos nos dois, então nada disso podia ser a causa: a única
-  variável era a flag. O que se achou nesse recorte foi a waveform apagada em silêncio
-  (ver a seção 8). **Ao investigar áudio quebrado, a primeira coisa a fazer é mandar o
-  MESMO arquivo pelo clipe e pelo microfone**: se um funciona e o outro não, o problema
-  está no que só a mensagem de voz percorre, e não no formato.
-- **O WEBM DO NAVEGADOR CARREGA ATRASO DE CODEC, E ELE VAZA PARA A SAÍDA.** Convertendo
-  o WebM do MediaRecorder, o OGG saía com `start_pts` 336; o mesmo comando partindo de um
-  WAV do computador saía com `start_pts` 0. Era a última diferença estrutural entre o áudio
-  gravado e o arquivo anexado, e o anexado é o caminho comprovadamente entregue. Por isso
-  a conversão passa `-af aresample=async=1:first_pts=0` (`TIMELINE_LIMPA`, em
-  `normalize-audio.ts`) nos dois perfis: para quem já começa em zero é inócuo, e para a
-  gravação torna a saída indistinguível da de um arquivo. Há teste que compara os dois
-  caminhos com ffprobe.
-- **WAVEFORM É CAMPO DE MENSAGEM DE VOZ, e áudio comum não leva.** Mandar `waveform` com
-  `ptt: false` produz uma combinação que nenhum cliente oficial gera. Aconteceu aqui, e o
-  log registrou (`voiceNote: false` ao lado de `waveform: 64`) num envio que o cliente não
-  conseguiu ouvir. `mediaContent` (`qrcode-provider.ts`) só inclui a waveform quando o
-  `ptt` sai verdadeiro.
+- **MANDE O MESMO ARQUIVO PELO CLIPE E PELO MICROFONE. É o teste que separa tudo.** Foi
+  ele que isolou este defeito depois de várias hipóteses erradas: o arquivo anexado tocava
+  no celular e a gravação não, com container, codec, mime type, duração, upload e sessão
+  iguais. O que sobrou foi a linha de tempo, e era isso. **Cuidado com a leitura fácil**:
+  na época pareceu que a culpada era a flag `ptt`, porque ela também diferia entre os dois
+  caminhos, e a mensagem de voz chegou a ser desligada por causa disso. Com o atraso de
+  codec zerado, o `ptt` voltou a funcionar sem tocar em mais nada. A lição é a do teste,
+  não a da flag: quando dois caminhos divergem, iguale-os em UMA variável por vez, senão a
+  primeira diferença que aparecer leva a culpa.
 - **Arquivo de áudio ANEXADO do computador continua arquivo, e não vira mensagem de voz.**
   Quem clicou no clipe escolheu um arquivo; transformar um mp3 de dez minutos em áudio de
   voz mudaria o que a pessoa quis mandar. Ele só troca de container quando o WhatsApp não
@@ -1654,10 +1631,9 @@ sempre juntos.
 persistida e retomada após restart; sync de chats/contatos/grupos e fotos; recebimento e
 envio de texto, imagem, áudio, vídeo, documento, figurinha, localização, contato; reações;
 responder citando; encaminhar; apagar; editar mensagem enviada pelo composer (texto e
-legenda de mídia, dentro da janela de 15 minutos do WhatsApp); gravação de áudio,
-normalizada no servidor para o OGG/Opus mono 16 kHz que o WhatsApp exige, com recusa
-clara quando a conversão falha (sai como arquivo de áudio, e não como mensagem de voz:
-ver `VOICE_NOTE_ENABLED` na seção 8);
+legenda de mídia, dentro da janela de 15 minutos do WhatsApp); gravação de áudio como
+mensagem de voz de verdade, normalizada no servidor para OGG/Opus com a linha de tempo
+zerada, com recusa clara quando a conversão falha;
 enquetes; edição e exclusão feitas pelo cliente refletidas na mensagem original, com marca
 "editada" e histórico das versões anteriores; mensagens agendadas com retentativa; notas internas; etiquetas; atribuição com
 histórico completo; quatro status de atendimento; leitura por usuário (cada pessoa com
