@@ -86,6 +86,29 @@ export class InstanceManager {
             message.senderPhone,
           );
         }
+        // Mensagem que já existia e voltou com texto diferente: é a edição
+        // que o reenvio do servidor revelou. Publica a atualização, e não
+        // uma bolha nova.
+        if (result?.edited) {
+          const [conversa, atualizada] = await Promise.all([
+            this.prisma.conversation.findUnique({
+              where: { id: result.conversationId },
+              select: {
+                id: true,
+                whatsappInstanceId: true,
+                departmentId: true,
+                assignedUserId: true,
+              },
+            }),
+            this.prisma.message.findUnique({ where: { id: result.messageId } }),
+          ]);
+          if (conversa && atualizada) {
+            this.io
+              .to(conversationAudience(organizationId, conversa))
+              .emit(RealtimeEvents.MessageUpdated, serializeMessage(atualizada));
+          }
+          return;
+        }
         if (!result?.isNewMessage) return;
         const [conversation, persisted] = await Promise.all([
           this.prisma.conversation.findUnique({
@@ -561,6 +584,14 @@ export class InstanceManager {
           // o que está na tela envelheceu. Silêncio aqui é o defeito
           // original de volta, na sua forma mais perigosa.
           await this.publishEditUnavailable(organizationId, event);
+          // Segunda via: o servidor guarda a mensagem no estado ATUAL, então
+          // pedir o reenvio traz o texto novo em claro. Se vier, a ingestão
+          // reconhece o conteúdo diferente e aplica a edição sozinha.
+          await this.provider.requestMessageResend(event.instanceId, event.externalChatId, {
+            externalMessageId: event.targetExternalMessageId,
+            fromMe: false,
+            participantExternalId: original.senderExternalId,
+          });
           return;
         }
         this.logger.info({

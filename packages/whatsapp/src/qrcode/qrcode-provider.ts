@@ -860,6 +860,39 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     });
   }
 
+  async requestMessageResend(
+    instanceId: string,
+    externalChatId: string,
+    target: MessageTarget,
+  ): Promise<boolean> {
+    const socket = this.sessions.get(instanceId)?.socket;
+    if (!socket) return false;
+    try {
+      // O próprio Baileys guarda quais reenvios já foram pedidos, então
+      // chamar de novo para a mesma mensagem não vira enxurrada de pedidos.
+      await socket.requestPlaceholderResend({
+        remoteJid: externalChatId,
+        id: target.externalMessageId,
+        fromMe: target.fromMe,
+        ...(target.participantExternalId ? { participant: target.participantExternalId } : {}),
+      });
+      this.logger.info({
+        instanceId,
+        messageId: target.externalMessageId,
+        event: "message_resend_requested",
+      });
+      return true;
+    } catch (err) {
+      this.logger.warn({
+        instanceId,
+        messageId: target.externalMessageId,
+        event: "message_resend_failed",
+        error: String(err),
+      });
+      return false;
+    }
+  }
+
   async editMessage(
     instanceId: string,
     chatId: string,

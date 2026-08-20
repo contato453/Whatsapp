@@ -176,6 +176,25 @@ export interface WhatsAppProvider {
    * editada. O prazo de edição é do WhatsApp (poucos minutos): passado ele,
    * o servidor recusa, então quem chama precisa conferir antes.
    */
+  /**
+   * Pede ao servidor do WhatsApp que reenvie uma mensagem.
+   *
+   * Existe para o caso da EDIÇÃO CIFRADA que não conseguimos abrir: o
+   * servidor guarda o estado ATUAL da mensagem (é assim que um aparelho
+   * novo já a vê editada), então o reenvio traz o texto novo em claro, sem
+   * depender de decifrar nada. A resposta volta pelo caminho normal de
+   * recebimento.
+   *
+   * Devolve false quando a instância não está conectada ou quando o
+   * WhatsApp recusa — não lançar aqui é de propósito: isto é uma tentativa
+   * extra, e falhar nela não pode derrubar o tratamento da edição.
+   */
+  requestMessageResend(
+    instanceId: string,
+    externalChatId: string,
+    target: MessageTarget,
+  ): Promise<boolean>;
+
   editMessage(
     instanceId: string,
     chatId: string,

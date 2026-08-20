@@ -287,3 +287,25 @@ describe("edição que não pôde ser lida", () => {
     expect(readMessageVersions(estado.updates[0]?.metadata)).toHaveLength(1);
   });
 });
+
+describe("reenvio pedido ao servidor", () => {
+  it("mensagem que volta com texto diferente vira edição, não bolha nova", async () => {
+    // O servidor guarda a mensagem no estado ATUAL. Quando a edição chega
+    // cifrada e não abre, pedimos o reenvio: o texto novo vem em claro, e a
+    // reentrega é reconhecida como edição em vez de duplicata.
+    const ingest = buildIngest();
+    const resultado = await ingest.applyEdit({
+      instanceId: "inst-1",
+      externalChatId: "5511999@s.whatsapp.net",
+      targetExternalMessageId: "wamid-1",
+      newContent: "CNPJ 99.999.999/0001-99",
+      editedAt: null,
+    });
+    expect(resultado).not.toBeNull();
+    expect(estado.criadas).toBe(0);
+    expect(estado.mensagem?.content).toBe("CNPJ 99.999.999/0001-99");
+    expect(readMessageVersions(estado.mensagem?.metadata)[0]?.content).toBe(
+      "CNPJ 11.111.111/0001-11",
+    );
+  });
+});

@@ -29,6 +29,8 @@ export interface IngestResult {
   conversationId: string;
   messageId: string;
   isNewMessage: boolean;
+  /** A mensagem já existia e teve o conteúdo ATUALIZADO (edição descoberta). */
+  edited?: boolean;
 }
 
 /**
@@ -97,9 +99,33 @@ export class MessageIngestService {
           externalMessageId: message.externalMessageId,
         },
       },
-      select: { id: true },
+      select: { id: true, content: true },
     });
     if (existing) {
+      // Reentrega com texto DIFERENTE é o reenvio que pedimos ao servidor
+      // para descobrir o que uma edição cifrada dizia: o WhatsApp devolve a
+      // mensagem no estado atual, já editada. Aplicar aqui é o que fecha o
+      // ciclo sem depender de decifrar nada. Texto igual continua sendo
+      // apenas uma duplicata, e não faz nada.
+      // A comparação só vale quando sabemos o conteúdo atual: `content`
+      // vem no select, e checar a presença evita decidir no escuro.
+      if (message.content && "content" in existing && existing.content !== message.content) {
+        const edited = await this.applyEdit({
+          instanceId: message.instanceId,
+          externalChatId: message.externalChatId,
+          targetExternalMessageId: message.externalMessageId,
+          newContent: message.content,
+          editedAt: null,
+        });
+        if (edited) {
+          return {
+            conversationId: conversation.id,
+            messageId: existing.id,
+            isNewMessage: false,
+            edited: true,
+          };
+        }
+      }
       return { conversationId: conversation.id, messageId: existing.id, isNewMessage: false };
     }
 

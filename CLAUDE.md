@@ -628,6 +628,14 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   com o mesmo sintoma de não ter recebido nada, e por isso `test/message-secret.test.ts`
   cifra com o mesmo esquema e confere que a função abre. O caminho antigo do
   `protocolMessage` continua ligado: aparelho desatualizado ainda o usa.
+- **QUANDO A EDIÇÃO CIFRADA NÃO ABRE, PEDIMOS O REENVIO AO SERVIDOR.** É a segunda via, e
+  não depende de criptografia nenhuma: o WhatsApp guarda a mensagem no estado ATUAL (é
+  assim que um aparelho novo já a vê editada), então `requestMessageResend` traz o texto
+  novo em claro pelo caminho normal de recebimento. A ingestão reconhece a reentrega com
+  conteúdo DIFERENTE e aplica como edição, em vez de descartar como duplicata — texto igual
+  continua sendo duplicata e não faz nada. Sem rota nova, sem evento novo: o ciclo fecha
+  reusando `applyEdit`. O reenvio é pedido só depois de a decifragem falhar, e o próprio
+  Baileys guarda quais já foram pedidos, então não vira enxurrada.
 - **NÃO FIXE A VERSÃO DO WHATSAPP WEB PARA CONTORNAR A EDIÇÃO CIFRADA. JÁ FOI TENTADO E
   DERRUBOU O SISTEMA.** O raciocínio é sedutor: é por anunciarmos a versão mais recente
   que o servidor manda a edição cifrada, então fixar uma anterior faria voltar o formato em
