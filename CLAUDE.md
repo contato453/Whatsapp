@@ -654,9 +654,13 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   comum, sem a onda e sem o 1.5x. O que se mediu: os MESMOS bytes com
   `ptt: false` tocam no celular do cliente e com `ptt: true` chegam como "Este áudio não
   está mais disponível", com imagem e vídeo passando normalmente pelo mesmo socket.
-  Formato e waveform foram descartados como causa. Para religar, ponha a constante em
-  `true` e mande UM áudio para um celular de verdade; o caminho de `ptt` continua inteiro
-  e testado.
+  Formato e waveform foram descartados como causa. **O que consertou o áudio foi outra
+  coisa: o atraso de codec que o WebM arrasta (ver a seção 13).** Consequência importante:
+  toda tentativa com `ptt` ligado aconteceu ANTES dessa correção, ou seja, a mensagem de
+  voz nunca foi testada com a linha de tempo limpa, e é plausível que o `ptt` fosse
+  inocente o tempo todo. Para religar, ponha a constante em `true` e mande UM áudio para
+  um celular de verdade; o caminho de `ptt` continua inteiro e testado, inclusive o
+  `relayVoiceNote`.
 - **A MENSAGEM DE VOZ NÃO SAI PELO `sendMessage` do Baileys**, e sim por
   `relayVoiceNote` (`qrcode-provider.ts`), que monta a mensagem com
   `generateWAMessage`, devolve a waveform e chama `relayMessage`. O motivo é uma perda
