@@ -56,6 +56,12 @@ export interface PreparedOutboundAudio {
  * arquivo pequeno) e sai como ARQUIVO DE ÁUDIO: o cliente vê um player comum,
  * sem a onda e sem o 1.5x.
  *
+ * O QUE DE FATO CONSERTOU O ÁUDIO FOI OUTRA COISA: o atraso de codec que o
+ * WebM do navegador arrasta para a saída da conversão. Isso importa aqui
+ * porque TODA tentativa com `ptt` ligado aconteceu antes daquela correção: a
+ * mensagem de voz nunca foi testada com a linha de tempo limpa, e é bem
+ * possível que o `ptt` fosse inocente o tempo todo.
+ *
  * PARA RELIGAR: ponha esta constante em `true` e mande UM áudio para um
  * celular de verdade. Se tocar, a mensagem de voz voltou. Nada mais precisa
  * mudar: o caminho de `ptt` continua inteiro e testado, inclusive o desvio de
