@@ -32,6 +32,7 @@ import type {
 } from "@azvchat/shared";
 import { detectAudioContainer, resolveAudioDeclaration } from "../audio/container.js";
 import type { MessageTarget, WhatsAppProvider, WhatsAppProviderEvents } from "../provider.js";
+import type { ProtocolAction } from "./normalize.js";
 import {
   chatTypeFromJid,
   directionFromKey,
@@ -45,6 +46,7 @@ import {
   isGroupJid,
   isIgnorableJid,
   jidToPhone,
+  messageKeyPaths,
   phoneFromJid,
   stripDeviceSuffix,
   toDate,
@@ -406,33 +408,7 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     // mídia (a bolha "Mídia indisponível" que a equipe via).
     const protocolAction = extractProtocolAction(message.message);
     if (protocolAction) {
-      // Edição reconhecida e SEM texto novo é a falha silenciosa desta
-      // história: nada vira bolha, nada é atualizado e ninguém percebe. Só
-      // esse caso deixa rastro, e da FORMA do pacote (as chaves do objeto),
-      // nunca do conteúdo da mensagem do cliente.
-      if (protocolAction.kind === "edit" && protocolAction.newContent == null) {
-        this.logger.warn({
-          instanceId,
-          messageId: message.key?.id ?? null,
-          event: "message_edit_without_content",
-          shape: Object.keys((message.message ?? {}) as Record<string, unknown>),
-        });
-      }
-      if (protocolAction.kind === "revoke") {
-        this.emit("message-deleted", {
-          instanceId,
-          externalChatId: remoteJid,
-          targetExternalMessageId: protocolAction.targetExternalMessageId,
-        });
-      } else if (protocolAction.newContent) {
-        this.emit("message-edited", {
-          instanceId,
-          externalChatId: remoteJid,
-          targetExternalMessageId: protocolAction.targetExternalMessageId,
-          newText: protocolAction.newContent,
-          editedAt: protocolAction.editedAt,
-        });
-      }
+      this.emitProtocolAction(instanceId, remoteJid, protocolAction, message.key?.id ?? null, message.message);
       // Pacote de protocolo nunca vira bolha, mesmo quando não soubemos o
       // que ele pede: seguir daqui criaria mensagem lixo no histórico.
       return;
@@ -463,10 +439,24 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     // log conta, o histórico fica limpo.
     if (!extracted) return;
     if (!isDisplayableContent(extracted)) {
+      // Nada de exibível: antes de descartar, procura o pacote de protocolo
+      // em QUALQUER profundidade. A lista de invólucros conhecidos é uma
+      // aposta no que o WhatsApp já usou, e foi por ela que a edição vinha
+      // parar aqui — reconhecida como "mensagem sem conteúdo" em vez de
+      // como edição. Mensagem de verdade nunca chega neste ponto.
+      const deepAction = extractProtocolAction(message.message, { deep: true });
+      if (deepAction) {
+        this.emitProtocolAction(instanceId, remoteJid, deepAction, message.key?.id ?? null, message.message);
+        return;
+      }
       this.logger.info({
         instanceId,
         messageId: message.key?.id ?? null,
         event: "message_without_content_skipped",
+        // Os NOMES dos campos, nunca os valores: é o que permite reconhecer
+        // uma estrutura nova do WhatsApp sem registrar o que o cliente
+        // escreveu.
+        shape: messageKeyPaths(message.message),
       });
       return;
     }
@@ -519,6 +509,49 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
       direction: normalized.direction,
     });
     this.emit("message", normalized);
+  }
+
+  /**
+   * Publica a ação pedida por um pacote de protocolo: apagar ou editar.
+   *
+   * Fica separado porque os DOIS pontos de reconhecimento chegam aqui — o
+   * teste normal e a busca profunda, que só roda quando a mensagem não tem
+   * nada de exibível.
+   */
+  private emitProtocolAction(
+    instanceId: string,
+    externalChatId: string,
+    action: ProtocolAction,
+    messageId: string | null,
+    rawMessage: WAMessage["message"],
+  ): void {
+    if (action.kind === "revoke") {
+      this.emit("message-deleted", {
+        instanceId,
+        externalChatId,
+        targetExternalMessageId: action.targetExternalMessageId,
+      });
+      return;
+    }
+    if (action.newContent) {
+      this.emit("message-edited", {
+        instanceId,
+        externalChatId,
+        targetExternalMessageId: action.targetExternalMessageId,
+        newText: action.newContent,
+        editedAt: action.editedAt,
+      });
+      return;
+    }
+    // Edição reconhecida e SEM texto novo é a falha silenciosa desta
+    // história: nada vira bolha, nada é atualizado e ninguém percebe. Só
+    // esse caso deixa rastro, e dos NOMES dos campos, nunca do conteúdo.
+    this.logger.warn({
+      instanceId,
+      messageId,
+      event: "message_edit_without_content",
+      shape: messageKeyPaths(rawMessage),
+    });
   }
 
   /**

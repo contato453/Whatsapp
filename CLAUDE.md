@@ -602,6 +602,17 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   Reconhecer o pacote e não achar o texto é a pior falha das duas: não sobra bolha lixo
   para denunciar, e a mensagem velha continua na tela. Por isso esse caso, e só ele, loga
   `message_edit_without_content` com as CHAVES do pacote — nunca o conteúdo.
+- **A LISTA DE INVÓLUCROS É UMA APOSTA, e por isso existe a BUSCA PROFUNDA.** Enumerar
+  `editedMessage`, `ephemeralMessage`, `viewOnce...` cobre o que o WhatsApp já usou, não o
+  que ele vai usar: em produção o pacote de edição chegou dentro de uma chave fora da
+  lista, escapou do reconhecimento e caiu na trava de conteúdo — sem bolha lixo (a trava
+  funcionou) e sem edição aplicada, que é a falha mais silenciosa das duas. Agora, quando a
+  mensagem não tem NADA de exibível, `extractProtocolAction(..., { deep: true })` procura o
+  `protocolMessage` em qualquer chave e em qualquer profundidade. A varredura só roda nesse
+  ponto de propósito: mensagem de verdade nunca chega até ali, então uma citação embutida
+  jamais é confundida com pacote de protocolo. Não achando nada, o log
+  `message_without_content_skipped` sai com os CAMINHOS das chaves (`messageKeyPaths`),
+  que é o que permite reconhecer a próxima estrutura sem registrar o que o cliente escreveu.
 - **FORMATO DE ÁUDIO: o WhatsApp toca mensagem de voz em OGG/Opus, mono, 16 kHz, com a
   flag `ptt` e a DURAÇÃO em segundos.** Nada disso é o que o navegador grava (ver a
   armadilha na seção 13), então todo áudio que sai é normalizado no SERVIDOR, por ffmpeg,

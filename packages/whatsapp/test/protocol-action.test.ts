@@ -5,6 +5,7 @@ import {
   extractEditedContent,
   extractProtocolAction,
   isDisplayableContent,
+  messageKeyPaths,
 } from "../src/qrcode/normalize.js";
 
 /**
@@ -206,5 +207,58 @@ describe("aninhamento inesperado do conteúdo novo", () => {
     );
     expect(acao?.kind).toBe("edit");
     expect(acao?.newContent).toBeNull();
+  });
+});
+
+describe("busca profunda (invólucro que não conhecíamos)", () => {
+  // O caso real que escapou em produção: o pacote de edição vinha dentro de
+  // uma chave que não estava na lista de invólucros conhecidos. Sem ele, a
+  // edição não virava bolha lixo (a trava de conteúdo pegava) mas também
+  // não era aplicada, e o atendente seguia lendo o texto velho.
+  const embrulhado = asMessage({
+    algumInvolucroNovo: {
+      message: {
+        protocolMessage: {
+          key: { id: ORIGINAL },
+          type: 14,
+          editedMessage: { conversation: "CNPJ corrigido" },
+        },
+      },
+    },
+  });
+
+  it("o teste normal NÃO reconhece — a lista de invólucros é uma aposta", () => {
+    expect(extractProtocolAction(embrulhado)).toBeNull();
+  });
+
+  it("a busca profunda reconhece e traz o texto novo", () => {
+    const acao = extractProtocolAction(embrulhado, { deep: true });
+    expect(acao?.kind).toBe("edit");
+    expect(acao?.targetExternalMessageId).toBe(ORIGINAL);
+    expect(acao?.newContent).toBe("CNPJ corrigido");
+  });
+
+  it("mensagem comum não vira protocolo nem na busca profunda", () => {
+    expect(extractProtocolAction(asMessage({ conversation: "oi" }), { deep: true })).toBeNull();
+    expect(
+      extractProtocolAction(asMessage({ imageMessage: { caption: "foto" } }), { deep: true }),
+    ).toBeNull();
+  });
+});
+
+describe("messageKeyPaths", () => {
+  it("devolve os caminhos das chaves, e nenhum valor", () => {
+    const caminhos = messageKeyPaths({
+      editedMessage: { message: { protocolMessage: { key: { id: "abc" }, type: 14 } } },
+    });
+    expect(caminhos).toContain("editedMessage.message.protocolMessage.type");
+    // O que a pessoa escreveu nunca entra: só o NOME do campo.
+    expect(caminhos.join(" ")).not.toContain("abc");
+  });
+
+  it("não estoura em binário nem em objeto vazio", () => {
+    expect(messageKeyPaths({ dados: new Uint8Array([1, 2, 3]) })).toEqual(["dados"]);
+    expect(messageKeyPaths({})).toEqual([]);
+    expect(messageKeyPaths(null)).toEqual([]);
   });
 });

@@ -377,6 +377,7 @@ export interface ProtocolAction {
  */
 function findProtocolMessage(
   rawMessage: proto.IMessage | null | undefined,
+  deep: boolean,
   depth = 0,
 ): proto.Message.IProtocolMessage | null {
   if (!rawMessage || depth > 5) return null;
@@ -391,17 +392,44 @@ function findProtocolMessage(
     "viewOnceMessageV2Extension",
     "documentWithCaptionMessage",
   ] as const;
-  for (const key of wrappers) {
+  // Na busca profunda vale QUALQUER chave, e não só os invólucros
+  // conhecidos: a lista deles é sempre uma aposta no que o WhatsApp já
+  // usou, e foi essa aposta que deixou a edição passar batido. Ela só é
+  // ligada quando a mensagem não tem nada de exibível, então mensagem de
+  // verdade nunca chega aqui.
+  const keys = deep ? Object.keys(message) : wrappers;
+  for (const key of keys) {
     const wrapped = message[key] as { message?: proto.IMessage } | undefined;
-    if (!wrapped) continue;
+    if (!wrapped || typeof wrapped !== "object") continue;
     // O invólucro pode trazer o conteúdo em `.message` ou já ser ele
     // próprio o conteúdo — as duas formas aparecem conforme a versão do
     // aplicativo, e recusar uma delas é perder a edição em silêncio.
     const inner = wrapped.message ?? (wrapped as proto.IMessage);
-    const found = findProtocolMessage(inner, depth + 1);
+    const found = findProtocolMessage(inner, deep, depth + 1);
     if (found) return found;
   }
   return null;
+}
+
+/**
+ * Caminhos das CHAVES de uma mensagem, para diagnóstico. Só nomes de campo
+ * do protocolo, nunca valores: é o que permite descobrir uma estrutura nova
+ * sem escrever no log uma linha do que o cliente escreveu.
+ */
+export function messageKeyPaths(value: unknown, prefix = "", depth = 0): string[] {
+  if (!value || typeof value !== "object" || ArrayBuffer.isView(value) || depth > 4) {
+    return prefix ? [prefix] : [];
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length === 0) return prefix ? [prefix] : [];
+  return entries
+    .flatMap(([key, inner]) => {
+      const path = prefix ? `${prefix}.${key}` : key;
+      return inner && typeof inner === "object" && !Array.isArray(inner)
+        ? messageKeyPaths(inner, path, depth + 1)
+        : [path];
+    })
+    .slice(0, 40);
 }
 
 /**
@@ -411,8 +439,9 @@ function findProtocolMessage(
  */
 export function extractProtocolAction(
   rawMessage: proto.IMessage | null | undefined,
+  options?: { deep?: boolean },
 ): ProtocolAction | null {
-  const protocolMessage = findProtocolMessage(rawMessage);
+  const protocolMessage = findProtocolMessage(rawMessage, options?.deep ?? false);
   const targetExternalMessageId = protocolMessage?.key?.id;
   if (!protocolMessage || !targetExternalMessageId) return null;
 
