@@ -611,9 +611,13 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   `audio_conversion_failed` e uma frase em português; enviar assim mesmo é o defeito que
   isso veio consertar.
 - **A MENSAGEM DE VOZ ESTÁ DESLIGADA** (`VOICE_NOTE_ENABLED = false`, em
-  `apps/api/src/lib/outbound-audio.ts`, onde está o porquê inteiro). A gravação do
-  microfone continua normalizada como voz (OGG/Opus mono 16 kHz) e sai como **arquivo de
-  áudio**: player comum, sem a onda e sem o 1.5x. O que se mediu: os MESMOS bytes com
+  `apps/api/src/lib/outbound-audio.ts`, onde está o porquê inteiro). Com ela desligada, a
+  gravação do microfone percorre **exatamente** o caminho do arquivo anexado: mesmo perfil
+  de conversão (OGG/Opus 48 kHz, `-application audio`) e **sem waveform**. Não basta
+  desligar a flag: perfil de voz produz mono 16 kHz com `-application voip`, e waveform é
+  campo de mensagem de voz. Qualquer um dos dois deixa a gravação diferente do anexo, e o
+  anexo é o único caminho comprovadamente entregue. Na tela do cliente vira um player
+  comum, sem a onda e sem o 1.5x. O que se mediu: os MESMOS bytes com
   `ptt: false` tocam no celular do cliente e com `ptt: true` chegam como "Este áudio não
   está mais disponível", com imagem e vídeo passando normalmente pelo mesmo socket.
   Formato e waveform foram descartados como causa. Para religar, ponha a constante em
@@ -1474,6 +1478,11 @@ sempre juntos.
   (ver a seção 8). **Ao investigar áudio quebrado, a primeira coisa a fazer é mandar o
   MESMO arquivo pelo clipe e pelo microfone**: se um funciona e o outro não, o problema
   está no que só a mensagem de voz percorre, e não no formato.
+- **WAVEFORM É CAMPO DE MENSAGEM DE VOZ, e áudio comum não leva.** Mandar `waveform` com
+  `ptt: false` produz uma combinação que nenhum cliente oficial gera. Aconteceu aqui, e o
+  log registrou (`voiceNote: false` ao lado de `waveform: 64`) num envio que o cliente não
+  conseguiu ouvir. `mediaContent` (`qrcode-provider.ts`) só inclui a waveform quando o
+  `ptt` sai verdadeiro.
 - **Arquivo de áudio ANEXADO do computador continua arquivo, e não vira mensagem de voz.**
   Quem clicou no clipe escolheu um arquivo; transformar um mp3 de dez minutos em áudio de
   voz mudaria o que a pessoa quis mandar. Ele só troca de container quando o WhatsApp não

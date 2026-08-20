@@ -13,6 +13,22 @@ import {
 const logger = pino({ level: "silent" });
 const temFfmpeg = spawnSync("ffmpeg", ["-version"]).status === 0;
 
+/** Lê a taxa de amostragem do arquivo pronto, para comparar os dois caminhos. */
+function taxaDeAmostragem(buffer: Buffer): number {
+  const saida = execFileSync(
+    "ffprobe",
+    [
+      "-hide_banner", "-loglevel", "error",
+      "-select_streams", "a:0",
+      "-show_entries", "stream=sample_rate",
+      "-of", "csv=p=0",
+      "pipe:0",
+    ],
+    { input: buffer, maxBuffer: 16 * 1024 * 1024 },
+  );
+  return Number(saida.toString().trim());
+}
+
 function gerar(args: string[]): Buffer {
   return execFileSync(
     "ffmpeg",
@@ -55,6 +71,26 @@ describe("prepareOutboundAudio", () => {
       expect(pronto.converted).toBe(true);
     },
     30_000,
+  );
+
+  it.skipIf(!temFfmpeg)(
+    "com a voz desligada, a gravação fica IDÊNTICA a um arquivo anexado",
+    async () => {
+      // Não basta desligar a flag: o perfil de voz produz mono 16 kHz e uma
+      // waveform, e as duas coisas deixariam a gravação diferente do anexo
+      // que comprovadamente toca no celular do cliente.
+      const webm = gerar([
+        "sine=frequency=440:duration=2",
+        "-c:a", "libopus", "-ar", "48000", "-ac", "1", "-f", "webm", "-live", "1",
+      ]);
+      const gravado = await prepareOutboundAudio(webm, "audio/webm", true, logger);
+      const anexado = await prepareOutboundAudio(webm, "audio/webm", false, logger);
+      expect(gravado.waveform).toBeUndefined();
+      expect(anexado.waveform).toBeUndefined();
+      expect(taxaDeAmostragem(gravado.data)).toBe(taxaDeAmostragem(anexado.data));
+      expect(taxaDeAmostragem(gravado.data)).toBe(48000);
+    },
+    60_000,
   );
 
   it.skipIf(!temFfmpeg)(

@@ -838,7 +838,11 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
           mimetype,
           ptt,
           ...(media.seconds !== undefined ? { seconds: media.seconds } : {}),
-          ...(media.waveform !== undefined ? { waveform: media.waveform } : {}),
+          // Waveform é campo de MENSAGEM DE VOZ. Mandá-la num áudio comum
+          // produz uma combinação que nenhum cliente oficial gera, e o
+          // objetivo aqui é o áudio comum sair idêntico ao arquivo anexado,
+          // que é o que comprovadamente toca no celular do cliente.
+          ...(ptt && media.waveform !== undefined ? { waveform: media.waveform } : {}),
         };
         break;
       }

@@ -18,13 +18,25 @@ const temFfmpeg = spawnSync("ffmpeg", ["-version"]).status === 0;
  * `sendMessage` de sempre. Se alguém achar que o desvio é desnecessário e
  * voltar tudo para o `sendMessage`, estes testes ficam vermelhos.
  */
+interface ConteudoAudio {
+  waveform?: Uint8Array;
+  ptt?: boolean;
+  seconds?: number;
+}
+
 interface SocketFalso {
   chamadas: { relay: number; send: number };
-  relayado: { waveform?: Uint8Array; ptt?: boolean; seconds?: number } | null;
+  relayado: ConteudoAudio | null;
+  /** O que foi entregue ao sendMessage do Baileys (áudio que não é voz). */
+  enviado: ConteudoAudio | null;
 }
 
 function montarProvider(): { provider: QrCodeWhatsAppProvider; espiao: SocketFalso } {
-  const espiao: SocketFalso = { chamadas: { relay: 0, send: 0 }, relayado: null };
+  const espiao: SocketFalso = {
+    chamadas: { relay: 0, send: 0 },
+    relayado: null,
+    enviado: null,
+  };
   const socket = {
     user: { id: "5511999999999:1@s.whatsapp.net" },
     waUploadToServer: async () => ({
@@ -39,8 +51,9 @@ function montarProvider(): { provider: QrCodeWhatsAppProvider; espiao: SocketFal
       espiao.relayado = audio ?? null;
       return "id-relay";
     },
-    sendMessage: async () => {
+    sendMessage: async (_jid: string, content: ConteudoAudio) => {
       espiao.chamadas.send += 1;
+      espiao.enviado = content;
       return { key: { id: "id-send" }, messageTimestamp: 1 };
     },
     ev: { emit: () => undefined },
@@ -108,6 +121,25 @@ describe("envio de mensagem de voz", () => {
       });
       expect(espiao.chamadas.send).toBe(1);
       expect(espiao.chamadas.relay).toBe(0);
+    },
+    60_000,
+  );
+
+  it.skipIf(!temFfmpeg)(
+    "áudio que não é mensagem de voz NUNCA leva waveform",
+    async () => {
+      // Waveform num áudio comum é combinação que nenhum cliente oficial
+      // gera. O objetivo é o áudio comum sair idêntico ao arquivo anexado,
+      // que é o que comprovadamente toca no celular do cliente.
+      const { provider, espiao } = montarProvider();
+      const media = await vozDeTeste();
+      expect(media.waveform?.length).toBe(64);
+      await provider.sendMedia("inst-1", "5511888888888@s.whatsapp.net", {
+        ...media,
+        asVoiceNote: false,
+      });
+      expect(espiao.enviado?.waveform).toBeUndefined();
+      expect(espiao.enviado?.ptt).toBe(false);
     },
     60_000,
   );
