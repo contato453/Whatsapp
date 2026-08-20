@@ -27,8 +27,9 @@ import type { AppDeps } from "../src/types.js";
  * equipe nos cards do Dashboard.
  *
  * A base tem, de propósito, conversas que precisam ficar de fora dos dois
- * lados igual: arquivada e conversa de um número que a supervisora não
- * enxerga. Se o painel passasse por cima do escopo de acesso, os números
+ * lados igual: arquivada, conversa de um número que a supervisora não
+ * enxerga e conversa de um departamento INTERNO (que ela enxerga
+ * normalmente na Inbox, mas que não conta como atendimento). Se o painel passasse por cima do escopo de acesso, os números
  * parariam de bater aqui antes de qualquer pessoa notar em produção.
  */
 
@@ -37,6 +38,8 @@ const INSTANCIA = "44444444-4444-4444-8444-444444444444";
 const INSTANCIA_FORA = "11111111-1111-4111-8111-111111111111";
 const DEPTO = "55555555-5555-4555-8555-555555555555";
 const DEPTO_2 = "66666666-6666-4666-8666-666666666666";
+/** Departamento INTERNO: nada dele pode aparecer nem na célula nem no painel. */
+const DEPTO_INTERNO = "22222222-2222-4222-8222-222222222222";
 const ANA = "77777777-7777-4777-8777-777777777777";
 const BRUNO = "88888888-8888-4888-8888-888888888888";
 const CLARA = "99999999-9999-4999-8999-999999999999";
@@ -101,6 +104,20 @@ function base(): Conversa[] {
     ),
     // Coletivo (@todos): 2 abertas — sem dono por DECISÃO, não por falta
     ...Array.from({ length: 2 }, () => conversa({ assignedToAll: true, status: "open" })),
+    // Departamento interno: a supervisora ENXERGA essas conversas na Inbox
+    // (o vínculo de departamento existe), mas elas não são atendimento a
+    // cliente e precisam sumir dos dois lados igual — célula e painel. Se
+    // um dos lados esquecer a regra, os números abaixo param de bater.
+    ...Array.from({ length: 2 }, () =>
+      conversa({ assignedUserId: ANA, status: "open", departmentId: DEPTO_INTERNO }),
+    ),
+    conversa({ status: "open", departmentId: DEPTO_INTERNO }),
+    conversa({ assignedToAll: true, status: "open", departmentId: DEPTO_INTERNO }),
+    conversa({
+      status: "resolved",
+      departmentId: DEPTO_INTERNO,
+      resolvedBy: [{ userId: ANA, at: NO_PERIODO }],
+    }),
     // Fora dos dois lados: arquivada, e número que a supervisora não enxerga
     conversa({ assignedUserId: ANA, status: "open", archivedAt: new Date() }),
     conversa({ status: "open", archivedAt: new Date() }),
@@ -150,6 +167,9 @@ function bate(conversa: Conversa, where: unknown): boolean {
     if (typeof criterio === "object") {
       const c = criterio as Record<string, unknown>;
       if ("in" in c) return (c.in as unknown[]).includes(valor);
+      // `notIn` nunca casa coluna nula, igual ao SQL: por isso o recorte de
+      // departamento interno traz o ramo explícito do `null` ao lado dele.
+      if ("notIn" in c) return valor !== null && !(c.notIn as unknown[]).includes(valor);
       if ("not" in c) return c.not === null ? valor !== null : valor !== c.not;
       return true;
     }
@@ -188,13 +208,20 @@ function fakePrisma(): PrismaClient {
   return {
     userWhatsAppInstance: { findMany: async () => [{ whatsappInstanceId: INSTANCIA }] },
     userDepartment: {
-      findMany: async () => [{ departmentId: DEPTO }, { departmentId: DEPTO_2 }],
+      findMany: async () => [
+        { departmentId: DEPTO },
+        { departmentId: DEPTO_2 },
+        // Ela enxerga o interno: a exclusão tem que vir da MARCA do
+        // departamento, e não de falta de acesso.
+        { departmentId: DEPTO_INTERNO },
+      ],
     },
     rolePermission: { findMany: async () => [] },
     department: {
-      findMany: async (args: { where?: { id?: { in: string[] } } }) => {
+      findMany: async (args: { where?: { id?: { in: string[] }; isInternal?: boolean } }) => {
+        if (args.where?.isInternal) return [{ id: DEPTO_INTERNO }];
         const pedidos = args.where?.id?.in;
-        const existentes = [{ id: DEPTO }, { id: DEPTO_2 }];
+        const existentes = [{ id: DEPTO }, { id: DEPTO_2 }, { id: DEPTO_INTERNO }];
         return pedidos ? existentes.filter((row) => pedidos.includes(row.id)) : existentes;
       },
     },
@@ -352,7 +379,10 @@ async function relatorio(app: FastifyInstance, filtro = ""): Promise<Relatorio> 
 }
 
 async function painel(app: FastifyInstance, query: string): Promise<number> {
-  const resposta = await pedir(app, `/conversations?limit=25&offset=0&${query}`);
+  // `excludeInternal` vai sempre, exatamente como `reportsApi.sliceConversations`
+  // manda na tela: o relatório não conta departamento interno, então o painel
+  // dele também não pode listar.
+  const resposta = await pedir(app, `/conversations?limit=25&offset=0&excludeInternal=true&${query}`);
   expect(resposta.statusCode).toBe(200);
   return (resposta.json() as { total: number }).total;
 }
@@ -437,7 +467,7 @@ describe("o número da célula é a quantidade que o painel lista", () => {
     const app = await buildApp();
     const resposta = await pedir(
       app,
-      `/conversations?limit=2&offset=0&status=open&assignment=${ASSIGNMENT_UNASSIGNED}`,
+      `/conversations?limit=2&offset=0&excludeInternal=true&status=open&assignment=${ASSIGNMENT_UNASSIGNED}`,
     );
     const pagina = resposta.json() as { conversations: unknown[]; total: number };
     expect(pagina.conversations).toHaveLength(2);
@@ -445,7 +475,7 @@ describe("o número da célula é a quantidade que o painel lista", () => {
 
     const segunda = await pedir(
       app,
-      `/conversations?limit=2&offset=2&status=open&assignment=${ASSIGNMENT_UNASSIGNED}`,
+      `/conversations?limit=2&offset=2&excludeInternal=true&status=open&assignment=${ASSIGNMENT_UNASSIGNED}`,
     );
     const resto = segunda.json() as { conversations: unknown[]; total: number };
     expect(resto.conversations).toHaveLength(2);

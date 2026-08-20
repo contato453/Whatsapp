@@ -6,6 +6,7 @@ import { requirePermission } from "../../lib/permissions.js";
 import { FILTER_NONE } from "@azvchat/shared";
 import { assertKnownFilterIds, listaDe } from "../../lib/conversation-filters.js";
 import { reportFilterConditions, resolvedHistoryWhere } from "../../lib/report-slice.js";
+import { internalDepartmentConditions } from "../../lib/internal-department.js";
 import { serializeUser } from "../../lib/serialize.js";
 import {
   bucketQueueEntries,
@@ -82,10 +83,18 @@ export async function reportRoutes(app: FastifyInstance, deps: AppDeps): Promise
      */
     const escopo = conversationScope(access);
     const escopoAnd = Array.isArray(escopo.AND) ? escopo.AND : escopo.AND ? [escopo.AND] : [];
+    // Departamento interno não conta como atendimento de ninguém, do mesmo
+    // jeito que a arquivada não conta. O painel lateral pede a mesma exclusão
+    // a `GET /conversations` (parâmetro `excludeInternal`), senão a célula
+    // diria "4" e a lista mostraria 5.
     const scope: Prisma.ConversationWhereInput = {
       ...escopo,
       archivedAt: null,
-      AND: [...escopoAnd, ...reportFilterConditions(query)],
+      AND: [
+        ...escopoAnd,
+        ...reportFilterConditions(query),
+        ...(await internalDepartmentConditions(deps.prisma, organizationId)),
+      ],
     };
 
     const [users, messages, resolvedEntries, queueEntries, receivedCount] = await Promise.all([

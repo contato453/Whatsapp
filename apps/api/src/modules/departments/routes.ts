@@ -16,6 +16,13 @@ const departmentSchema = z.object({
     .optional(),
   /** Responsável padrão — null remove */
   defaultAssigneeId: z.string().uuid().nullable().optional(),
+  /**
+   * Departamento interno: as conversas dele saem dos NÚMEROS (dashboard,
+   * atrasados agora, relatório por atendente) e continuam em tudo o mais —
+   * lista, não lidas, som, aviso no título. Não é arquivamento e não mexe em
+   * quem enxerga o quê.
+   */
+  isInternal: z.boolean().optional(),
 });
 
 export async function departmentRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {

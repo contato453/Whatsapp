@@ -13,6 +13,8 @@ interface DepartmentForm {
   description: string;
   color: string;
   defaultAssigneeId: string;
+  /** Departamento interno: as conversas dele ficam fora dos números. */
+  isInternal: boolean;
 }
 
 /**
@@ -29,6 +31,7 @@ const EMPTY_FORM: DepartmentForm = {
   description: "",
   color: DEFAULT_ENTITY_COLOR,
   defaultAssigneeId: "",
+  isInternal: false,
 };
 
 /**
@@ -221,6 +224,7 @@ export default function DepartmentsPage() {
       description: department.description ?? "",
       color: department.color ?? DEFAULT_ENTITY_COLOR,
       defaultAssigneeId: department.defaultAssigneeId ?? "",
+      isInternal: department.isInternal,
     });
     setError(null);
     setEditing(department);
@@ -240,6 +244,7 @@ export default function DepartmentsPage() {
       description: form.description || undefined,
       color: form.color,
       defaultAssigneeId: form.defaultAssigneeId || null,
+      isInternal: form.isInternal,
     };
     try {
       if (editing) {
@@ -301,6 +306,31 @@ export default function DepartmentsPage() {
         Conversas que chegarem neste departamento sem responsável são atribuídas a esta pessoa
         automaticamente. Quem já assumiu uma conversa não a perde.
       </p>
+      {/* A caixa fica DEPOIS do responsável padrão de propósito: ela não muda
+          distribuição nem visibilidade, só contagem, e é a decisão menos
+          frequente do cadastro. */}
+      <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-slate-200 p-3">
+        <input
+          type="checkbox"
+          checked={form.isInternal}
+          onChange={(event) => setForm({ ...form, isInternal: event.target.checked })}
+          className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-brand-600"
+        />
+        <span className="min-w-0">
+          <span className="block text-sm font-medium text-slate-800">
+            Departamento interno (não entra nos números)
+          </span>
+          {/* O texto diz as duas metades: o que sai e o que FICA. Sem a
+              segunda, a equipe leria "interno" como "arquivado" e não
+              marcaria, com medo de perder o aviso de mensagem nova. */}
+          <span className="mt-0.5 block text-xs text-slate-500">
+            As conversas deste departamento saem do Dashboard, do card &ldquo;Atrasados agora&rdquo;
+            e do Relatório por atendente. Elas continuam normalmente na lista de conversas, com
+            aviso de não lidas, som e piscada no título da aba. Marcar ou desmarcar vale na hora,
+            inclusive para os grupos que já existem.
+          </span>
+        </span>
+      </label>
       {editing && assignees.length === 0 && (
         <p className="text-xs text-amber-600">
           Nenhum usuário tem acesso a este departamento ainda. Libere o acesso na tela de Usuários
@@ -352,7 +382,19 @@ export default function DepartmentsPage() {
                   <Building2 className="h-5 w-5" />
                 </div>
                 <div className="min-w-0">
-                  <p className="truncate font-semibold text-slate-900">{department.name}</p>
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <p className="truncate font-semibold text-slate-900">{department.name}</p>
+                    {/* Sem o selo, a caixa marcada no formulário some da vista
+                        e ninguém consegue conferir por que um número encolheu. */}
+                    {department.isInternal && (
+                      <span
+                        className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500"
+                        title="Departamento interno: as conversas dele não entram no Dashboard, no card de atrasados nem no relatório."
+                      >
+                        Interno
+                      </span>
+                    )}
+                  </div>
                   {department.description && (
                     <p className="truncate text-xs text-slate-500">{department.description}</p>
                   )}

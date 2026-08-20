@@ -53,6 +53,7 @@ import { assertKnownFilterIds, listaDe } from "../../lib/conversation-filters.js
 import { reportFilterConditions, resolvedInPeriodWhere } from "../../lib/report-slice.js";
 import { loadAttendanceSettings } from "../../lib/attendance-settings.js";
 import { scanOverdueConversations } from "../../lib/overdue.js";
+import { internalDepartmentConditions } from "../../lib/internal-department.js";
 import { canApplyToConversation } from "../../lib/department-resource.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import {
@@ -175,6 +176,23 @@ const listQuerySchema = z.object({
    * não um valor que some com outro.
    */
   overdue: z.coerce.boolean().optional(),
+  /**
+   * Tira as conversas dos departamentos INTERNOS da lista.
+   *
+   * A Inbox nunca manda este parâmetro: grupo interno é trabalho do dia a dia
+   * da equipe e continua na lista, com badge de não lidas, som e piscada no
+   * título. Quem manda é o painel do relatório, que precisa listar exatamente
+   * o que a célula conta — e a célula já não conta o interno. Sem isso, a
+   * célula diria "4" e o painel mostraria 5, que é o desencontro que faz a
+   * equipe parar de confiar na tela.
+   *
+   * O filtro "Atrasadas" NÃO precisa dele: a exclusão do interno mora dentro
+   * de `lib/overdue.ts`, então o card e a lista dele já saem iguais.
+   *
+   * `z.coerce.boolean()` transforma qualquer texto em `true` (inclusive
+   * "false"), como em `archived`: quem não quer o recorte OMITE o parâmetro.
+   */
+  excludeInternal: z.coerce.boolean().optional(),
   limit: z.coerce.number().min(1).max(100).default(50),
   offset: z.coerce.number().min(0).default(0),
 })
@@ -299,6 +317,12 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
           new Date(query.resolvedTo),
         ),
       );
+    }
+
+    // O recorte do painel do relatório: interno não conta lá, então não pode
+    // aparecer aqui. Mesma fonte única que a célula usa.
+    if (query.excludeInternal) {
+      filtros.push(...(await internalDepartmentConditions(deps.prisma, request.user.organizationId)));
     }
 
     /**

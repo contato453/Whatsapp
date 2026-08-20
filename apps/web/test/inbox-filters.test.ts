@@ -90,7 +90,7 @@ function conversa(overrides: Partial<ConversationDto> = {}): ConversationDto {
 
 /** Departamento e etiqueta de mentira, com os campos que o DTO exige. */
 function depto(id: string, name: string): DepartmentDto {
-  return { id, name, color: "#000000", description: null, defaultAssigneeId: null };
+  return { id, name, color: "#000000", description: null, defaultAssigneeId: null, isInternal: false };
 }
 
 function pessoa(id: string, name: string): UserDirectoryDto {

@@ -123,6 +123,16 @@ model Department {
   /// Responsável padrão: assume as conversas que entram neste departamento
   /// sem ninguém atribuído. Precisa ter acesso ao próprio departamento.
   defaultAssigneeId String?
+  /// Departamento INTERNO: as conversas dele não entram em número nenhum
+  /// (dashboard, atrasados agora e relatório por atendente). Existe porque
+  /// grupo interno da equipe não é atendimento a cliente, e contá-lo como
+  /// tal inflava o painel — principalmente o "Atrasados agora", já que a
+  /// última mensagem de um grupo interno é quase sempre "do cliente" aos
+  /// olhos do sistema e ninguém "responde" a ela.
+  /// **Não é arquivamento**: a conversa continua na lista, continua contando
+  /// não lidas, tocando o som e piscando o título. O que muda é só a
+  /// contagem — visibilidade não é tocada em lugar nenhum.
+  isInternal        Boolean  @default(false)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 

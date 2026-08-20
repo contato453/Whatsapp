@@ -111,7 +111,17 @@ snake_case e id `uuid`.
   `apps/web/src/lib/notification-sound.ts` — **não há arquivo de áudio no repositório**.
 - `UserWhatsAppInstance` (N:N) — **quais números o usuário enxerga**.
 - `UserDepartment` (N:N) — **em quais departamentos o usuário atua**.
-- `Department` — `name` único na org, `color`, `defaultAssigneeId` (responsável padrão).
+- `Department` — `name` único na org, `color`, `defaultAssigneeId` (responsável padrão),
+  `isInternal` (padrão `false`) — **departamento interno: as conversas dele não entram em
+  número nenhum** (cards e gráficos do dashboard, "Atrasados agora" e relatório por
+  atendente). Existe porque grupo interno da equipe não é atendimento a cliente, e o
+  estrago maior era no atraso: num grupo interno a última mensagem é quase sempre de
+  entrada, ninguém "responde" a ela, e a conversa acumulava atraso para sempre — o painel
+  passava a medir conversa nossa em vez de cliente esperando. **Não é arquivamento**: a
+  conversa continua na lista, contando não lidas, tocando o som e piscando o título da aba;
+  e **não é visibilidade** — `access.ts` não foi tocado. Como o recorte é por junção, e não
+  por marca copiada na conversa, ligar já vale para os grupos que existem e desligar
+  devolve tudo, sem backfill. Fonte única em `apps/api/src/lib/internal-department.ts`.
 
 **WhatsApp**
 - `WhatsAppInstance` — `status` (`disconnected|connecting|qr_required|connected|reconnecting|error`),
@@ -398,6 +408,12 @@ GET    /conversations                     GET /conversations/:id
         da coluna "Concluídas" do relatório. Os três andam juntos ou nenhum
         vem. Mede o EVENTO de conclusão, não o status atual nem o responsável
         de agora: a conversa concluída ontem e reaberta hoje continua contando)
+       [&excludeInternal=true]
+       (tira as conversas dos departamentos INTERNOS. A Inbox nunca manda —
+        grupo interno continua na lista dela; quem manda é o painel do
+        relatório, que precisa listar exatamente o que a célula conta. O
+        filtro `overdue` NÃO precisa dele: a exclusão mora dentro de
+        `lib/overdue.ts` e vale nas duas pontas)
        [&overdue=true]
        (a lista do card "Atrasados agora": não resolvidas, com a última
         mensagem do cliente, esperando além do limite em tempo de expediente.
@@ -1423,6 +1439,21 @@ sempre juntos.
   moram em `packages/shared/src/dashboard-filters.ts`, o `AND` está em
   `dashboardFilterConditions` (`modules/dashboard/routes.ts`) e há teste que fica
   vermelho se os dois virarem um `OR`. **Não "uniformize" as duas telas.**
+- **DEPARTAMENTO INTERNO NÃO É ARQUIVAMENTO, e confundir os dois é o erro fácil aqui.**
+  Arquivar faz DUAS coisas juntas: some da lista (sem badge de não lidas, sem som, sem
+  piscar o título) e sai dos números. `Department.isInternal` faz **só a segunda**. A
+  equipe usa os grupos internos o dia inteiro e precisa ser avisada de mensagem neles, então
+  `lib/conversation-reads.ts`, `message-sound.tsx` e `unread-title.tsx` **não sabem que isto
+  existe, e não devem passar a saber** — "uniformizar" com o arquivamento faria os grupos
+  internos sumirem da tela da equipe. Consequências para qualquer mexida aqui: (1) o recorte
+  sai inteiro de `lib/internal-department.ts` e é **acrescentado** ao `AND` que já carrega
+  `conversationScope`, nunca posto no lugar dele; (2) a conversa **sem departamento continua
+  contando**, e por isso o ramo explícito do `null` — em SQL, `departmentId NOT IN (...)`
+  descarta a coluna nula, e sumiria justamente com a conversa que o número não classificou;
+  (3) a exclusão do atraso mora **dentro** de `scanOverdueConversations`, e não em quem
+  chama, senão o card e a lista dele divergiriam; (4) o painel do relatório pede
+  `excludeInternal=true` porque a célula já não conta o interno. Nada disso é chave de
+  permissão nem recorte de visibilidade.
 - **A régua do atraso é UMA SÓ, em `apps/api/src/lib/overdue.ts`.** O card
   "Atrasados agora" mostra o número e `GET /conversations?overdue=true` mostra quais
   são — as duas pontas saem da mesma função, e o card é um link para ela. Duas contas
@@ -1684,7 +1715,9 @@ perfil e troca de senha pelo próprio usuário; aviso de chamada recebida; som d
 notificação de mensagem recebida, com som e volume escolhidos por cada usuário; título da
 aba piscando com as conversas que receberam mensagem, até alguém abrir a Inbox; horário
 permitido de login por dia da semana, aplicado a quem não é supervisor, com aviso 5 minutos
-antes e encerramento da sessão no fechamento.
+antes e encerramento da sessão no fechamento; departamento marcado como interno, cujas
+conversas ficam fora do dashboard, do card de atrasados e do relatório por atendente sem
+sair da lista de conversas nem perder o aviso de mensagem nova.
 
 **Falta** (ordem sugerida): validar o pareamento QR em rede aberta (o ambiente de
 desenvolvimento bloqueia `web.whatsapp.com`); votos de enquete agregados na Inbox;

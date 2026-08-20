@@ -143,6 +143,9 @@ export function serializeDepartment(department: Department) {
     color: department.color,
     // Só o id: o nome é resolvido no frontend, que já carrega os usuários.
     defaultAssigneeId: department.defaultAssigneeId,
+    // A tela precisa dizer quais departamentos ficam fora dos números; sem
+    // isso a equipe marcaria a caixa e não teria como conferir onde ela vale.
+    isInternal: department.isInternal,
   };
 }
 
