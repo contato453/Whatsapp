@@ -9,6 +9,7 @@ import {
   Paperclip,
   Pencil,
   Plus,
+  Search,
   Trash2,
   Video,
   X,
@@ -31,6 +32,7 @@ import { quickRepliesApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { cn, formatDateTime } from "@/lib/utils";
 import type { QuickReplyDto } from "@/lib/types";
+import { matchQuickReply, quickReplySearchTerms } from "@/lib/quick-reply-search";
 import { Button, Card, EmptyState, Field, Input, Modal, Spinner, Textarea } from "@/components/ui";
 import {
   DepartmentBadges,
@@ -40,6 +42,8 @@ import {
   useMyDepartments,
 } from "@/components/department-picker";
 import { VariablePicker } from "@/components/quick-replies/variable-picker";
+import { HighlightedText } from "@/components/quick-replies/highlighted-text";
+import { QuickReplySearchBar } from "@/components/quick-replies/quick-reply-search-bar";
 
 const EMPTY_FORM = {
   shortcut: "",
@@ -88,6 +92,9 @@ export default function QuickRepliesPage() {
   const [expandedIds, setExpandedIds] = useState<string[]>([]);
   /** "" = todos; "general" = só as gerais; senão o id do departamento. */
   const [departmentFilter, setDepartmentFilter] = useState("");
+  // Busca é uso momentâneo (diferente dos filtros da Inbox, que persistem em
+  // localStorage): não precisa sobreviver a uma nova visita à tela.
+  const [searchQuery, setSearchQuery] = useState("");
 
   const load = useCallback(() => {
     quickRepliesApi.list().then(setReplies);
@@ -115,10 +122,28 @@ export default function QuickRepliesPage() {
     return replies.filter((reply) => appliesToConversation(reply, departmentFilter));
   }, [replies, departmentFilter]);
 
+  const searchTerms = useMemo(() => quickReplySearchTerms(searchQuery), [searchQuery]);
+
+  /**
+   * Casa a busca contra o que já está na tela (a mesma régua do filtro de
+   * departamento acima: sem nova chamada à API). `null` de `matchQuickReply`
+   * derruba o item; a ordem original da lista é preservada porque `filter`
+   * não reordena.
+   */
+  const results = useMemo(() => {
+    if (!visibleReplies) return null;
+    return visibleReplies
+      .map((reply) => ({ reply, match: matchQuickReply(reply, searchTerms) }))
+      .filter(
+        (item): item is { reply: QuickReplyDto; match: NonNullable<typeof item.match> } =>
+          item.match !== null,
+      );
+  }, [visibleReplies, searchTerms]);
+
   const allExpanded =
-    !!visibleReplies &&
-    visibleReplies.length > 0 &&
-    visibleReplies.every((reply) => expandedIds.includes(reply.id));
+    !!results &&
+    results.length > 0 &&
+    results.every(({ reply, match }) => expandedIds.includes(reply.id) || match.matchedContent);
 
   function openNew() {
     // Sem "vale para todos" para quem não é admin: já entra no primeiro
@@ -279,53 +304,60 @@ export default function QuickRepliesPage() {
           <Plus className="h-4 w-4" /> Nova resposta
         </Button>
       </div>
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-slate-500">
-          Na tela de Conversas, digite{" "}
-          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs">/</span> na caixa de
-          mensagem para inserir uma resposta com uma tecla.
-        </p>
-        {replies && replies.length > 0 && (
-          <div className="flex items-center gap-3">
-            <select
-              value={departmentFilter}
-              onChange={(event) => setDepartmentFilter(event.target.value)}
-              className={cn(
-                "rounded-lg border px-2 py-1.5 text-sm",
-                departmentFilter
-                  ? "border-brand-600 font-medium text-brand-700"
-                  : "border-slate-200 text-slate-600",
-              )}
-            >
-              <option value="">Todos os departamentos</option>
-              <option value="general">Somente gerais</option>
-              {departments.map((department) => (
-                <option key={department.id} value={department.id}>
-                  {department.name}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={() =>
-                setExpandedIds((current) => {
-                  const visibleIds = (visibleReplies ?? []).map((reply) => reply.id);
-                  // Age só sobre as linhas visíveis: expandir com filtro
-                  // ligado não pode abrir o que está escondido.
-                  return allExpanded
-                    ? current.filter((id) => !visibleIds.includes(id))
-                    : [...new Set([...current, ...visibleIds])];
-                })
-              }
-              className="whitespace-nowrap text-sm font-medium text-brand-600 hover:underline"
-            >
-              {allExpanded ? "Recolher todas" : "Expandir todas"}
-            </button>
-          </div>
-        )}
-      </div>
+      <p className="mb-3 text-sm text-slate-500">
+        Na tela de Conversas, digite{" "}
+        <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs">/</span> na caixa de
+        mensagem para inserir uma resposta com uma tecla.
+      </p>
 
-      {!replies || !visibleReplies ? (
+      {replies && replies.length > 0 && (
+        <div className="mb-2 flex flex-wrap items-center gap-3">
+          <QuickReplySearchBar value={searchQuery} onChange={setSearchQuery} />
+          <select
+            value={departmentFilter}
+            onChange={(event) => setDepartmentFilter(event.target.value)}
+            className={cn(
+              "rounded-lg border px-2 py-1.5 text-sm",
+              departmentFilter
+                ? "border-brand-600 font-medium text-brand-700"
+                : "border-slate-200 text-slate-600",
+            )}
+          >
+            <option value="">Todos os departamentos</option>
+            <option value="general">Somente gerais</option>
+            {departments.map((department) => (
+              <option key={department.id} value={department.id}>
+                {department.name}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() =>
+              setExpandedIds((current) => {
+                const visibleIds = (results ?? []).map(({ reply }) => reply.id);
+                // Age só sobre as linhas visíveis: expandir com busca ou
+                // filtro ligado não pode abrir o que está escondido.
+                return allExpanded
+                  ? current.filter((id) => !visibleIds.includes(id))
+                  : [...new Set([...current, ...visibleIds])];
+              })
+            }
+            className="whitespace-nowrap text-sm font-medium text-brand-600 hover:underline"
+          >
+            {allExpanded ? "Recolher todas" : "Expandir todas"}
+          </button>
+        </div>
+      )}
+
+      {replies && replies.length > 0 && visibleReplies && results && (
+        <p className="mb-4 text-xs text-slate-400">
+          {results.length} de {visibleReplies.length}{" "}
+          {visibleReplies.length === 1 ? "resposta" : "respostas"}
+        </p>
+      )}
+
+      {!replies || !visibleReplies || !results ? (
         <div className="flex justify-center py-16">
           <Spinner className="h-8 w-8" />
         </div>
@@ -341,10 +373,36 @@ export default function QuickRepliesPage() {
         <p className="py-16 text-center text-sm text-slate-500">
           Nenhuma resposta rápida no departamento selecionado.
         </p>
+      ) : results.length === 0 ? (
+        // A busca não achou nada NESTE recorte. O texto deixa claro que existe
+        // filtro de departamento aplicado — senão a pessoa acha que a resposta
+        // sumiu do cadastro, quando ela só está fora do departamento escolhido.
+        <EmptyState
+          icon={<Search className="h-12 w-12" />}
+          title={`Nenhuma resposta encontrada para "${searchQuery.trim()}"`}
+          description={
+            departmentFilter
+              ? "Sem resultado no departamento selecionado. Troque o departamento, limpe a busca ou crie uma resposta nova."
+              : "Confira a grafia ou limpe a busca para ver a lista inteira."
+          }
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setSearchQuery("")}>
+                Limpar busca
+              </Button>
+              <Button variant="outline" size="sm" onClick={openNew}>
+                <Plus className="h-4 w-4" /> Nova resposta
+              </Button>
+            </div>
+          }
+        />
       ) : (
         <Card className="divide-y divide-slate-100">
-          {visibleReplies.map((reply) => {
-            const expanded = expandedIds.includes(reply.id);
+          {results.map(({ reply, match }) => {
+            // Casamento no conteúdo abre expandido sozinho: mostrar o texto
+            // inteiro, com o termo destacado no lugar real, é o que explica
+            // por que aquele item apareceu, sem precisar de mais um clique.
+            const expanded = expandedIds.includes(reply.id) || match.matchedContent;
             return (
               <div key={reply.id} className="flex items-start gap-2 px-2 py-1">
                 <button
@@ -361,8 +419,14 @@ export default function QuickRepliesPage() {
                   />
                   <span className="min-w-0 flex-1">
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                      <span className="text-sm font-semibold text-brand-700">/{reply.shortcut}</span>
-                      {reply.title && <span className="text-sm text-slate-500">{reply.title}</span>}
+                      <span className="text-sm font-semibold text-brand-700">
+                        /<HighlightedText segments={match.shortcut} />
+                      </span>
+                      {reply.title && (
+                        <span className="text-sm text-slate-500">
+                          <HighlightedText segments={match.title} />
+                        </span>
+                      )}
                       <DepartmentBadges item={reply} />
                       {reply.media && <MediaBadge type={reply.media.type} />}
                       <span
@@ -376,14 +440,20 @@ export default function QuickRepliesPage() {
                       </span>
                     </span>
                     {/* Recolhida mostra só a primeira linha: dá para varrer a
-                        lista inteira sem perder a noção do que a resposta diz. */}
+                        lista inteira sem perder a noção do que a resposta diz.
+                        Só chega expandida sem casamento no conteúdo (mask
+                        vazia), então o destaque nunca aparece truncado. */}
                     <span
                       className={cn(
                         "mt-0.5 block text-sm text-slate-600",
                         expanded ? "whitespace-pre-wrap" : "truncate",
                       )}
                     >
-                      {expanded ? reply.content : reply.content.replace(/\s+/g, " ").trim()}
+                      {expanded ? (
+                        <HighlightedText segments={match.content} />
+                      ) : (
+                        reply.content.replace(/\s+/g, " ").trim()
+                      )}
                     </span>
                   </span>
                 </button>
