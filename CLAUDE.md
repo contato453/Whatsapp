@@ -603,7 +603,8 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   Reconhecer o pacote e não achar o texto é a pior falha das duas: não sobra bolha lixo
   para denunciar, e a mensagem velha continua na tela. Por isso esse caso, e só ele, loga
   `message_edit_without_content` com as CHAVES do pacote — nunca o conteúdo.
-- **A EDIÇÃO FEITA PELO CLIENTE CHEGA CIFRADA, e nenhuma versão do Baileys abre.** O
+- **A EDIÇÃO FEITA PELO CLIENTE CHEGA CIFRADA, e nenhuma versão do Baileys abre — nós
+  abrimos.** O
   WhatsApp trocou o mecanismo: em vez do `protocolMessage` com o texto novo em claro, manda
   um `secretEncryptedMessage` (`secretEncType = MESSAGE_EDIT`) com a chave da mensagem
   ORIGINAL e um payload cifrado. A chave sai de HKDF-SHA256 sem sal sobre o
@@ -1663,7 +1664,8 @@ legenda de mídia, dentro da janela de 15 minutos do WhatsApp); gravação de á
 mensagem de voz de verdade, normalizada no servidor para OGG/Opus com a linha de tempo
 zerada, com recusa clara quando a conversão falha;
 enquetes; edição e exclusão feitas pelo cliente refletidas na mensagem original, com marca
-"editada" e histórico das versões anteriores; mensagens agendadas com retentativa; notas internas; etiquetas; atribuição com
+"editada" e histórico das versões anteriores, inclusive quando o WhatsApp entrega a edição
+CIFRADA (validado em produção em 20/08/2026); mensagens agendadas com retentativa; notas internas; etiquetas; atribuição com
 histórico completo; quatro status de atendimento; leitura por usuário (cada pessoa com
 o próprio contador de não lidas, com "marcar como não lida" para reservar a conversa
 para depois); busca na conversa e busca global;
