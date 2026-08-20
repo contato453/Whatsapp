@@ -10,9 +10,10 @@ import { decryptEditedText } from "@azvchat/whatsapp";
 import type { Server } from "socket.io";
 import type { Logger } from "pino";
 import { conversationAudience, instanceAudience } from "../realtime/socket.js";
-import { serializeConversation, serializeMessage } from "../lib/serialize.js";
+import { serializeConversation, serializeMessage, serializePinnedItems } from "../lib/serialize.js";
 import { resolveCallerIdentity } from "../lib/call-identity.js";
 import { resolveConversationPersonName } from "../lib/person-profile.js";
+import { pinnedItemsIfMessagePinned, unpinMessageIfPinned } from "../lib/pinned-items.js";
 import { extensionFromMime, type MediaStorage } from "../lib/media-storage.js";
 import type { MessageIngestService } from "./message-ingest.js";
 import type { AuditService } from "../modules/audit/service.js";
@@ -106,6 +107,22 @@ export class InstanceManager {
             this.io
               .to(conversationAudience(organizationId, conversa))
               .emit(RealtimeEvents.MessageUpdated, serializeMessage(atualizada));
+            // Terceiro canal de edição (reenvio pedido ao servidor): mesmo
+            // cuidado dos outros dois — mensagem fixada acompanha o texto
+            // novo na faixa, sem reload.
+            const refreshedByEdit = await pinnedItemsIfMessagePinned(
+              this.prisma,
+              conversa.id,
+              atualizada.id,
+            );
+            if (refreshedByEdit) {
+              this.io
+                .to(conversationAudience(organizationId, conversa))
+                .emit(RealtimeEvents.PinnedItems, {
+                  conversationId: conversa.id,
+                  items: serializePinnedItems(refreshedByEdit),
+                });
+            }
           }
           return;
         }
@@ -433,6 +450,22 @@ export class InstanceManager {
         this.io
           .to(conversationAudience(organizationId, message.conversation))
           .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
+        // Cliente apagou uma mensagem fixada: desafixa sozinha, senão a
+        // faixa continuaria mostrando uma referência que a conversa já não
+        // tem mais.
+        const freedByDelete = await unpinMessageIfPinned(
+          this.prisma,
+          message.conversationId,
+          message.id,
+        );
+        if (freedByDelete) {
+          this.io
+            .to(conversationAudience(organizationId, message.conversation))
+            .emit(RealtimeEvents.PinnedItems, {
+              conversationId: message.conversationId,
+              items: serializePinnedItems(freedByDelete),
+            });
+        }
       });
     });
 
@@ -457,6 +490,21 @@ export class InstanceManager {
         this.io
           .to(conversationAudience(organizationId, result.conversation))
           .emit(RealtimeEvents.MessageUpdated, serializeMessage(result.message));
+        // Mensagem fixada mostra o conteúdo na própria faixa: sem isto, a
+        // edição do cliente ficaria invisível ali até alguém recarregar.
+        const refreshedByEdit = await pinnedItemsIfMessagePinned(
+          this.prisma,
+          result.conversation.id,
+          result.message.id,
+        );
+        if (refreshedByEdit) {
+          this.io
+            .to(conversationAudience(organizationId, result.conversation))
+            .emit(RealtimeEvents.PinnedItems, {
+              conversationId: result.conversation.id,
+              items: serializePinnedItems(refreshedByEdit),
+            });
+        }
         // A prévia da lista pode ter mudado junto: quem está com a Inbox
         // aberta precisa ver a linha acompanhar o texto novo.
         const conversation = await this.prisma.conversation.findUnique({
@@ -637,6 +685,22 @@ export class InstanceManager {
         this.io
           .to(conversationAudience(organizationId, result.conversation))
           .emit(RealtimeEvents.MessageUpdated, serializeMessage(result.message));
+        // Mesmo motivo do canal em claro: mensagem fixada mostra o
+        // conteúdo na própria faixa, e a edição cifrada também precisa
+        // aparecer ali sem reload.
+        const refreshedByEdit = await pinnedItemsIfMessagePinned(
+          this.prisma,
+          result.conversation.id,
+          result.message.id,
+        );
+        if (refreshedByEdit) {
+          this.io
+            .to(conversationAudience(organizationId, result.conversation))
+            .emit(RealtimeEvents.PinnedItems, {
+              conversationId: result.conversation.id,
+              items: serializePinnedItems(refreshedByEdit),
+            });
+        }
         const conversation = await this.prisma.conversation.findUnique({
           where: { id: result.conversation.id },
           include: {

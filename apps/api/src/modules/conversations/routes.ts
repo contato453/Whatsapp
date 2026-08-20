@@ -57,9 +57,15 @@ import { internalDepartmentConditions } from "../../lib/internal-department.js";
 import { canApplyToConversation } from "../../lib/department-resource.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import {
+  loadPinnedItems,
+  pinItem,
+  unpinItem,
+} from "../../lib/pinned-items.js";
+import {
   serializeConversation,
   serializeConversationDetail,
   serializeGroupParticipant,
+  serializePinnedItems,
   serializeUserDirectory,
 } from "../../lib/serialize.js";
 import { countPendingScheduled } from "../../lib/scheduled-pending.js";
@@ -445,7 +451,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     const conversation = await findConversationOr404(id, request.user);
 
     // Painel de contexto: grupo + participantes + histórico de atribuição
-    const [group, history, notes, scheduledPendingCount] = await Promise.all([
+    const [group, history, notes, scheduledPendingCount, pinnedItems] = await Promise.all([
       conversation.type === "group"
         ? deps.prisma.whatsAppGroup.findFirst({
             where: {
@@ -470,6 +476,9 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       // Valor inicial do contador de agendamentos do composer. Vem junto da
       // conversa para o badge já aparecer certo na abertura, sem consulta extra.
       countPendingScheduled(deps.prisma, id),
+      // Faixa fixa do topo. Depois da carga inicial, quem mantém isto em dia
+      // é o evento `conversation:pinned-items`.
+      loadPinnedItems(deps.prisma, id),
     ]);
 
     // Busca as fotos dos participantes em segundo plano; o frontend é
@@ -517,7 +526,12 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     );
 
     return {
-      conversation: serializeConversationDetail(conversation, scheduledPendingCount, personName),
+      conversation: serializeConversationDetail(
+        conversation,
+        scheduledPendingCount,
+        pinnedItems,
+        personName,
+      ),
       group: group
         ? {
             id: group.id,
@@ -1686,4 +1700,100 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     });
     return { ok: true };
   });
+
+  /**
+   * Fixa/desafixa uma NOTA interna — mesma faixa das mensagens, mas a faixa
+   * deixa claro que é nota interna (para ninguém confundir com algo que o
+   * cliente vê). A permissão é a mesma de fixar mensagem: é a mesma faixa,
+   * o mesmo lugar na tela, a mesma decisão de "destacar algo no topo".
+   */
+  app.post(
+    "/conversations/:id/notes/:noteId/pin",
+    { preHandler: requirePermission(deps, "message.pin") },
+    async (request, reply) => {
+      const { id, noteId } = z
+        .object({ id: z.string().uuid(), noteId: z.string().uuid() })
+        .parse(request.params);
+      const { replaceItemId } = z
+        .object({ replaceItemId: z.string().uuid().optional() })
+        .parse(request.body ?? {});
+      const conversation = await findConversationOr404(id, request.user);
+      const note = await deps.prisma.internalNote.findFirst({
+        where: { id: noteId, conversationId: id, organizationId: request.user.organizationId },
+      });
+      if (!note) throw new NotFoundError("Nota interna");
+
+      const result = await pinItem(deps.prisma, {
+        organizationId: request.user.organizationId,
+        conversationId: id,
+        target: { kind: "note", id: noteId },
+        userId: request.user.sub,
+        replaceItemId,
+      });
+      if (!result.alreadyPinned) {
+        deps.audit.record({
+          organizationId: request.user.organizationId,
+          userId: request.user.sub,
+          action: "message.pinned",
+          entityType: "InternalNote",
+          entityId: noteId,
+          metadata: { conversationId: id },
+        });
+        if (result.replaced) {
+          deps.audit.record({
+            organizationId: request.user.organizationId,
+            userId: request.user.sub,
+            action: "message.unpinned",
+            entityType: result.replaced.messageId ? "Message" : "InternalNote",
+            entityId: (result.replaced.messageId ?? result.replaced.noteId) as string,
+            metadata: { conversationId: id, replacedBy: noteId },
+          });
+        }
+        deps.io
+          .to(conversationAudience(request.user.organizationId, conversation))
+          .emit(RealtimeEvents.PinnedItems, {
+            conversationId: id,
+            items: serializePinnedItems(result.items),
+          });
+      }
+      return reply.status(201).send({ items: serializePinnedItems(result.items) });
+    },
+  );
+
+  app.post(
+    "/conversations/:id/notes/:noteId/unpin",
+    { preHandler: requirePermission(deps, "message.pin") },
+    async (request) => {
+      const { id, noteId } = z
+        .object({ id: z.string().uuid(), noteId: z.string().uuid() })
+        .parse(request.params);
+      const conversation = await findConversationOr404(id, request.user);
+      const note = await deps.prisma.internalNote.findFirst({
+        where: { id: noteId, conversationId: id, organizationId: request.user.organizationId },
+      });
+      if (!note) throw new NotFoundError("Nota interna");
+
+      const result = await unpinItem(deps.prisma, {
+        conversationId: id,
+        target: { kind: "note", id: noteId },
+      });
+      if (result.removed) {
+        deps.audit.record({
+          organizationId: request.user.organizationId,
+          userId: request.user.sub,
+          action: "message.unpinned",
+          entityType: "InternalNote",
+          entityId: noteId,
+          metadata: { conversationId: id },
+        });
+        deps.io
+          .to(conversationAudience(request.user.organizationId, conversation))
+          .emit(RealtimeEvents.PinnedItems, {
+            conversationId: id,
+            items: serializePinnedItems(result.items),
+          });
+      }
+      return { items: serializePinnedItems(result.items) };
+    },
+  );
 }

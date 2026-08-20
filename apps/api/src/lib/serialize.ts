@@ -2,6 +2,7 @@ import type {
   Conversation,
   Department,
   GroupParticipant,
+  InternalNote,
   Message,
   ParticipantClientRole,
   QuickReply,
@@ -413,18 +414,23 @@ export function serializeConversation(
  * Conversa aberta na Inbox: o mesmo DTO da lista mais o que só faz sentido
  * na tela de uma conversa.
  *
- * `scheduledPendingCount` fica fora de `serializeConversation` de propósito:
- * a lista de conversas renderiza dezenas de linhas por carga e um `count`
- * por linha sairia caro justamente na tela mais usada do sistema.
+ * `scheduledPendingCount` e `pinnedItems` ficam fora de `serializeConversation`
+ * de propósito: a lista de conversas renderiza dezenas de linhas por carga, e
+ * um `count`/consulta a mais por linha sairia caro justamente na tela mais
+ * usada do sistema. `pinnedItems` chega aqui só na carga inicial da conversa
+ * aberta; depois disso quem mantém a lista em dia é o evento
+ * `conversation:pinned-items`.
  */
 export function serializeConversationDetail(
   conversation: ConversationWithRelations,
   scheduledPendingCount: number,
+  pinnedItems: Parameters<typeof serializePinnedItems>[0],
   personName?: string | null,
 ) {
   return {
     ...serializeConversation(conversation, personName),
     scheduledPendingCount,
+    pinnedItems: serializePinnedItems(pinnedItems),
   };
 }
 
@@ -575,4 +581,51 @@ export function serializeMessage(
     // Dados extras por tipo (opções da enquete, por exemplo)
     metadata: (message.metadata as Record<string, unknown> | null) ?? null,
   };
+}
+
+/**
+ * Nota interna, no formato usado pela faixa de fixadas
+ * (`serializePinnedItems`). As rotas de nota (criar/editar/excluir) montam o
+ * mesmo formato à mão, ponto a ponto — esta função existe para o código
+ * NOVO não repetir a lista de campos pela quarta vez.
+ */
+export function serializeInternalNote(note: InternalNote & { user?: User | null }) {
+  return {
+    id: note.id,
+    conversationId: note.conversationId,
+    content: note.content,
+    user: note.user ? serializeUserDirectory(note.user) : null,
+    createdAt: note.createdAt.toISOString(),
+  };
+}
+
+/**
+ * Fixação (pin) — mensagem ou nota interna, nunca as duas: `message`/`note`
+ * saem um deles nulo, conforme `kind`. Usado tanto no detalhe da conversa
+ * (`GET /conversations/:id`) quanto no evento `conversation:pinned-items`,
+ * que reenvia a lista inteira a cada mudança.
+ */
+export function serializePinnedItem(
+  pin: {
+    id: string;
+    pinnedAt: Date;
+    pinnedBy: User | null;
+    message: (Message & { reactions?: never }) | null;
+    note: (InternalNote & { user: User | null }) | null;
+  },
+) {
+  return {
+    id: pin.id,
+    kind: pin.message ? ("message" as const) : ("note" as const),
+    pinnedAt: pin.pinnedAt.toISOString(),
+    pinnedBy: pin.pinnedBy ? serializeUserDirectory(pin.pinnedBy) : null,
+    message: pin.message ? serializeMessage(pin.message) : null,
+    note: pin.note ? serializeInternalNote(pin.note) : null,
+  };
+}
+
+export function serializePinnedItems(
+  pins: Array<Parameters<typeof serializePinnedItem>[0]>,
+) {
+  return pins.map(serializePinnedItem);
 }

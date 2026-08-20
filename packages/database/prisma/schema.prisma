@@ -34,6 +34,7 @@ model Organization {
   attendanceSettings  AttendanceSettings?
   rolePermissions     RolePermission[]
   personProfiles      PersonProfile[]
+  pinnedItems         PinnedItem[]
 
   @@map("organizations")
 }
@@ -105,6 +106,7 @@ model User {
   defaultForInstances   WhatsAppInstance[]              @relation("InstanceDefaultAssignee")
   permissionChanges     RolePermission[]                @relation("RolePermissionUpdatedBy")
   conversationReads     ConversationRead[]
+  pinnedItems           PinnedItem[]
 
   @@index([organizationId])
   @@map("users")
@@ -433,6 +435,9 @@ model Conversation {
   assignmentHistory ConversationAssignmentHistory[]
   scheduledMessages ScheduledMessage[]
   reads             ConversationRead[]
+  /// Fixadas no topo — INTERNO ao AZVCHAT, nunca propagado ao WhatsApp (ver
+  /// `PinnedItem`).
+  pinnedItems       PinnedItem[]
 
   @@unique([whatsappInstanceId, externalChatId])
   @@index([organizationId, status])
@@ -544,6 +549,7 @@ model Message {
   sentByUser   User?              @relation(fields: [sentByUserId], references: [id], onDelete: SetNull)
   reactions    MessageReaction[]
   readMarks    ConversationRead[]
+  pinnedItems  PinnedItem[]
 
   @@unique([conversationId, externalMessageId])
   @@index([conversationId, timestamp])
@@ -593,9 +599,54 @@ model InternalNote {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  pinnedItems  PinnedItem[]
 
   @@index([conversationId])
   @@map("internal_notes")
+}
+
+// ============================================================
+// Mensagens fixadas ("pin")
+// ============================================================
+
+/// Fixação é INTERNA ao AZVCHAT: destaca uma mensagem (ou nota interna) no
+/// topo da conversa, só para a equipe, e NUNCA é propagada ao WhatsApp — o
+/// pin do próprio WhatsApp fixa para todos os participantes do grupo, e o
+/// cliente veria o escritório fixando coisas no chat dele. Por isso não usa o
+/// recurso de pin do Baileys e não chama o provider.
+///
+/// O alvo é polimórfico (`messageId` OU `noteId`, nunca os dois — garantido
+/// pela constraint `pinned_items_one_target` na migration) porque nota
+/// interna também pode ser fixada, e ela não é `Message`. Sem prazo de
+/// validade de propósito: link de formulário e de pasta precisa continuar no
+/// topo até alguém desafixar, diferente do WhatsApp.
+model PinnedItem {
+  id             String   @id @default(uuid())
+  organizationId String
+  conversationId String
+  /// Nulo quando o alvo é uma nota interna.
+  messageId      String?
+  /// Nulo quando o alvo é uma mensagem.
+  noteId         String?
+  /// Quem fixou. Nulo segue o mesmo padrão de `archivedByUserId`/
+  /// `deletedByUserId`: ação de alguém que pode não existir mais no cadastro.
+  pinnedByUserId String?
+  pinnedAt       DateTime @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  message      Message?      @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  note         InternalNote? @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  pinnedBy     User?         @relation(fields: [pinnedByUserId], references: [id], onDelete: SetNull)
+
+  // NULL não colide em índice único do Postgres, então várias fixações de
+  // nota (messageId nulo) e várias de mensagem (noteId nulo) convivem — cada
+  // unique só impede duplicar o MESMO alvo na mesma conversa.
+  @@unique([conversationId, messageId])
+  @@unique([conversationId, noteId])
+  // Ordena a faixa ("1 de 3") e sustenta a contagem do limite de 3.
+  @@index([conversationId, pinnedAt])
+  @@map("pinned_items")
 }
 
 // ============================================================

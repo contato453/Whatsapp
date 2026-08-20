@@ -19,6 +19,8 @@ import {
   Pencil,
   Phone,
   PhoneMissed,
+  Pin,
+  PinOff,
   Smile,
   Trash2,
   User,
@@ -315,11 +317,15 @@ export function MessageBubble({
   message,
   isGroup,
   showSender,
+  pinned,
+  canPin,
   onReact,
   onReply,
   onForward,
   onEdit,
   onDelete,
+  onPin,
+  onUnpin,
   onOpenMedia,
   onQuotedClick,
   senderAvatar,
@@ -328,11 +334,19 @@ export function MessageBubble({
   message: MessageDto;
   isGroup: boolean;
   showSender: boolean;
+  /** Está entre as fixadas da conversa agora — desenha a marca discreta na
+   * bolha, para quem rola a conversa entender por que ela está no topo. */
+  pinned: boolean;
+  /** Mesma chave (`message.pin`) que decide o item do menu — esconder e
+   * recusar andam sempre juntos. */
+  canPin: boolean;
   onReact: (message: MessageDto, emoji: string) => void;
   onReply: (message: MessageDto) => void;
   onForward: (message: MessageDto) => void;
   onEdit: (message: MessageDto) => void;
   onDelete: (message: MessageDto) => void;
+  onPin: (message: MessageDto) => void;
+  onUnpin: (message: MessageDto) => void;
   /** Clique em imagem/vídeo/figurinha — abre a lightbox de tela cheia. */
   onOpenMedia?: (message: MessageDto) => void;
   /**
@@ -393,6 +407,8 @@ export function MessageBubble({
         <MessageActions
           side="left"
           message={message}
+          pinned={pinned}
+          canPin={canPin}
           menuOpen={menuOpen}
           emojiOpen={emojiOpen}
           setMenuOpen={setMenuOpen}
@@ -402,6 +418,8 @@ export function MessageBubble({
           onForward={onForward}
           onEdit={onEdit}
           onDelete={onDelete}
+          onPin={onPin}
+          onUnpin={onUnpin}
         />
       )}
 
@@ -548,6 +566,10 @@ export function MessageBubble({
             outbound ? "text-chat-sent-meta" : "text-slate-400",
           )}
         >
+          {/* Marca discreta: por que esta bolha está destacada lá em cima. */}
+          {pinned && !message.deletedAt && (
+            <Pin className="h-3 w-3 shrink-0" aria-label="Mensagem fixada" />
+          )}
           {message.editedAt && !message.deletedAt && (
             <EditedMark message={message} outbound={outbound} />
           )}
@@ -587,6 +609,8 @@ export function MessageBubble({
         <MessageActions
           side="right"
           message={message}
+          pinned={pinned}
+          canPin={canPin}
           menuOpen={menuOpen}
           emojiOpen={emojiOpen}
           setMenuOpen={setMenuOpen}
@@ -596,6 +620,8 @@ export function MessageBubble({
           onForward={onForward}
           onEdit={onEdit}
           onDelete={onDelete}
+          onPin={onPin}
+          onUnpin={onUnpin}
         />
       )}
     </div>
@@ -605,6 +631,8 @@ export function MessageBubble({
 function MessageActions({
   side,
   message,
+  pinned,
+  canPin,
   menuOpen,
   emojiOpen,
   setMenuOpen,
@@ -614,9 +642,13 @@ function MessageActions({
   onForward,
   onEdit,
   onDelete,
+  onPin,
+  onUnpin,
 }: {
   side: "left" | "right";
   message: MessageDto;
+  pinned: boolean;
+  canPin: boolean;
   menuOpen: boolean;
   emojiOpen: boolean;
   setMenuOpen: (value: boolean) => void;
@@ -626,6 +658,8 @@ function MessageActions({
   onForward: (message: MessageDto) => void;
   onEdit: (message: MessageDto) => void;
   onDelete: (message: MessageDto) => void;
+  onPin: (message: MessageDto) => void;
+  onUnpin: (message: MessageDto) => void;
 }) {
   const { can } = useAuth();
   const outbound = message.direction === "outbound";
@@ -732,6 +766,28 @@ function MessageActions({
               <Copy className="h-3.5 w-3.5" /> Copiar texto
             </button>
           )}
+          {canPin &&
+            (pinned ? (
+              <button
+                onClick={() => {
+                  onUnpin(message);
+                  setMenuOpen(false);
+                }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50"
+              >
+                <PinOff className="h-3.5 w-3.5" /> Desafixar
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  onPin(message);
+                  setMenuOpen(false);
+                }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50"
+              >
+                <Pin className="h-3.5 w-3.5" /> Fixar
+              </button>
+            ))}
           {canEdit && (
             <button
               onClick={() => {

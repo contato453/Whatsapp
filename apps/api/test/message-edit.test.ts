@@ -108,6 +108,9 @@ async function buildApp(message: Record<string, unknown> | null): Promise<Fastif
         return { ...message, ...(args.data as Record<string, unknown>) };
       },
     },
+    // A rota confere se a mensagem está fixada (para atualizar a faixa) —
+    // sem fixação nenhuma neste teste, então nunca acha nada.
+    pinnedItem: { findFirst: async () => null },
   } as unknown as PrismaClient;
 
   const deps = {

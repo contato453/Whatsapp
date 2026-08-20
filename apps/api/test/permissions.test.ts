@@ -217,6 +217,7 @@ describe("padrões de fábrica (Usuário / Supervisor)", () => {
     // Atendimento
     ["message.delete_sent", false, true],
     ["message.edit_sent", false, true],
+    ["message.pin", true, true],
     ["scheduled_message.cancel_other", false, true],
     ["conversation.transfer_user", true, true],
     ["conversation.unassign", true, true],

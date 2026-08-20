@@ -130,6 +130,8 @@ export function ContextPanel({
   onChanged,
   onEditNote,
   onDeleteNote,
+  onPinNote,
+  onUnpinNote,
 }: {
   detail: ConversationDetailDto;
   departments: DepartmentDto[];
@@ -143,10 +145,19 @@ export function ContextPanel({
   /** Os mesmos handlers do cartão da conversa — nada de segundo fluxo aqui. */
   onEditNote: (note: NoteDto) => void;
   onDeleteNote: (note: NoteDto) => void;
+  onPinNote: (note: NoteDto) => void;
+  onUnpinNote: (note: NoteDto) => void;
 }) {
   const router = useRouter();
   const { can } = useAuth();
   const conversation = detail.conversation;
+  // Mesma chave do menu da bolha: fixar nota ou mensagem é a mesma ação.
+  const canPin = can("message.pin");
+  const pinnedNoteIds = new Set(
+    detail.conversation.pinnedItems
+      .filter((item) => item.kind === "note" && item.note)
+      .map((item) => item.note?.id),
+  );
   /**
    * A MESMA chave que a API exige na rota de transferência. Vem da sessão
    * (`can`), e não do papel: com a tela deduzindo pelo cargo, ligar a chave
@@ -728,8 +739,12 @@ export function ContextPanel({
               key={note.id}
               note={note}
               canManage={canManageNote(note)}
+              pinned={pinnedNoteIds.has(note.id)}
+              canPin={canPin}
               onEdit={onEditNote}
               onDelete={onDeleteNote}
+              onPin={onPinNote}
+              onUnpin={onUnpinNote}
             />
           ))}
         </div>

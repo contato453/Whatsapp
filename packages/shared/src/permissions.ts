@@ -70,6 +70,14 @@ export const PERMISSION_ACTIONS = [
     defaults: { agent: false, supervisor: true },
   },
   {
+    key: "message.pin",
+    label: "Fixar e desafixar mensagem na conversa",
+    description:
+      "Destaca uma mensagem (ou nota interna) no topo da conversa, só para a equipe. Nunca é enviado ao WhatsApp.",
+    area: "atendimento",
+    defaults: { agent: true, supervisor: true },
+  },
+  {
     key: "scheduled_message.cancel_other",
     label: "Cancelar agendamento feito por outra pessoa",
     description:
