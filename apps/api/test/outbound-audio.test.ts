@@ -87,6 +87,10 @@ describe("prepareOutboundAudio", () => {
       const gravado = await prepareOutboundAudio(webm, "audio/webm", true, logger);
       const anexado = await prepareOutboundAudio(webm, "audio/webm", false, logger);
       expect(gravado.waveform).toBeUndefined();
+      // A gravação é fala, então sai com bitrate menor. É a ÚNICA diferença:
+      // taxa de amostragem e canais seguem iguais ao anexo, e a cadeia de
+      // resampling nem é tocada, que é onde morava o atraso de codec.
+      expect(gravado.data.length).toBeLessThan(anexado.data.length);
       expect(anexado.waveform).toBeUndefined();
       expect(taxaDeAmostragem(gravado.data)).toBe(taxaDeAmostragem(anexado.data));
       expect(taxaDeAmostragem(gravado.data)).toBe(48000);

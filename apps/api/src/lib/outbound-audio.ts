@@ -62,6 +62,19 @@ export interface PreparedOutboundAudio {
 export const VOICE_NOTE_ENABLED = true;
 
 /**
+ * Bitrate da gravação do microfone. O perfil de arquivo usa 96 kbps, que é
+ * generoso para música e desperdício para fala: em Opus, 32 kbps já entrega
+ * voz limpa, e o arquivo cai para cerca de um terço. Num escritório que manda
+ * áudio o dia inteiro isso vira transferência e disco de verdade.
+ *
+ * É SÓ O BITRATE, de propósito. Taxa de amostragem e canais continuam os
+ * mesmos do arquivo anexado, que é a forma provada em produção, e a cadeia de
+ * resampling nem é tocada: era ali que morava o atraso de codec que fazia o
+ * áudio chegar quebrado.
+ */
+const MICROPHONE_BITRATE = "32k";
+
+/**
  * `fromMicrophone` diz de ONDE o áudio veio, e não o que ele vira: o microfone
  * do composer manda true e é normalizado como voz; arquivo anexado do
  * computador manda false e continua arquivo, convertido só quando o WhatsApp
@@ -91,7 +104,11 @@ export async function prepareOutboundAudio(
   const asVoiceNote = fromMicrophone && VOICE_NOTE_ENABLED;
   const profile: AudioNormalizationProfile = "file";
   try {
-    const normalized = await normalizeAudioForWhatsApp(buffer, { profile, logger });
+    const normalized = await normalizeAudioForWhatsApp(buffer, {
+      profile,
+      logger,
+      ...(fromMicrophone ? { bitrate: MICROPHONE_BITRATE } : {}),
+    });
     return {
       data: normalized.data,
       mimeType: normalized.mimeType || fallbackMimeType,

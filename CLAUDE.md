@@ -651,10 +651,12 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
 - **A MENSAGEM DE VOZ ESTÁ LIGADA** (`VOICE_NOTE_ENABLED`, em
   `apps/api/src/lib/outbound-audio.ts`, com o histórico inteiro). **A CONVERSÃO É SEMPRE A
   DE ARQUIVO**, inclusive na mensagem de voz: OGG/Opus 48 kHz, linha de tempo zerada e sem
-  waveform, que é a forma de bytes provada em produção. O perfil de voz (mono 16 kHz,
-  `-application voip`, com waveform) é o que o WhatsApp usa e daria arquivo menor, mas
-  trocá-lo mexe em três coisas de uma vez sobre algo que funciona: se for experimentar,
-  troque UMA variável por vez e mande um áudio de verdade a cada passo. Desligar a
+  waveform, que é a forma de bytes provada em produção. A única coisa que a gravação muda
+  em relação ao anexo é o **bitrate** (`MICROPHONE_BITRATE`, 32 kbps contra 96): fala em
+  Opus não precisa de mais, e um minuto caiu de 829 KB para 334 KB. O perfil de voz (mono
+  16 kHz, `-application voip`, com waveform) é o que o WhatsApp usa e encolheria mais, mas
+  mexe na cadeia de resampling, que é onde morava o atraso de codec deste defeito: se for
+  experimentar, troque UMA variável por vez e mande um áudio de verdade a cada passo. Desligar a
   constante faz a gravação sair como arquivo de áudio comum, que toca do mesmo jeito, só
   sem a onda e sem o 1.5x.
 - **A MENSAGEM DE VOZ NÃO SAI PELO `sendMessage` do Baileys**, e sim por
