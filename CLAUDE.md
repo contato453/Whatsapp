@@ -1483,6 +1483,14 @@ sempre juntos.
   (ver a seção 8). **Ao investigar áudio quebrado, a primeira coisa a fazer é mandar o
   MESMO arquivo pelo clipe e pelo microfone**: se um funciona e o outro não, o problema
   está no que só a mensagem de voz percorre, e não no formato.
+- **O WEBM DO NAVEGADOR CARREGA ATRASO DE CODEC, E ELE VAZA PARA A SAÍDA.** Convertendo
+  o WebM do MediaRecorder, o OGG saía com `start_pts` 336; o mesmo comando partindo de um
+  WAV do computador saía com `start_pts` 0. Era a última diferença estrutural entre o áudio
+  gravado e o arquivo anexado, e o anexado é o caminho comprovadamente entregue. Por isso
+  a conversão passa `-af aresample=async=1:first_pts=0` (`TIMELINE_LIMPA`, em
+  `normalize-audio.ts`) nos dois perfis: para quem já começa em zero é inócuo, e para a
+  gravação torna a saída indistinguível da de um arquivo. Há teste que compara os dois
+  caminhos com ffprobe.
 - **WAVEFORM É CAMPO DE MENSAGEM DE VOZ, e áudio comum não leva.** Mandar `waveform` com
   `ptt: false` produz uma combinação que nenhum cliente oficial gera. Aconteceu aqui, e o
   log registrou (`voiceNote: false` ao lado de `waveform: 64`) num envio que o cliente não
