@@ -1619,6 +1619,19 @@ sempre juntos.
   texto e sem arquivo, com log `message_without_content_skipped`. É a trava final contra o
   próximo formato que o WhatsApp inventar — não dá para prever qual será, dá para garantir
   que ele não suje a conversa com "Mídia indisponível".
+- **"MÍDIA INDISPONÍVEL" NA TELA NÃO SIGNIFICA QUE O ARQUIVO SUMIU DO WHATSAPP** — o cliente
+  seguia vendo o PDF/imagem no celular dele o tempo todo, só o AZVCHAT ficava cego. O
+  download da mídia (`message.media.download()`, com `reuploadRequest` do Baileys por
+  baixo) pode falhar de forma TRANSITÓRIA — um tropeço de rede, ou o reupload chegando cedo
+  demais, antes do WhatsApp acabar de disponibilizar o arquivo — e sem retentativa uma
+  falha na primeira tentativa virava "Mídia indisponível" PARA SEMPRE: a edição de legenda
+  que o cliente faz depois (`applyEdit`) só atualiza texto, nunca baixa mídia de novo, então
+  não havia segunda chance. `downloadMediaWithRetry` (`message-ingest.ts`) tenta até
+  `MEDIA_DOWNLOAD_MAX_ATTEMPTS` (3) vezes, com espera crescente entre elas, antes de desistir
+  e gravar `mediaUrl: null` — só aí sai o log `media_download_failed`, agora com `attempts`.
+  Falha nas três tentativas continua sem derrubar a ingestão (a mensagem entra sem mídia, e
+  o texto/legenda não se perde), e não existe hoje um caminho de retentativa MAIS TARDE
+  (fila de mídia é item da seção 14) — ela some de vez se as três tentativas esgotarem.
 - **Menção NÃO é formatação de texto.** Escrever "@Fulano" (ou até o número) na mensagem
   não marca ninguém: quem notifica é a lista de identificadores em
   `contextInfo.mentionedJid`, que viaja **ao lado** do texto — do composer

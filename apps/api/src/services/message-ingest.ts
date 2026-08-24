@@ -14,6 +14,21 @@ import type { MediaStorage } from "../lib/media-storage.js";
 import { extensionFromMime } from "../lib/media-storage.js";
 import { eligibleAssigneeWhere } from "../lib/default-assignee.js";
 
+// Tentativas de baixar a mídia da mensagem recebida antes de desistir.
+// Falha aqui costuma ser TRANSITÓRIA — um tropeço de rede, ou o pedido de
+// reupload do Baileys chegando cedo demais, antes do WhatsApp acabar de
+// disponibilizar o arquivo —, e o cliente segue enxergando a mídia no
+// celular dele o tempo todo. Sem retentativa esse tropeço vira "Mídia
+// indisponível" PARA SEMPRE: a edição de legenda feita depois
+// (`applyEdit`) só atualiza texto, nunca baixa mídia de novo, então uma
+// única falha na primeira tentativa não tem segunda chance.
+const MEDIA_DOWNLOAD_MAX_ATTEMPTS = 3;
+const MEDIA_DOWNLOAD_RETRY_DELAY_MS = 1500;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** Mensagem atualizada mais a conversa, que quem emite usa para a audiência. */
 export interface EditResult {
   message: Message;
@@ -131,18 +146,11 @@ export class MessageIngestService {
 
     let mediaUrl: string | null = null;
     if (message.media) {
-      try {
-        const buffer = await message.media.download();
+      const buffer = await this.downloadMediaWithRetry(message);
+      if (buffer) {
         mediaUrl = await this.storage.save(buffer, {
           instanceId: message.instanceId,
           extension: message.media.filename?.split(".").pop() ?? extensionFromMime(message.media.mimeType),
-        });
-      } catch (err) {
-        this.logger.warn({
-          instanceId: message.instanceId,
-          messageId: message.externalMessageId,
-          event: "media_download_failed",
-          error: String(err),
         });
       }
     }
@@ -274,6 +282,41 @@ export class MessageIngestService {
     });
 
     return { conversationId: conversation.id, messageId: created.id, isNewMessage: true };
+  }
+
+  /**
+   * Baixa a mídia com algumas tentativas antes de desistir — ver o
+   * comentário de `MEDIA_DOWNLOAD_MAX_ATTEMPTS`. Devolve `null` quando as
+   * tentativas se esgotam, e SÓ ENTÃO grava o log `media_download_failed`:
+   * uma falha isolada na primeira tentativa não pode aparecer como
+   * incidente antes de dar tempo do reupload do Baileys resolver sozinho.
+   * A mensagem é ingerida do mesmo jeito, sem mídia — falhar a ingestão
+   * inteira por causa do arquivo perderia também o texto/legenda que o
+   * cliente escreveu.
+   */
+  private async downloadMediaWithRetry(
+    message: Pick<NormalizedMessage, "instanceId" | "externalMessageId" | "media">,
+  ): Promise<Buffer | null> {
+    if (!message.media) return null;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= MEDIA_DOWNLOAD_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        return await message.media.download();
+      } catch (err) {
+        lastError = err;
+        if (attempt < MEDIA_DOWNLOAD_MAX_ATTEMPTS) {
+          await delay(MEDIA_DOWNLOAD_RETRY_DELAY_MS * attempt);
+        }
+      }
+    }
+    this.logger.warn({
+      instanceId: message.instanceId,
+      messageId: message.externalMessageId,
+      event: "media_download_failed",
+      attempts: MEDIA_DOWNLOAD_MAX_ATTEMPTS,
+      error: String(lastError),
+    });
+    return null;
   }
 
   /**
