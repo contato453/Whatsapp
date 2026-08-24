@@ -75,86 +75,105 @@ export class InstanceManager {
 
     this.provider.on("message", (message) => {
       void this.withOrg(message.instanceId, async (organizationId) => {
-        const result = await this.ingest.ingest(message, { organizationId });
-        // O nome que o WhatsApp envia junto da mensagem (pushName) costuma
-        // ser a melhor fonte para identificar participantes de grupo.
-        if (message.chatType === "group" && message.senderExternalId && message.senderName) {
-          void this.enrichParticipant(
-            message.instanceId,
-            message.externalChatId,
-            message.senderExternalId,
-            message.senderName,
-            message.senderPhone,
-          );
-        }
-        // Mensagem que já existia e voltou com texto diferente: é a edição
-        // que o reenvio do servidor revelou. Publica a atualização, e não
-        // uma bolha nova.
-        if (result?.edited) {
-          const [conversa, atualizada] = await Promise.all([
+        // A partir daqui a mensagem já foi GRAVADA (ou `ingest` decidiu, com
+        // log próprio, que não havia o que gravar) — o que resta é publicar
+        // em tempo real. Um try/catch dedicado, e não só o `catch` genérico
+        // de `withOrg`, porque aqui já sabemos o chat e o id externo da
+        // mensagem: uma falha nesta etapa NÃO perde a mensagem (ela já está
+        // no banco, aparece ao recarregar), mas sem o contexto certo no log
+        // a equipe não teria como diferenciar "sumiu de vez" de "só não
+        // chegou ao vivo".
+        try {
+          const result = await this.ingest.ingest(message, { organizationId });
+          // O nome que o WhatsApp envia junto da mensagem (pushName) costuma
+          // ser a melhor fonte para identificar participantes de grupo.
+          if (message.chatType === "group" && message.senderExternalId && message.senderName) {
+            void this.enrichParticipant(
+              message.instanceId,
+              message.externalChatId,
+              message.senderExternalId,
+              message.senderName,
+              message.senderPhone,
+            );
+          }
+          // Mensagem que já existia e voltou com texto diferente: é a edição
+          // que o reenvio do servidor revelou. Publica a atualização, e não
+          // uma bolha nova.
+          if (result?.edited) {
+            const [conversa, atualizada] = await Promise.all([
+              this.prisma.conversation.findUnique({
+                where: { id: result.conversationId },
+                select: {
+                  id: true,
+                  whatsappInstanceId: true,
+                  departmentId: true,
+                  assignedUserId: true,
+                },
+              }),
+              this.prisma.message.findUnique({ where: { id: result.messageId } }),
+            ]);
+            if (conversa && atualizada) {
+              this.io
+                .to(conversationAudience(organizationId, conversa))
+                .emit(RealtimeEvents.MessageUpdated, serializeMessage(atualizada));
+              // Terceiro canal de edição (reenvio pedido ao servidor): mesmo
+              // cuidado dos outros dois — mensagem fixada acompanha o texto
+              // novo na faixa, sem reload.
+              const refreshedByEdit = await pinnedItemsIfMessagePinned(
+                this.prisma,
+                conversa.id,
+                atualizada.id,
+              );
+              if (refreshedByEdit) {
+                this.io
+                  .to(conversationAudience(organizationId, conversa))
+                  .emit(RealtimeEvents.PinnedItems, {
+                    conversationId: conversa.id,
+                    items: serializePinnedItems(refreshedByEdit),
+                  });
+              }
+            }
+            return;
+          }
+          if (!result?.isNewMessage) return;
+          const [conversation, persisted] = await Promise.all([
             this.prisma.conversation.findUnique({
               where: { id: result.conversationId },
-              select: {
-                id: true,
-                whatsappInstanceId: true,
-                departmentId: true,
-                assignedUserId: true,
+              include: {
+                assignedUser: true,
+                department: true,
+                instance: true,
+                tags: { include: { tag: true } },
               },
             }),
             this.prisma.message.findUnique({ where: { id: result.messageId } }),
           ]);
-          if (conversa && atualizada) {
-            this.io
-              .to(conversationAudience(organizationId, conversa))
-              .emit(RealtimeEvents.MessageUpdated, serializeMessage(atualizada));
-            // Terceiro canal de edição (reenvio pedido ao servidor): mesmo
-            // cuidado dos outros dois — mensagem fixada acompanha o texto
-            // novo na faixa, sem reload.
-            const refreshedByEdit = await pinnedItemsIfMessagePinned(
-              this.prisma,
-              conversa.id,
-              atualizada.id,
-            );
-            if (refreshedByEdit) {
-              this.io
-                .to(conversationAudience(organizationId, conversa))
-                .emit(RealtimeEvents.PinnedItems, {
-                  conversationId: conversa.id,
-                  items: serializePinnedItems(refreshedByEdit),
-                });
-            }
-          }
-          return;
+          if (!conversation || !persisted) return;
+          // Conversa individual leva o nome da PESSOA no título — o DTO da
+          // mensagem não pode sobrescrever o nome corrigido na lista.
+          const personName = await resolveConversationPersonName(
+            this.prisma,
+            organizationId,
+            conversation,
+          );
+          const room = conversationAudience(organizationId, conversation);
+          this.io.to(room).emit(RealtimeEvents.MessageNew, {
+            conversation: serializeConversation(conversation, personName),
+            message: serializeMessage(persisted),
+          });
+          this.io
+            .to(room)
+            .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation, personName));
+        } catch (err) {
+          this.logger.error({
+            instanceId: message.instanceId,
+            externalChatId: message.externalChatId,
+            externalMessageId: message.externalMessageId,
+            type: message.type,
+            event: "message_realtime_publish_failed",
+            error: String(err),
+          });
         }
-        if (!result?.isNewMessage) return;
-        const [conversation, persisted] = await Promise.all([
-          this.prisma.conversation.findUnique({
-            where: { id: result.conversationId },
-            include: {
-              assignedUser: true,
-              department: true,
-              instance: true,
-              tags: { include: { tag: true } },
-            },
-          }),
-          this.prisma.message.findUnique({ where: { id: result.messageId } }),
-        ]);
-        if (!conversation || !persisted) return;
-        // Conversa individual leva o nome da PESSOA no título — o DTO da
-        // mensagem não pode sobrescrever o nome corrigido na lista.
-        const personName = await resolveConversationPersonName(
-          this.prisma,
-          organizationId,
-          conversation,
-        );
-        const room = conversationAudience(organizationId, conversation);
-        this.io.to(room).emit(RealtimeEvents.MessageNew, {
-          conversation: serializeConversation(conversation, personName),
-          message: serializeMessage(persisted),
-        });
-        this.io
-          .to(room)
-          .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation, personName));
       });
     });
 

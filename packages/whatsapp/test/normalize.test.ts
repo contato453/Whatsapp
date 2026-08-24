@@ -7,6 +7,7 @@ import {
   extractQuotedContext,
   extractQuotedMessageId,
   extractSender,
+  fallbackExternalMessageId,
   isGroupJid,
   isIgnorableJid,
   jidToPhone,
@@ -76,6 +77,15 @@ describe("unwrapMessage", () => {
   it("retorna a própria mensagem quando não há wrapper", () => {
     const message = { conversation: "olá" };
     expect(unwrapMessage(message)).toEqual(message);
+  });
+
+  it("desembrulha mensagem enviada de OUTRO aparelho da mesma conta (deviceSentMessage)", () => {
+    // A atendente responde pelo celular em vez de pelo AZVCHAT: o conteúdo
+    // chega embrulhado, e sem desembrulhar caía no fallback "other" sem
+    // texto nem mídia.
+    const inner = { conversation: "respondido pelo celular" };
+    const wrapped = { deviceSentMessage: { destinationJid: "5511999998888@s.whatsapp.net", message: inner } };
+    expect(unwrapMessage(wrapped)).toEqual(inner);
   });
 });
 
@@ -152,6 +162,53 @@ describe("extractContent", () => {
   it("retorna null para mensagem vazia", () => {
     expect(extractContent(null)).toBeNull();
     expect(extractContent(undefined)).toBeNull();
+  });
+
+  // A pessoa TOCOU numa opção — botão, item de lista ou botão de modelo —,
+  // e isso é conteúdo de verdade. Sem estes três ramos, a resposta caía no
+  // fallback "other" sem texto e sem mídia, e `isDisplayableContent` a
+  // descartava em silêncio: o clique do cliente simplesmente não chegava.
+  it("extrai a resposta de um botão", () => {
+    const result = extractContent({
+      buttonsResponseMessage: { selectedButtonId: "op1", selectedDisplayText: "Sim, confirmo" },
+    } as never);
+    expect(result).toEqual({
+      type: "text",
+      content: "Sim, confirmo",
+      mimeType: null,
+      filename: null,
+      hasMedia: false,
+    });
+  });
+
+  it("extrai a resposta de um botão sem texto de exibição, pelo id selecionado", () => {
+    const result = extractContent({
+      buttonsResponseMessage: { selectedButtonId: "op1" },
+    } as never);
+    expect(result?.content).toBe("op1");
+  });
+
+  it("extrai a resposta de uma lista", () => {
+    const result = extractContent({
+      listResponseMessage: {
+        title: "Contábil",
+        singleSelectReply: { selectedRowId: "dept-contabil" },
+      },
+    } as never);
+    expect(result).toEqual({
+      type: "text",
+      content: "Contábil",
+      mimeType: null,
+      filename: null,
+      hasMedia: false,
+    });
+  });
+
+  it("extrai a resposta de um botão de modelo (template)", () => {
+    const result = extractContent({
+      templateButtonReplyMessage: { selectedId: "btn-1", selectedDisplayText: "Quero renovar" },
+    } as never);
+    expect(result?.content).toBe("Quero renovar");
   });
 });
 
@@ -326,6 +383,36 @@ describe("extractSender", () => {
     );
     expect(result.senderExternalId).toBe(ownJid);
     expect(result.senderPhone).toBe("5511988887777");
+  });
+});
+
+describe("fallbackExternalMessageId", () => {
+  // Substitui `unknown-${Date.now()}`: aquele fallback mudava a cada
+  // chamada, então a MESMA mensagem reprocessada (reconexão, reentrega)
+  // virava uma linha nova a cada vez — quebrava a idempotência que o
+  // resto do pipeline depende. Chat + remetente + timestamp é estável.
+  const timestamp = new Date("2026-08-24T10:00:00.000Z");
+
+  it("é determinística: a mesma mensagem reprocessada gera a MESMA chave", () => {
+    const first = fallbackExternalMessageId("5511999998888@s.whatsapp.net", "5511999998888@s.whatsapp.net", timestamp);
+    const second = fallbackExternalMessageId("5511999998888@s.whatsapp.net", "5511999998888@s.whatsapp.net", timestamp);
+    expect(first).toBe(second);
+  });
+
+  it("duas mensagens sem id, do mesmo chat mas remetentes diferentes, não colidem", () => {
+    const a = fallbackExternalMessageId("120363000000000001@g.us", "5511999998888@s.whatsapp.net", timestamp);
+    const b = fallbackExternalMessageId("120363000000000001@g.us", "5511988887777@s.whatsapp.net", timestamp);
+    expect(a).not.toBe(b);
+  });
+
+  it("duas mensagens sem id, do mesmo remetente mas timestamps diferentes, não colidem", () => {
+    const a = fallbackExternalMessageId("5511999998888@s.whatsapp.net", "5511999998888@s.whatsapp.net", timestamp);
+    const b = fallbackExternalMessageId(
+      "5511999998888@s.whatsapp.net",
+      "5511999998888@s.whatsapp.net",
+      new Date(timestamp.getTime() + 1000),
+    );
+    expect(a).not.toBe(b);
   });
 });
 

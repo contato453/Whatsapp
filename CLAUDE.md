@@ -713,6 +713,20 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   jamais é confundida com pacote de protocolo. Não achando nada, o log
   `message_without_content_skipped` sai com os CAMINHOS das chaves (`messageKeyPaths`),
   que é o que permite reconhecer a próxima estrutura sem registrar o que o cliente escreveu.
+- **RESPOSTA A BOTÃO, A LISTA OU A BOTÃO DE MODELO É CONTEÚDO, NÃO "MENSAGEM SEM NADA".**
+  `buttonsResponseMessage`, `listResponseMessage` e `templateButtonReplyMessage` não tinham
+  ramo em `extractContent`: a pessoa TOCAVA numa opção, o pacote caía no fallback `other` sem
+  texto e sem mídia, e `isDisplayableContent` descartava em silêncio — sem bolha lixo (a
+  trava funcionou), mas também sem o clique do cliente chegar à Inbox. Os três agora saem
+  como tipo `text`, com o rótulo escolhido (ou o id, quando o WhatsApp não manda o texto de
+  exibição) como conteúdo. `unwrapMessage` e `findProtocolMessage` também desembrulham
+  `deviceSentMessage` — mensagem que a atendente manda do PRÓPRIO celular, de outro aparelho
+  ligado à mesma conta, chega embrulhada nele, e sem desembrulhar caía no mesmo fallback sem
+  conteúdo.
+- **Mensagem sem `key.id` utilizável** (raro, mas existe) usa `fallbackExternalMessageId`
+  (chat + remetente + timestamp) em vez de `unknown-${Date.now()}`: o fallback antigo mudava
+  a cada chamada, então a MESMA mensagem reprocessada (reconexão, reentrega) virava uma linha
+  NOVA a cada vez em vez de bater na deduplicação por `(conversationId, externalMessageId)`.
 - **FORMATO DE ÁUDIO: o WhatsApp toca mensagem de voz em OGG/Opus, mono, 16 kHz, com a
   flag `ptt` e a DURAÇÃO em segundos.** Nada disso é o que o navegador grava (ver a
   armadilha na seção 13), então todo áudio que sai é normalizado no SERVIDOR, por ffmpeg,
@@ -766,6 +780,32 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   shared) e refaz a prévia quando a editada é a última da conversa. Original desconhecida
   (anterior à conexão do número, ou nunca sincronizada) é ignorada com log
   `message_edit_target_missing` — sem registro novo e sem bolha de erro.
+- **`ingest()` nunca lança.** Qualquer falha não recuperada nas etapas de dentro vira log
+  `message_ingest_failed` com `instanceId`, `externalChatId`, `externalMessageId` e `type` —
+  nunca conteúdo — e devolve `null`, em vez de subir até um `catch` genérico que só sabia o
+  `instanceId`. Duas corridas conhecidas JÁ se recuperam sozinhas, sem log de incidente: duas
+  mensagens do mesmo lote de `messages.upsert` (que roda cada mensagem com `void`, sem
+  esperar a anterior) criando a MESMA conversa nova ao mesmo tempo, e duas chamadas
+  concorrentes gravando o MESMO `externalMessageId` (ao vivo cruzando com o backfill de
+  histórico, ver abaixo) — as duas colidem no índice único do Postgres (`P2002`), e quem
+  perde a corrida busca a linha que a vencedora acabou de criar em vez de desistir da
+  mensagem. Mídia que falha ao BAIXAR (já tinha retentativa) ou ao SALVAR no storage (disco
+  cheio, permissão — não tinha) também não derruba a mensagem: grava sem `mediaUrl`, marcando
+  `metadata.mediaDownloadFailed` (`@azvchat/shared`, `MEDIA_DOWNLOAD_FAILED_METADATA_KEY`)
+  para a equipe achar depois o que ficou sem arquivo.
+- **Backfill da janela de desconexão.** Mensagem que chega com a instância em
+  `reconnecting`/`qr_required` não desaparece de vez: com `syncFullHistory: false`, o
+  WhatsApp ainda manda as mensagens recentes perdidas no PRÓPRIO evento
+  `messaging-history.set` (campo `messages`, ao lado de `chats`/`contacts`, que já eram
+  lidos). `QrCodeWhatsAppProvider.handleHistoryMessages` processa esse lote pelo MESMO
+  `handleIncomingMessage` do recebimento ao vivo — sequencial, e não `void` em paralelo,
+  porque aqui o volume por rodada é maior — e quem deduplica é a ingestão de sempre, por
+  `(conversationId, externalMessageId)`. Mensagem malformada no lote só pula ela mesma (log
+  `history_message_failed`), nunca trava o resto. Como o histórico pode reentregar algo fora
+  de ordem, `ingest()` **não regride** `lastMessageAt` nem reabre conversa concluída por uma
+  mensagem mais ANTIGA que a última já conhecida — a guarda é `message.timestamp >=
+  conversation.lastMessageAt`; mensagem ao vivo sempre chega mais nova, então o caminho
+  comum nunca muda.
 - `apps/api/src/services/scheduler.ts` roda as mensagens agendadas, com retentativa quando
   a instância está momentaneamente desconectada.
 - Sessões ficam em `WHATSAPP_SESSION_DIR` (volume persistente). **Deploy não exige novo QR.**

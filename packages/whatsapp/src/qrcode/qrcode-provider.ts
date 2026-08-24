@@ -43,6 +43,7 @@ import {
   extractProtocolAction,
   extractQuotedContext,
   extractSender,
+  fallbackExternalMessageId,
   isDisplayableContent,
   isGroupJid,
   isIgnorableJid,
@@ -205,8 +206,19 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
       void this.handleConnectionUpdate(instanceId, update);
     });
 
-    socket.ev.on("messaging-history.set", ({ chats, contacts }) => {
+    socket.ev.on("messaging-history.set", ({ chats, contacts, messages }) => {
       this.handleHistorySync(instanceId, chats, contacts);
+      // BACKFILL da janela de desconexão: com `syncFullHistory: false` o
+      // WhatsApp ainda manda, neste MESMO evento, as mensagens recentes que
+      // o aparelho perdeu enquanto a instância estava fora do ar —
+      // `chats`/`contacts` sempre foram lidos daqui, mas `messages` era
+      // descartado por inteiro. Era esse o buraco: mensagem chegando com a
+      // instância em `reconnecting`/`qr_required` não tinha SEGUNDA chance
+      // de entrar no AZVCHAT, mesmo continuando visível no celular do
+      // cliente. Mesmo pipeline de sempre (`handleIncomingMessage`), então
+      // a idempotência por `externalMessageId` cobre o que já foi recebido
+      // ao vivo.
+      void this.handleHistoryMessages(instanceId, messages);
     });
 
     socket.ev.on("chats.upsert", (chats) => {
@@ -402,6 +414,48 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     }
   }
 
+  /**
+   * Processa as mensagens que o `messaging-history.set` trouxe — o
+   * backfill da janela de desconexão (ver o comentário no listener).
+   *
+   * Sequencial, e não `void` em paralelo como o `messages.upsert` ao vivo:
+   * aqui o volume pode chegar a dezenas de mensagens de uma vez, e rodar
+   * tudo concorrente multiplica a chance de duas mensagens do MESMO chat
+   * novo (nunca visto antes) disputarem a criação da conversa ao mesmo
+   * tempo. Uma mensagem que falhar não pode travar as demais, então cada
+   * uma tem o próprio try/catch.
+   */
+  private async handleHistoryMessages(instanceId: string, messages: WAMessage[]): Promise<void> {
+    if (messages.length === 0) return;
+    this.logger.info({
+      instanceId,
+      event: "history_messages_sync_started",
+      count: messages.length,
+    });
+    let processed = 0;
+    for (const message of messages) {
+      try {
+        await this.handleIncomingMessage(instanceId, message);
+        processed += 1;
+      } catch (err) {
+        this.logger.error({
+          instanceId,
+          // `message` em si pode vir quebrado (é exatamente o que este
+          // catch protege), então o acesso também precisa ser opcional.
+          messageId: message?.key?.id ?? null,
+          event: "history_message_failed",
+          error: String(err),
+        });
+      }
+    }
+    this.logger.info({
+      instanceId,
+      event: "history_messages_sync_finished",
+      count: messages.length,
+      processed,
+    });
+  }
+
   private async handleIncomingMessage(instanceId: string, message: WAMessage): Promise<void> {
     const state = this.getOrCreateState(instanceId);
     const remoteJid = message.key?.remoteJid;
@@ -522,9 +576,11 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
     // sincronizada (mensagem anterior à conexão do número).
     const quotedContext = extractQuotedContext(message.message);
 
+    const messageTimestamp = toDate(message.messageTimestamp);
     const normalized: NormalizedMessage = {
       instanceId,
-      externalMessageId: message.key?.id ?? `unknown-${Date.now()}`,
+      externalMessageId:
+        message.key?.id ?? fallbackExternalMessageId(remoteJid, senderExternalId, messageTimestamp),
       externalChatId: remoteJid,
       chatType: chatTypeFromJid(remoteJid),
       chatName: null,
@@ -548,7 +604,7 @@ export class QrCodeWhatsAppProvider implements WhatsAppProvider {
       // derivada dele.
       ...(messageSecret ? { messageSecret } : {}),
       ...(extracted.pollOptions ? { pollOptions: extracted.pollOptions } : {}),
-      timestamp: toDate(message.messageTimestamp),
+      timestamp: messageTimestamp,
       media: extracted.hasMedia && socket
         ? {
             mimeType: extracted.mimeType,
