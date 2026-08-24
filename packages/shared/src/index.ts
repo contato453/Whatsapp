@@ -7,6 +7,7 @@ export * from "./inbox-filters.js";
 export * from "./internal-note.js";
 export * from "./mentions.js";
 export * from "./message-edit.js";
+export * from "./message-media.js";
 export * from "./message-quote.js";
 export * from "./permissions.js";
 export * from "./phone.js";

@@ -302,7 +302,14 @@ describe("mensagem nova em conversa arquivada (ingestão)", () => {
 
   it("não desarquiva e não mexe no status", async () => {
     const service = ingestHarness(
-      baseConversation({ archivedAt: new Date(), status: "resolved" }),
+      // `lastMessageAt` claramente ANTES da mensagem que está chegando —
+      // `inbound.timestamp` é fixado no carregamento do arquivo, e sem
+      // isso o `lastMessageAt` fresco (criado agora, na montagem do
+      // cenário) ficaria depois dela por coincidência de relógio, e a
+      // guarda contra regressão (mensagem antiga não empurra a conversa
+      // para trás) pularia a atualização — não é isso que este teste quer
+      // exercitar.
+      baseConversation({ archivedAt: new Date(), status: "resolved", lastMessageAt: new Date(0) }),
     );
     const result = await service.ingest(inbound, { organizationId: "org-1" });
     expect(result?.isNewMessage).toBe(true);
@@ -316,7 +323,7 @@ describe("mensagem nova em conversa arquivada (ingestão)", () => {
   });
 
   it("na conversa NÃO arquivada o comportamento de sempre continua", async () => {
-    const service = ingestHarness(baseConversation({ status: "resolved" }));
+    const service = ingestHarness(baseConversation({ status: "resolved", lastMessageAt: new Date(0) }));
     await service.ingest(inbound, { organizationId: "org-1" });
     const update = recorded.conversationUpdates.at(-1)?.data as Record<string, unknown>;
     // Nenhum contador de conversa é tocado — o não lido é por usuário.
@@ -334,7 +341,12 @@ describe("número de backup (ingestão e papéis)", () => {
         create: async (args: Record<string, unknown>) => {
           recorded.conversationCreates.push(args);
           return {
-            ...baseConversation(),
+            // Conversa RECÉM-criada: `lastMessageAt` nulo, como a real —
+            // `baseConversation()` sozinho estampa `new Date()` na hora do
+            // mock rodar, o que fica DEPOIS do timestamp da mensagem
+            // (capturado antes, na montagem do `ingest(...)`) e acionava
+            // por engano a guarda contra regredir `lastMessageAt`.
+            ...baseConversation({ lastMessageAt: null }),
             ...(args.data as Record<string, unknown>),
           };
         },

@@ -2,6 +2,7 @@ import type { Message, PrismaClient, Prisma } from "@azvchat/database";
 import type { NormalizedMessage, QuotedSnapshot } from "@azvchat/shared";
 import {
   EDIT_CONTENT_UNAVAILABLE_METADATA_KEY,
+  MEDIA_DOWNLOAD_FAILED_METADATA_KEY,
   MESSAGE_SECRET_METADATA_KEY,
   isEditContentUnavailable,
   appendMessageVersion,
@@ -13,6 +14,24 @@ import type { Logger } from "pino";
 import type { MediaStorage } from "../lib/media-storage.js";
 import { extensionFromMime } from "../lib/media-storage.js";
 import { eligibleAssigneeWhere } from "../lib/default-assignee.js";
+
+/**
+ * P2002 do Prisma: violação de índice único. É o sinal de uma CORRIDA, não
+ * de um erro de verdade — duas mensagens do mesmo lote (`messages.upsert`
+ * manda o array inteiro sem aguardar uma de cada vez) chegando para o MESMO
+ * chat novo, ou a mesma mensagem entrando ao vivo e pelo backfill de
+ * histórico ao mesmo tempo. Quem perde a corrida não pode simplesmente
+ * falhar: o `create` já aconteceu do outro lado, então a linha existe e o
+ * caminho certo é buscá-la, não desistir da mensagem.
+ */
+function isUniqueViolation(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: unknown }).code === "P2002"
+  );
+}
 
 // Tentativas de baixar a mídia da mensagem recebida antes de desistir.
 // Falha aqui costuma ser TRANSITÓRIA — um tropeço de rede, ou o pedido de
@@ -81,7 +100,36 @@ export class MessageIngestService {
     private readonly logger: Logger,
   ) {}
 
+  /**
+   * Ponto de entrada do pipeline. NUNCA lança: qualquer falha não prevista
+   * nas etapas de baixo (essas já se recuperam sozinhas — corrida de
+   * criação da conversa, mídia que não baixa/salva) é registrada aqui com
+   * o contexto INTEIRO que a equipe precisa para achar a mensagem perdida —
+   * instância, chat, id externo e tipo, nunca o conteúdo — e devolve `null`
+   * em vez de deixar a exceção subir até um `catch` genérico que só sabe o
+   * `instanceId`. "A equipe não tem como saber o que não apareceu" era
+   * exatamente esse buraco.
+   */
   async ingest(
+    message: NormalizedMessage,
+    context: { organizationId: string },
+  ): Promise<IngestResult | null> {
+    try {
+      return await this.ingestUnsafe(message, context);
+    } catch (err) {
+      this.logger.error({
+        instanceId: message.instanceId,
+        externalChatId: message.externalChatId,
+        externalMessageId: message.externalMessageId,
+        type: message.type,
+        event: "message_ingest_failed",
+        error: String(err),
+      });
+      return null;
+    }
+  }
+
+  private async ingestUnsafe(
     message: NormalizedMessage,
     context: { organizationId: string },
   ): Promise<IngestResult | null> {
@@ -145,13 +193,37 @@ export class MessageIngestService {
     }
 
     let mediaUrl: string | null = null;
+    let mediaFailed = false;
     if (message.media) {
       const buffer = await this.downloadMediaWithRetry(message);
       if (buffer) {
-        mediaUrl = await this.storage.save(buffer, {
-          instanceId: message.instanceId,
-          extension: message.media.filename?.split(".").pop() ?? extensionFromMime(message.media.mimeType),
-        });
+        // Salvar no storage é uma etapa própria, com falha própria (disco
+        // cheio, permissão) — diferente do download, que já tem
+        // retentativa. Sem este try/catch, um erro aqui derrubava a
+        // ingestão INTEIRA: a mensagem sumia por causa do anexo, levando
+        // junto o texto/legenda que o cliente escreveu.
+        try {
+          mediaUrl = await this.storage.save(buffer, {
+            instanceId: message.instanceId,
+            extension:
+              message.media.filename?.split(".").pop() ?? extensionFromMime(message.media.mimeType),
+          });
+        } catch (err) {
+          mediaFailed = true;
+          this.logger.error({
+            instanceId: message.instanceId,
+            externalChatId: message.externalChatId,
+            externalMessageId: message.externalMessageId,
+            type: message.type,
+            event: "media_save_failed",
+            error: String(err),
+          });
+        }
+      } else {
+        // Já esgotou as tentativas de download — `downloadMediaWithRetry`
+        // gravou o `media_download_failed`. Só falta marcar para a equipe
+        // (e uma futura retentativa) achar a mensagem sem arquivo.
+        mediaFailed = true;
       }
     }
 
@@ -217,27 +289,38 @@ export class MessageIngestService {
     if (message.messageSecret) {
       metadata = { ...(metadata ?? {}), [MESSAGE_SECRET_METADATA_KEY]: message.messageSecret };
     }
+    // Mídia sem arquivo: marca para a equipe (e uma futura retentativa)
+    // achar a mensagem sem se confundir com "mensagem sem mídia nenhuma".
+    if (mediaFailed) {
+      metadata = { ...(metadata ?? {}), [MEDIA_DOWNLOAD_FAILED_METADATA_KEY]: true };
+    }
 
-    const created = await this.prisma.message.create({
-      data: {
-        organizationId: context.organizationId,
-        conversationId: conversation.id,
-        externalMessageId: message.externalMessageId,
-        senderExternalId: message.senderExternalId,
-        senderName: message.senderName,
-        senderPhone,
-        direction: message.direction,
-        type: message.type,
-        content: message.content,
-        mediaUrl,
-        mimeType: message.media?.mimeType ?? null,
-        filename: message.media?.filename ?? null,
-        quotedMessageId: message.quotedExternalMessageId,
-        timestamp: message.timestamp,
-        status: isInbound ? "delivered" : "sent",
-        ...(metadata ? { metadata: metadata as Prisma.InputJsonValue } : {}),
-      },
+    const created = await this.createMessageSafely({
+      organizationId: context.organizationId,
+      conversationId: conversation.id,
+      externalMessageId: message.externalMessageId,
+      senderExternalId: message.senderExternalId,
+      senderName: message.senderName,
+      senderPhone,
+      direction: message.direction,
+      type: message.type,
+      content: message.content,
+      mediaUrl,
+      mimeType: message.media?.mimeType ?? null,
+      filename: message.media?.filename ?? null,
+      quotedMessageId: message.quotedExternalMessageId,
+      timestamp: message.timestamp,
+      status: isInbound ? "delivered" : "sent",
+      ...(metadata ? { metadata: metadata as Prisma.InputJsonValue } : {}),
     });
+    if (!created.isNewRow) {
+      // Perdeu a corrida: a mesma mensagem entrou por outro caminho entre
+      // a checagem de duplicidade lá em cima e este `create` (ao vivo e o
+      // backfill de histórico competindo pela mesma mensagem, por
+      // exemplo). A linha já existe — devolve como duplicata, sem tentar
+      // gravar de novo.
+      return { conversationId: conversation.id, messageId: created.message.id, isNewMessage: false };
+    }
 
     /**
      * Conversa arquivada CONTINUA ARQUIVADA quando chega mensagem — de
@@ -250,38 +333,83 @@ export class MessageIngestService {
      * quando alguém desarquivar.
      */
     const isArchived = conversation.archivedAt != null;
-    await this.prisma.conversation.update({
-      where: { id: conversation.id },
-      data: {
-        lastMessageAt: message.timestamp,
-        lastMessagePreview: preview,
-        ...(isInbound && !isArchived
-          ? {
-              // Não há contador para incrementar: o não lido é POR USUÁRIO e
-              // sai derivado da marca de leitura de cada um
-              // (`lib/conversation-reads.ts`). Incrementar uma coluna da
-              // conversa era o que fazia a leitura de um apagar o aviso de
-              // todos os outros.
-              // Mensagem do cliente devolve a conversa para a fila: concluída
-              // reabre, e "AG. Cliente" deixa de fazer sentido — a espera
-              // acabou no momento em que ele respondeu.
-              ...(conversation.status === "resolved" || conversation.status === "waiting_client"
-                ? { status: "open" as const }
-                : {}),
-            }
-          : {}),
-      },
-    });
+    // Mensagem ANTIGA chegando fora de ordem — o caso normal do backfill de
+    // histórico após reconexão, que reprocessa o que a instância perdeu
+    // enquanto estava fora do ar — não pode empurrar `lastMessageAt` para
+    // TRÁS: a Inbox ordena por ele, e regredir bagunçaria a lista para
+    // todo mundo. Pelo mesmo motivo, ela também não pode reabrir uma
+    // conversa que já foi concluída DEPOIS dela por uma mensagem mais
+    // recente. Mensagem ao vivo sempre chega com timestamp novo, então
+    // esta guarda nunca muda o comportamento de sempre.
+    const isNewestKnown =
+      !conversation.lastMessageAt || message.timestamp >= conversation.lastMessageAt;
+    if (isNewestKnown) {
+      await this.prisma.conversation.update({
+        where: { id: conversation.id },
+        data: {
+          lastMessageAt: message.timestamp,
+          lastMessagePreview: preview,
+          ...(isInbound && !isArchived
+            ? {
+                // Não há contador para incrementar: o não lido é POR USUÁRIO e
+                // sai derivado da marca de leitura de cada um
+                // (`lib/conversation-reads.ts`). Incrementar uma coluna da
+                // conversa era o que fazia a leitura de um apagar o aviso de
+                // todos os outros.
+                // Mensagem do cliente devolve a conversa para a fila: concluída
+                // reabre, e "AG. Cliente" deixa de fazer sentido — a espera
+                // acabou no momento em que ele respondeu.
+                ...(conversation.status === "resolved" || conversation.status === "waiting_client"
+                  ? { status: "open" as const }
+                  : {}),
+              }
+            : {}),
+        },
+      });
+    }
 
     this.logger.info({
       instanceId: message.instanceId,
       conversationId: conversation.id,
-      messageId: created.id,
+      messageId: created.message.id,
       event: "message_persisted",
       timestamp: message.timestamp.toISOString(),
     });
 
-    return { conversationId: conversation.id, messageId: created.id, isNewMessage: true };
+    return { conversationId: conversation.id, messageId: created.message.id, isNewMessage: true };
+  }
+
+  /**
+   * `Message.create` protegido contra a mesma corrida da conversa: a
+   * checagem de duplicidade e este `create` não são atômicos, então duas
+   * chamadas concorrentes para a MESMA mensagem (o vivo e o backfill de
+   * histórico disputando o mesmo `externalMessageId`, por exemplo) podem
+   * as duas passar pela checagem e as duas tentarem criar. A perdedora
+   * recebe P2002 do índice único — e o certo é buscar a linha que a
+   * vencedora já gravou, não perder a mensagem.
+   */
+  private async createMessageSafely(
+    // `externalMessageId` é nullable no schema (mensagem SEM esse campo é
+    // caso legítimo em outros fluxos), mas aqui — vindo da ingestão — é
+    // sempre a chave da deduplicação, e nunca ausente. A interseção só
+    // estreita o tipo para o `where` de baixo; não muda o dado gravado.
+    data: Prisma.MessageUncheckedCreateInput & { conversationId: string; externalMessageId: string },
+  ): Promise<{ message: Message; isNewRow: boolean }> {
+    try {
+      const message = await this.prisma.message.create({ data });
+      return { message, isNewRow: true };
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      const existing = await this.prisma.message.findUniqueOrThrow({
+        where: {
+          conversationId_externalMessageId: {
+            conversationId: data.conversationId,
+            externalMessageId: data.externalMessageId,
+          },
+        },
+      });
+      return { message: existing, isNewRow: false };
+    }
   }
 
   /**
@@ -733,6 +861,29 @@ export class MessageIngestService {
       // a Inbox nem os números do dashboard. Sem autor: foi o sistema.
       ...(instance?.isBackup ? { archivedAt: new Date() } : {}),
     };
-    return this.prisma.conversation.create({ data });
+    // A CORRIDA que perdia mensagem em silêncio: `messages.upsert` manda o
+    // lote inteiro de uma vez e cada mensagem é processada sem esperar a
+    // anterior terminar. Quando um contato NOVO manda duas mensagens
+    // seguidas rápido (ou o backfill de histórico cruza com uma mensagem
+    // ao vivo do mesmo chat), as duas passam por `findUnique` ANTES de
+    // qualquer uma criar a conversa — as duas veem "não existe" e as duas
+    // tentam `create`. A perdedora recebia P2002, a exceção subia sem
+    // tratamento específico até o `catch` genérico do instance-manager
+    // (só `instanceId`, sem chat nem mensagem), e a mensagem dela morria
+    // ali: nunca virava linha, nunca era retentada. O conserto é buscar a
+    // conversa que a vencedora acabou de criar, em vez de desistir.
+    try {
+      return await this.prisma.conversation.create({ data });
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      return this.prisma.conversation.findUniqueOrThrow({
+        where: {
+          whatsappInstanceId_externalChatId: {
+            whatsappInstanceId: message.instanceId,
+            externalChatId: message.externalChatId,
+          },
+        },
+      });
+    }
   }
 }

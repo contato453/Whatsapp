@@ -90,6 +90,12 @@ export function unwrapMessage(
     "viewOnceMessageV2Extension",
     "documentWithCaptionMessage",
     "editedMessage",
+    // Mensagem enviada de OUTRO aparelho ligado à mesma conta (ex.: a
+    // atendente responde pelo celular em vez de pelo AZVCHAT) chega
+    // embrulhada aqui. Sem desembrulhar, o conteúdo fica preso dentro de
+    // `deviceSentMessage.message` e a mensagem cai no fallback "other" sem
+    // texto nem mídia — o mesmo destino da edição não desembrulhada.
+    "deviceSentMessage",
   ] as const;
   for (const key of wrappers) {
     const wrapped = m[key] as { message?: proto.IMessage } | undefined;
@@ -202,6 +208,42 @@ export function extractContent(
       hasMedia: false,
     };
   }
+  // Resposta a botão, a lista ou a modelo com botão: a pessoa TOCOU numa
+  // opção, e isso é conteúdo de verdade, não "mensagem sem nada para
+  // mostrar". Sem estes três ramos, a resposta caía no fallback `other` sem
+  // texto e sem mídia — `isDisplayableContent` a descartava em silêncio, e
+  // o clique do cliente simplesmente não chegava à Inbox.
+  if (message.buttonsResponseMessage) {
+    const button = message.buttonsResponseMessage;
+    return {
+      type: "text",
+      content: button.selectedDisplayText ?? button.selectedButtonId ?? null,
+      mimeType: null,
+      filename: null,
+      hasMedia: false,
+    };
+  }
+  if (message.listResponseMessage) {
+    const list = message.listResponseMessage;
+    return {
+      type: "text",
+      content: list.title ?? list.singleSelectReply?.selectedRowId ?? null,
+      mimeType: null,
+      filename: null,
+      hasMedia: false,
+    };
+  }
+  if (message.templateButtonReplyMessage) {
+    const template = message.templateButtonReplyMessage;
+    return {
+      type: "text",
+      content: template.selectedDisplayText ?? template.selectedId ?? null,
+      mimeType: null,
+      filename: null,
+      hasMedia: false,
+    };
+  }
+
   const poll = message.pollCreationMessage ?? message.pollCreationMessageV3;
   if (poll) {
     return {
@@ -359,6 +401,27 @@ export function toDate(timestamp: number | LongLike | null | undefined): Date {
 }
 
 /**
+ * Chave determinística para a mensagem que chega sem `key.id` utilizável
+ * (raro, mas alguns pacotes de sincronização vêm assim).
+ *
+ * Antes disso o fallback era `unknown-${Date.now()}`: além de mudar a cada
+ * chamada (a mesma mensagem reprocessada — reconexão, reentrega do
+ * WhatsApp — virava uma linha NOVA a cada vez, quebrando a idempotência),
+ * duas mensagens sem id chegando no mesmo milissegundo podiam colidir. A
+ * combinação chat + remetente + timestamp é o que o próprio WhatsApp usa
+ * para diferenciar mensagens, então serve como substituto estável: mesma
+ * mensagem reprocessada gera a MESMA chave, e cai certinho na deduplicação
+ * de `(conversationId, externalMessageId)`.
+ */
+export function fallbackExternalMessageId(
+  externalChatId: string,
+  senderExternalId: string | null,
+  timestamp: Date,
+): string {
+  return `noid:${externalChatId}:${senderExternalId ?? "desconhecido"}:${timestamp.getTime()}`;
+}
+
+/**
  * A mensagem tem alguma coisa para mostrar?
  *
  * Conteúdo classificado como `other`, sem texto e sem arquivo, é uma linha
@@ -423,6 +486,7 @@ function findProtocolMessage(
     "viewOnceMessageV2",
     "viewOnceMessageV2Extension",
     "documentWithCaptionMessage",
+    "deviceSentMessage",
   ] as const;
   // Na busca profunda vale QUALQUER chave, e não só os invólucros
   // conhecidos: a lista deles é sempre uma aposta no que o WhatsApp já
