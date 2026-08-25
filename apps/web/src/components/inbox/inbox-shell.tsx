@@ -89,6 +89,7 @@ import {
   type QuickReplyUnresolved,
 } from "./quick-reply-variables";
 import { useConversationCompany } from "./use-conversation-company";
+import { useMessageScroll } from "./message-scroll";
 import { useUnreadCounts } from "./use-unread-counts";
 import { FilterBar } from "./filter-bar";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
@@ -340,7 +341,6 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     }));
   }, [canFilterScope, departmentParam, instanceParam]);
 
-  const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   /**
    * Gravação de áudio em andamento: enquanto ela existe, arrastar e colar
@@ -605,6 +605,10 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   /** Abre o trecho da conversa em torno de uma mensagem encontrada. */
   async function jumpToMessage(message: MessageDto) {
     if (!conversationId) return;
+    // A busca ancora numa mensagem específica, nunca no fim: sem isso, a
+    // troca da lista de mensagens abaixo faria a rolagem presa ao fim
+    // brigar com o `scrollIntoView` desta função.
+    messageScroll.suspendStick();
     const data = await api.get<{ messages: MessageDto[]; hasMore: boolean }>(
       `/conversations/${conversationId}/messages/around?at=${encodeURIComponent(message.timestamp)}`,
     );
@@ -630,6 +634,9 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
    */
   async function jumpToQuotedMessage(quotedMessageId: string) {
     if (!conversationId) return;
+    // Mesmo motivo de `jumpToMessage`: este caminho ancora na citação, não
+    // no fim, mesmo quando a mensagem já está carregada (sem fetch novo).
+    messageScroll.suspendStick();
     const scrollToQuoted = () => {
       setHighlightId(quotedMessageId);
       setTimeout(() => {
@@ -672,10 +679,6 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       setLoadingMore(false);
     }
   }
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "auto" });
-  }, [messages?.length]);
 
   // ---------- Tempo real ----------
   useEffect(() => {
@@ -1257,6 +1260,9 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     if (!conversationId) return;
     const targetId = item.kind === "message" ? item.message?.id : item.note?.id;
     if (!targetId) return;
+    // Mesmo motivo de `jumpToMessage`: a faixa fixa ancora no item fixado,
+    // não no fim.
+    messageScroll.suspendStick();
     const highlightAndScroll = () => {
       setHighlightId(targetId);
       setTimeout(() => {
@@ -1572,6 +1578,10 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     return withDividers;
   }, [messages, detail?.notes]);
 
+  // Posição de abertura da janela de mensagens: sempre no fim, sem âncora
+  // em não lida — ver o porquê e o mecanismo completo em `message-scroll.ts`.
+  const messageScroll = useMessageScroll(conversationId, timeline.length);
+
   return (
     <div className="flex h-full">
       {/* Coluna esquerda: lista */}
@@ -1806,8 +1816,14 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
             )}
 
             {/* overflow-x-hidden: nome de arquivo ou link longo não pode
-                criar barra de rolagem lateral na conversa. */}
-            <div className="thin-scroll flex-1 space-y-2 overflow-y-auto overflow-x-hidden px-4 py-4">
+                criar barra de rolagem lateral na conversa. `containerRef` e
+                `onScroll` são o mecanismo de "presa ao fim" — ver o porquê
+                em `message-scroll.ts`. */}
+            <div
+              ref={messageScroll.containerRef}
+              onScroll={messageScroll.onScroll}
+              className="thin-scroll flex-1 overflow-y-auto overflow-x-hidden px-4 py-4"
+            >
               {hasMore && messages && messages.length > 0 && (
                 <div className="flex justify-center pb-2">
                   <Button
@@ -1828,7 +1844,13 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
               ) : timeline.length === 0 ? (
                 <EmptyState title="Sem mensagens ainda" description="As novas mensagens deste chat aparecerão aqui em tempo real." />
               ) : (
-                timeline.map((item) =>
+                // `contentRef`: altura de CONTEÚDO, e não a altura fixa do
+                // contêiner acima — é o que denuncia mídia que termina de
+                // baixar depois e empurra a última bolha (ver `message-
+                // scroll.ts`). `space-y-2` mudou de lugar para cá, junto
+                // com o que ela espaça.
+                <div ref={messageScroll.contentRef} className="space-y-2">
+                {timeline.map((item) =>
                   item.kind === "day" ? (
                     <div key={`day-${item.at}`} className="flex justify-center py-2">
                       <span className="rounded-full bg-slate-200/70 px-3 py-1 text-[11px] font-medium capitalize text-slate-600">
@@ -1889,9 +1911,9 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                     />
                     </div>
                   ),
-                )
+                )}
+                </div>
               )}
-              <div ref={bottomRef} />
             </div>
 
             <footer

@@ -220,6 +220,12 @@ function MediaContent({
     }
   }
 
+  // Nem a ingestão nem o metadata guardam largura/altura da mídia (ver
+  // CLAUDE.md), então não há dimensão real para reservar aqui — só um
+  // palpite, que erraria tanto quanto o problema que veio resolver. Quem
+  // corrige a bolha crescendo depois do carregamento (e empurrando a
+  // rolagem presa ao fim) é o `ResizeObserver` de `message-scroll.ts`,
+  // que reage ao tamanho de verdade em vez de adivinhar.
   if (isVisual) {
     if (failed) return <p className="text-xs italic opacity-70">Falha ao carregar imagem</p>;
     if (!url) return <div className="h-40 w-52 animate-pulse rounded-lg bg-slate-200/60" />;
