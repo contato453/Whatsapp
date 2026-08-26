@@ -56,6 +56,19 @@ const envSchema = z.object({
   ),
   /** Timeout da chamada ao Azevedo-OS, curto de propósito (ver o client). */
   AZEVEDO_OS_TIMEOUT_MS: z.coerce.number().min(500).max(30_000).default(5000),
+
+  /**
+   * Integração de escrita, sentido inverso da anterior: o Azevedo-OS chama
+   * PARA CÁ, para mandar lembrete de cobrança por WhatsApp. Escopo fixo de
+   * propósito — um único WhatsAppInstance pré-cadastrado, nunca escolhido
+   * por parâmetro da chamada. Um token vazado manda mensagem só por este
+   * número, nunca pelos outros da empresa.
+   *
+   * As duas juntas: sem token OU sem instance, a rota nasce desligada
+   * (503), nunca aberta por omissão.
+   */
+  FINANCEIRO_LEMBRETE_TOKEN: optionalEnv(z.string().min(16)),
+  FINANCEIRO_WHATSAPP_INSTANCE_ID: optionalEnv(z.string().uuid()),
 });
 
 export type AppConfig = ReturnType<typeof loadConfig>;

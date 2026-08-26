@@ -1973,7 +1973,91 @@ a apagar o vínculo sem querer.
 
 ---
 
-## 16. Como escrever um bom prompt para este sistema
+## 16. Azevedo-OS ↔ AZVCHAT (lembrete de cobrança — sentido inverso)
+
+Espelho da seção 15, mas ao contrário: ali o AZVCHAT chama o Azevedo-OS para
+**ler** cadastro de empresa; aqui é o Azevedo-OS (Financeiro) chamando o
+AZVCHAT para **mandar** WhatsApp — lembrete de cobrança gerado pela régua do
+Financeiro (`fin_lembretes_gerar()`, do lado de lá).
+
+```
+Serviço de e-mail do Azevedo-OS (Node) → API Fastify (token) → provider → WhatsApp
+```
+
+**Escopo fixo, decisão do Lincoln (26/08/2026).** Um único
+`FINANCEIRO_WHATSAPP_INSTANCE_ID`, pré-cadastrado só no `.env` — o corpo da
+chamada NUNCA escolhe instância nem departamento. Reduz o raio de dano: um
+token vazado manda mensagem só por este número, nunca pelos outros
+conectados da empresa. Se um dia outro módulo do Azevedo-OS precisar de
+outro número, é outra variável e (se fizer sentido) outra rota — não um
+parâmetro a mais nesta.
+
+**Primeiro caminho de auth de serviço-para-serviço ENTRANDO no AZVCHAT.** A
+seção 15 tinha o quê copiar (`AZEVEDO_OS_API_TOKEN`, só que na direção
+contrária); esta não tinha nada — é a primeira rota do sistema que não é
+JWT de sessão de navegador. `FINANCEIRO_LEMBRETE_TOKEN` é um bearer estático,
+conferido num preHandler próprio (`autenticarServicoFinanceiro`, em
+`modules/integrations/financeiro-lembrete.ts`), não em `lib/auth.ts` — não é
+sessão, não tem usuário, não passa por `verifySession`.
+
+**Endpoint.**
+
+```
+POST /integrations/financeiro/lembrete   { telefone, mensagem, externalReference? }
+```
+
+**Sem token OU sem instância configurados, a rota responde 503** —
+`financeiro_lembrete_nao_configurado` — nunca fica aberta por omissão, mesmo
+que alguém acerte por acaso um `Authorization` qualquer. Instância
+configurada mas desconectada também não é 500 genérico: é 503
+`instance_offline`, checado com `provider.getConnectionStatus` ANTES de
+tentar enviar.
+
+**Conversa nova, ao vivo.** Diferente de toda rota de `messages/routes.ts`
+(que sempre partem de uma `Conversation` já existente — `findConversationOr404`),
+a maioria dos telefones que chegam aqui não tem conversa nem contato prévios.
+A rota usa `deps.ingest.ensureConversation(...)`, o mesmo caminho que
+`POST /group-participants/:id/conversation` já usa para abrir conversa a
+partir de um telefone solto — não é lógica nova, é reaproveitada. O
+`organizationId` vem do próprio `WhatsAppInstance` (`findUnique` pelo id
+fixo), não de um env var separado: duas variáveis que precisassem
+concordar entre si é o tipo de configuração que diverge no primeiro deploy
+em que alguém mexe numa e esquece a outra.
+
+**Mensagem pronta, não gerada aqui.** `mensagem` chega já composta pelo
+Financeiro (valor, vencimento, Pix copia-e-cola ou link do boleto, tudo
+escrito do lado de lá) — o AZVCHAT só entrega. Isso é o oposto da seção 15,
+onde nenhum dado financeiro atravessa: ali seria o Azevedo-OS mostrando
+segredo de negócio DENTRO da tela do AZVCHAT; aqui é o Azevedo-OS decidindo
+o que dizer e o AZVCHAT só sendo o telefone. O texto do lembrete não é
+auditado em conteúdo (mesma regra dos logs — `sem conteúdo de mensagem`);
+o que fica registrado é a **ação** (`message.sent.integration`) e o
+`externalReference` (o id da cobrança, do lado do Financeiro).
+
+**Sem `sentByUserId`.** Não é uma pessoa logada mandando — o campo é opcional
+exatamente para isto. `senderName` grava `"Financeiro (Azevedo OS)"`, para
+quem olhar o histórico da conversa entender de onde a mensagem saiu.
+
+**Tempo real e persistência — os mesmos passos de `POST /conversations/:id/messages`,
+replicados à mão** (esta rota não reutiliza o handler daquela, que espera uma
+conversa já resolvida por `request.user`): `Message.create`, atualizar
+`lastMessageAt`/`lastMessagePreview` da conversa, emitir
+`RealtimeEvents.MessageNew` + `ConversationUpdated` em
+`conversationAudience()`. Pular qualquer um destes faz a mensagem sair de
+verdade pelo WhatsApp e a Inbox não mostrar — pior que não enviar, porque
+ninguém saberia que foi enviada.
+
+**Sem fila, sem retentativa própria.** Quem decide REPETIR o envio (uma
+cobrança sem sucesso) é o lado de lá: `fin_lembretes.status = 'erro'` fica
+visível, e o Financeiro decide se tenta de novo — esta rota não guarda
+estado de tentativa nenhum.
+
+**Variáveis** (as duas obrigatórias juntas — falta uma, e a integração nasce
+desligada): `FINANCEIRO_LEMBRETE_TOKEN`, `FINANCEIRO_WHATSAPP_INSTANCE_ID`.
+
+---
+
+## 17. Como escrever um bom prompt para este sistema
 
 Um prompt fica bom aqui quando responde, nesta ordem:
 
