@@ -95,6 +95,16 @@ const DASHBOARD_ACCENT_SOFT = "#6366f1";
 /** A cada quanto a tela se recarrega sozinha — ver o efeito na página. */
 const AUTO_REFRESH_MS = 60_000;
 
+/**
+ * O card "Atrasados agora" está DESLIGADO por enquanto — a régua de atraso
+ * está sendo reconfigurada e o número atual não é confiável. Em vez de
+ * esconder o card (a equipe perguntaria "cadê"), ele fica no lugar mostrando
+ * que está em ajuste, para todo mundo que abre o Dashboard, sem distinção de
+ * papel. Reative virando esta chave para `false`: nenhuma outra mudança é
+ * necessária, o card volta a puxar `stats.overdue` normalmente.
+ */
+const OVERDUE_CARD_DISABLED = true;
+
 /** As duas cores das mensagens — o mesmo par validado dos gráficos. */
 const RECEIVED_COLOR = "#16a34a";
 const SENT_COLOR = "#0891b2";
@@ -264,6 +274,7 @@ function StatCard({
   pending,
   alert,
   href,
+  disabledMessage,
 }: {
   label: string;
   /** Linha fina sob o título — normalmente a frase do período. */
@@ -276,15 +287,23 @@ function StatCard({
   alert?: boolean;
   /** Quando presente, o card vira link para a Inbox já filtrada. */
   href?: string;
+  /**
+   * Quando presente, o card ignora `value`/`alert`/`href` e mostra esta
+   * frase no lugar do número — o indicador está temporariamente desligado
+   * (ver `OVERDUE_CARD_DISABLED`), e um número zerado passaria a impressão
+   * de "sem atraso" em vez de "ainda não mostra o dado".
+   */
+  disabledMessage?: string;
 }) {
-  const color = accent ?? "#475569";
+  const color = disabledMessage ? "#64748b" : (accent ?? "#475569");
   const card = (
     <Card
       className={cn(
         "relative flex h-full flex-col gap-3 overflow-hidden p-5 pb-6",
         // Alerta só quando existe o que alertar: zero atrasado não é vermelho.
-        alert && "border-red-200 bg-red-50/60",
+        !disabledMessage && alert && "border-red-200 bg-red-50/60",
         href &&
+          !disabledMessage &&
           "transition-colors hover:border-slate-300 hover:bg-slate-50 motion-reduce:transition-none",
       )}
     >
@@ -300,7 +319,11 @@ function StatCard({
           {sublabel && <p className="text-xs text-slate-500">{sublabel}</p>}
         </div>
       </div>
-      {pending ? (
+      {disabledMessage ? (
+        <span className="text-lg font-semibold leading-tight text-slate-500">
+          {disabledMessage}
+        </span>
+      ) : pending ? (
         <ValueSkeleton className="h-9 w-16" />
       ) : (
         // Fonte tabular: o número não dança de largura a cada atualização.
@@ -318,11 +341,13 @@ function StatCard({
       <span
         aria-hidden
         className="absolute inset-x-0 bottom-0 h-1"
-        style={{ backgroundColor: alert ? "#dc2626" : color }}
+        style={{ backgroundColor: disabledMessage ? color : alert ? "#dc2626" : color }}
       />
     </Card>
   );
-  if (!href) return card;
+  // Card desligado nunca vira link: não há lista de verdade para abrir atrás
+  // do número que ele nem está mostrando.
+  if (!href || disabledMessage) return card;
   // Link de verdade, e não `onClick`: abrir em outra aba e o botão do meio
   // continuam funcionando, que é o que se espera de um atalho de navegação.
   return (
@@ -995,31 +1020,41 @@ export default function DashboardPage() {
           alert={Boolean(stats && stats.overdue.count > 0)}
           pending={initialPending}
           // Só vira link quando há o que abrir: um card zerado que leva a uma
-          // lista vazia é clique que não responde nada.
+          // lista vazia é clique que não responde nada. Desligado, nem chega
+          // a ser calculado — `disabledMessage` já descarta o `href` abaixo.
           href={stats && stats.overdue.count > 0 ? overdueInboxHref(filters) : undefined}
+          // Ver `OVERDUE_CARD_DISABLED`: a régua de atraso está sendo
+          // reconfigurada, e o número de hoje não é confiável para mostrar.
+          disabledMessage={OVERDUE_CARD_DISABLED ? "Em configuração" : undefined}
           hint={
-            <>
-              {/* Este card não olha o período: é sempre o estado agora. */}
+            OVERDUE_CARD_DISABLED ? (
               <span className="block">
-                Estado agora, sem filtro de período · limite: {stats?.responseLimitMinutes ?? 30}{" "}
-                min
+                Este indicador está sendo ajustado e volta a mostrar o número em breve.
               </span>
-              {stats?.overdue.oldestWaitingMinutes !== null &&
-                stats?.overdue.oldestWaitingMinutes !== undefined && (
-                  <span className="block font-semibold text-red-700">
-                    mais antigo: {formatWaiting(stats.overdue.oldestWaitingMinutes)}
+            ) : (
+              <>
+                {/* Este card não olha o período: é sempre o estado agora. */}
+                <span className="block">
+                  Estado agora, sem filtro de período · limite:{" "}
+                  {stats?.responseLimitMinutes ?? 30} min
+                </span>
+                {stats?.overdue.oldestWaitingMinutes !== null &&
+                  stats?.overdue.oldestWaitingMinutes !== undefined && (
+                    <span className="block font-semibold text-red-700">
+                      mais antigo: {formatWaiting(stats.overdue.oldestWaitingMinutes)}
+                    </span>
+                  )}
+                {/* A lista abre exatamente estas conversas — mesma régua de
+                    atraso. Só o filtro de responsável não vai junto, porque na
+                    Inbox ele soma com o departamento em vez de cruzar. */}
+                {stats && stats.overdue.count > 0 && (
+                  <span className="block text-slate-500">
+                    Clique para abrir a lista delas
+                    {carriesPartialScope ? " (sem o filtro de responsável)" : ""}.
                   </span>
                 )}
-              {/* A lista abre exatamente estas conversas — mesma régua de
-                  atraso. Só o filtro de responsável não vai junto, porque na
-                  Inbox ele soma com o departamento em vez de cruzar. */}
-              {stats && stats.overdue.count > 0 && (
-                <span className="block text-slate-500">
-                  Clique para abrir a lista delas
-                  {carriesPartialScope ? " (sem o filtro de responsável)" : ""}.
-                </span>
-              )}
-            </>
+              </>
+            )
           }
         />
         <StatCard
