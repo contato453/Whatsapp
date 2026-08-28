@@ -83,7 +83,17 @@ async function handleUnauthorized(response: Response): Promise<never> {
   );
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+interface RequestOptions {
+  /**
+   * O login trata o 401 como credencial inválida, não como sessão vencida:
+   * mascará-lo com "Sessão expirada" faria quem errou a senha (ou teve o
+   * cadastro desativado) achar que o sistema a deslogou, e tentar de novo à
+   * toa, sem ver o motivo real que a API devolveu ("Credenciais inválidas").
+   */
+  rawUnauthorized?: boolean;
+}
+
+async function request<T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> {
   const token = getToken();
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
@@ -95,7 +105,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...init?.headers,
     },
   });
-  if (response.status === 401) {
+  if (response.status === 401 && !options?.rawUnauthorized) {
     return handleUnauthorized(response);
   }
   if (!response.ok) {
@@ -112,6 +122,12 @@ export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) }),
+  /**
+   * Login tem tratamento próprio do 401: a mensagem da API ("Credenciais
+   * inválidas") precisa chegar à tela, em vez de virar "Sessão expirada".
+   */
+  login: <T>(body: unknown) =>
+    request<T>("/auth/login", { method: "POST", body: JSON.stringify(body) }, { rawUnauthorized: true }),
   postForm: <T>(path: string, form: FormData) =>
     request<T>(path, { method: "POST", body: form }),
   patch: <T>(path: string, body: unknown) =>
