@@ -15,6 +15,7 @@ import type {
   AgentReportDto,
   ConversationDto,
   DashboardStatsDto,
+  IntegrationTokenDto,
   MessageDto,
   PinnedItemDto,
   QuickReplyDto,
@@ -241,6 +242,22 @@ export interface SendMessageInput {
   /** `externalContactId` dos participantes marcados. */
   mentions?: string[];
 }
+
+/**
+ * Tokens da API de integração (envio por sistema externo). Administração só de
+ * admin — a rota da API recusa de novo por conta própria. O token em claro
+ * volta UMA vez, no `create`, e nunca mais.
+ */
+export const integrationTokensApi = {
+  list: () =>
+    api.get<{ tokens: IntegrationTokenDto[] }>("/integration-tokens").then((data) => data.tokens),
+  create: (input: { name: string; whatsappInstanceId: string }) =>
+    api.post<{ token: string; integrationToken: IntegrationTokenDto }>("/integration-tokens", input),
+  revoke: (id: string) =>
+    api
+      .post<{ integrationToken: IntegrationTokenDto }>(`/integration-tokens/${id}/revoke`)
+      .then((data) => data.integrationToken),
+};
 
 export const messagesApi = {
   send: (conversationId: string, input: SendMessageInput) =>

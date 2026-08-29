@@ -69,6 +69,14 @@ const envSchema = z.object({
    */
   FINANCEIRO_LEMBRETE_TOKEN: optionalEnv(z.string().min(16)),
   FINANCEIRO_WHATSAPP_INSTANCE_ID: optionalEnv(z.string().uuid()),
+
+  /**
+   * Limite de envios por MINUTO de cada token da API de integração
+   * (`POST /integrations/messages`). Folgado de saída — confirmação de
+   * agendamento é evento esporádico —, mas fica em configuração para o
+   * escritório apertar sem mexer no código. O 429 sai por token, não por IP.
+   */
+  INTEGRATION_TOKEN_RATE_LIMIT_PER_MINUTE: z.coerce.number().min(1).max(100_000).default(60),
 });
 
 export type AppConfig = ReturnType<typeof loadConfig>;
