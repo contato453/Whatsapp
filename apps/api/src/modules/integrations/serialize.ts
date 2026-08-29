@@ -4,7 +4,44 @@ import type {
   AzevedoOsFacetsDto,
   AzevedoOsFieldFacets,
 } from "@azvchat/shared";
+import type { IntegrationToken } from "@azvchat/database";
 import type { AzevedoOsCompanyFacets } from "../../services/azevedo-os-client.js";
+
+/** DTO do token de integração para a tela de administração. */
+export interface IntegrationTokenDto {
+  id: string;
+  name: string;
+  /** Prefixo visível — o token em claro NUNCA sai daqui depois da criação. */
+  tokenPrefix: string;
+  whatsappInstanceId: string;
+  /** Nome do número autorizado, quando ele ainda existe. */
+  instanceName: string | null;
+  active: boolean;
+  lastUsedAt: string | null;
+  usageCount: number;
+  createdAt: string;
+}
+
+/**
+ * Serializa o token para a tela. NUNCA inclui `tokenHash` — o segredo (e o
+ * hash dele) fica no banco e só o valor em claro, mostrado uma vez na criação,
+ * volta pela rota de criação.
+ */
+export function serializeIntegrationToken(
+  token: IntegrationToken & { instance?: { name: string } | null },
+): IntegrationTokenDto {
+  return {
+    id: token.id,
+    name: token.name,
+    tokenPrefix: token.tokenPrefix,
+    whatsappInstanceId: token.whatsappInstanceId,
+    instanceName: token.instance?.name ?? null,
+    active: token.active,
+    lastUsedAt: token.lastUsedAt ? token.lastUsedAt.toISOString() : null,
+    usageCount: token.usageCount,
+    createdAt: token.createdAt.toISOString(),
+  };
+}
 
 /**
  * DTO da empresa do Azevedo-OS.

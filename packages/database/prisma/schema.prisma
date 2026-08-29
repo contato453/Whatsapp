@@ -35,6 +35,7 @@ model Organization {
   rolePermissions     RolePermission[]
   personProfiles      PersonProfile[]
   pinnedItems         PinnedItem[]
+  integrationTokens   IntegrationToken[]
 
   @@map("organizations")
 }
@@ -107,6 +108,7 @@ model User {
   permissionChanges     RolePermission[]                @relation("RolePermissionUpdatedBy")
   conversationReads     ConversationRead[]
   pinnedItems           PinnedItem[]
+  integrationTokens     IntegrationToken[]              @relation("IntegrationTokenCreatedBy")
 
   @@index([organizationId])
   @@map("users")
@@ -189,10 +191,11 @@ model WhatsAppInstance {
   organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   department      Department?            @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   defaultAssignee User?                  @relation("InstanceDefaultAssignee", fields: [defaultAssigneeId], references: [id], onDelete: SetNull)
-  conversations   Conversation[]
-  groups          WhatsAppGroup[]
-  contacts        Contact[]
-  userAccess      UserWhatsAppInstance[]
+  conversations     Conversation[]
+  groups            WhatsAppGroup[]
+  contacts          Contact[]
+  userAccess        UserWhatsAppInstance[]
+  integrationTokens IntegrationToken[]
 
   @@index([organizationId])
   @@index([departmentId])
@@ -438,6 +441,10 @@ model Conversation {
   /// Fixadas no topo — INTERNO ao AZVCHAT, nunca propagado ao WhatsApp (ver
   /// `PinnedItem`).
   pinnedItems       PinnedItem[]
+  /// Registros de idempotência de envios pela API de integração (ver
+  /// `IntegrationMessageLog`). Referência frouxa: apagar a conversa não apaga
+  /// o log, só zera o ponteiro.
+  integrationMessageLogs IntegrationMessageLog[]
 
   @@unique([whatsappInstanceId, externalChatId])
   @@index([organizationId, status])
@@ -550,6 +557,7 @@ model Message {
   reactions    MessageReaction[]
   readMarks    ConversationRead[]
   pinnedItems  PinnedItem[]
+  integrationMessageLogs IntegrationMessageLog[]
 
   @@unique([conversationId, externalMessageId])
   @@index([conversationId, timestamp])
@@ -966,4 +974,72 @@ model AttendanceLoginHours {
 
   @@unique([settingsId, weekday])
   @@map("attendance_login_hours")
+}
+
+// ============================================================
+// Integração de envio para sistemas externos (token de máquina)
+// ============================================================
+
+/// Token de integração: credencial de MÁQUINA para outro sistema do escritório
+/// disparar UMA mensagem de WhatsApp (ex.: confirmação de agendamento). Não é
+/// sessão de usuário — a rota de envio tem guard próprio, fora de `auth.ts`,
+/// e não passa por `requireRole`.
+///
+/// Guardamos só o HASH do token (`tokenHash`, sha256): o valor em claro é
+/// mostrado uma única vez, na criação, e nunca mais. Cada token é amarrado a
+/// EXATAMENTE uma instância (`whatsappInstanceId`): um token vazado manda
+/// mensagem só por aquele número. Revogar é `active = false`, nunca apagar —
+/// o histórico de uso continua de pé.
+model IntegrationToken {
+  id                 String    @id @default(uuid())
+  organizationId     String
+  name               String
+  /// Prefixo visível ("azv_a1b2c3d4"), para a tela identificar o token sem
+  /// nunca guardar o segredo.
+  tokenPrefix        String
+  /// sha256 do token inteiro — a autenticação é igualdade por este índice.
+  tokenHash          String    @unique
+  whatsappInstanceId String
+  active             Boolean   @default(true)
+  /// Quem criou. Nulo = o criador não existe mais no cadastro; o token
+  /// continua válido, porque pertence à integração, não à pessoa.
+  createdById        String?
+  lastUsedAt         DateTime?
+  usageCount         Int       @default(0)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  organization Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  instance     WhatsAppInstance        @relation(fields: [whatsappInstanceId], references: [id], onDelete: Cascade)
+  createdBy    User?                   @relation("IntegrationTokenCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  messageLogs  IntegrationMessageLog[]
+
+  @@index([organizationId])
+  @@index([whatsappInstanceId])
+  @@map("integration_tokens")
+}
+
+/// Registro de envio por chave de idempotência. Quando o sistema externo tenta
+/// de novo por timeout, a MESMA chave dentro de 24h não reenvia — devolve o
+/// resultado do envio original (conversa, mensagem, telefone normalizado).
+/// Uma linha por (token, chave); reuso após 24h sobrescreve a linha e a janela
+/// anda junto. Conversa/mensagem são referência frouxa (SET NULL): podem ser
+/// apagadas sem apagar o registro.
+model IntegrationMessageLog {
+  id                 String   @id @default(uuid())
+  integrationTokenId String
+  idempotencyKey     String
+  conversationId     String?
+  messageId          String?
+  normalizedPhone    String
+  status             String
+  createdAt          DateTime @default(now())
+
+  token        IntegrationToken @relation(fields: [integrationTokenId], references: [id], onDelete: Cascade)
+  conversation Conversation?    @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  message      Message?         @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@unique([integrationTokenId, idempotencyKey])
+  @@index([integrationTokenId, createdAt])
+  @@map("integration_message_logs")
 }

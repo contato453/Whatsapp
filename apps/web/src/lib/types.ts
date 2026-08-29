@@ -88,6 +88,23 @@ export interface InstanceDto {
   createdAt: string;
 }
 
+/**
+ * Token da API de integração (envio por sistema externo). O valor em claro
+ * NUNCA vem aqui — só na resposta da criação, uma única vez. Esta é a linha da
+ * lista de administração.
+ */
+export interface IntegrationTokenDto {
+  id: string;
+  name: string;
+  tokenPrefix: string;
+  whatsappInstanceId: string;
+  instanceName: string | null;
+  active: boolean;
+  lastUsedAt: string | null;
+  usageCount: number;
+  createdAt: string;
+}
+
 export interface DepartmentDto {
   id: string;
   name: string;

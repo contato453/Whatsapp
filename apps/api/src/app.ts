@@ -21,6 +21,7 @@ import { auditRoutes } from "./modules/audit/routes.js";
 import { reportRoutes } from "./modules/reports/routes.js";
 import { integrationRoutes } from "./modules/integrations/routes.js";
 import { financeiroLembreteRoutes } from "./modules/integrations/financeiro-lembrete.js";
+import { integrationMessageApiRoutes } from "./modules/integrations/message-api.js";
 import { permissionRoutes } from "./modules/permissions/routes.js";
 import type { AppDeps } from "./types.js";
 
@@ -78,6 +79,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     await auditRoutes(instance, deps);
     await integrationRoutes(instance, deps);
     await financeiroLembreteRoutes(instance, deps);
+    await integrationMessageApiRoutes(instance, deps);
     await permissionRoutes(instance, deps);
   });
 

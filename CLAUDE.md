@@ -504,6 +504,16 @@ POST   /quick-replies/:id/used
 GET    /conversations/:id/scheduled-messages   POST /conversations/:id/scheduled-messages
 DELETE /scheduled-messages/:id
 
+GET    /integration-tokens   (admin; tokens da API de integração — nunca o token em claro)
+POST   /integration-tokens   (admin; cria e devolve o token em claro UMA vez)
+POST   /integration-tokens/:id/revoke   (admin; desativa, nunca apaga — histórico fica)
+POST   /integrations/messages           (token de máquina, NÃO sessão; ver a seção 17)
+       { telefone, mensagem, idempotencyKey?, instanceId? }
+       (envia por sistema externo pela instância do token; telefone normalizado
+        antes de tudo (422 se inválido/grupo), instância errada 403,
+        desconectada/excluída 409, idempotência de 24h, rate limit por token 429.
+        Reaproveita o caminho do envio manual — não expõe leitura nenhuma)
+
 GET    /permissions          (admin; o que a organização gravou por cima do catálogo —
        o catálogo em si NÃO vem por aqui, a tela o importa de @azvchat/shared)
 PUT    /permissions          (admin; grava em bloco, apaga a linha quando o valor volta ao
@@ -1818,7 +1828,10 @@ conversas ficam fora do dashboard, do card de atrasados e do relatório por aten
 sair da lista de conversas nem perder o aviso de mensagem nova; fixar mensagem (ou nota
 interna) no topo da conversa, faixa interna que nunca vai ao WhatsApp, com até 3 fixadas
 por conversa, sem prazo de validade, navegação entre elas e atualização em tempo real para
-todo mundo com a conversa aberta.
+todo mundo com a conversa aberta; API de integração para sistema externo disparar mensagem
+por token de máquina (amarrado a um número, com idempotência de 24h, rate limit por token e
+tela de administração de tokens para admin), reaproveitando o caminho do envio manual — a
+mensagem aparece na Inbox como qualquer outra.
 
 **Falta** (ordem sugerida): validar o pareamento QR em rede aberta (o ambiente de
 desenvolvimento bloqueia `web.whatsapp.com`); votos de enquete agregados na Inbox;
@@ -2057,7 +2070,74 @@ desligada): `FINANCEIRO_LEMBRETE_TOKEN`, `FINANCEIRO_WHATSAPP_INSTANCE_ID`.
 
 ---
 
-## 17. Como escrever um bom prompt para este sistema
+## 17. API de integração — envio por sistema externo (token de máquina)
+
+Rota genérica para **qualquer sistema do escritório disparar UMA mensagem** no
+WhatsApp do cliente logo após uma ação lá (o caso de origem: o agendador de
+reuniões manda a confirmação quando o cliente conclui a reserva). O sistema
+externo **só envia** — não recebe, não é robô de atendimento —, e a mensagem
+aparece na Inbox como qualquer outra, para o atendimento ver o histórico.
+
+Diferente da seção 16 (Financeiro), o escopo **não** é uma instância fixa no
+`.env`: cada token carrega a sua. É o **primeiro caminho autenticado por token
+de banco por-tenant** — a seção 16 usa bearer estático do `.env`.
+
+**Token** (`IntegrationToken`, migration `20260829120000_integration_message_tokens`).
+Guarda `name`, `tokenPrefix` (visível), `tokenHash` (**sha256 — o valor em
+claro é mostrado UMA vez na criação e nunca mais**), `whatsappInstanceId`
+(amarração a **exatamente uma** instância), `active`, `createdById` (nulo não
+invalida: o token é da integração, não da pessoa), `lastUsedAt`, `usageCount`.
+Crypto em `apps/api/src/lib/integration-token.ts` (sha256, não bcrypt: alta
+entropia). Revogar é `active = false`, **nunca apagar** — o histórico fica.
+
+**Guard** (`modules/integrations/message-api.ts`, `authenticateIntegrationToken`):
+bearer no `Authorization`, conferido por hash num `findFirst`. Sem token, token
+inexistente e token revogado respondem **todos 401** (não se revela qual). Não
+passa por `verifySession`/`authenticate`/`requireRole` — não há usuário. O token
+autenticado fica em `request.integrationToken`.
+
+**Envio** — `POST /integrations/messages` (token), corpo Zod
+`{ telefone, mensagem, idempotencyKey?, instanceId? }`:
+- **normaliza o telefone ANTES de tudo** (`normalizeBrazilPhone`, em
+  `@azvchat/shared` — com ou sem 55, com ou sem pontuação; número inválido é
+  **422**, grupo é **422**, nunca tenta enviar);
+- `mensagem` vem **pronta** do sistema externo (sem motor de template aqui),
+  com teto e recusa de texto vazio (422);
+- `instanceId` no corpo é opcional e serve só para **recusar (403)** tentativa
+  de enviar por instância diferente da do token — o envio é sempre pela do
+  token;
+- **idempotência**: `idempotencyKey` repetida dentro de 24h **não reenvia** e
+  devolve o resultado original (`IntegrationMessageLog`, única por
+  `(token, chave)`, janela móvel);
+- instância excluída ou desconectada/`qr_required` responde **409** (não
+  enfileira em silêncio);
+- reaproveita o caminho do envio manual: `ingest.ensureConversation` (mesma
+  criação de número novo — **sem inventar departamento nem responsável**),
+  `provider.sendText`, `Message.create` outbound (sem `sentByUserId`,
+  `senderName` = `Integração (<nome>)`, `metadata.origem = "api-integration"`),
+  atualização de prévia e os eventos `MessageNew` + `ConversationUpdated` na
+  `conversationAudience()`. Sucesso devolve `{ status, messageId,
+  conversationId, phone, idempotent }`;
+- **rate limit por token** (429), `INTEGRATION_TOKEN_RATE_LIMIT_PER_MINUTE`
+  (padrão 60), keyed pelo hash do bearer.
+
+**Administração** (`admin`, papel fixo no código, como criar/excluir número):
+`GET /integration-tokens`, `POST /integration-tokens` (devolve o token em claro
+UMA vez), `POST /integration-tokens/:id/revoke`. Tela: card **Tokens de
+integração** em Configurações, só para admin
+(`components/settings/integration-tokens.tsx`), que lista, cria (mostrando o
+token uma vez com botão copiar) e revoga, e exibe a URL do endpoint + exemplo
+de chamada pronto.
+
+**Visibilidade**: nada muda — a conversa criada segue `lib/access.ts` como
+qualquer outra, e o endpoint **não expõe leitura** de conversa/mensagem/contato.
+**Auditoria**: `integration_token.created`, `integration_token.revoked` e
+`message.sent.integration` (com token, instância, conversa e resultado — nunca
+conteúdo nem token em claro).
+
+---
+
+## 18. Como escrever um bom prompt para este sistema
 
 Um prompt fica bom aqui quando responde, nesta ordem:
 
