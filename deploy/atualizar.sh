@@ -14,7 +14,7 @@
 # ==============================================================
 set -euo pipefail
 
-BRANCH="${DEPLOY_BRANCH:-claude/whatsapp-support-platform-ezyvx0}"
+BRANCH="${DEPLOY_BRANCH:-claude/whatsapp-ajustes-producao-loonrm}"
 RAIZ="${DEPLOY_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 COMPOSE="docker-compose.prod.yml"
 # `--force` sobe os containers mesmo sem commit novo (útil depois de
