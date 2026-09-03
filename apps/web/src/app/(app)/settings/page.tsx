@@ -20,6 +20,7 @@ import { Button, Card, Field, Input } from "@/components/ui";
 import { UserAvatar } from "@/components/user-avatar";
 import { AvatarCropper } from "@/components/avatar-cropper";
 import { IntegrationTokensCard } from "@/components/settings/integration-tokens";
+import { AzevedoOsHealthCard } from "@/components/settings/azevedo-os-health";
 
 export default function SettingsPage() {
   const { user, setSession, setUser } = useAuth();
@@ -34,6 +35,8 @@ export default function SettingsPage() {
         <PasswordCard />
         {/* Só admin administra tokens de máquina — a API recusa de novo. */}
         {user?.role === "admin" && <IntegrationTokensCard />}
+        {/* Idem para a saúde da integração com o Azevedo-OS. */}
+        {user?.role === "admin" && <AzevedoOsHealthCard />}
         <Card className="p-6">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
             Sistema

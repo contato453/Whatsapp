@@ -3,8 +3,10 @@ import type { Logger } from "pino";
 import {
   AzevedoOsError,
   createAzevedoOsClient,
+  withAdminDetails,
   type AzevedoOsClientOptions,
 } from "../src/services/azevedo-os-client.js";
+import { AppError } from "../src/lib/errors.js";
 
 /**
  * O que estes testes fixam:
@@ -82,6 +84,84 @@ describe("client do Azevedo-OS — autenticação servidor-a-servidor", () => {
       statusCode: 503,
     });
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  /**
+   * `missingVars` alimenta três lugares: o aviso do boot, a mensagem do card
+   * para quem administra e a verificação de saúde. Nunca o valor — só o
+   * nome, e só das que de fato faltam.
+   */
+  it("`missingVars` nomeia só o que falta, nunca o que está presente", () => {
+    const semNada = build((async () => jsonResponse({})) as unknown as typeof fetch, {
+      baseUrl: null,
+      token: null,
+    });
+    expect(semNada.missingVars).toEqual(["AZEVEDO_OS_API_URL", "AZEVEDO_OS_API_TOKEN"]);
+
+    const sóSemToken = build((async () => jsonResponse({})) as unknown as typeof fetch, {
+      token: null,
+    });
+    expect(sóSemToken.missingVars).toEqual(["AZEVEDO_OS_API_TOKEN"]);
+
+    const ligado = build((async () => jsonResponse({})) as unknown as typeof fetch);
+    expect(ligado.missingVars).toEqual([]);
+  });
+
+  it("`lastSuccessAt` começa nulo e só avança em consulta que de fato funcionou", async () => {
+    const client = build((async () => jsonResponse(EMPRESA)) as unknown as typeof fetch);
+    expect(client.lastSuccessAt).toBeNull();
+
+    await client.getCompany(EMPRESA.id);
+    const primeira = client.lastSuccessAt;
+    expect(primeira).toBeInstanceOf(Date);
+
+    // Resposta que falha na validação não é sucesso — não deve mexer na marca.
+    const comFalha = build((async () => jsonResponse({ sem: "id" })) as unknown as typeof fetch);
+    await comFalha.getCompany("x").catch(() => undefined);
+    expect(comFalha.lastSuccessAt).toBeNull();
+  });
+});
+
+describe("client do Azevedo-OS — mensagem de admin quando falta configuração", () => {
+  it("integração desligada + admin soma o nome das variáveis, sem tocar em outro erro", () => {
+    const desligada = new AzevedoOsError("disabled");
+    const withDetails = (() => {
+      try {
+        withAdminDetails(desligada, true, ["AZEVEDO_OS_API_URL", "AZEVEDO_OS_API_TOKEN"]);
+      } catch (err) {
+        return err;
+      }
+    })();
+    expect(withDetails).toBeInstanceOf(AppError);
+    expect(withDetails).toMatchObject({
+      statusCode: 503,
+      code: "azevedo_os_disabled",
+      details: { missingVars: ["AZEVEDO_OS_API_URL", "AZEVEDO_OS_API_TOKEN"] },
+    });
+  });
+
+  it("quem não é admin recebe o erro original, sem `details`", () => {
+    const desligada = new AzevedoOsError("disabled");
+    const semDetails = (() => {
+      try {
+        withAdminDetails(desligada, false, ["AZEVEDO_OS_API_URL"]);
+      } catch (err) {
+        return err;
+      }
+    })();
+    expect(semDetails).toBe(desligada);
+  });
+
+  it("erro que não é 'disabled' (ex.: portal fora do ar) passa direto, mesmo para admin", () => {
+    const timeout = new AzevedoOsError("timeout");
+    const passou = (() => {
+      try {
+        withAdminDetails(timeout, true, ["AZEVEDO_OS_API_URL"]);
+      } catch (err) {
+        return err;
+      }
+    })();
+    expect(passou).toBe(timeout);
   });
 });
 

@@ -104,6 +104,8 @@ function fakePrisma(): PrismaClient {
 function fakeAzevedoOs(): AzevedoOsClient {
   return {
     enabled: true,
+    missingVars: [],
+    lastSuccessAt: null,
     searchCompanies: async () => [],
     getCompany: async () => {
       throw new AzevedoOsError("not_found");

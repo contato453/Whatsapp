@@ -1,13 +1,17 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { AZEVEDO_OS_SOURCE, azevedoOsSearchIsValid } from "@azvchat/shared";
-import { authenticate } from "../../lib/auth.js";
+import { authenticate, requireRole } from "../../lib/auth.js";
 import { requireAnyPermission } from "../../lib/permissions.js";
 import { findAccessibleConversation } from "../../lib/conversation-access.js";
 import type { AppDeps } from "../../types.js";
 import { loadCompanyFacets } from "../../lib/azevedo-os-company-filter.js";
-import { AzevedoOsError } from "../../services/azevedo-os-client.js";
-import { serializeAzevedoOsCompany, serializeAzevedoOsFacets } from "./serialize.js";
+import { AzevedoOsError, withAdminDetails } from "../../services/azevedo-os-client.js";
+import {
+  serializeAzevedoOsCompany,
+  serializeAzevedoOsFacets,
+  serializeAzevedoOsHealth,
+} from "./serialize.js";
 
 /**
  * Ponte do AZVCHAT com o Azevedo-OS. O frontend nunca fala com o Azevedo-OS:
@@ -39,8 +43,15 @@ export async function integrationRoutes(app: FastifyInstance, deps: AppDeps): Pr
       if (conversation.externalSource !== AZEVEDO_OS_SOURCE || !conversation.externalReference) {
         return { company: null };
       }
-      const company = await deps.azevedoOs.getCompany(conversation.externalReference);
-      return { company: serializeAzevedoOsCompany(company, deps.azevedoOs.companyWebUrl(company.id)) };
+      try {
+        const company = await deps.azevedoOs.getCompany(conversation.externalReference);
+        return { company: serializeAzevedoOsCompany(company, deps.azevedoOs.companyWebUrl(company.id)) };
+      } catch (err) {
+        // Para admin, "não configurada" soma QUAL variável falta — o resto
+        // da equipe continua vendo só o aviso genérico (ver azevedo-os.ts
+        // no frontend). Qualquer outra falha sai como chegou.
+        withAdminDetails(err, request.user.role === "admin", deps.azevedoOs.missingVars);
+      }
     },
   );
 
@@ -68,12 +79,16 @@ export async function integrationRoutes(app: FastifyInstance, deps: AppDeps): Pr
       await findAccessibleConversation(deps.prisma, request.user, query.conversationId);
       if (!azevedoOsSearchIsValid(query.search)) return { companies: [] };
 
-      const companies = await deps.azevedoOs.searchCompanies(query.search.trim(), SEARCH_LIMIT);
-      return {
-        companies: companies.map((company) =>
-          serializeAzevedoOsCompany(company, deps.azevedoOs.companyWebUrl(company.id)),
-        ),
-      };
+      try {
+        const companies = await deps.azevedoOs.searchCompanies(query.search.trim(), SEARCH_LIMIT);
+        return {
+          companies: companies.map((company) =>
+            serializeAzevedoOsCompany(company, deps.azevedoOs.companyWebUrl(company.id)),
+          ),
+        };
+      } catch (err) {
+        withAdminDetails(err, request.user.role === "admin", deps.azevedoOs.missingVars);
+      }
     },
   );
 
@@ -103,6 +118,33 @@ export async function integrationRoutes(app: FastifyInstance, deps: AppDeps): Pr
         if (!(err instanceof AzevedoOsError)) throw err;
         return { facets: null, unavailable: true };
       }
+    },
+  );
+
+  /**
+   * Verificação de saúde da integração — só admin. Diferente das rotas
+   * acima, esta FAZ uma consulta ao vivo quando a integração está
+   * configurada (o mesmo endpoint dos seletores da Inbox, que não depende
+   * de conversa nenhuma) para responder "o portal está respondendo agora"
+   * de verdade, e não só "a configuração existe". Essa própria consulta já
+   * atualiza `lastSuccessAt` quando funciona — não existe um caminho de
+   * "ping" separado do caminho real de uso.
+   */
+  app.get(
+    "/integrations/azevedo-os/health",
+    { preHandler: requireRole("admin") },
+    async () => {
+      let reachable: boolean | null = null;
+      if (deps.azevedoOs.enabled) {
+        try {
+          await deps.azevedoOs.companyFacets();
+          reachable = true;
+        } catch (err) {
+          if (!(err instanceof AzevedoOsError)) throw err;
+          reachable = false;
+        }
+      }
+      return { health: serializeAzevedoOsHealth(deps.azevedoOs, reachable) };
     },
   );
 }

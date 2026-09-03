@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AZEVEDO_OS_SOURCE, type AzevedoOsCompanyDto } from "@azvchat/shared";
 import { ApiError, azevedoOsApi } from "@/lib/api";
 import { azevedoOsErrorMessage } from "@/lib/azevedo-os";
+import { useAuth } from "@/lib/auth-context";
 import type { ConversationDto } from "@/lib/types";
 
 /**
@@ -31,6 +32,8 @@ export interface ConversationCompanyState {
 export function useConversationCompany(
   conversation: ConversationDto | null,
 ): ConversationCompanyState {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const conversationId = conversation?.id ?? null;
   const linked =
     conversation?.externalSource === AZEVEDO_OS_SOURCE && !!conversation.externalReference;
@@ -59,10 +62,15 @@ export function useConversationCompany(
       })
       .catch((err) => {
         setCompany(null);
-        setError(azevedoOsErrorMessage(err instanceof ApiError ? err.code : undefined));
+        setError(
+          azevedoOsErrorMessage(err instanceof ApiError ? err.code : undefined, {
+            isAdmin,
+            details: err instanceof ApiError ? err.details : undefined,
+          }),
+        );
       })
       .finally(() => setLoading(false));
-  }, [conversationId, linked, reference]);
+  }, [conversationId, linked, reference, isAdmin]);
 
   useEffect(reload, [reload]);
 

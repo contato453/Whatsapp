@@ -1789,6 +1789,38 @@ sempre juntos.
   exceções deliberadas: a busca global (`GET /search`) continua encontrando
   arquivada — senão não haveria como achá-la para desarquivar — e o card
   "Conversas arquivadas" do dashboard conta só elas, ignorando o período.
+- **VARIÁVEL PÚBLICA DO NEXT.JS (`NEXT_PUBLIC_`) É GRAVADA NO BUILD, NÃO EM TEMPO DE
+  EXECUÇÃO — e por isso NENHUMA credencial de integração pode usar esse prefixo.** O
+  Next.js substitui `process.env.NEXT_PUBLIC_*` pelo valor literal dentro do bundle na
+  hora de compilar (aqui, `apps/web/Dockerfile`, via `NEXT_PUBLIC_API_URL` como `ARG` do
+  `docker build`). Depois disso o valor está gravado em `.js` estático: mudar o `.env` do
+  servidor, reiniciar o contêiner ou trocar o segredo do GitHub **não tem efeito nenhum**
+  — só uma imagem nova, construída de novo, pega o valor novo. É o tipo de causa que
+  produz o sintoma "funcionava e parou depois de um deploy, sem ninguém mexer na
+  variável": alguém mexeu, só que na hora de CONSTRUIR uma imagem anterior, e o efeito só
+  aparece dias depois. Verificado em 03/09/2026 (incidente do modal "Vincular empresa do
+  Azevedo-OS"): a leitura correta é `apps/api/src/config.ts` e nenhuma
+  `NEXT_PUBLIC_AZEVEDO_*` existe em lugar nenhum do repositório — a integração já nasceu
+  desenhada como a seção 15 descreve, servidor-a-servidor, e a suspeita inicial (variável
+  pública gravada no build) não se confirmou. A regra fica pela mesma razão da seção 15:
+  **nenhuma credencial de integração pode ter equivalente `NEXT_PUBLIC_`**, porque
+  qualquer coisa com esse prefixo vai para o navegador de todo mundo, gravada, sem volta
+  fácil.
+- **RESULTADO DE DEPLOY VERDE NÃO PROVA QUE A INTEGRAÇÃO FOI CONFIGURADA — a prova é a
+  LISTA DE PASSOS, não o `conclusion` do run.** Achado do mesmo incidente de 03/09/2026,
+  antes de a causa em si ser descartada: conferi os workflow runs de `Deploy` do primeiro
+  logo após a integração nascer (16/08/2026) até o mais recente, e em **todos** o passo
+  "Configurar a integração com o Azevedo-OS" aparece `skipped`, porque `VPS_HOST`/
+  `VPS_USER`/`VPS_SSH_KEY` nunca foram cadastrados neste repositório — é exatamente o caso
+  que o aviso da seção 15 já descrevia, só que junto da prova de que ele vale desde
+  sempre aqui. Consequência prática: o único caminho que já pôde ter ligado
+  `AZEVEDO_OS_API_URL`/`AZEVEDO_OS_API_TOKEN` em produção é a Opção B do `DEPLOY.md`
+  (edição direta do `.env` na VPS) — o caminho automático pelos segredos do GitHub nunca
+  rodou uma vez. Se a integração algum dia parar de novo sem commit nenhum mexendo nela, a
+  causa está fora do repositório, e o primeiro comando a rodar NA VPS é
+  `grep -c '^AZEVEDO_OS_' .env` dentro de `~/Whatsapp` — o `DEPLOY.md` já avisa que a
+  resposta certa é `4`, e que `8` significa linha colada duas vezes, com a última
+  vencendo em silêncio.
 - Baileys é integração não oficial: risco de banimento do número. Use números dedicados.
 
 ---
@@ -1983,6 +2015,42 @@ cabeçalho da conversa: ele é interno, e o chip âmbar continua sendo do códig
 manual já gravado. O painel **não tem mais a caixa "Cadastro"** — a empresa do cliente é o
 card, e um campo de texto ao lado dele escrevendo no MESMO `externalReference` era convite
 a apagar o vínculo sem querer.
+
+**Nunca mais falhar em silêncio (03/09/2026).** Até aqui o defeito de configuração ausente
+só aparecia para quem tentava vincular uma empresa, no meio do atendimento — quem administra
+não tinha como saber sem abrir a tela. Três reforços, todos em cima do que já existia (nada
+de migration, nada em `lib/access.ts`):
+
+1. **Aviso no BOOT.** Se `azevedoOs.enabled` é falso, `index.ts` loga
+   `azevedo_os_integration_disabled` uma vez, destacado, com `missingVars` — os NOMES das
+   variáveis que faltam, nunca o valor. `AzevedoOsClient.missingVars` é calculado uma vez
+   na criação do client (`AZEVEDO_OS_ENV_VARS`, em `services/azevedo-os-client.ts`).
+2. **A mensagem do card tem DOIS textos.** Quem atende continua vendo "Integração com o
+   Azevedo-OS não configurada. Avise o administrador do sistema." — o mesmo de sempre, só
+   com o pedido explícito. Quem é admin vê QUAL variável falta
+   (`azevedoOsErrorMessage(code, { isAdmin, details })`, em `lib/azevedo-os.ts`). O nome
+   chega pela API só quando o pedido é de admin: `withAdminDetails` (mesmo arquivo do
+   client) reescreve o `AzevedoOsError` de falha `disabled` como `AppError` com
+   `details: { missingVars }`, e só quando `request.user.role === "admin"` — as outras
+   falhas (timeout, 404, resposta estranha) já dizem o que houve e não passam por aqui.
+   `AppError.details` é gênerico e nunca segredo; a rota decide o que soma, este campo só
+   carrega.
+3. **Verificação de saúde, só admin.** `GET /integrations/azevedo-os/health`
+   (`requireRole("admin")`) responde `configured`, `missingVars`, `reachable` e
+   `lastSuccessAt` (`AzevedoOsHealthDto`, em `@azvchat/shared`). `reachable` não é
+   suposição: a rota FAZ uma consulta ao vivo (`companyFacets()`, o mesmo endpoint dos
+   seletores da Inbox, que não depende de conversa) quando `configured` é true — e essa
+   própria consulta, se funcionar, já atualiza `lastSuccessAt`, porque não existe um
+   caminho de "ping" separado do caminho real de uso. `lastSuccessAt` é **só em memória**
+   (fechamento dentro de `createAzevedoOsClient`, atualizado no fim de cada chamada que
+   validou com sucesso): reinicia com o processo, e o pior caso é responder "nunca" cedo
+   demais depois de um restart, nunca mentir sobre um sucesso que não aconteceu. Na tela,
+   `components/settings/azevedo-os-health.tsx`, ao lado de `IntegrationTokensCard` em
+   Configurações, sob o mesmo padrão (`user?.role === "admin"` na tela E a rota recusando
+   de novo) — carrega só sob clique em "Checar agora", nunca sozinho ao abrir a tela.
+
+Os filtros de regime/folha e o card já degradavam sozinhos antes disso (ver mais abaixo);
+o que faltava era warning de quem administra saber SEM abrir uma tela de atendimento.
 
 ---
 

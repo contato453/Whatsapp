@@ -20,7 +20,7 @@ import {
   resolveCompanyIds,
   unlinkedCompanyWhere,
 } from "../../lib/azevedo-os-company-filter.js";
-import { AzevedoOsError } from "../../services/azevedo-os-client.js";
+import { AzevedoOsError, withAdminDetails } from "../../services/azevedo-os-client.js";
 import {
   accessibleDepartmentIds,
   canAssignBeyondConversationReach,
@@ -1281,7 +1281,11 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     if (plan.verifyCompany && plan.reference) {
       // Empresa inexistente responde 404 do próprio client; indisponível
       // responde 502/504. Em nenhum dos casos a conversa é alterada.
-      await deps.azevedoOs.getCompany(plan.reference);
+      try {
+        await deps.azevedoOs.getCompany(plan.reference);
+      } catch (err) {
+        withAdminDetails(err, request.user.role === "admin", deps.azevedoOs.missingVars);
+      }
     }
 
     await deps.prisma.conversation.update({

@@ -266,3 +266,27 @@ const FACET_VALUE_PATTERN = /^[a-z0-9_]{1,60}$/;
 export function azevedoOsFacetValueIsValid(value: string): boolean {
   return FACET_VALUE_PATTERN.test(value);
 }
+
+/* ------------------------------------------------------------------ *
+ * Verificação de saúde (só para quem administra)
+ * ------------------------------------------------------------------ */
+
+/**
+ * O que a tela de administração mostra sobre a integração — nunca segredo,
+ * só o que ajuda a diagnosticar: se a configuração está presente, se o
+ * portal respondeu na última checagem e quando foi a última consulta que
+ * realmente funcionou. `missingVars` traz NOMES de variável, nunca valor.
+ */
+export interface AzevedoOsHealthDto {
+  /** Falso quando falta `AZEVEDO_OS_API_URL` e/ou `AZEVEDO_OS_API_TOKEN`. */
+  configured: boolean;
+  /** Nomes das variáveis ausentes — vazio quando `configured` é true. */
+  missingVars: string[];
+  /**
+   * Resultado de uma consulta ao vivo feita na hora da checagem. `null`
+   * quando `configured` é falso: sem configuração não há o que testar.
+   */
+  reachable: boolean | null;
+  /** ISO 8601 da última consulta bem-sucedida, ou `null` se nunca houve. */
+  lastSuccessAt: string | null;
+}

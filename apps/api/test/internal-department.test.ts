@@ -92,6 +92,8 @@ async function buildApp(): Promise<FastifyInstance> {
     prisma: fakePrisma(),
     azevedoOs: {
       enabled: false,
+      missingVars: ["AZEVEDO_OS_API_URL", "AZEVEDO_OS_API_TOKEN"],
+      lastSuccessAt: null,
       searchCompanies: async () => [],
       getCompany: async () => {
         throw new AzevedoOsError("not_found");

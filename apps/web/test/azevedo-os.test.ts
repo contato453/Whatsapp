@@ -163,6 +163,37 @@ describe("mensagens de falha do card", () => {
     expect(azevedoOsErrorMessage("azevedo_os_company_not_found")).toContain("não encontrada");
     expect(azevedoOsErrorMessage("azevedo_os_disabled")).toContain("não configurada");
   });
+
+  /**
+   * Item C da correção do incidente de 03/09/2026: quem atende só precisa
+   * saber que não é problema dele; quem administra precisa do nome da
+   * variável, senão vai abrir o `.env` para adivinhar.
+   */
+  it("integração não configurada: mensagem genérica para quem atende", () => {
+    const texto = azevedoOsErrorMessage("azevedo_os_disabled", {
+      isAdmin: false,
+      details: { missingVars: ["AZEVEDO_OS_API_URL", "AZEVEDO_OS_API_TOKEN"] },
+    });
+    expect(texto).toContain("não configurada");
+    expect(texto).not.toContain("AZEVEDO_OS_API_URL");
+    expect(texto.toLowerCase()).toContain("administrador");
+  });
+
+  it("integração não configurada: admin vê o nome da variável que falta", () => {
+    const texto = azevedoOsErrorMessage("azevedo_os_disabled", {
+      isAdmin: true,
+      details: { missingVars: ["AZEVEDO_OS_API_TOKEN"] },
+    });
+    expect(texto).toContain("AZEVEDO_OS_API_TOKEN");
+  });
+
+  it("admin sem `missingVars` no corpo (outro tipo de erro) cai na mensagem genérica", () => {
+    const texto = azevedoOsErrorMessage("azevedo_os_disabled", {
+      isAdmin: true,
+      details: { outraCoisa: 1 },
+    });
+    expect(texto).not.toContain("AZEVEDO_OS");
+  });
 });
 
 /**

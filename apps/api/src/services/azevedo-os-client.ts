@@ -4,6 +4,18 @@ import type { AzevedoOsCompany, AzevedoOsContact } from "@azvchat/shared";
 import { AppError } from "../lib/errors.js";
 
 /**
+ * Variáveis de ambiente da integração, na ordem em que `enabled` as
+ * confere. NUNCA são o valor — só o nome, que não é segredo — e servem a
+ * três lugares: o aviso do boot (`index.ts`), a mensagem que o card mostra
+ * a quem administra (`azevedoOsErrorMessage` no frontend) e a verificação
+ * de saúde (`GET /integrations/azevedo-os/health`).
+ */
+export const AZEVEDO_OS_ENV_VARS = {
+  url: "AZEVEDO_OS_API_URL",
+  token: "AZEVEDO_OS_API_TOKEN",
+} as const;
+
+/**
  * Único ponto do AZVCHAT que fala com o Azevedo-OS.
  *
  * A comunicação é servidor-a-servidor: o token vive só aqui, e nenhuma rota
@@ -266,6 +278,14 @@ export function normalizeCompany(raw: RawCompany): AzevedoOsCompany {
 export interface AzevedoOsClient {
   /** Falso quando falta URL ou token: a tela avisa em vez de tentar. */
   readonly enabled: boolean;
+  /** Nomes das variáveis que faltam (vazio quando `enabled` é true). */
+  readonly missingVars: readonly string[];
+  /**
+   * Instante da última consulta que teve sucesso — `null` se nunca houve
+   * nenhuma. Só em memória: é telemetria operacional, não dado de negócio,
+   * e reinicia com o processo (ver a verificação de saúde).
+   */
+  readonly lastSuccessAt: Date | null;
   searchCompanies(term: string, limit: number): Promise<AzevedoOsCompany[]>;
   getCompany(id: string): Promise<AzevedoOsCompany>;
   /** Valores possíveis de regime e folha, para montar os seletores. */
@@ -293,6 +313,17 @@ export function createAzevedoOsClient(options: AzevedoOsClientOptions): AzevedoO
   const enabled = baseUrl.length > 0 && token.length > 0;
   const fetchImpl = options.fetchImpl ?? fetch;
   const logger = options.logger;
+
+  const missingVars: string[] = [];
+  if (baseUrl.length === 0) missingVars.push(AZEVEDO_OS_ENV_VARS.url);
+  if (token.length === 0) missingVars.push(AZEVEDO_OS_ENV_VARS.token);
+
+  // Só em memória, de propósito (ver o comentário na interface): não vale
+  // uma migration, e reiniciar o processo já é o pior caso ("nunca").
+  let lastSuccessAt: Date | null = null;
+  function markSuccess(): void {
+    lastSuccessAt = new Date();
+  }
 
   async function call(path: string): Promise<unknown> {
     if (!enabled) throw new AzevedoOsError("disabled");
@@ -334,6 +365,10 @@ export function createAzevedoOsClient(options: AzevedoOsClientOptions): AzevedoO
 
   return {
     enabled,
+    missingVars,
+    get lastSuccessAt() {
+      return lastSuccessAt;
+    },
 
     async searchCompanies(term, limit) {
       const params = new URLSearchParams({ search: term, limit: String(limit) });
@@ -350,6 +385,7 @@ export function createAzevedoOsClient(options: AzevedoOsClientOptions): AzevedoO
           : "companies" in parsed.data
             ? parsed.data.companies
             : parsed.data.results;
+      markSuccess();
       return list.slice(0, limit).map(normalizeCompany);
     },
 
@@ -366,6 +402,7 @@ export function createAzevedoOsClient(options: AzevedoOsClientOptions): AzevedoO
           : "data" in parsed.data
             ? parsed.data.data
             : parsed.data.company;
+      markSuccess();
       return normalizeCompany(company);
     },
 
@@ -377,6 +414,7 @@ export function createAzevedoOsClient(options: AzevedoOsClientOptions): AzevedoO
         throw new AzevedoOsError("invalid_response");
       }
       const data = "data" in parsed.data ? parsed.data.data : parsed.data;
+      markSuccess();
       return {
         taxRegime: normalizeFacetField(data.taxRegime),
         payroll: normalizeFacetField(data.payroll),
@@ -397,6 +435,7 @@ export function createAzevedoOsClient(options: AzevedoOsClientOptions): AzevedoO
         logger.warn({ event: "azevedo_os_unexpected_payload", path: "/company-ids" });
         throw new AzevedoOsError("invalid_response");
       }
+      markSuccess();
       if (Array.isArray(parsed.data)) return { ids: parsed.data, truncated: false };
       const ids = "data" in parsed.data ? parsed.data.data : parsed.data.ids;
       return { ids, truncated: parsed.data.truncated === true };
@@ -410,4 +449,27 @@ export function createAzevedoOsClient(options: AzevedoOsClientOptions): AzevedoO
       return template.replace("{id}", encodeURIComponent(id));
     },
   };
+}
+
+/**
+ * Repassa o erro, e para quem administra soma QUAL variável falta —
+ * pedido explícito de 03/09/2026: o card dizia "não configurada" e ponto,
+ * o que obrigava quem administra a adivinhar entre `AZEVEDO_OS_API_URL` e
+ * `AZEVEDO_OS_API_TOKEN` (ou os dois) antes de abrir o `.env`. Nunca o
+ * valor — só o nome, que não é segredo.
+ *
+ * Só reescreve quando as três condições batem: é `AzevedoOsError`, é
+ * exatamente a falha `disabled` (as outras — timeout, 404, resposta
+ * estranha — já dizem o que houve) e quem pediu é admin. Qualquer outro
+ * erro sai como chegou.
+ */
+export function withAdminDetails(
+  err: unknown,
+  isAdmin: boolean,
+  missingVars: readonly string[],
+): never {
+  if (err instanceof AzevedoOsError && err.failure === "disabled" && isAdmin && missingVars.length > 0) {
+    throw new AppError(err.message, err.statusCode, err.code, { missingVars: [...missingVars] });
+  }
+  throw err;
 }

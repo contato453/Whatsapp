@@ -5,6 +5,7 @@ import type {
   AttendanceSettings,
   AzevedoOsCompanyDto,
   AzevedoOsFacetsDto,
+  AzevedoOsHealthDto,
   ConfigurableRole,
   ConversationStatus,
   ParticipantClientRole,
@@ -53,6 +54,12 @@ export class ApiError extends Error {
     message: string,
     public readonly status: number,
     public readonly code?: string,
+    /**
+     * Contexto extra que a API só soma para admin (ex.: `missingVars` da
+     * integração com o Azevedo-OS — nomes de variável, nunca valor). Ver
+     * `AppError.details` no backend.
+     */
+    public readonly details?: Record<string, unknown>,
   ) {
     super(message);
   }
@@ -103,8 +110,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = (await response.json().catch(() => null)) as {
       message?: string;
       error?: string;
+      details?: Record<string, unknown>;
     } | null;
-    throw new ApiError(body?.message ?? "Erro na requisição", response.status, body?.error);
+    throw new ApiError(
+      body?.message ?? "Erro na requisição",
+      response.status,
+      body?.error,
+      body?.details,
+    );
   }
   return response.json() as Promise<T>;
 }
@@ -345,6 +358,13 @@ export const azevedoOsApi = {
     api.patch<{ ok: boolean }>(`/conversations/${conversationId}/reference`, {
       externalReference: null,
     }),
+  /**
+   * Verificação de saúde — só admin (a API recusa de novo com 403). Faz
+   * uma consulta ao vivo no servidor, então não chame em loop nem a cada
+   * tecla: é para o card de Configurações, sob clique de "Checar agora".
+   */
+  health: () =>
+    api.get<{ health: AzevedoOsHealthDto }>("/integrations/azevedo-os/health").then((data) => data.health),
 };
 
 /**

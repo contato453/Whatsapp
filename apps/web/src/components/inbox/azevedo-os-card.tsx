@@ -11,6 +11,7 @@ import {
 } from "@azvchat/shared";
 import { ApiError, azevedoOsApi } from "@/lib/api";
 import { azevedoOsErrorMessage, azevedoOsStatusDotClass } from "@/lib/azevedo-os";
+import { useAuth } from "@/lib/auth-context";
 import type { ConversationDto } from "@/lib/types";
 import { Button, Input, Modal, Spinner } from "@/components/ui";
 import type { ConversationCompanyState } from "./use-conversation-company";
@@ -80,6 +81,8 @@ function SearchModal({
   onClose: () => void;
   onLinked: () => void;
 }) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [term, setTerm] = useState("");
   const [results, setResults] = useState<AzevedoOsCompanyDto[] | null>(null);
   const [searching, setSearching] = useState(false);
@@ -112,12 +115,17 @@ function SearchModal({
           setError(null);
         })
         .catch((err) =>
-          setError(azevedoOsErrorMessage(err instanceof ApiError ? err.code : undefined)),
+          setError(
+            azevedoOsErrorMessage(err instanceof ApiError ? err.code : undefined, {
+              isAdmin,
+              details: err instanceof ApiError ? err.details : undefined,
+            }),
+          ),
         )
         .finally(() => setSearching(false));
     }, 300);
     return () => clearTimeout(timer);
-  }, [term, open, conversationId]);
+  }, [term, open, conversationId, isAdmin]);
 
   async function selecionar(company: AzevedoOsCompanyDto) {
     setLinking(true);
@@ -129,7 +137,10 @@ function SearchModal({
       setError(
         err instanceof ApiError && err.status === 403
           ? err.message
-          : azevedoOsErrorMessage(err instanceof ApiError ? err.code : undefined),
+          : azevedoOsErrorMessage(err instanceof ApiError ? err.code : undefined, {
+              isAdmin,
+              details: err instanceof ApiError ? err.details : undefined,
+            }),
       );
     } finally {
       setLinking(false);

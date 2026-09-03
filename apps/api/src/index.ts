@@ -39,6 +39,17 @@ async function main(): Promise<void> {
     timeoutMs: config.AZEVEDO_OS_TIMEOUT_MS,
     logger: logger.child({ module: "azevedo-os" }),
   });
+  // Antes de 03/09/2026 o defeito só aparecia quando alguém tentava
+  // vincular uma empresa — quem administra a VPS não tinha como saber que
+  // a integração estava desligada sem abrir a tela. Este aviso sai UMA vez,
+  // no boot, destacado do resto do log de partida, com o NOME de quem
+  // falta (nunca o valor).
+  if (!azevedoOs.enabled) {
+    logger.warn(
+      { event: "azevedo_os_integration_disabled", missingVars: azevedoOs.missingVars },
+      "Integração com o Azevedo-OS desligada: defina as variáveis que faltam no .env da VPS (ou nos segredos do GitHub, se o deploy por SSH estiver ligado)",
+    );
+  }
 
   // Único ponto do sistema que instancia um provider concreto.
   const provider = new QrCodeWhatsAppProvider({

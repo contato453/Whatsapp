@@ -7,6 +7,13 @@ export class AppError extends Error {
     message: string,
     public readonly statusCode: number = 400,
     public readonly code?: string,
+    /**
+     * Contexto extra, só para quem administra decidir se mostra na tela
+     * (ver `azevedo_os_disabled`, em `services/azevedo-os-client.ts`).
+     * NUNCA um segredo — só o que ajuda a corrigir, como nome de variável
+     * de ambiente ausente. Quem decide se exibe é a rota, não este arquivo.
+     */
+    public readonly details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "AppError";
@@ -63,6 +70,7 @@ export function registerErrorHandler(app: FastifyInstance): void {
       return reply.status(error.statusCode).send({
         error: error.code ?? "app_error",
         message: error.message,
+        ...(error.details ? { details: error.details } : {}),
       });
     }
     // Erros do próprio Fastify (rate limit, payload grande etc.)

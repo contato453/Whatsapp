@@ -3,9 +3,10 @@ import type {
   AzevedoOsCompanyDto,
   AzevedoOsFacetsDto,
   AzevedoOsFieldFacets,
+  AzevedoOsHealthDto,
 } from "@azvchat/shared";
 import type { IntegrationToken } from "@azvchat/database";
-import type { AzevedoOsCompanyFacets } from "../../services/azevedo-os-client.js";
+import type { AzevedoOsClient, AzevedoOsCompanyFacets } from "../../services/azevedo-os-client.js";
 
 /** DTO do token de integração para a tela de administração. */
 export interface IntegrationTokenDto {
@@ -94,4 +95,22 @@ export function serializeAzevedoOsFacets(facets: AzevedoOsCompanyFacets): Azeved
     hasNone: raw.noneCount > 0,
   });
   return { taxRegime: field(facets.taxRegime), payroll: field(facets.payroll) };
+}
+
+/**
+ * DTO da verificação de saúde, só para admin (`GET
+ * /integrations/azevedo-os/health`). `reachable` chega pronto de quem
+ * chamou a rota — é o resultado de uma consulta ao vivo feita ali, e esta
+ * função só empacota o que o client já sabe sobre si mesmo.
+ */
+export function serializeAzevedoOsHealth(
+  client: Pick<AzevedoOsClient, "enabled" | "missingVars" | "lastSuccessAt">,
+  reachable: boolean | null,
+): AzevedoOsHealthDto {
+  return {
+    configured: client.enabled,
+    missingVars: [...client.missingVars],
+    reachable,
+    lastSuccessAt: client.lastSuccessAt ? client.lastSuccessAt.toISOString() : null,
+  };
 }

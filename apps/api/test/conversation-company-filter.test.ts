@@ -77,6 +77,8 @@ function fakePrisma(): PrismaClient {
 function fakeAzevedoOs(overrides: Partial<AzevedoOsClient> = {}): AzevedoOsClient {
   return {
     enabled: true,
+    missingVars: [],
+    lastSuccessAt: null,
     searchCompanies: async () => [],
     getCompany: async () => {
       throw new AzevedoOsError("not_found");
