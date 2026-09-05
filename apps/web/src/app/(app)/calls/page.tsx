@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Download,
   PhoneIncoming,
   PhoneMissed,
   PhoneOutgoing,
@@ -12,6 +13,7 @@ import {
 } from "lucide-react";
 import { api, callsApi, fetchAuthedBlobUrl } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { downloadCallRecording } from "@/lib/media-download";
 import type { CallLogDto, InstanceDto } from "@/lib/types";
 import {
   Button,
@@ -413,12 +415,13 @@ function CallRow({ call, canPlayRecording }: { call: CallLogDto; canPlayRecordin
       </div>
       <div className="flex items-center gap-3">
         {call.hasRecording && canPlayRecording && (
-          <div className="rounded-full bg-slate-50 px-3 py-1.5 ring-1 ring-slate-200">
+          <div className="flex items-center gap-1.5 rounded-full bg-slate-50 px-3 py-1.5 ring-1 ring-slate-200">
             <AudioPlayer
               outbound={false}
               durationSeconds={call.durationSeconds ?? undefined}
               load={() => fetchAuthedBlobUrl(callsApi.recordingPath(call.id))}
             />
+            <DownloadRecordingButton call={call} />
           </div>
         )}
         <span className="shrink-0 whitespace-nowrap text-xs tabular-nums text-slate-400">
@@ -426,6 +429,47 @@ function CallRow({ call, canPlayRecording }: { call: CallLogDto; canPlayRecordin
         </span>
       </div>
     </div>
+  );
+}
+
+/**
+ * Botão de baixar a gravação, ao lado do player. Mesmo padrão de estado do
+ * download de documento na bolha do chat (`message-bubble.tsx`): spinner
+ * enquanto baixa, ícone volta ao normal depois — falha some sozinha no
+ * próximo clique, sem texto extra que não cabe nesta linha estreita.
+ */
+function DownloadRecordingButton({ call }: { call: CallLogDto }) {
+  const [downloading, setDownloading] = useState(false);
+  const [downloadFailed, setDownloadFailed] = useState(false);
+
+  async function download() {
+    setDownloadFailed(false);
+    setDownloading(true);
+    try {
+      // Mesmo caminho autenticado do player — um `<a href>` direto não envia
+      // o header Authorization que a rota exige.
+      await downloadCallRecording(call);
+    } catch {
+      setDownloadFailed(true);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => void download()}
+      disabled={downloading}
+      className={cn(
+        "flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-60",
+        downloadFailed ? "bg-rose-100 text-rose-600 hover:bg-rose-200" : "bg-slate-100 hover:bg-slate-200",
+      )}
+      aria-label={downloadFailed ? "Falha ao baixar — tentar de novo" : "Baixar gravação"}
+      title={downloadFailed ? "Falha ao baixar — tentar de novo" : "Baixar gravação"}
+    >
+      {downloading ? <Spinner className="h-4 w-4" /> : <Download className="h-4 w-4" />}
+    </button>
   );
 }
 
