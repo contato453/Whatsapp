@@ -74,6 +74,7 @@ import type {
 import { cn } from "@/lib/utils";
 import { Card, EmptyState, MultiSelect, type MultiSelectGroup } from "@/components/ui";
 import { UserAvatar } from "@/components/user-avatar";
+import { ConversationAvatar } from "@/components/inbox/conversation-avatar";
 import { MessagesTimeline } from "@/components/dashboard/messages-timeline";
 import { HoursHeatmap } from "@/components/dashboard/hours-heatmap";
 import { Sparkline } from "@/components/dashboard/sparkline";
@@ -404,13 +405,12 @@ function RankingRow({
     >
       <div className="flex items-center gap-3">
         <RankPosition position={position} />
-        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-500">
-          {row.type === "group" ? (
-            <Users2 className="h-3.5 w-3.5" />
-          ) : (
-            <UserRound className="h-3.5 w-3.5" />
-          )}
-        </span>
+        <ConversationAvatar
+          conversationId={row.conversationId}
+          name={row.title}
+          hasAvatar={row.hasAvatar}
+          size="sm"
+        />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-slate-900">{row.title}</p>
           <p className="flex items-center gap-1 truncate text-[11px] text-slate-500">

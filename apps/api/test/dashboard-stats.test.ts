@@ -332,6 +332,19 @@ describe("GET /dashboard/stats", () => {
     await app.close();
   });
 
+  it("período 'ontem' é aceito e devolve um intervalo fechado (com periodEnd)", async () => {
+    const app = await buildTestApp();
+    const body = (await stats(app, "admin", "?period=yesterday")).json();
+    expect(body.period).toBe("yesterday");
+    // Diferente dos demais atalhos (sem corte superior), ontem é um dia
+    // fechado — por isso tem periodEnd, e não null.
+    expect(body.periodEnd).not.toBeNull();
+    expect(new Date(body.periodEnd).getTime()).toBeGreaterThan(
+      new Date(body.periodStart).getTime(),
+    );
+    await app.close();
+  });
+
   it("admin consulta sem recorte de número, departamento ou responsável", async () => {
     const app = await buildTestApp();
     await stats(app, "admin");
@@ -480,6 +493,7 @@ describe("GET /dashboard/stats", () => {
         conversationId: "conv-1",
         title: "Nome dado pela equipe",
         type: "group",
+        hasAvatar: false,
         instanceName: "Comercial",
         assignee: { userId: "user-1", name: "Maria Supervisora", hasAvatar: false },
         received: 7,

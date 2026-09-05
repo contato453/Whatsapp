@@ -461,6 +461,9 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
                 title: true,
                 customTitle: true,
                 type: true,
+                // A tela busca a foto pelo endpoint autenticado; aqui só a
+                // chave de storage importa, para saber SE existe uma.
+                profilePicture: true,
                 instance: { select: { name: true } },
                 // Quem está com o atendimento na mão. A lista mostra isso
                 // porque "conversa mais ativa" sem dono é justamente a que
@@ -580,6 +583,10 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
           // WhatsApp, que o sync sobrescreve.
           title: conversation.customTitle ?? conversation.title,
           type: conversation.type,
+          // A tela busca a foto pelo endpoint autenticado (mesmo padrão da
+          // Inbox); aqui só diz SE existe, para não pedir uma foto que não
+          // há.
+          hasAvatar: conversation.profilePicture != null,
           instanceName: conversation.instance?.name ?? null,
           // Só o mínimo para desenhar a linha — nada de dado de cadastro do
           // usuário viajando dentro do trabalho de outro.

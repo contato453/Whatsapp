@@ -234,6 +234,8 @@ export interface DashboardRankingRow {
   conversationId: string;
   title: string;
   type: ConversationType;
+  /** Existe foto de perfil? A tela busca pelo endpoint autenticado. */
+  hasAvatar: boolean;
   instanceName: string | null;
   /** Responsável pelo atendimento; `null` quando a conversa está sem dono. */
   assignee: { userId: string; name: string; hasAvatar: boolean } | null;

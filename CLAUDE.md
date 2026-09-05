@@ -1413,7 +1413,11 @@ sempre juntos.
 - **Nenhum corte de data do dashboard usa o fuso do servidor** — "hoje" é o dia civil do
   escritório, não o dia UTC do container. O `custom` pega os dois dias das pontas inteiros;
   os atalhos **não** têm corte superior, de propósito: o relógio do WhatsApp pode vir à
-  frente do nosso e um `lte: agora` sumiria com a mensagem recém-chegada.
+  frente do nosso e um `lte: agora` sumiria com a mensagem recém-chegada. **`yesterday`
+  ("Ontem") é a única exceção**, e de propósito: é um dia civil FECHADO que não inclui hoje,
+  então precisa de `periodEnd` — sem ele "ontem" mostraria ontem mais o dia inteiro de hoje.
+  Por isso ele fica fora de `DASHBOARD_FIXED_PERIODS`/`DASHBOARD_PERIOD_DAYS` (que assumem
+  "sem corte superior") e tem conta própria em `periodRange`, do mesmo jeito que `custom`.
 - **Os filtros do dashboard refinam o recorte, nunca o ampliam.** Número, status,
   departamento e responsável — os quatro em MULTISSELEÇÃO, somando dentro e cruzando entre
   si — entram num `AND` junto com `conversationScope`, então pedir um número que o usuário

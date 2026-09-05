@@ -478,6 +478,8 @@ export interface DashboardRankingRowDto {
   /** Já resolvido pela API: `customTitle` vence `title`, como na Inbox. */
   title: string;
   type: ConversationType;
+  /** Existe foto de perfil? Buscada por `ConversationAvatar`, como na Inbox. */
+  hasAvatar: boolean;
   instanceName: string | null;
   /** Responsável pelo atendimento; `null` quando a conversa está sem dono. */
   assignee: { userId: string; name: string; hasAvatar: boolean } | null;
