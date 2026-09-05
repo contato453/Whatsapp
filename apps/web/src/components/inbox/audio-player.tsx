@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Pause, Play } from "lucide-react";
+import { AlertCircle, Loader2, Pause, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const SPEEDS = [1, 1.5, 2] as const;
@@ -17,12 +17,89 @@ function formatSeconds(value: number): string {
  * Player de áudio com controle de velocidade — essencial para ouvir
  * áudios longos de clientes em ritmo acelerado.
  */
-export function AudioPlayer({ src, outbound }: { src: string; outbound: boolean }) {
+export function AudioPlayer({
+  src: srcProp,
+  load,
+  outbound,
+  durationSeconds,
+}: {
+  /** URL pronta do áudio. Use `load` quando o binário só deve ser baixado ao tocar. */
+  src?: string;
+  /**
+   * Carrega o áudio sob demanda e devolve a URL do blob. Quando presente e
+   * `src` ausente, o player só baixa o arquivo no primeiro play — é como a
+   * gravação de chamada aparece na lista sem baixar tudo de uma vez.
+   */
+  load?: () => Promise<string>;
+  outbound: boolean;
+  /**
+   * Duração conhecida (do WhatsApp), em segundos. Serve de reserva quando o
+   * navegador não consegue ler a duração do arquivo — é o caso do OGG/Opus da
+   * nota de voz, que chegava com a barra e o tempo zerados sem isto.
+   */
+  durationSeconds?: number;
+}) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<(typeof SPEEDS)[number]>(1);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
+  // Fonte resolvida: o `src` direto, ou o que o `load` baixou no primeiro play.
+  const [src, setSrc] = useState<string | null>(srcProp ?? null);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  // Play pedido antes de a fonte existir — dispara sozinho quando ela chega.
+  const wantPlay = useRef(false);
+  // URL que ESTE player criou (via load): revoga ao desmontar. `src` vindo de
+  // fora é do chamador, e revogá-lo cortaria o áudio de quem o passou.
+  const ownedUrl = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (srcProp) setSrc(srcProp);
+  }, [srcProp]);
+
+  useEffect(() => {
+    return () => {
+      if (ownedUrl.current) URL.revokeObjectURL(ownedUrl.current);
+    };
+  }, []);
+
+  async function ensureSrc(): Promise<void> {
+    if (src || !load || loading) return;
+    setLoading(true);
+    setLoadError(false);
+    try {
+      const url = await load();
+      ownedUrl.current = url;
+      setSrc(url);
+    } catch {
+      setLoadError(true);
+      wantPlay.current = false;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Assim que a fonte fica pronta e havia um play pendente, toca.
+  useEffect(() => {
+    if (src && wantPlay.current) {
+      wantPlay.current = false;
+      const audio = audioRef.current;
+      if (audio) {
+        audio.playbackRate = speed;
+        void audio.play();
+      }
+    }
+  }, [src, speed]);
+
+  // O `duration` do elemento vence quando é um número real; senão vale o que o
+  // WhatsApp informou. OGG/Opus costuma reportar 0 ou Infinity até o fim do
+  // download, e é aí que a reserva segura a barra e o tempo total.
+  const effectiveDuration =
+    Number.isFinite(duration) && duration > 0 ? duration : durationSeconds ?? 0;
+  // Enquanto não toca, mostramos o TOTAL (como no WhatsApp); ao tocar, o
+  // tempo decorrido.
+  const displayed = progress > 0 ? progress : effectiveDuration;
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -30,6 +107,12 @@ export function AudioPlayer({ src, outbound }: { src: string; outbound: boolean 
   }, [speed]);
 
   function toggle() {
+    // Ainda não baixou (gravação de chamada): baixa agora e toca ao terminar.
+    if (!src) {
+      wantPlay.current = true;
+      void ensureSrc();
+      return;
+    }
     const audio = audioRef.current;
     if (!audio) return;
     if (audio.paused) {
@@ -47,32 +130,48 @@ export function AudioPlayer({ src, outbound }: { src: string; outbound: boolean 
 
   return (
     <div className="flex min-w-[220px] items-center gap-2">
-      <audio
-        ref={audioRef}
-        src={src}
-        preload="metadata"
-        onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
-        onEnded={() => setPlaying(false)}
-        onTimeUpdate={(event) => setProgress(event.currentTarget.currentTime)}
-        onLoadedMetadata={(event) => setDuration(event.currentTarget.duration)}
-        className="hidden"
-      />
+      {src && (
+        <audio
+          ref={audioRef}
+          src={src}
+          preload="metadata"
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+          onEnded={() => setPlaying(false)}
+          onTimeUpdate={(event) => setProgress(event.currentTarget.currentTime)}
+          onLoadedMetadata={(event) => setDuration(event.currentTarget.duration)}
+          className="hidden"
+        />
+      )}
       <button
         onClick={toggle}
+        disabled={loading}
         className={cn(
           "flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors",
-          outbound ? "bg-white/60 hover:bg-white/90" : "bg-slate-100 hover:bg-slate-200",
+          loadError
+            ? "bg-rose-100 text-rose-600 hover:bg-rose-200"
+            : outbound
+              ? "bg-white/60 hover:bg-white/90"
+              : "bg-slate-100 hover:bg-slate-200",
         )}
-        aria-label={playing ? "Pausar" : "Reproduzir"}
+        aria-label={loadError ? "Tentar de novo" : playing ? "Pausar" : "Reproduzir"}
+        title={loadError ? "Falha ao carregar — tocar de novo" : undefined}
       >
-        {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+        {loading ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : loadError ? (
+          <AlertCircle className="h-4 w-4" />
+        ) : playing ? (
+          <Pause className="h-4 w-4" />
+        ) : (
+          <Play className="h-4 w-4" />
+        )}
       </button>
 
       <input
         type="range"
         min={0}
-        max={duration || 0}
+        max={effectiveDuration || 0}
         step={0.1}
         value={progress}
         onChange={(event) => {
@@ -89,7 +188,7 @@ export function AudioPlayer({ src, outbound }: { src: string; outbound: boolean 
       />
 
       <span className={cn("shrink-0 text-[10px] tabular-nums", outbound ? "text-chat-sent-meta" : "text-slate-400")}>
-        {formatSeconds(progress)}
+        {formatSeconds(displayed)}
       </span>
 
       <button

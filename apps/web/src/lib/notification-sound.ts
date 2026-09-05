@@ -190,6 +190,50 @@ export function playNotificationSound(
 }
 
 /**
+ * Toque de CHAMADA: dois tons repetidos em cadência de telefone, tocando em
+ * laço até alguém atender/recusar. Diferente do aviso de mensagem (um toque
+ * único), a ligação insiste — é o alerta que compete com o telefone da mesa.
+ */
+const RINGTONE: readonly Tone[] = [
+  { frequency: 587.33, wave: "sine", offset: 0, duration: 0.4 },
+  { frequency: 880, wave: "sine", offset: 0.5, duration: 0.4 },
+];
+const RINGTONE_INTERVAL_MS = 2400;
+let ringtoneTimer: number | null = null;
+
+/**
+ * Começa a tocar o toque de chamada em laço. Idempotente: chamar de novo
+ * enquanto já toca não empilha. A ligação é mais urgente que a mensagem, então
+ * NÃO depende da preferência "Nenhum" do som de mensagem — usa só o volume.
+ */
+export function startRingtone(volume: NotificationVolume = "medium"): void {
+  if (ringtoneTimer !== null) return;
+  const ctx = audioContext();
+  if (!ctx) return;
+  const peak = VOLUME_GAIN[volume];
+  const ring = () => {
+    if (ctx.state !== "running") {
+      void ctx.resume().catch(() => undefined);
+    }
+    try {
+      schedule(ctx, RINGTONE, peak);
+    } catch {
+      // Silêncio: o aviso na tela (modal de chamada) continua valendo.
+    }
+  };
+  ring();
+  ringtoneTimer = window.setInterval(ring, RINGTONE_INTERVAL_MS);
+}
+
+/** Para o toque de chamada. Seguro chamar mesmo sem estar tocando. */
+export function stopRingtone(): void {
+  if (ringtoneTimer !== null) {
+    window.clearInterval(ringtoneTimer);
+    ringtoneTimer = null;
+  }
+}
+
+/**
  * Preview da tela de Configurações. Sempre parte de um clique, então o
  * contexto já está destravado — e, ao contrário do aviso de mensagem, não
  * passa pelo intervalo mínimo: quem está escolhendo o som precisa poder

@@ -81,6 +81,23 @@ export interface WhatsAppProviderEvents {
     keyCandidates: string[];
     editedAt: Date | null;
   }) => void;
+  /**
+   * Alguém votou numa enquete. O WhatsApp manda a seleção ATUAL completa do
+   * votante a cada voto (trocar de opção reenvia a lista inteira), então
+   * `selectedNames` substitui o voto anterior daquela pessoa, nunca soma.
+   */
+  "poll-vote": (event: {
+    instanceId: string;
+    externalChatId: string;
+    /** Id externo da mensagem de enquete que recebeu o voto */
+    pollExternalMessageId: string;
+    voterExternalId: string | null;
+    voterPhone: string | null;
+    voterName: string | null;
+    /** Opções escolhidas AGORA (rótulos já decifrados pelo AstraCalls) */
+    selectedNames: string[];
+    at: Date;
+  }) => void;
   /** Chamada de voz/vídeo registrada no chat */
   call: (event: CallEvent) => void;
   "chats-sync": (event: { instanceId: string; chats: ProviderChat[] }) => void;

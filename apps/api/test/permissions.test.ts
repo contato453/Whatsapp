@@ -244,6 +244,11 @@ describe("padrões de fábrica (Usuário / Supervisor)", () => {
     ["dashboard.view_team", false, true],
     ["audit.view", false, true],
     ["attendance_settings.manage", false, true],
+    // Ligações
+    ["call.answer", true, true],
+    ["call.view", true, true],
+    ["call.recording.play", false, true],
+    ["call.recording.delete", false, false],
   ];
 
   it.each(esperado)("%s → Usuário %s, Supervisor %s", (action, agent, supervisor) => {
