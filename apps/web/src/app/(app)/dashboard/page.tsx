@@ -17,7 +17,10 @@ import {
   ListFilter,
   Mail,
   MessagesSquare,
+  Phone,
+  PhoneIncoming,
   PhoneOff,
+  PhoneOutgoing,
   QrCode,
   RadioTower,
   RotateCcw,
@@ -1242,6 +1245,39 @@ export default function DashboardPage() {
           </div>
         </Card>
       </div>
+
+      {/* Card à parte de "Mensagens" — ligação é `Message` só por
+          conveniência de armazenamento, mas não é texto nem mídia, e a tela
+          de Ligações já mostra o detalhe (gravação, situação, filtros). Aqui
+          é só o total do período, sem gráfico: o card fica simples de
+          propósito, e os dois números somados aqui NÃO entram mais em
+          "Mensagens" (ver `NOT_A_CALL` na API). */}
+      <Card className="mt-4 p-5">
+        <BlockHeader
+          icon={<Phone className="h-4 w-4" />}
+          accent={DASHBOARD_ACCENT}
+          title="Ligações"
+          subtitle={`Chamadas de voz e vídeo ${phrase}`}
+        />
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <MessageTile
+            label={`Recebidas ${phrase}`}
+            value={stats?.calls.received ?? 0}
+            color={RECEIVED_COLOR}
+            icon={<PhoneIncoming className="h-4 w-4" />}
+            series={[]}
+            pending={initialPending}
+          />
+          <MessageTile
+            label={`Realizadas ${phrase}`}
+            value={stats?.calls.made ?? 0}
+            color={SENT_COLOR}
+            icon={<PhoneOutgoing className="h-4 w-4" />}
+            series={[]}
+            pending={initialPending}
+          />
+        </div>
+      </Card>
 
       {/* Os gráficos ficam sob os cards de mensagens: os cards dão o total do
           período, e estes mostram como esse total se distribuiu. */}

@@ -1474,6 +1474,20 @@ sempre juntos.
   as mensagens deles — mesmo padrão do card de atraso. Os descartes são os mesmos dos cards
   (apagada e saída `pending` não contam), senão o gráfico contaria uma história e os cards
   outra; há teste fixando que a soma da série bate com o card.
+- **LIGAÇÃO (`Message.type = "call"`) NÃO CONTA MAIS COMO MENSAGEM.** Card próprio
+  ("Ligações", recebidas/realizadas do período, sem gráfico) desde que a tela de Ligações
+  existe — antes disso, toda ligação já entrava sem querer dentro de "Mensagens
+  recebidas/enviadas", do ranking de conversas mais ativas, do total por usuário e da série
+  "Mensagens por dia"/mapa de calor, porque nenhuma dessas consultas olhava o `type`.
+  `NOT_A_CALL` (`modules/dashboard/routes.ts`) é a exclusão única, aplicada em TODA consulta
+  que soma com o card de mensagens — os dois `message.count`, o `groupBy` do ranking e sua
+  quebra por direção, o `groupBy` de `sentByUserId`/`received` do `topUsers`, e o
+  `AND "type" != 'call'` dentro do SQL cru de `loadActivityBuckets`. Esquecer um desses
+  pontos faz exatamente o defeito que a separação veio consertar: a soma de uma linha do
+  ranking (ou da série por dia) deixa de bater com o card, ligação some de um lugar e
+  reaparece no outro. O card de Ligações usa as MESMAS consultas de mensagem (`message.count`
+  com `type: "call"` em vez de excluído), só que sem série — decisão de manter simples, sem
+  sparkline nem timeline própria.
 - **`topUsers` é de supervisor para cima**, igual ao relatório por atendente: para o `agent`
   a rota nem consulta e devolve `null`, e a tela não desenha o bloco. `sent` sai de
   `Message.sentByUserId` (envio sem autor é do scheduler e não conta como trabalho de

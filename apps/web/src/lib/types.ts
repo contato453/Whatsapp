@@ -542,6 +542,11 @@ export interface DashboardStatsDto {
     received: number;
     sent: number;
   };
+  /** Ligações (fora da conta de mensagens desde que a tela de Ligações existe). */
+  calls: {
+    received: number;
+    made: number;
+  };
   ranking: DashboardRankingRowDto[];
   /** `null` para quem não é supervisor — o bloco não aparece na tela dele. */
   topUsers: DashboardTopUserDto[] | null;
