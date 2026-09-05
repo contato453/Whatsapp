@@ -83,6 +83,14 @@ describe("cortes de data no fuso configurado", () => {
     expect(periodRange("30d", sp("2026-08-15T10:00:00"), SP).end).toBeNull();
   });
 
+  it("ontem é o único atalho com corte superior — um dia civil fechado, sem hoje dentro", () => {
+    const range = periodRange("yesterday", sp("2026-08-15T10:00:00"), SP);
+    // Mesmas bordas do "personalizado de um dia só" (14/08), porque é
+    // exatamente o mesmo dia civil visto de hoje = 15/08.
+    expect(range.start.toISOString()).toBe("2026-08-14T03:00:00.000Z");
+    expect(range.end?.toISOString()).toBe("2026-08-15T02:59:59.999Z");
+  });
+
   it("personalizado sem datas cai no dia de hoje, nunca na base inteira", () => {
     const now = sp("2026-08-15T10:00:00");
     expect(periodRange("custom", now, SP).start.toISOString()).toBe(

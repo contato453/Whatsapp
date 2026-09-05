@@ -1,7 +1,7 @@
 "use client";
 
-import { fetchMediaBlobUrl } from "./api";
-import type { MessageDto } from "./types";
+import { callsApi, fetchAuthedBlobUrl, fetchMediaBlobUrl } from "./api";
+import type { CallLogDto, MessageDto } from "./types";
 
 /**
  * Download de mídia de mensagem — caminho único usado pela bolha de documento
@@ -103,4 +103,38 @@ export function triggerBlobDownload(blobUrl: string, filename: string): void {
   anchor.href = blobUrl;
   anchor.download = filename;
   anchor.click();
+}
+
+/**
+ * Nome do arquivo da gravação de ligação: quem ligou (ou o telefone, sem
+ * nome conhecido) + a data, sempre `.mp3` — a rota do AstraCalls é fixa em
+ * `/recordings/{id}.mp3`, não há outro formato a considerar.
+ */
+export function callRecordingDownloadName(
+  call: Pick<CallLogDto, "contactName" | "contactPhone" | "timestamp">,
+): string {
+  const date = new Date(call.timestamp);
+  const stamp = Number.isNaN(date.getTime())
+    ? "sem-data"
+    : `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  const who = (call.contactName ?? call.contactPhone ?? "contato")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // remove acentos
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+  return `ligacao-${who || "contato"}-${stamp}.mp3`;
+}
+
+/**
+ * Baixa a gravação de uma ligação e dispara o salvamento no navegador. Mesmo
+ * caminho autenticado do player (`fetchAuthedBlobUrl`) — a rota exige
+ * Authorization, que um `<a href>` direto não envia.
+ */
+export async function downloadCallRecording(call: CallLogDto): Promise<void> {
+  const blobUrl = await fetchAuthedBlobUrl(callsApi.recordingPath(call.id));
+  triggerBlobDownload(blobUrl, callRecordingDownloadName(call));
+  // Mesma folga do download de mídia de mensagem: dá tempo do navegador ler
+  // o blob antes de revogar a URL.
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
 }

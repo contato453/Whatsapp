@@ -205,6 +205,29 @@ export interface QuotedPreviewDto {
   type: string;
 }
 
+/** Uma linha do registro de Ligações. */
+export interface CallLogDto {
+  /** Id da mensagem de chamada (também usado para baixar a gravação). */
+  id: string;
+  conversationId: string;
+  contactName: string | null;
+  contactPhone: string | null;
+  instanceName: string | null;
+  instanceId: string | null;
+  direction: "inbound" | "outbound";
+  /** ringing | accepted | missed | rejected */
+  status: string;
+  isVideo: boolean;
+  durationSeconds: number | null;
+  hasRecording: boolean;
+  timestamp: string;
+}
+
+export interface CallLogResponse {
+  calls: CallLogDto[];
+  total: number;
+}
+
 export interface MessageDto {
   id: string;
   conversationId: string;
@@ -230,6 +253,18 @@ export interface MessageDto {
   metadata: {
     pollOptions?: string[];
     selectableCount?: number;
+    /**
+     * Votos da enquete, por votante (telefone/JID → seleção atual). O WhatsApp
+     * manda a seleção completa a cada voto, então cada entrada é o voto ATUAL
+     * daquela pessoa. Apure com `tallyPollVotes` de `@azvchat/shared`.
+     */
+    votes?: Record<string, { names: string[]; voterName: string | null; at: string }>;
+    /**
+     * Duração do áudio em segundos, quando conhecida. O player usa como total
+     * porque o navegador não lê a duração de um OGG/Opus sem baixar tudo — sem
+     * ela, a barra e o tempo da nota de voz recebida ficam zerados.
+     */
+    durationSeconds?: number;
     callStatus?: string;
     isVideo?: boolean;
     /**
@@ -443,6 +478,8 @@ export interface DashboardRankingRowDto {
   /** Já resolvido pela API: `customTitle` vence `title`, como na Inbox. */
   title: string;
   type: ConversationType;
+  /** Existe foto de perfil? Buscada por `ConversationAvatar`, como na Inbox. */
+  hasAvatar: boolean;
   instanceName: string | null;
   /** Responsável pelo atendimento; `null` quando a conversa está sem dono. */
   assignee: { userId: string; name: string; hasAvatar: boolean } | null;
@@ -506,6 +543,11 @@ export interface DashboardStatsDto {
   messages: {
     received: number;
     sent: number;
+  };
+  /** Ligações (fora da conta de mensagens desde que a tela de Ligações existe). */
+  calls: {
+    received: number;
+    made: number;
   };
   ranking: DashboardRankingRowDto[];
   /** `null` para quem não é supervisor — o bloco não aparece na tela dele. */

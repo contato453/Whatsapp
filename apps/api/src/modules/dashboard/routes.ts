@@ -130,6 +130,18 @@ const COUNTABLE_MESSAGE = {
 };
 
 /**
+ * Exclui ligação (`type = "call"`) das contagens de MENSAGEM — cards de
+ * recebidas/enviadas, ranking de conversas mais ativas e o total por
+ * usuário. Ligação é uma `Message` só por conveniência de armazenamento
+ * (compartilha `direction`/`timestamp`/`conversationId`), mas não é texto
+ * nem mídia: contá-la ali infla "Mensagens" com algo que a tela de Ligações
+ * já mostra à parte. Vale em toda consulta que soma com o card de mensagens,
+ * pela mesma razão de `COUNTABLE_MESSAGE` — senão a soma de uma linha do
+ * ranking, ou da série por dia, não bateria com o card.
+ */
+const NOT_A_CALL = { type: { not: "call" as const } };
+
+/**
  * Teto de conversas lidas por requisição. Acima disso a série por dia e o
  * total por usuário sairiam incompletos, então em vez de cortar em silêncio a
  * rota loga o estouro — o mesmo espírito do teto do relatório por atendente.
@@ -326,6 +338,8 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
       instanceBuckets,
       messagesReceived,
       messagesSent,
+      callsReceived,
+      callsMade,
       topConversations,
     ] =
       await Promise.all([
@@ -369,6 +383,7 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
             direction: "inbound",
             timestamp: withinPeriod,
             ...COUNTABLE_MESSAGE,
+            ...NOT_A_CALL,
           },
         }),
         deps.prisma.message.count({
@@ -376,6 +391,30 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
             organizationId,
             ...messageFilter,
             direction: "outbound",
+            timestamp: withinPeriod,
+            ...COUNTABLE_MESSAGE,
+            ...NOT_A_CALL,
+          },
+        }),
+        // Ligações: mesma régua de COUNTABLE_MESSAGE (apagada e pending fora),
+        // mas SÓ type="call" — o espelho de NOT_A_CALL acima. Card à parte de
+        // "Mensagens" desde que a tela de Ligações existe.
+        deps.prisma.message.count({
+          where: {
+            organizationId,
+            ...messageFilter,
+            direction: "inbound",
+            type: "call",
+            timestamp: withinPeriod,
+            ...COUNTABLE_MESSAGE,
+          },
+        }),
+        deps.prisma.message.count({
+          where: {
+            organizationId,
+            ...messageFilter,
+            direction: "outbound",
+            type: "call",
             timestamp: withinPeriod,
             ...COUNTABLE_MESSAGE,
           },
@@ -387,6 +426,7 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
           where: {
             organizationId,
             ...messageFilter,
+            ...NOT_A_CALL,
             timestamp: withinPeriod,
             ...COUNTABLE_MESSAGE,
           },
@@ -408,6 +448,7 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
                 conversationId: { in: rankingIds },
                 timestamp: withinPeriod,
                 ...COUNTABLE_MESSAGE,
+                ...NOT_A_CALL,
               },
               _count: { _all: true },
             })
@@ -420,6 +461,9 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
                 title: true,
                 customTitle: true,
                 type: true,
+                // A tela busca a foto pelo endpoint autenticado; aqui só a
+                // chave de storage importa, para saber SE existe uma.
+                profilePicture: true,
                 instance: { select: { name: true } },
                 // Quem está com o atendimento na mão. A lista mostra isso
                 // porque "conversa mais ativa" sem dono é justamente a que
@@ -471,6 +515,7 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
                 direction: "outbound",
                 timestamp: withinPeriod,
                 ...COUNTABLE_MESSAGE,
+                ...NOT_A_CALL,
                 // Envio sem autor é da automação (agendada disparada pelo
                 // scheduler), e não trabalho de alguém.
                 sentByUserId: { not: null },
@@ -538,6 +583,10 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
           // WhatsApp, que o sync sobrescreve.
           title: conversation.customTitle ?? conversation.title,
           type: conversation.type,
+          // A tela busca a foto pelo endpoint autenticado (mesmo padrão da
+          // Inbox); aqui só diz SE existe, para não pedir uma foto que não
+          // há.
+          hasAvatar: conversation.profilePicture != null,
           instanceName: conversation.instance?.name ?? null,
           // Só o mínimo para desenhar a linha — nada de dado de cadastro do
           // usuário viajando dentro do trabalho de outro.
@@ -598,6 +647,8 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
       instancesByStatus,
       messagesReceived,
       messagesSent,
+      callsReceived,
+      callsMade,
       overdue,
       ranking,
       topUsers,
@@ -645,6 +696,7 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
           direction: "inbound",
           timestamp: withinPeriod,
           ...COUNTABLE_MESSAGE,
+          ...NOT_A_CALL,
         },
         _count: { _all: true },
       });
@@ -726,8 +778,8 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
    * O escopo de acesso continua valendo: os ids vêm de uma busca que já passou
    * por `conversationScope` e pelos filtros da tela, e esta consulta só olha as
    * mensagens deles. Os mesmos descartes dos cards valem aqui (apagada não
-   * conta, saída ainda `pending` não conta), senão o gráfico contaria uma
-   * história e os cards outra.
+   * conta, saída ainda `pending` não conta, ligação — `type = 'call'` — não
+   * conta), senão o gráfico contaria uma história e os cards outra.
    */
   async function loadActivityBuckets(
     { prisma }: AppDeps,
@@ -752,6 +804,7 @@ export async function dashboardRoutes(app: FastifyInstance, deps: AppDeps): Prom
         ${upperBound}
         AND "deletedAt" IS NULL
         AND NOT ("direction" = 'outbound' AND "status" = 'pending')
+        AND "type" != 'call'
       GROUP BY 1, 2, 3, 4
     `);
   }

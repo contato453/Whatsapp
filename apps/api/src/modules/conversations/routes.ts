@@ -485,6 +485,27 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     // avisado por WebSocket quando houver novidade.
     if (group) {
       void deps.instanceManager.syncParticipantAvatars(id, request.user.organizationId);
+      // Foto do PRÓPRIO grupo: se a consulta inicial (logo após parear) falhou,
+      // o backfill marcou o grupo como "sem foto" e não voltava a tentar —
+      // o chip do grupo ficava sem imagem na lista. Ao abrir, tentamos de novo
+      // (force ignora a marca em memória) só quando ainda não há foto.
+      if (!conversation.profilePicture) {
+        void deps.instanceManager
+          .syncConversationAvatar(
+            {
+              id: conversation.id,
+              whatsappInstanceId: conversation.whatsappInstanceId,
+              externalChatId: conversation.externalChatId,
+            },
+            { force: true },
+          )
+          .then((updated) => {
+            if (updated) return emitConversationUpdated(id, request.user.organizationId);
+          })
+          .catch(() => {
+            /* falha temporária: tenta de novo na próxima abertura */
+          });
+      }
     }
 
     // Em grupos "@lid" os metadados nem sempre trazem nome e telefone de

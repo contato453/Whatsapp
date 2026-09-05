@@ -120,6 +120,13 @@ export interface NormalizedMessage {
   messageSecret?: string;
   /** Opções da enquete, quando type === "poll" */
   pollOptions?: string[];
+  /**
+   * Duração do áudio/vídeo em segundos, quando o provider a conhece. Guardada
+   * porque o player do navegador não consegue ler a duração de um OGG/Opus
+   * sem baixar o arquivo inteiro — sem esse número, a barra e o tempo total da
+   * mensagem de voz recebida ficam zerados na tela.
+   */
+  mediaDurationSeconds?: number;
   timestamp: Date;
   media: {
     mimeType: string | null;
@@ -185,8 +192,27 @@ export interface CallEvent {
   fromPhone: string | null;
   isVideo: boolean;
   isGroup: boolean;
-  /** offer/ringing = tocando; accept = atendida; reject/timeout = não atendida */
-  status: "ringing" | "accepted" | "rejected" | "missed";
+  /**
+   * offer/ringing = tocando; accepted = atendida (em andamento); ended =
+   * atendida E encerrada (alguém desligou depois de atender); rejected/missed =
+   * não atendida. `ended` é terminal e DISTINTO de `accepted`: sem ele, o
+   * encerramento de uma chamada atendida não tinha sinal e a tela ficava
+   * contando minutos para sempre.
+   */
+  status: "ringing" | "accepted" | "ended" | "rejected" | "missed";
+  /**
+   * Quem originou: `inbound` = o cliente ligou para nós, `outbound` = nós
+   * ligamos. Deduzido de qual evento abriu a chamada (recebida começa por
+   * `incoming`). Nulo quando não dá para saber.
+   */
+  direction?: "inbound" | "outbound" | null;
+  /**
+   * Id da GRAVAÇÃO da chamada no AstraCalls, quando a conta grava. É a chave
+   * de `/recordings/{id}` — guardada para o registro de Ligações tocar depois.
+   */
+  recordingId?: string | null;
+  /** Duração da chamada em segundos, quando o provider a informa. */
+  durationSeconds?: number | null;
   timestamp: Date;
 }
 

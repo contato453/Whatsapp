@@ -7,6 +7,8 @@ import {
   BarChart3,
   Check,
   CheckCheck,
+  CheckCircle2,
+  Circle,
   Clock,
   Copy,
   CornerUpLeft,
@@ -36,7 +38,8 @@ import {
   quotedPreviewText,
   readMessageVersions,
 } from "@azvchat/shared";
-import { fetchMediaBlobUrl } from "@/lib/api";
+import { api, fetchMediaBlobUrl } from "@/lib/api";
+import { tallyPollVotes } from "@azvchat/shared";
 import { useAuth } from "@/lib/auth-context";
 import { documentKindLabel, downloadMessageMedia } from "@/lib/media-download";
 import { cn, formatPhone } from "@/lib/utils";
@@ -156,6 +159,120 @@ function EditedMark({ message, outbound }: { message: MessageDto; outbound: bool
   );
 }
 
+/**
+ * Enquete com apuração e voto. As opções mostram a contagem e uma barra
+ * proporcional; clicar vota pelo número conectado (a seleção completa vai para
+ * o WhatsApp, que substitui o voto anterior). Só dá para votar em enquete
+ * RECEBIDA — o WhatsApp não deixa votar na própria; a enviada fica só como
+ * placar. Os votos chegam decifrados pelo AstraCalls e atualizam em tempo real.
+ */
+function PollContent({ message, outbound }: { message: MessageDto; outbound: boolean }) {
+  const options = useMemo(() => message.metadata?.pollOptions ?? [], [message.metadata?.pollOptions]);
+  const selectableCount = message.metadata?.selectableCount ?? 1;
+  const multi = selectableCount !== 1;
+  const canVote = !outbound; // não se vota na própria enquete
+  const tally = useMemo(
+    () => tallyPollVotes(options, message.metadata?.votes),
+    [options, message.metadata?.votes],
+  );
+  const [selected, setSelected] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(false);
+
+  async function cast(next: string[]) {
+    setSelected(next);
+    setSaving(true);
+    setError(false);
+    try {
+      await api.post(`/conversations/${message.conversationId}/polls/${message.id}/vote`, {
+        selectedNames: next,
+      });
+    } catch {
+      setError(true);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function toggle(option: string) {
+    if (!canVote || saving) return;
+    if (multi) {
+      const has = selected.includes(option);
+      const next = has
+        ? selected.filter((o) => o !== option)
+        : [...selected, option].slice(0, selectableCount);
+      void cast(next);
+    } else {
+      void cast(selected.includes(option) ? [] : [option]);
+    }
+  }
+
+  const total = tally.totalVoters;
+  return (
+    <div className="min-w-[240px] space-y-1.5">
+      <p className="flex items-center gap-1.5 text-sm font-medium">
+        <BarChart3 className="h-4 w-4" /> {message.content ?? "Enquete"}
+      </p>
+      <div className="space-y-1">
+        {tally.options.map(({ option, count, voters }) => {
+          const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+          const isSel = selected.includes(option);
+          return (
+            <button
+              key={option}
+              type="button"
+              onClick={() => toggle(option)}
+              disabled={!canVote || saving}
+              title={voters.length ? voters.join(", ") : undefined}
+              className={cn(
+                "relative w-full overflow-hidden rounded-md border px-2 py-1 text-left text-xs transition-colors",
+                canVote ? "cursor-pointer" : "cursor-default",
+                outbound ? "border-black/10" : "border-slate-200",
+                isSel
+                  ? outbound
+                    ? "bg-white/80"
+                    : "bg-brand-50"
+                  : outbound
+                    ? "bg-white/40"
+                    : "bg-slate-50",
+                canVote && !isSel && (outbound ? "hover:bg-white/60" : "hover:bg-slate-100"),
+              )}
+            >
+              <span
+                className="absolute inset-y-0 left-0 bg-brand-500/15"
+                style={{ width: `${pct}%` }}
+                aria-hidden
+              />
+              <span className="relative flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5">
+                  {canVote ? (
+                    isSel ? (
+                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-brand-600" />
+                    ) : (
+                      <Circle className="h-3.5 w-3.5 shrink-0 opacity-40" />
+                    )
+                  ) : null}
+                  <span className="break-words">{option}</span>
+                </span>
+                <span className="shrink-0 tabular-nums opacity-70">{count}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <p className={cn("text-[10px]", outbound ? "text-chat-sent-meta" : "text-slate-400")}>
+        {error
+          ? "Falha ao votar — tente de novo"
+          : saving
+            ? "Enviando voto…"
+            : total === 0
+              ? "Nenhum voto ainda"
+              : `${total} ${total === 1 ? "voto" : "votos"}${multi ? " · escolha múltipla" : ""}`}
+      </p>
+    </div>
+  );
+}
+
 function MediaContent({
   message,
   outbound,
@@ -243,7 +360,9 @@ function MediaContent({
   if (isAudio) {
     if (failed) return <p className="text-xs italic opacity-70">Falha ao carregar áudio</p>;
     if (!url) return <div className="h-10 w-56 animate-pulse rounded-lg bg-slate-200/60" />;
-    return <AudioPlayer src={url} outbound={outbound} />;
+    return (
+      <AudioPlayer src={url} outbound={outbound} durationSeconds={message.metadata?.durationSeconds} />
+    );
   }
   if (isVideo) {
     if (failed) return <p className="text-xs italic opacity-70">Falha ao carregar vídeo</p>;
@@ -518,27 +637,7 @@ export function MessageBubble({
             {message.content ?? "Chamada"}
           </p>
         ) : message.type === "poll" ? (
-          <div className="space-y-1.5">
-            <p className="flex items-center gap-1.5 text-sm font-medium">
-              <BarChart3 className="h-4 w-4" /> {message.content ?? "Enquete"}
-            </p>
-            <div className="space-y-1">
-              {(message.metadata?.pollOptions ?? []).map((option, index) => (
-                <div
-                  key={index}
-                  className={cn(
-                    "rounded-md border px-2 py-1 text-xs",
-                    outbound ? "border-black/10 bg-white/50" : "border-slate-200 bg-slate-50",
-                  )}
-                >
-                  {option}
-                </div>
-              ))}
-            </div>
-            <p className={cn("text-[10px]", outbound ? "text-chat-sent-meta" : "text-slate-400")}>
-              Os votos aparecem no WhatsApp dos participantes
-            </p>
-          </div>
+          <PollContent message={message} outbound={outbound} />
         ) : message.type === "location" ? (
           <p className="flex items-center gap-1.5 text-sm">
             <MapPin className="h-4 w-4" /> {message.content ?? "Localização"}

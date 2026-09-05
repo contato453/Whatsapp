@@ -11,6 +11,13 @@ export const RealtimeEvents = {
   MessageUpdated: "message:updated",
   /** Chamada tocando agora — aviso na tela do atendente responsável. */
   CallIncoming: "call:incoming",
+  /**
+   * Mudança de estado de UMA chamada (tocando → atendida → encerrada). O painel
+   * do discador acompanha por aqui: numa chamada de SAÍDA a tela dispara, mas
+   * quem avisa que o outro lado atendeu ou desligou é este evento. Vai para a
+   * audiência da conversa, como os demais eventos de chamada.
+   */
+  CallStatus: "call:status",
   ConversationUpdated: "conversation:updated",
   /**
    * Leitura de uma conversa mudou — e é a única coisa do sistema que vai
@@ -110,6 +117,15 @@ export interface MessageStatusPayload {
   status: MessageStatus;
 }
 
+/** Estado ao vivo de uma chamada, para o painel do discador. */
+export type CallLiveStatus = "ringing" | "accepted" | "ended" | "rejected" | "missed";
+
+export interface CallStatusPayload {
+  callId: string;
+  conversationId: string;
+  status: CallLiveStatus;
+}
+
 /** Grupo conhecido de que quem liga participa — diz "de qual cliente" é a pessoa. */
 export interface CallerGroupRef {
   /** Conversa do grupo na Inbox; null quando o grupo ainda não virou conversa. */
@@ -136,6 +152,8 @@ export interface CallerAvatarRef {
  */
 export interface CallIncomingPayload {
   conversationId: string;
+  /** Id da chamada no provider — necessário para ATENDER/recusar pelo discador. */
+  callId: string;
   conversationTitle: string;
   /** Nome resolvido pela API; null = contato não identificado. Nunca é um LID. */
   callerName: string | null;

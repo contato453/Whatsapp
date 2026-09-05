@@ -186,12 +186,26 @@ export type DashboardFixedPeriod = (typeof DASHBOARD_FIXED_PERIODS)[number];
  * `custom` é o intervalo escolhido na mão, com data de início e fim. Ele
  * convive com os atalhos em vez de substituí-los: no dia a dia a pergunta é
  * "e hoje?", e obrigar a preencher duas datas para isso seria pior.
+ *
+ * `yesterday` fica FORA de `DASHBOARD_FIXED_PERIODS` de propósito: os atalhos
+ * ali são "últimos N dias contando hoje", sempre sem corte superior (vale
+ * "até agora" — ver o comentário de `periodRange`). Ontem é o oposto, um
+ * único dia CIVIL FECHADO que não inclui hoje, então tem conta própria em
+ * `periodRange`, do mesmo jeito que `custom`.
  */
-export const DASHBOARD_PERIODS = [...DASHBOARD_FIXED_PERIODS, "custom"] as const;
+export const DASHBOARD_PERIODS = [
+  "today",
+  "yesterday",
+  "7d",
+  "15d",
+  "30d",
+  "custom",
+] as const;
 export type DashboardPeriod = (typeof DASHBOARD_PERIODS)[number];
 
 export const DASHBOARD_PERIOD_LABELS: Record<DashboardPeriod, string> = {
   today: "Hoje",
+  yesterday: "Ontem",
   "7d": "7 dias",
   "15d": "15 dias",
   "30d": "30 dias",
@@ -201,6 +215,7 @@ export const DASHBOARD_PERIOD_LABELS: Record<DashboardPeriod, string> = {
 /** Como o período aparece dentro da frase de um rótulo ("recebidas hoje"). */
 export const DASHBOARD_PERIOD_PHRASES: Record<DashboardPeriod, string> = {
   today: "hoje",
+  yesterday: "ontem",
   "7d": "nos últimos 7 dias",
   "15d": "nos últimos 15 dias",
   "30d": "nos últimos 30 dias",

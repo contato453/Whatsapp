@@ -6,6 +6,9 @@ import { PhoneCall, Video } from "lucide-react";
 import { RealtimeEvents, type CallIncomingPayload } from "@azvchat/shared";
 import { useAuth } from "@/lib/auth-context";
 import { useSocket } from "@/lib/socket-context";
+import { useCall } from "@/lib/call-context";
+import { callsApi } from "@/lib/api";
+import { startRingtone, stopRingtone } from "@/lib/notification-sound";
 import { formatPhone } from "@/lib/utils";
 import { Avatar, Badge, Button } from "@/components/ui";
 import { ConversationAvatar, ParticipantAvatar } from "@/components/inbox/conversation-avatar";
@@ -71,8 +74,10 @@ function AlertAvatar({ alert }: { alert: CallAlert }) {
  */
 export function CallAlerts() {
   const socket = useSocket();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
+  const canAnswer = can("call.answer");
   const router = useRouter();
+  const { answerIncoming } = useCall();
   const [alerts, setAlerts] = useState<CallAlert[]>([]);
 
   const dismiss = useCallback((key: string) => {
@@ -80,7 +85,9 @@ export function CallAlerts() {
   }, []);
 
   useEffect(() => {
-    if (!socket || !user) return;
+    // Sem a chave de atender ligação, nem o aviso aparece — não há o que fazer
+    // com ele, e o toque só incomodaria.
+    if (!socket || !user || !canAnswer) return;
     const onCall = (payload: CallIncomingPayload) => {
       // Com responsável definido, avisa só quem responde pela conversa.
       // Sem responsável, avisa todo mundo para a ligação não passar em branco.
@@ -120,7 +127,7 @@ export function CallAlerts() {
     return () => {
       socket.off(RealtimeEvents.CallIncoming, onCall);
     };
-  }, [socket, user, dismiss]);
+  }, [socket, user, canAnswer, dismiss]);
 
   // Pede a permissão uma vez; se negada, o aviso na tela continua valendo.
   useEffect(() => {
@@ -128,6 +135,15 @@ export function CallAlerts() {
       void Notification.requestPermission().catch(() => undefined);
     }
   }, []);
+
+  // Toque de chamada em laço enquanto houver aviso na tela. Para sozinho quando
+  // a chamada é atendida, recusada ou expira (o aviso some e a limpeza roda).
+  // O volume acompanha a preferência pessoal do aviso sonoro.
+  useEffect(() => {
+    if (alerts.length === 0) return;
+    startRingtone(user?.notificationVolume ?? "medium");
+    return () => stopRingtone();
+  }, [alerts.length, user?.notificationVolume]);
 
   /** Uma chamada por vez: as seguintes entram assim que esta sair. */
   const alert = alerts[0];
@@ -189,28 +205,38 @@ export function CallAlerts() {
           </div>
         )}
 
-        <p className="mt-3 text-xs text-slate-400">
-          A ligação está tocando no celular. O sistema não atende nem recusa.
-        </p>
-
         <div className="mt-5 flex gap-2">
           <Button
-            className="flex-1 justify-center"
+            className="flex-1 justify-center bg-emerald-600 hover:bg-emerald-700"
             onClick={() => {
               dismiss(alert.key);
-              router.push(`/inbox/${alert.conversationId}`);
+              answerIncoming(alert);
             }}
           >
-            Abrir conversa
+            <PhoneCall className="h-4 w-4" />
+            Atender
           </Button>
           <Button
             variant="outline"
-            className="flex-1 justify-center"
-            onClick={() => dismiss(alert.key)}
+            className="flex-1 justify-center border-rose-200 text-rose-700 hover:bg-rose-50"
+            onClick={() => {
+              dismiss(alert.key);
+              void callsApi.reject(alert.conversationId, alert.callId).catch(() => undefined);
+            }}
           >
-            Dispensar
+            Recusar
           </Button>
         </div>
+        <button
+          type="button"
+          className="mt-3 text-xs font-medium text-brand-700 hover:underline"
+          onClick={() => {
+            dismiss(alert.key);
+            router.push(`/inbox/${alert.conversationId}`);
+          }}
+        >
+          Abrir conversa sem atender
+        </button>
         {singleGroup && (
           <button
             type="button"

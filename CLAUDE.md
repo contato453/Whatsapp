@@ -1102,6 +1102,42 @@ conhecê-la sozinhos. **Dado financeiro nunca entra**: ver a seção 13.
   `VPS_PORT`, `VPS_KNOWN_HOSTS`, `VPS_PATH`) são **environment secrets**. Sem eles o job
   avisa e sai em verde, em vez de falhar.
 
+> **A PRODUÇÃO DE VERDADE NÃO É O QUE OS PARÁGRAFOS ACIMA DESCREVEM — descoberto em
+> 05/09/2026, depois de quase repetir o incidente de 16/08/2026 (seção 15) de um jeito
+> pior.** Na VPS existem HOJE três stacks Docker Compose, e o parágrafo "Produção" acima
+> descreve uma que está **morta**:
+> 1. `whatsapp` → `/root/Whatsapp/docker-compose.prod.yml` (pasta DIFERENTE do clone de
+>    trabalho). Só o Postgres e o Caddy dela seguem de pé; API e Web nunca sobem — os
+>    domínios que ela serve (`app.lincolnazevedo.com.br`, `api.lincolnazevedo.com.br`)
+>    apontam para containers `web`/`api` que não existem mais (DNS interno do Docker
+>    devolve `127.0.53.53`, o "não existe" do resolvedor). **Rodar `deploy/atualizar.sh`
+>    ou `docker compose up` nessa pasta não atualiza a produção — atualiza um cadáver.**
+> 2. `azvchat2` → `docker-compose.azvchat2.yml` **dentro do clone de trabalho da VPS**,
+>    mas **fora do Git** (não versionado, `.gitignore` nunca o viu). Containers
+>    `azvchat2-azvapi-1`/`azvchat2-azvweb-1`/`azvchat2-azvpg-1`. **Este é o sistema que o
+>    escritório usa de verdade** — confirmado consultando a configuração VIVA do Caddy
+>    (`curl http://localhost:2019/config/` de dentro do container, porta da API admin do
+>    Caddy — não o arquivo em disco, que está desatualizado): `app.azvchat.com.br` e
+>    `api.azvchat.com.br` apontam para `azvweb:3000`/`azvapi:4000`, os nomes de serviço
+>    desta stack. Variáveis do AstraCalls (`WHATSAPP_PROVIDER`, `ASTRACALLS_API_URL/KEY`,
+>    `ASTRACALLS_WEBHOOK_URL/SECRET`) vivem em `.env.azvchat2`, também fora do Git.
+> 3. `astracalls` → `docker-compose.astracalls.yml`, idem fora do Git, serve
+>    `astracalls.azvchat.com.br` → `wacalls:8080` (a ponte de chamadas de voz).
+>
+> **O Caddy foi reconfigurado por dentro (API admin, porta 2019) sem que o `Caddyfile` em
+> disco fosse atualizado** — por isso ele é enganoso: descreve só as rotas mortas do
+> item 1. Reiniciar o container do Caddy a partir desse arquivo (`docker compose up` na
+> pasta `/root/Whatsapp`) **derrubaria as rotas vivas** de `app.azvchat.com.br`/
+> `api.azvchat.com.br`, porque a config em memória seria substituída pela do disco.
+> **Nunca faça isso.** Deploy de código novo na VPS, a partir de agora, é:
+> `git checkout <branch>` no clone de `/root/Whatsapp-ajustes/`, depois
+> `docker compose -f docker-compose.azvchat2.yml --env-file .env.azvchat2 up -d --build`
+> — nunca `docker-compose.prod.yml`, nunca a pasta `/root/Whatsapp`. Antes de confiar em
+> qualquer deploy futuro, valide de verdade (como no incidente da seção 15: resultado do
+> comando é evidência, código de saída não é) — `docker compose ps` com os três
+> containers `healthy`/`Up`, log da API sem erro de migration, e
+> `curl .../health` devolvendo 200 nos domínios reais.
+
 ---
 
 ## 12. Receitas — como mudanças costumam ser feitas aqui
@@ -1377,7 +1413,11 @@ sempre juntos.
 - **Nenhum corte de data do dashboard usa o fuso do servidor** — "hoje" é o dia civil do
   escritório, não o dia UTC do container. O `custom` pega os dois dias das pontas inteiros;
   os atalhos **não** têm corte superior, de propósito: o relógio do WhatsApp pode vir à
-  frente do nosso e um `lte: agora` sumiria com a mensagem recém-chegada.
+  frente do nosso e um `lte: agora` sumiria com a mensagem recém-chegada. **`yesterday`
+  ("Ontem") é a única exceção**, e de propósito: é um dia civil FECHADO que não inclui hoje,
+  então precisa de `periodEnd` — sem ele "ontem" mostraria ontem mais o dia inteiro de hoje.
+  Por isso ele fica fora de `DASHBOARD_FIXED_PERIODS`/`DASHBOARD_PERIOD_DAYS` (que assumem
+  "sem corte superior") e tem conta própria em `periodRange`, do mesmo jeito que `custom`.
 - **Os filtros do dashboard refinam o recorte, nunca o ampliam.** Número, status,
   departamento e responsável — os quatro em MULTISSELEÇÃO, somando dentro e cruzando entre
   si — entram num `AND` junto com `conversationScope`, então pedir um número que o usuário
@@ -1438,6 +1478,20 @@ sempre juntos.
   as mensagens deles — mesmo padrão do card de atraso. Os descartes são os mesmos dos cards
   (apagada e saída `pending` não contam), senão o gráfico contaria uma história e os cards
   outra; há teste fixando que a soma da série bate com o card.
+- **LIGAÇÃO (`Message.type = "call"`) NÃO CONTA MAIS COMO MENSAGEM.** Card próprio
+  ("Ligações", recebidas/realizadas do período, sem gráfico) desde que a tela de Ligações
+  existe — antes disso, toda ligação já entrava sem querer dentro de "Mensagens
+  recebidas/enviadas", do ranking de conversas mais ativas, do total por usuário e da série
+  "Mensagens por dia"/mapa de calor, porque nenhuma dessas consultas olhava o `type`.
+  `NOT_A_CALL` (`modules/dashboard/routes.ts`) é a exclusão única, aplicada em TODA consulta
+  que soma com o card de mensagens — os dois `message.count`, o `groupBy` do ranking e sua
+  quebra por direção, o `groupBy` de `sentByUserId`/`received` do `topUsers`, e o
+  `AND "type" != 'call'` dentro do SQL cru de `loadActivityBuckets`. Esquecer um desses
+  pontos faz exatamente o defeito que a separação veio consertar: a soma de uma linha do
+  ranking (ou da série por dia) deixa de bater com o card, ligação some de um lugar e
+  reaparece no outro. O card de Ligações usa as MESMAS consultas de mensagem (`message.count`
+  com `type: "call"` em vez de excluído), só que sem série — decisão de manter simples, sem
+  sparkline nem timeline própria.
 - **`topUsers` é de supervisor para cima**, igual ao relatório por atendente: para o `agent`
   a rota nem consulta e devolve `null`, e a tela não desenha o bloco. `sent` sai de
   `Message.sentByUserId` (envio sem autor é do scheduler e não conta como trabalho de

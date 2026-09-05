@@ -157,7 +157,12 @@ function fakePrisma(): PrismaClient {
     message: {
       count: async (args: Record<string, unknown>) => {
         recorded.messageCount.push(args);
-        const where = args.where as { direction?: string };
+        const where = args.where as { direction?: string; type?: unknown };
+        // A rota pede `type: "call"` (ligações) OU `type: { not: "call" }`
+        // (mensagens, excluindo ligação) — só o primeiro é string crua.
+        if (where.type === "call") {
+          return where.direction === "inbound" ? 6 : 3;
+        }
         return where.direction === "inbound" ? 40 : 25;
       },
       groupBy: async (args: { by: string[]; where?: Record<string, unknown> }) => {
@@ -327,6 +332,19 @@ describe("GET /dashboard/stats", () => {
     await app.close();
   });
 
+  it("período 'ontem' é aceito e devolve um intervalo fechado (com periodEnd)", async () => {
+    const app = await buildTestApp();
+    const body = (await stats(app, "admin", "?period=yesterday")).json();
+    expect(body.period).toBe("yesterday");
+    // Diferente dos demais atalhos (sem corte superior), ontem é um dia
+    // fechado — por isso tem periodEnd, e não null.
+    expect(body.periodEnd).not.toBeNull();
+    expect(new Date(body.periodEnd).getTime()).toBeGreaterThan(
+      new Date(body.periodStart).getTime(),
+    );
+    await app.close();
+  });
+
   it("admin consulta sem recorte de número, departamento ou responsável", async () => {
     const app = await buildTestApp();
     await stats(app, "admin");
@@ -475,6 +493,7 @@ describe("GET /dashboard/stats", () => {
         conversationId: "conv-1",
         title: "Nome dado pela equipe",
         type: "group",
+        hasAvatar: false,
         instanceName: "Comercial",
         assignee: { userId: "user-1", name: "Maria Supervisora", hasAvatar: false },
         received: 7,
@@ -499,7 +518,7 @@ describe("GET /dashboard/stats", () => {
     await app.close();
   });
 
-  it("mensagens do período: recebidas e enviadas, sem as apagadas nem as pendentes", async () => {
+  it("mensagens do período: recebidas e enviadas, sem as apagadas, as pendentes nem as ligações", async () => {
     const app = await buildTestApp();
     const body = (await stats(app, "admin")).json();
     expect(body.messages).toEqual({ received: 40, sent: 25 });
@@ -507,6 +526,34 @@ describe("GET /dashboard/stats", () => {
     // agendada que não saiu não foi enviada a ninguém.
     for (const args of recorded.messageCount) {
       expect(args.where).toMatchObject({
+        deletedAt: null,
+        NOT: { direction: "outbound", status: "pending" },
+      });
+    }
+    // As duas consultas de "Mensagens" (nunca as de "Ligações") excluem
+    // `type: "call"` — senão a mesma ligação contaria nos dois cards.
+    const mensagens = recorded.messageCount.filter(
+      (args) => (args.where as { type?: unknown }).type !== "call",
+    );
+    expect(mensagens.length).toBeGreaterThan(0);
+    for (const args of mensagens) {
+      expect(args.where).toMatchObject({ type: { not: "call" } });
+    }
+    await app.close();
+  });
+
+  it("ligações do período: recebidas e realizadas, à parte de 'Mensagens'", async () => {
+    const app = await buildTestApp();
+    const body = (await stats(app, "admin")).json();
+    expect(body.calls).toEqual({ received: 6, made: 3 });
+    const ligacoes = recorded.messageCount.filter(
+      (args) => (args.where as { type?: unknown }).type === "call",
+    );
+    // Uma consulta para cada direção, sem se misturar com a de mensagens.
+    expect(ligacoes).toHaveLength(2);
+    for (const args of ligacoes) {
+      expect(args.where).toMatchObject({
+        type: "call",
         deletedAt: null,
         NOT: { direction: "outbound", status: "pending" },
       });

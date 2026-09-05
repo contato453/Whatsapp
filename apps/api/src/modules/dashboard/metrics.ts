@@ -170,6 +170,17 @@ export function periodRange(
       end: new Date(zonedTimeToUtc(timeZone, addCivilDays(to, 1), 0, 0).getTime() - 1),
     };
   }
+  if (period === "yesterday") {
+    // Único atalho com corte SUPERIOR: os outros são "últimos N dias
+    // contando hoje, até agora"; ontem é um dia civil fechado que não
+    // inclui hoje — sem o corte, "ontem" mostraria ontem mais o dia inteiro
+    // de hoje.
+    const day = addCivilDays(civilDateIn(timeZone, now), -1);
+    return {
+      start: zonedTimeToUtc(timeZone, day, 0, 0),
+      end: new Date(zonedTimeToUtc(timeZone, addCivilDays(day, 1), 0, 0).getTime() - 1),
+    };
+  }
   const today = civilDateIn(timeZone, now);
   const days = DASHBOARD_PERIOD_DAYS[period as DashboardFixedPeriod];
   const first = addCivilDays(today, -(days - 1));

@@ -234,6 +234,8 @@ export interface DashboardRankingRow {
   conversationId: string;
   title: string;
   type: ConversationType;
+  /** Existe foto de perfil? A tela busca pelo endpoint autenticado. */
+  hasAvatar: boolean;
   instanceName: string | null;
   /** Responsável pelo atendimento; `null` quando a conversa está sem dono. */
   assignee: { userId: string; name: string; hasAvatar: boolean } | null;
@@ -286,6 +288,9 @@ export interface DashboardStatsInput {
   instancesByStatus: Record<ConnectionStatus, number>;
   messagesReceived: number;
   messagesSent: number;
+  /** Ligações (`Message` com `type = "call"`), fora da conta de mensagens. */
+  callsReceived: number;
+  callsMade: number;
   overdue: { count: number; oldestWaitingMinutes: number | null };
   ranking: DashboardRankingRow[];
   /** `null` para quem não é supervisor: o bloco nem aparece na tela dele. */
@@ -338,6 +343,10 @@ export function serializeDashboardStats(input: DashboardStatsInput) {
     messages: {
       received: input.messagesReceived,
       sent: input.messagesSent,
+    },
+    calls: {
+      received: input.callsReceived,
+      made: input.callsMade,
     },
     ranking: input.ranking,
     topUsers: input.topUsers,

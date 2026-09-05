@@ -31,17 +31,19 @@ export function isConfigurableRole(value: string): value is ConfigurableRole {
 }
 
 /** Áreas do catálogo — viram as seções da tela, nesta ordem. */
-export const PERMISSION_AREAS = ["atendimento", "cadastros", "visao"] as const;
+export const PERMISSION_AREAS = ["atendimento", "ligacoes", "cadastros", "visao"] as const;
 export type PermissionArea = (typeof PERMISSION_AREAS)[number];
 
 export const PERMISSION_AREA_LABELS: Record<PermissionArea, string> = {
   atendimento: "Atendimento",
+  ligacoes: "Ligações",
   cadastros: "Cadastros",
   visao: "Visão e relatórios",
 };
 
 export const PERMISSION_AREA_DESCRIPTIONS: Record<PermissionArea, string> = {
   atendimento: "O que a equipe pode fazer dentro de uma conversa já em andamento.",
+  ligacoes: "Quem atende ligações e quem acessa o registro e as gravações de chamadas.",
   cadastros: "Quem mexe nas listas que o escritório inteiro usa.",
   visao: "Quais números e registros do escritório cada perfil consegue consultar.",
 };
@@ -264,6 +266,39 @@ export const PERMISSION_ACTIONS = [
       "Grava o limite de resposta, o expediente e o horário permitido de login. Consultar os parâmetros todo mundo pode.",
     area: "visao",
     defaults: { agent: false, supervisor: true },
+  },
+  // ---------- Ligações ----------
+  {
+    key: "call.answer",
+    label: "Atender e fazer ligações",
+    description:
+      "Usar o discador: atender chamadas recebidas e iniciar chamadas para o cliente. Sem esta chave, o aviso de chamada e o botão de ligar não aparecem.",
+    area: "ligacoes",
+    defaults: { agent: true, supervisor: true },
+  },
+  {
+    key: "call.view",
+    label: "Ver o registro de ligações",
+    description:
+      "Abrir a tela de Ligações e consultar o histórico de chamadas recebidas e feitas. Não inclui ouvir a gravação.",
+    area: "ligacoes",
+    defaults: { agent: true, supervisor: true },
+  },
+  {
+    key: "call.recording.play",
+    label: "Ouvir a gravação das ligações",
+    description:
+      "Reproduzir e baixar o áudio gravado das chamadas. É conteúdo sensível — por padrão, só supervisor.",
+    area: "ligacoes",
+    defaults: { agent: false, supervisor: true },
+  },
+  {
+    key: "call.recording.delete",
+    label: "Excluir gravações por período",
+    description:
+      "Apaga em definitivo as gravações de um período para liberar espaço. Não pode ser desfeito — por padrão, ninguém além do administrador.",
+    area: "ligacoes",
+    defaults: { agent: false, supervisor: false },
   },
 ] as const;
 

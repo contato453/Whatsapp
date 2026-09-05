@@ -1,8 +1,9 @@
-import type { PrismaClient } from "@azvchat/database";
+import type { PrismaClient, Prisma } from "@azvchat/database";
 import type {
   ProviderContact,
   ProviderChat,
   ProviderGroup,
+  PollVotes,
 } from "@azvchat/shared";
 import { RealtimeEvents, readMessageSecret, type CallIncomingPayload } from "@azvchat/shared";
 import type { WhatsAppProvider } from "@azvchat/whatsapp";
@@ -28,6 +29,8 @@ const PARTICIPANT_AVATAR_LIMIT = 80;
 const CALL_LABELS: Record<string, (isVideo: boolean) => string> = {
   ringing: (isVideo) => (isVideo ? "Chamada de vídeo recebida" : "Chamada de voz recebida"),
   accepted: (isVideo) => (isVideo ? "Chamada de vídeo atendida" : "Chamada de voz atendida"),
+  // Encerrada depois de atendida = atendida (chamada completa), não perdida.
+  ended: (isVideo) => (isVideo ? "Chamada de vídeo atendida" : "Chamada de voz atendida"),
   rejected: (isVideo) => (isVideo ? "Chamada de vídeo recusada" : "Chamada de voz recusada"),
   missed: (isVideo) => (isVideo ? "Chamada de vídeo perdida" : "Chamada de voz perdida"),
 };
@@ -288,6 +291,57 @@ export class InstanceManager {
       });
     });
 
+    // Voto em enquete — atualiza os votos gravados na PRÓPRIA mensagem da
+    // enquete (metadata.votes), sem linha nova. O AstraCalls já entrega o voto
+    // decifrado; guardamos UMA entrada por votante (a seleção atual dele
+    // substitui a anterior) e emitimos message:updated para a tela reapurar.
+    this.provider.on("poll-vote", (event) => {
+      void this.withOrg(event.instanceId, async (organizationId) => {
+        const conversation = await this.prisma.conversation.findUnique({
+          where: {
+            whatsappInstanceId_externalChatId: {
+              whatsappInstanceId: event.instanceId,
+              externalChatId: event.externalChatId,
+            },
+          },
+          select: { id: true, whatsappInstanceId: true, departmentId: true, assignedUserId: true },
+        });
+        if (!conversation) return;
+        const message = await this.prisma.message.findUnique({
+          where: {
+            conversationId_externalMessageId: {
+              conversationId: conversation.id,
+              externalMessageId: event.pollExternalMessageId,
+            },
+          },
+          select: { id: true, metadata: true },
+        });
+        // Enquete anterior à conexão (ou nunca sincronizada): sem a mensagem
+        // não há onde guardar o voto. Ignora em silêncio.
+        if (!message) return;
+
+        const metadata = (message.metadata as Record<string, unknown> | null) ?? {};
+        const votes = { ...((metadata.votes as PollVotes | undefined) ?? {}) };
+        // Chave por PESSOA: telefone quando há, senão o JID — é o que faz o
+        // voto novo do mesmo votante substituir o antigo em vez de somar.
+        const voterKey = event.voterPhone ?? event.voterExternalId;
+        if (!voterKey) return;
+        votes[voterKey] = {
+          names: event.selectedNames,
+          voterName: event.voterName,
+          at: event.at.toISOString(),
+        };
+
+        const updated = await this.prisma.message.update({
+          where: { id: message.id },
+          data: { metadata: { ...metadata, votes } as unknown as Prisma.InputJsonValue },
+        });
+        this.io
+          .to(conversationAudience(organizationId, conversation))
+          .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
+      });
+    });
+
     // Chamada de voz/vídeo — vira um registro dentro da conversa
     this.provider.on("call", (event) => {
       void this.withOrg(event.instanceId, async (organizationId) => {
@@ -324,23 +378,46 @@ export class InstanceManager {
               externalMessageId: `call:${event.callId}`,
             },
           },
-          select: { id: true },
+          select: { id: true, metadata: true },
         });
+
+        // Metadados da chamada para o registro de Ligações: status, vídeo,
+        // duração e o id da gravação (quando a conta grava). Só sobrescreve o
+        // que veio — um evento posterior sem gravação não apaga a já conhecida.
+        const callMetadata: Record<string, unknown> = {
+          // No REGISTRO, chamada encerrada depois de atendida fica como
+          // "accepted" (atendida): é o rótulo e o filtro do histórico. O
+          // `ended` é sinal de TEMPO REAL (encerrar a tela), não estado do log.
+          callStatus: event.status === "ended" ? "accepted" : event.status,
+          isVideo: event.isVideo,
+        };
+        if (event.durationSeconds != null) callMetadata.durationSeconds = event.durationSeconds;
+        if (event.recordingId) callMetadata.recordingId = event.recordingId;
+        const direction: "inbound" | "outbound" = event.direction ?? "inbound";
 
         const message = existing
           ? await this.prisma.message.update({
               where: { id: existing.id },
-              data: { content: label, metadata: { callStatus: event.status, isVideo: event.isVideo } },
+              data: {
+                content: label,
+                direction,
+                // Preserva chaves anteriores (ex.: gravação vista antes) e
+                // atualiza com as novas.
+                metadata: {
+                  ...((existing.metadata as Record<string, unknown> | null) ?? {}),
+                  ...callMetadata,
+                } as Prisma.InputJsonValue,
+              },
             })
           : await this.prisma.message.create({
               data: {
                 organizationId,
                 conversationId: conversation.id,
                 externalMessageId: `call:${event.callId}`,
-                direction: "inbound",
+                direction,
                 type: "call",
                 content: label,
-                metadata: { callStatus: event.status, isVideo: event.isVideo },
+                metadata: callMetadata as Prisma.InputJsonValue,
                 senderExternalId: event.fromExternalId,
                 timestamp: event.timestamp,
                 status: "delivered",
@@ -389,6 +466,16 @@ export class InstanceManager {
             .emit(RealtimeEvents.ConversationUpdated, serializeConversation(full, personName));
         }
 
+        // Estado ao vivo da chamada para o painel do discador (tocando →
+        // atendida → encerrada). Sempre emitido, inclusive nas transições que
+        // não são "ringing" — é como o painel de uma chamada de SAÍDA descobre
+        // que o outro lado atendeu ou desligou.
+        this.io.to(room).emit(RealtimeEvents.CallStatus, {
+          callId: event.callId,
+          conversationId: conversation.id,
+          status: event.status,
+        });
+
         // Está tocando agora: avisa o responsável em qualquer tela do sistema.
         // O sistema nunca atende nem rejeita — o telefone segue tocando.
         if (!existing && event.status === "ringing") {
@@ -427,6 +514,7 @@ export class InstanceManager {
           });
           const payload: CallIncomingPayload = {
             conversationId: conversation.id,
+            callId: event.callId,
             conversationTitle:
               full?.customTitle ?? full?.title ?? conversation.customTitle ?? conversation.title,
             callerName: identity.name,
