@@ -294,6 +294,17 @@ export class MessageIngestService {
     if (mediaFailed) {
       metadata = { ...(metadata ?? {}), [MEDIA_DOWNLOAD_FAILED_METADATA_KEY]: true };
     }
+    // Opções da enquete RECEBIDA: sem elas a bolha mostra a pergunta e nenhuma
+    // alternativa. É a mesma chave `pollOptions` que o envio já grava — a tela
+    // lê das duas pontas por ela.
+    if (message.pollOptions?.length) {
+      metadata = { ...(metadata ?? {}), pollOptions: message.pollOptions };
+    }
+    // Duração do áudio: o player usa como total quando o navegador não
+    // consegue lê-la do arquivo (caso do OGG/Opus da nota de voz).
+    if (message.mediaDurationSeconds) {
+      metadata = { ...(metadata ?? {}), durationSeconds: message.mediaDurationSeconds };
+    }
 
     const created = await this.createMessageSafely({
       organizationId: context.organizationId,
@@ -581,6 +592,19 @@ export class MessageIngestService {
     // Apagada não volta atrás: a edição chegou depois do revoke, e
     // ressuscitar o texto contrariaria o que o cliente pediu.
     if (message.deletedAt) return null;
+
+    // Edição sem texto novo NÃO apaga o conteúdo. Quando o provider não
+    // consegue extrair o texto da edição (formato do payload que ele ainda
+    // não reconhece), gravar vazio deixava a bolha PRETA "editada" sem texto —
+    // pior que não aplicar. Melhor manter o que estava e registrar o caso.
+    if (!input.newContent && message.content) {
+      this.logger.warn({
+        instanceId: input.instanceId,
+        messageId: message.id,
+        event: "message_edit_empty_ignored",
+      });
+      return null;
+    }
 
     // Idempotência: o mesmo evento chega pelos dois canais do Baileys
     // (upsert e update). Conteúdo igual ao que já está gravado não gera

@@ -2,7 +2,7 @@ import "./lib/load-env.js";
 import { mkdir } from "node:fs/promises";
 import pino from "pino";
 import { getPrisma, disconnectPrisma } from "@azvchat/database";
-import { QrCodeWhatsAppProvider } from "@azvchat/whatsapp";
+import { AstraCallsProvider, QrCodeWhatsAppProvider, type WhatsAppProvider } from "@azvchat/whatsapp";
 import { loadConfig } from "./config.js";
 import { buildApp } from "./app.js";
 import { createRealtime } from "./realtime/socket.js";
@@ -40,12 +40,30 @@ async function main(): Promise<void> {
     logger: logger.child({ module: "azevedo-os" }),
   });
 
-  // Único ponto do sistema que instancia um provider concreto.
-  const provider = new QrCodeWhatsAppProvider({
-    sessionDir: config.sessionDir,
-    logger: logger.child({ module: "whatsapp-provider" }),
-    proxyUrl: config.WHATSAPP_PROXY_URL,
-  });
+  // Único ponto do sistema que instancia um provider concreto. A escolha
+  // entre Baileys (qrcode) e AstraCalls sai do WHATSAPP_PROVIDER — o resto do
+  // sistema só conhece a interface WhatsAppProvider e não muda.
+  let provider: WhatsAppProvider;
+  if (config.WHATSAPP_PROVIDER === "astracalls") {
+    if (!config.ASTRACALLS_API_URL || !config.ASTRACALLS_API_KEY) {
+      throw new Error(
+        "WHATSAPP_PROVIDER=astracalls exige ASTRACALLS_API_URL e ASTRACALLS_API_KEY no .env.",
+      );
+    }
+    provider = new AstraCallsProvider({
+      apiUrl: config.ASTRACALLS_API_URL,
+      apiKey: config.ASTRACALLS_API_KEY,
+      webhookUrl: config.ASTRACALLS_WEBHOOK_URL,
+      sessionDir: config.sessionDir,
+      logger: logger.child({ module: "whatsapp-provider" }),
+    });
+  } else {
+    provider = new QrCodeWhatsAppProvider({
+      sessionDir: config.sessionDir,
+      logger: logger.child({ module: "whatsapp-provider" }),
+      proxyUrl: config.WHATSAPP_PROXY_URL,
+    });
+  }
 
   // Container mutável: io e instanceManager dependem do servidor HTTP,
   // que só existe depois de buildApp. As rotas leem deps.* somente em

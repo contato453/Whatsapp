@@ -111,6 +111,7 @@ import {
 } from "./internal-note";
 import { PinnedBanner } from "./pinned-banner";
 import { StatusSelect } from "./status-select";
+import { CallButton } from "./call-panel";
 
 /** Status que a Inbox aceita receber pela URL, vindo dos cards do dashboard. */
 function isStatusParam(value: string | null): value is ConversationStatus {
@@ -1709,6 +1710,12 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
+                {/* Ligar para o cliente — só em conversa individual (grupo não
+                    liga) e só com a chave de atender/fazer ligações. Sem
+                    telefone discável (@lid) a API recusa com aviso. */}
+                {!isGroup && can("call.answer") && (
+                  <CallButton conversationId={conversation.id} title={conversation.title} />
+                )}
                 {/* Status do atendimento, editável na própria barra */}
                 <StatusSelect
                   status={conversation.status}

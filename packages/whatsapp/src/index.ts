@@ -1,5 +1,9 @@
 export type { WhatsAppProvider, WhatsAppProviderEvents } from "./provider.js";
 export { QrCodeWhatsAppProvider, type QrCodeProviderOptions } from "./qrcode/qrcode-provider.js";
+export {
+  AstraCallsProvider,
+  type AstraCallsProviderOptions,
+} from "./astracalls/astracalls-provider.js";
 /**
  * Conhecimento sobre o formato de áudio que o WhatsApp aceita fica aqui,
  * junto com o resto da camada de provider. A API consome estas funções e

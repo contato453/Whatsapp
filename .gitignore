@@ -25,3 +25,8 @@ logs/
 # misc
 .DS_Store
 coverage/
+.env.*
+!.env.example
+backup-*.sql.gz
+deploy/sid.txt
+deploy/test-sid.txt

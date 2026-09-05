@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Inbox,
+  PhoneCall,
   LayoutDashboard,
   LogOut,
   PanelLeftClose,
@@ -32,6 +33,7 @@ import { cn } from "@/lib/utils";
 import { Spinner, Tooltip } from "@/components/ui";
 import { UserAvatar } from "@/components/user-avatar";
 import { CallAlerts } from "@/components/call-alerts";
+import { CallProvider } from "@/lib/call-context";
 import { MessageSound } from "@/components/message-sound";
 import { SessionSchedule } from "@/components/session-schedule";
 import { UnreadTitle } from "@/components/unread-title";
@@ -71,6 +73,9 @@ const NAV: Array<{
   // /whatsapp — mudá-las quebraria favoritos e os links dos cards do
   // dashboard sem ganho nenhum.
   { href: "/inbox", label: "Conversas", icon: Inbox, minRole: "agent" },
+  // Registro de todas as chamadas (com gravação). Aparece por chave: quem não
+  // pode ver o registro não vê o menu (esconder e recusar andam juntos).
+  { href: "/calls", label: "Ligações", icon: PhoneCall, minRole: "agent", permission: "call.view" },
   {
     href: "/whatsapp",
     label: "Conexões",
@@ -419,6 +424,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const allowed = !current || pathAllowed(current, pathname, user.role, can);
 
   return (
+    <CallProvider>
     <div className="flex h-screen overflow-hidden bg-slate-50">
       <Sidebar user={user} logout={logout} can={can} />
       <main className="min-w-0 flex-1 overflow-hidden">
@@ -433,5 +439,6 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       {/* Aviso de fechamento do horário de uso, e saída quando ele chega. */}
       <SessionSchedule />
     </div>
+    </CallProvider>
   );
 }

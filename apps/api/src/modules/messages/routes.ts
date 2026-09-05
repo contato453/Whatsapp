@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Prisma } from "@azvchat/database";
-import type { MediaPayload, QuotedMessageRef, QuotedSnapshot } from "@azvchat/shared";
+import type { MediaPayload, PollVotes, QuotedMessageRef, QuotedSnapshot } from "@azvchat/shared";
 import {
   MESSAGE_EDIT_EXPIRED_MESSAGE,
   appendMessageVersion,
@@ -365,6 +365,70 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
     });
     await afterOutboundPersist(id, request.user.organizationId, message.id);
     return reply.status(201).send({ message: serializeMessage(message) });
+  });
+
+  /**
+   * Vota numa enquete RECEBIDA, pelo número conectado. `selectedNames` é a
+   * seleção completa (o WhatsApp substitui o voto anterior, não soma). O
+   * AstraCalls não devolve o próprio voto por webhook, então gravamos aqui a
+   * escolha do número na PRÓPRIA mensagem da enquete e avisamos a tela.
+   */
+  app.post("/conversations/:id/polls/:messageId/vote", { preHandler: authenticate }, async (request) => {
+    const { id, messageId } = z
+      .object({ id: z.string().uuid(), messageId: z.string().uuid() })
+      .parse(request.params);
+    const body = z.object({ selectedNames: z.array(z.string()).max(12) }).parse(request.body);
+    const conversation = await findConversationOr404(id, request.user);
+
+    const poll = await deps.prisma.message.findFirst({
+      where: { id: messageId, conversationId: id, type: "poll" },
+      select: { id: true, externalMessageId: true, metadata: true },
+    });
+    if (!poll?.externalMessageId) throw new NotFoundError("Enquete");
+    const pollExternalId = poll.externalMessageId;
+
+    const metadata = (poll.metadata as Record<string, unknown> | null) ?? {};
+    const options = Array.isArray(metadata.pollOptions) ? (metadata.pollOptions as string[]) : [];
+    const selectableCount = typeof metadata.selectableCount === "number" ? metadata.selectableCount : 1;
+    // Só opções que existem na enquete; e respeita o teto de seleção dela.
+    const chosen = body.selectedNames.filter((name) => options.includes(name));
+    if (chosen.length > Math.max(selectableCount, 1)) {
+      throw new AppError("Seleção acima do permitido para esta enquete.", 400, "poll_too_many");
+    }
+
+    const provider = deps.provider as {
+      votePoll?: (
+        instanceId: string,
+        chatId: string,
+        pollExternalMessageId: string,
+        selectedNames: string[],
+      ) => Promise<void>;
+    };
+    if (typeof provider.votePoll !== "function") {
+      throw new AppError("O provider atual não permite votar em enquete.", 501, "poll_vote_unsupported");
+    }
+    await provider.votePoll(
+      conversation.whatsappInstanceId,
+      conversation.externalChatId,
+      pollExternalId,
+      chosen,
+    );
+
+    // Registra o voto do NÚMERO conectado (o WhatsApp guarda um voto por
+    // número). A chave é o telefone do número; o nome exibido é o do atendente
+    // que clicou, para a equipe saber de onde saiu.
+    const votes = { ...((metadata.votes as PollVotes | undefined) ?? {}) };
+    const voterKey = deps.provider.getPhoneNumber(conversation.whatsappInstanceId) ?? "self";
+    votes[voterKey] = { names: chosen, voterName: request.user.name, at: new Date().toISOString() };
+    const updated = await deps.prisma.message.update({
+      where: { id: poll.id },
+      data: { metadata: { ...metadata, votes } as unknown as Prisma.InputJsonValue },
+    });
+
+    deps.io
+      .to(conversationAudience(request.user.organizationId, conversation))
+      .emit(RealtimeEvents.MessageUpdated, serializeMessage(updated));
+    return { message: serializeMessage(updated) };
   });
 
   /** Reage a uma mensagem (emoji vazio remove a reação). */

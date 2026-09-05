@@ -12,6 +12,7 @@ import { tagRoutes } from "./modules/tags/routes.js";
 import { whatsappInstanceRoutes } from "./modules/whatsapp-instances/routes.js";
 import { conversationRoutes } from "./modules/conversations/routes.js";
 import { messageRoutes } from "./modules/messages/routes.js";
+import { callRoutes } from "./modules/calls/routes.js";
 import { quickReplyRoutes } from "./modules/quick-replies/routes.js";
 import { scheduledMessageRoutes } from "./modules/scheduled-messages/routes.js";
 import { attendanceSettingsRoutes } from "./modules/attendance-settings/routes.js";
@@ -22,6 +23,7 @@ import { reportRoutes } from "./modules/reports/routes.js";
 import { integrationRoutes } from "./modules/integrations/routes.js";
 import { financeiroLembreteRoutes } from "./modules/integrations/financeiro-lembrete.js";
 import { integrationMessageApiRoutes } from "./modules/integrations/message-api.js";
+import { astracallsWebhookRoutes } from "./modules/integrations/astracalls-webhook.js";
 import { permissionRoutes } from "./modules/permissions/routes.js";
 import type { AppDeps } from "./types.js";
 
@@ -70,6 +72,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     await whatsappInstanceRoutes(instance, deps);
     await conversationRoutes(instance, deps);
     await messageRoutes(instance, deps);
+    await callRoutes(instance, deps);
     await quickReplyRoutes(instance, deps);
     await scheduledMessageRoutes(instance, deps);
     await attendanceSettingsRoutes(instance, deps);
@@ -80,6 +83,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     await integrationRoutes(instance, deps);
     await financeiroLembreteRoutes(instance, deps);
     await integrationMessageApiRoutes(instance, deps);
+    await astracallsWebhookRoutes(instance, deps);
     await permissionRoutes(instance, deps);
   });
 

@@ -13,6 +13,7 @@ import type {
 import type { DashboardFilters } from "./dashboard-filters";
 import type {
   AgentReportDto,
+  CallLogResponse,
   ConversationDto,
   DashboardStatsDto,
   IntegrationTokenDto,
@@ -121,6 +122,63 @@ export const api = {
     request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
 };
+
+/**
+ * Discador de voz. Só SINALIZAÇÃO passa por aqui — o áudio é WebRTC direto
+ * (UDP) entre o navegador e o servidor do AstraCalls. A chave do AstraCalls
+ * nunca chega ao navegador: a troca de SDP é proxiada pela nossa API.
+ */
+export const callsApi = {
+  start: (conversationId: string, video = false) =>
+    api.post<{ callId: string }>(`/conversations/${conversationId}/calls`, { video }),
+  accept: (conversationId: string, callId: string) =>
+    api.post<{ ok: boolean }>(`/conversations/${conversationId}/calls/${callId}/accept`),
+  reject: (conversationId: string, callId: string) =>
+    api.post<{ ok: boolean }>(`/conversations/${conversationId}/calls/${callId}/reject`),
+  end: (conversationId: string, callId: string) =>
+    api.delete<{ ok: boolean }>(`/conversations/${conversationId}/calls/${callId}`),
+  webrtc: (conversationId: string, callId: string, sdpOffer: string) =>
+    api.post<{ sdp_answer: string }>(`/conversations/${conversationId}/calls/${callId}/webrtc`, {
+      sdp_offer: sdpOffer,
+    }),
+  /** Registro de Ligações. Listas viajam como parâmetro repetido (?status=a&status=b). */
+  list: (filters: CallLogFilters) => {
+    const params = new URLSearchParams();
+    if (filters.from) params.set("from", filters.from);
+    if (filters.to) params.set("to", filters.to);
+    if (filters.search) params.set("search", filters.search);
+    for (const s of filters.status ?? []) params.append("status", s);
+    for (const d of filters.direction ?? []) params.append("direction", d);
+    for (const t of filters.callType ?? []) params.append("callType", t);
+    for (const i of filters.instanceId ?? []) params.append("instanceId", i);
+    if (filters.limit != null) params.set("limit", String(filters.limit));
+    if (filters.offset != null) params.set("offset", String(filters.offset));
+    return api.get<CallLogResponse>(`/calls?${params.toString()}`);
+  },
+  /** URL autenticada da gravação — buscar com `fetchMediaBlobUrl`. */
+  recordingPath: (callId: string) => `/calls/${callId}/recording`,
+  /** Exclui as gravações de um período (admin) para liberar espaço na VPS. */
+  purgeRecordings: (from: string, to: string) =>
+    api.post<{
+      recordsCleared: number;
+      filesDeleted: number;
+      freedBytes: number;
+      fileErrors: number;
+      diskConfigured: boolean;
+    }>("/calls/recordings/purge", { from, to }),
+};
+
+export interface CallLogFilters {
+  from?: string;
+  to?: string;
+  search?: string;
+  status?: string[];
+  direction?: string[];
+  callType?: string[];
+  instanceId?: string[];
+  limit?: number;
+  offset?: number;
+}
 
 /**
  * Vínculo com departamento — o mesmo contrato para etiqueta e resposta
@@ -584,8 +642,17 @@ export const attendanceSettingsApi = {
  * senão a memória cresce a cada mídia aberta ao longo do dia.
  */
 export async function fetchMediaBlobUrl(messageId: string): Promise<string> {
+  return fetchAuthedBlobUrl(`/messages/${messageId}/media`);
+}
+
+/**
+ * Baixa um binário AUTENTICADO (com o Bearer) e devolve um blob URL temporário.
+ * Base do `fetchMediaBlobUrl` e usado também pela gravação de chamada — a rota
+ * exige o header, então nada de apontar `src` direto para a API.
+ */
+export async function fetchAuthedBlobUrl(path: string): Promise<string> {
   const token = getToken();
-  const response = await fetch(`${API_URL}/messages/${messageId}/media`, {
+  const response = await fetch(`${API_URL}${path}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   // Sessão vencida no meio da ação segue o mesmo caminho do client: limpa o

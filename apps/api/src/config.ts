@@ -25,6 +25,49 @@ const envSchema = z.object({
   WEB_ORIGIN: z.string().default("http://localhost:3000"),
   WHATSAPP_SESSION_DIR: z.string().default("./data/sessions"),
   WHATSAPP_PROXY_URL: z.string().optional(),
+
+  /**
+   * Qual implementação de WhatsAppProvider usar. `qrcode` é o Baileys de
+   * sempre (padrão, para não mudar a produção por omissão); `astracalls` é a
+   * API HTTP externa do AstraCalls (whatsmeow), que o `index.ts` instancia no
+   * lugar do Baileys. A troca é num ponto só — ver o comentário lá.
+   */
+  WHATSAPP_PROVIDER: z.enum(["qrcode", "astracalls"]).default("qrcode"),
+  /**
+   * AstraCalls (só quando WHATSAPP_PROVIDER=astracalls). Tudo opcional no
+   * schema para não travar o boot do provider Baileys; a validação de
+   * "está tudo presente?" é feita no `index.ts`, ao escolher o provider.
+   *
+   * `ASTRACALLS_API_URL` é a base (ex.: https://astracalls.azvchat.com.br) e
+   * `ASTRACALLS_API_KEY` vai no header `X-API-Key` de toda chamada — vive só
+   * no processo da API, nunca no navegador (sem `NEXT_PUBLIC_`).
+   */
+  ASTRACALLS_API_URL: optionalEnv(z.string().url()),
+  ASTRACALLS_API_KEY: optionalEnv(z.string().min(1)),
+  /**
+   * URL pública que o AstraCalls chama (POST) com os eventos da sessão —
+   * mensagem recebida, status, etc. Precisa ser alcançável de fora (ex.:
+   * https://api.azvchat.com.br/integrations/astracalls/webhook), porque o
+   * container do AstraCalls fala com a API pela internet, não pela rede
+   * interna do compose.
+   */
+  ASTRACALLS_WEBHOOK_URL: optionalEnv(z.string().url()),
+  /**
+   * Segredo que protege a rota de webhook: o AstraCalls não manda o nosso
+   * bearer de sessão, então embutimos este segredo na URL/num header e a rota
+   * recusa quem não o apresenta. Sem ele a rota fica fechada (503).
+   */
+  ASTRACALLS_WEBHOOK_SECRET: optionalEnv(z.string().min(16)),
+  /**
+   * Diretório onde o AstraCalls grava os MP3 das chamadas, compartilhado com
+   * a API por volume (ex.: `/recordings`). Só serve para a ferramenta de
+   * EXCLUSÃO de gravações por período liberar espaço na VPS — sem ele, a
+   * exclusão só limpa o ponteiro no banco e avisa que não pôde apagar o
+   * arquivo. Nunca usado para LER a gravação (isso é sempre pela API do
+   * AstraCalls, autenticado).
+   */
+  CALL_RECORDINGS_DIR: optionalEnv(z.string().min(1)),
+
   MEDIA_DIR: z.string().default("./data/media"),
   // O padrão vem do shared: a tela barra o arquivo grande na prévia com o
   // mesmo número, antes de subir byte nenhum. Apertar ou soltar o limite
