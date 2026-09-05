@@ -1102,6 +1102,42 @@ conhecê-la sozinhos. **Dado financeiro nunca entra**: ver a seção 13.
   `VPS_PORT`, `VPS_KNOWN_HOSTS`, `VPS_PATH`) são **environment secrets**. Sem eles o job
   avisa e sai em verde, em vez de falhar.
 
+> **A PRODUÇÃO DE VERDADE NÃO É O QUE OS PARÁGRAFOS ACIMA DESCREVEM — descoberto em
+> 05/09/2026, depois de quase repetir o incidente de 16/08/2026 (seção 15) de um jeito
+> pior.** Na VPS existem HOJE três stacks Docker Compose, e o parágrafo "Produção" acima
+> descreve uma que está **morta**:
+> 1. `whatsapp` → `/root/Whatsapp/docker-compose.prod.yml` (pasta DIFERENTE do clone de
+>    trabalho). Só o Postgres e o Caddy dela seguem de pé; API e Web nunca sobem — os
+>    domínios que ela serve (`app.lincolnazevedo.com.br`, `api.lincolnazevedo.com.br`)
+>    apontam para containers `web`/`api` que não existem mais (DNS interno do Docker
+>    devolve `127.0.53.53`, o "não existe" do resolvedor). **Rodar `deploy/atualizar.sh`
+>    ou `docker compose up` nessa pasta não atualiza a produção — atualiza um cadáver.**
+> 2. `azvchat2` → `docker-compose.azvchat2.yml` **dentro do clone de trabalho da VPS**,
+>    mas **fora do Git** (não versionado, `.gitignore` nunca o viu). Containers
+>    `azvchat2-azvapi-1`/`azvchat2-azvweb-1`/`azvchat2-azvpg-1`. **Este é o sistema que o
+>    escritório usa de verdade** — confirmado consultando a configuração VIVA do Caddy
+>    (`curl http://localhost:2019/config/` de dentro do container, porta da API admin do
+>    Caddy — não o arquivo em disco, que está desatualizado): `app.azvchat.com.br` e
+>    `api.azvchat.com.br` apontam para `azvweb:3000`/`azvapi:4000`, os nomes de serviço
+>    desta stack. Variáveis do AstraCalls (`WHATSAPP_PROVIDER`, `ASTRACALLS_API_URL/KEY`,
+>    `ASTRACALLS_WEBHOOK_URL/SECRET`) vivem em `.env.azvchat2`, também fora do Git.
+> 3. `astracalls` → `docker-compose.astracalls.yml`, idem fora do Git, serve
+>    `astracalls.azvchat.com.br` → `wacalls:8080` (a ponte de chamadas de voz).
+>
+> **O Caddy foi reconfigurado por dentro (API admin, porta 2019) sem que o `Caddyfile` em
+> disco fosse atualizado** — por isso ele é enganoso: descreve só as rotas mortas do
+> item 1. Reiniciar o container do Caddy a partir desse arquivo (`docker compose up` na
+> pasta `/root/Whatsapp`) **derrubaria as rotas vivas** de `app.azvchat.com.br`/
+> `api.azvchat.com.br`, porque a config em memória seria substituída pela do disco.
+> **Nunca faça isso.** Deploy de código novo na VPS, a partir de agora, é:
+> `git checkout <branch>` no clone de `/root/Whatsapp-ajustes/`, depois
+> `docker compose -f docker-compose.azvchat2.yml --env-file .env.azvchat2 up -d --build`
+> — nunca `docker-compose.prod.yml`, nunca a pasta `/root/Whatsapp`. Antes de confiar em
+> qualquer deploy futuro, valide de verdade (como no incidente da seção 15: resultado do
+> comando é evidência, código de saída não é) — `docker compose ps` com os três
+> containers `healthy`/`Up`, log da API sem erro de migration, e
+> `curl .../health` devolvendo 200 nos domínios reais.
+
 ---
 
 ## 12. Receitas — como mudanças costumam ser feitas aqui
