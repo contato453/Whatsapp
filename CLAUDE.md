@@ -225,7 +225,7 @@ snake_case e id `uuid`.
 
 **Inteligência artificial** — `AiProviderConfig`, `AiSettings`, `AiAgent` (+ `AiAgentDepartment`,
 `AiAgentVersion`, `AiAgentKnowledgeSource`), `AiKnowledgeSource`, `AiAutomation`, `AiSession`,
-`AiUsageLog`. Ver a seção 19.
+`AiUsageLog`. Ver a seção 20.
 
 **Permissões**
 - `RolePermission` — o que cada perfil PODE FAZER nesta organização, por par
@@ -532,7 +532,7 @@ GET|POST /ai/knowledge  PATCH|DELETE /ai/knowledge/:id     GET /ai/options
 GET|POST /ai/automations  PATCH|DELETE /ai/automations/:id  (tudo isso: ai.agent.manage)
 GET    /conversations/:id/ai           (sessão de IA mais recente da conversa)
 POST   /conversations/:id/ai/stop      (ai.session.stop)   POST /conversations/:id/ai/resume (ai.session.resume)
-       (ver a seção 19)
+       (ver a seção 20)
 
 GET    /permissions          (admin; o que a organização gravou por cima do catálogo —
        o catálogo em si NÃO vem por aqui, a tela o importa de @azvchat/shared)
@@ -1942,7 +1942,12 @@ por conversa, sem prazo de validade, navegação entre elas e atualização em t
 todo mundo com a conversa aberta; API de integração para sistema externo disparar mensagem
 por token de máquina (amarrado a um número, com idempotência de 24h, rate limit por token e
 tela de administração de tokens para admin), reaproveitando o caminho do envio manual — a
-mensagem aparece na Inbox como qualquer outra.
+mensagem aparece na Inbox como qualquer outra; **follow-up automático** (seção 19): regra
+reutilizável por um, vários ou todos os departamentos, com etapas de aguardar e agir
+(mandar mensagem com variáveis, etiquetar, mudar status), disparada quando a conversa entra
+em "aguardando cliente", cancelada na hora se o cliente responde ou se o atendimento sai
+desse status, reiniciada quando a equipe manda mensagem nova, respeitando expediente e
+rodando inteiramente no backend (sobrevive a reinício e a fechar o navegador).
 
 **Falta** (ordem sugerida): validar o pareamento QR em rede aberta (o ambiente de
 desenvolvimento bloqueia `web.whatsapp.com`); votos de enquete agregados na Inbox;
@@ -2284,7 +2289,211 @@ conteúdo nem token em claro).
 
 ---
 
-## 19. Inteligência artificial (atendimento por IA)
+## 18. Como escrever um bom prompt para este sistema
+
+Um prompt fica bom aqui quando responde, nesta ordem:
+
+1. **O quê e para quem** — a mudança em uma frase, e qual papel (admin, supervisor,
+   usuário) sente o efeito.
+2. **Onde encosta** — cite as camadas pelo nome real: `schema.prisma` + migration,
+   `modules/<dominio>/routes.ts`, `lib/access.ts`, `shared/enums.ts` ou `realtime.ts`,
+   `web/src/lib/api.ts`, tela/componente.
+3. **Regra de visibilidade** — quem passa a ver ou deixa de ver. Se a resposta for "não
+   muda", diga isso explicitamente, para a IA não inventar filtro.
+4. **Comportamento nas bordas** — conversa sem departamento, sem responsável, número
+   desconectado, usuário desativado, grupo sem participante sincronizado.
+5. **Tempo real** — a mudança precisa aparecer sem reload? Então tem evento e audiência.
+6. **Auditoria** — a ação entra no `AuditLog`? Com qual `action`?
+7. **Critério de pronto** — `pnpm typecheck && pnpm lint && pnpm test` verdes, mais o teste
+   novo que prova a regra.
+
+Esqueleto pronto:
+
+> No AZVCHAT (monorepo `contato453/Whatsapp`, Fastify + Prisma + Next.js), quero **\<mudança\>**.
+> Contexto: **\<por que, na operação do escritório\>**.
+> Camadas afetadas: **\<liste\>**.
+> Visibilidade: **\<quem vê / não muda\>** — usar as funções de `lib/access.ts`, sem `where` na mão.
+> Bordas: **\<conversa sem departamento, sem responsável, ...\>**.
+> Tempo real: **\<evento e audiência, ou "não precisa"\>**. Auditoria: **\<action, ou "não"\>**.
+> Seguir as convenções do `CLAUDE.md` (Zod em toda entrada, serializer dedicado, enums em
+> `@azvchat/shared`, kit de UI, textos em português, comentário explicando o porquê).
+> Ao final: migration nova (nunca editar migration aplicada), teste cobrindo a regra, e
+> `pnpm typecheck && pnpm lint && pnpm test` verdes. Commit e push na branch de trabalho.
+
+---
+
+## 19. Follow-up Automático
+
+Automação por **tempo sem resposta do cliente**: uma regra com uma ou mais etapas
+("aguardar N, depois fazer X") que dispara quando a conversa entra em
+`waiting_client` ("Aguardando cliente"), cancela sozinha se o cliente responde ou se o
+atendimento sai desse status, e reinicia a contagem se a equipe manda mensagem nova
+enquanto ainda espera. Roda inteiramente no backend — sobrevive a fechar o navegador,
+a deploy e a reiniciar o processo, porque todo o estado (a próxima ação de cada
+conversa) mora no banco, nunca em `setTimeout` do frontend.
+
+**Vínculo com departamento — o MESMO desenho da resposta rápida e da etiqueta.**
+`FollowUpRule.isGeneral` vale para a organização inteira; desligada, a regra tem uma ou
+mais linhas em `FollowUpRuleDepartment` (N:N). Nunca as duas coisas juntas, mesma
+validação de `lib/department-resource.ts` — que é reaproveitado sem mudança nenhuma
+(`resolveDepartmentTarget`, `assertCanManageResource`, `canApplyToConversation`,
+`auditDepartmentSnapshot`). É o que permite **uma** regra valer para Comercial e
+Financeiro ao mesmo tempo, sem duplicar cadastro: editar a regra (adicionar/remover
+departamento, marcar "todos", limpar seleção) reflete para todo mundo que a usa, porque
+não existe cópia por departamento — existe UM registro com vários vínculos.
+
+### Modelo de dados
+
+`FollowUpRule` (cadastro) → `FollowUpRuleDepartment` (N:N, igual a `QuickReplyDepartment`)
+e `FollowUpRuleStep` (etapas, em ordem) → `FollowUpExecution` (o "timer" rodando sobre
+UMA conversa) → `FollowUpExecutionLog` (uma linha por evento: iniciado, etapa executada,
+etapa falhou, reiniciado, cancelado, pausado, retomado, adiado, concluído — é o
+Histórico da seção seguinte).
+
+Uma regra tem no máximo **uma execução ativa ou pausada por conversa**: além da checagem
+de aplicação (`reconcileConversation` nunca inicia uma segunda se já existe uma para a
+mesma regra), o banco garante com um índice **parcial** que o Prisma Client não
+representa em `schema.prisma` —
+`follow_up_executions_one_active_per_conversation`, `UNIQUE (conversationId) WHERE
+status IN ('active', 'paused')`, na migration `20260906120000_follow_up_automation`.
+Mesmo padrão do índice parcial de `tags`/`quick_replies` (`isGeneral = true`): existe
+só no banco, e por isso este comentário existe — quem gerar uma migration nova por cima
+do schema precisa saber que ele está lá antes de deixar o Prisma "corrigir" o diff.
+
+Gatilho (`FollowUpTrigger`) é enum com **um valor só hoje**, `waiting_client` — o pedido
+original cita outros ("tag adicionada", "entrou em departamento") como aceitáveis "se
+compatíveis com a arquitetura atual"; nenhum tem um evento único e barato o bastante
+para justificar a entrada agora, e o enum (em vez de um booleano fixo) deixa a porta
+aberta para entrarem depois sem migration de schema, só de dado.
+
+**"Fila" não existe como entidade no AZVCHAT** (não há tabela de fila — o pedido original
+cita "regra específica da fila" na prioridade). A prioridade real, em
+`lib/follow-up-engine.ts` (`pickApplicableRule`): regra restrita a departamento(s) que
+inclui o da conversa vence a regra geral (`isGeneral`); empate dentro do mesmo degrau,
+regra com filtro de **número** explícito (mais específica) vence a sem filtro; sobrando
+empate, a mais recentemente atualizada. Conversa **sem departamento** aceita qualquer
+regra ativa que bata com o número — mesma regra de `canApplyToConversation` que a
+etiqueta e a resposta rápida já seguem ("sem departamento aceita qualquer item
+visível").
+
+### O motor — `apps/api/src/lib/follow-up-engine.ts`
+
+Fonte única de decisão, chamada de dois lugares:
+
+- **Rotas HTTP**, depois de qualquer mudança que possa afetar um follow-up:
+  `reconcileConversation` em `POST /conversations/:id/status`, `/resolve`, `/reopen`,
+  `/archive`, `/unarchive` e `/transfer-department` (entra, sai, ou reavalia a regra
+  aplicável); `handleInboundMessage` na ingestão de mensagem recebida (`services/
+  instance-manager.ts`, no handler do evento `message` do provider — cobre mensagem ao
+  vivo e a do backfill de histórico, que passam pelo mesmo caminho); `handleOutboundMessage`
+  em todo ponto que cria mensagem de SAÍDA pela equipe (`afterOutboundPersist`, em
+  `modules/messages/routes.ts` — composer, forward, enquete, resposta rápida com mídia —
+  e também o disparo de mensagem agendada em `services/scheduler.ts`).
+- **O worker** (`services/follow-up-scheduler.ts`), a cada 30s, só chama
+  `processDueExecutions`: acha as execuções `active` com `nextRunAt` vencido (mais as
+  `paused` com prazo vencido, que voltam a `active` sozinhas) e roda a etapa de cada uma.
+
+**Revalidação antes de cada etapa, nunca só no início** (o pedido pede isso
+explicitamente): antes de agir, o worker relê a conversa e a regra do banco e confere,
+NESTA ordem — conversa existe e não está arquivada; status ainda é `waiting_client`;
+regra ainda está ativa e ainda vale para o departamento (e o número) da conversa. Falhar
+qualquer uma cancela a execução com o motivo certo
+(`conversation_archived`/`conversation_resolved`/`canceled_status_change`/
+`canceled_department_change`/`rule_deactivated`) em vez de mandar a mensagem de qualquer
+jeito. É o que resolve a seção 15 do pedido ("cancelamento mesmo com job agendado") sem
+precisar de fila de verdade: o "job" é só uma linha com `nextRunAt`, e quem confere se
+ainda faz sentido é sempre a leitura de agora, nunca o que foi decidido na hora de
+agendar.
+
+**Ação de cada etapa** (`FollowUpStepAction`): `send_message` (texto reaproveitando o
+MESMO motor de variáveis da resposta rápida — `resolveQuickReplyTemplate`, de
+`@azvchat/shared`, com `{{empresa.*}}` resolvido contra o Azevedo-OS quando a conversa
+está vinculada), `add_tag`/`remove_tag` (`ConversationTag`) e `change_status`. **Ficaram
+de fora desta entrega** "encaminhar" e "webhook/API" (citados como possíveis no pedido
+original): encaminhar precisaria da mesma régua de `conversationAssigneeWhere` que a
+transferência manual usa, e webhook para URL arbitrária é superfície de ataque que
+merece desenho próprio (allowlist, assinatura, timeout) — nenhum dos dois tem o mesmo
+"reaproveita o que já existe" das outras quatro ações.
+
+**Encerramento automático** (`FollowUpRule.finalizeOnComplete`, ligado por padrão):
+depois da última etapa, se ninguém respondeu, a conversa vai para `resolved`, ganha uma
+linha em `ConversationAssignmentHistory` com o motivo (`finalizeReason`, padrão "Sem
+retorno do cliente") e, se configurada, uma etiqueta (`finalizeTagId` — o pedido sugere
+"ENCERRADO POR INATIVIDADE", mas o nome é livre, reaproveitando `Tag` que já existe).
+
+**Expediente** (`FollowUpRule.respectBusinessHours`, ligado por padrão):
+`lib/business-schedule.ts` (`nextBusinessMoment`) empurra o horário calculado da
+próxima etapa para a abertura do próximo dia útil quando ele cai fora do expediente
+configurado em `AttendanceSettings`/`AttendanceBusinessHours` — **a MESMA fonte que o
+dashboard usa para expediente**, nunca uma segunda definição. Feriado não é tratado,
+pelo mesmo motivo do card de atraso: não existe tabela de feriados no AZVCHAT.
+
+**Cancelamento e reinício da contagem** (seções 14/16 do pedido): mensagem recebida
+cancela sempre (`client_replied`); mensagem enviada pela equipe **enquanto a etapa
+atual ainda não venceu** reinicia o prazo dela a partir de agora
+(`handleOutboundMessage`) — nunca cria uma segunda execução, só reagenda a que já
+existe. Mudar de departamento reavalia: se a nova regra aplicável é outra, a execução
+antiga é cancelada (`canceled_department_change`) e uma nova começa do zero na regra do
+departamento novo; se ninguém aplica mais, só cancela.
+
+### Ações do atendente na conversa
+
+`GET/POST /conversations/:id/follow-up*` (mesmo recorte de acesso de qualquer rota de
+conversa — `findAccessibleConversation`): `cancel`, `pause` (com ou sem `untilAt`;
+pausa com prazo volta a `active` sozinha quando o worker perceber que o prazo venceu),
+`resume`, `postpone` (`until` obrigatório, no futuro). Papel mínimo é a chave
+`follow_up.control` do catálogo de permissões (`packages/shared/src/permissions.ts`),
+padrão liberado para usuário e supervisor — controlar o que já está rodando numa
+conversa é atendimento, não cadastro. **Criar, editar, duplicar, ativar/desativar e
+excluir a REGRA** é a chave separada `follow_up.manage` (cadastros, padrão só
+supervisor+), a mesma que trava `GET/POST/PATCH/DELETE /follow-up-rules*` e
+`GET /follow-up-executions` (Histórico geral). Regra **geral** ("todos os
+departamentos") continua sendo só do admin, sem chave própria — mesma exceção que a
+etiqueta geral já tinha (`resolveDepartmentTarget` sem `canWriteGeneral` cai em
+`canWriteGeneralResource`, que só o admin passa).
+
+Na tela do chat, `components/inbox/follow-up-banner.tsx` (fora do `inbox-shell.tsx` de
+propósito, como o hook de não lidas) desenha a faixa discreta — regra, etapa atual,
+próxima ação, departamento — e os botões de ação; some sozinha quando não há execução
+ativa/pausada. Evento próprio de tempo real, `RealtimeEvents.FollowUpUpdated`
+(`followup:updated`, payload `FollowUpUpdatedPayload`), carregando o estado INTEIRO da
+execução (ou `null`) para a `conversationAudience` de sempre — mesma ideia de
+`PinnedItems`: reenviar tudo é mais simples que sincronizar patch, e o payload é
+pequeno por construção.
+
+### Tela — Automações → Follow-up Automático
+
+`apps/web/src/app/(app)/automations/follow-up/page.tsx`: lista (nome, status,
+departamentos — `DepartmentBadges` reaproveitado sem mudança —, número, gatilho, prazo
+do primeiro follow-up, quantidade de etapas, execuções ativas, mensagens enviadas,
+última alteração), Nova regra/Editar/Duplicar/Ativar-Desativar/Excluir/Histórico. O
+formulário reaproveita `DepartmentCheckboxes`/`useMyDepartments`/`canManageScopedItem`
+de `components/department-picker.tsx` — o mesmo componente que Etiquetas e Respostas
+Rápidas usam, sem duplicar lógica de seleção. Histórico (regra ou geral) mostra os
+contadores da seção 34 do pedido (execuções, departamentos usados, clientes que
+responderam, encerradas por inatividade, canceladas) e a lista de execuções com o log
+expandível de cada uma.
+
+### O que ficou de fora desta entrega (limitações conhecidas)
+
+- Gatilhos além de `waiting_client` ("tag adicionada", "entrou em departamento/fila") —
+  o enum já suporta adicionar sem migration de schema, só falta o disparo.
+- Ações `encaminhar` e `webhook/API` nas etapas (ver acima, por quê).
+- Reordenar etapas na tela é por botões (subir/descer), não arrastar — mesmo efeito,
+  interação mais simples.
+- Indicadores agregados da seção 35 do pedido (taxa de recuperação, mensagens enviadas
+  HOJE) não têm card próprio na tela principal — os números por regra (execuções
+  ativas, mensagens enviadas, e os contadores do Histórico) já existem e cobrem a
+  auditoria, mas o painel consolidado do dia é trabalho futuro, no mesmo molde do
+  dashboard.
+- A tela principal (seção 6 do pedido) ainda não tem barra de filtro por departamento/
+  status/regra/período — a API de histórico (`GET /follow-up-executions`) já aceita
+  `departmentId`/`ruleId`/`status`/`from`/`to`, então plugar os controles é trabalho de
+  tela, não de rota nova. Filtro por fila/atendente/tipo de atendimento (seção 22) não
+  entrou: "fila" não existe no AZVCHAT, e atendente/tipo de atendimento não são
+  atributos de `FollowUpRule` nesta entrega.
+
+## 20. Inteligência artificial (atendimento por IA)
 
 Módulo nativo: uma IA atende conversas do WhatsApp dentro da Inbox, com regras, limites,
 conhecimento e custo sob controle. Tela em **Configurações → Inteligência artificial**
@@ -2303,9 +2512,12 @@ sem responsável). Em vez de inventar um sistema paralelo para cada um:
   fallback do agente + fila humana);
 - "CRM" é o que a casa já usa para classificar: **etiquetas**, **nota interna** (o registro
   de oportunidade/atividade) e **status** do atendimento;
-- "follow-up" é a **mensagem agendada** (`ScheduledMessage`) — a ferramenta
-  `schedule_followup` agenda a mensagem, põe a conversa em "Aguardando cliente" e encerra a
-  participação da IA; quando o cliente responde, a automação pode abrir um ciclo novo;
+- "follow-up" é o **Follow-up Automático** da seção 19 — a ferramenta `schedule_followup`
+  põe a conversa em "Aguardando cliente" e chama `reconcileConversation`, que inicia a
+  REGRA de follow-up que valer para a conversa (nenhuma regra nova é criada pela IA), e a
+  participação da IA termina; quando o cliente responde, a automação pode abrir um ciclo
+  novo. Toda mensagem que a IA envia passa por `handleOutboundMessage`, e concluir/
+  transferir passa por `reconcileConversation`, como as rotas da equipe;
 - "campos a coletar" vivem na **memória do atendimento** (`AiSession.state.collected`) e vão
   no resumo ao atendente; o nome coletado pode virar `customTitle` da conversa, quando a
   capacidade está ligada. Não há tabela de campos personalizados de contato.
@@ -2422,34 +2634,3 @@ mídia); base de conhecimento é texto/FAQ com busca lexical (sem documentos/emb
 não há construtor visual de fluxos — a automação é o bloco; a pesquisa de saldo da OpenAI
 depende de Admin key; a API roda em instância única (a fila por conversa é em memória, como
 o scheduler).
-
-## 18. Como escrever um bom prompt para este sistema
-
-Um prompt fica bom aqui quando responde, nesta ordem:
-
-1. **O quê e para quem** — a mudança em uma frase, e qual papel (admin, supervisor,
-   usuário) sente o efeito.
-2. **Onde encosta** — cite as camadas pelo nome real: `schema.prisma` + migration,
-   `modules/<dominio>/routes.ts`, `lib/access.ts`, `shared/enums.ts` ou `realtime.ts`,
-   `web/src/lib/api.ts`, tela/componente.
-3. **Regra de visibilidade** — quem passa a ver ou deixa de ver. Se a resposta for "não
-   muda", diga isso explicitamente, para a IA não inventar filtro.
-4. **Comportamento nas bordas** — conversa sem departamento, sem responsável, número
-   desconectado, usuário desativado, grupo sem participante sincronizado.
-5. **Tempo real** — a mudança precisa aparecer sem reload? Então tem evento e audiência.
-6. **Auditoria** — a ação entra no `AuditLog`? Com qual `action`?
-7. **Critério de pronto** — `pnpm typecheck && pnpm lint && pnpm test` verdes, mais o teste
-   novo que prova a regra.
-
-Esqueleto pronto:
-
-> No AZVCHAT (monorepo `contato453/Whatsapp`, Fastify + Prisma + Next.js), quero **\<mudança\>**.
-> Contexto: **\<por que, na operação do escritório\>**.
-> Camadas afetadas: **\<liste\>**.
-> Visibilidade: **\<quem vê / não muda\>** — usar as funções de `lib/access.ts`, sem `where` na mão.
-> Bordas: **\<conversa sem departamento, sem responsável, ...\>**.
-> Tempo real: **\<evento e audiência, ou "não precisa"\>**. Auditoria: **\<action, ou "não"\>**.
-> Seguir as convenções do `CLAUDE.md` (Zod em toda entrada, serializer dedicado, enums em
-> `@azvchat/shared`, kit de UI, textos em português, comentário explicando o porquê).
-> Ao final: migration nova (nunca editar migration aplicada), teste cobrindo a regra, e
-> `pnpm typecheck && pnpm lint && pnpm test` verdes. Commit e push na branch de trabalho.

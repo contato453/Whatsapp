@@ -103,6 +103,7 @@ import {
   useBlockStrayFileDrop,
 } from "./attachment-drop";
 import { ScheduleModal } from "./composer-modals";
+import { FollowUpBanner } from "./follow-up-banner";
 import { MediaLightbox } from "./media-lightbox";
 import { MessageBubble } from "./message-bubble";
 import { ContextPanel } from "./context-panel";
@@ -1800,6 +1801,9 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                 )
               }
             />
+
+            {/* Follow-up automático ativo: mesma ideia da faixa fixa, discreta e opcional. */}
+            {conversationId && <FollowUpBanner conversationId={conversationId} />}
 
             {/* Busca dentro da conversa */}
             {chatSearchOpen && (

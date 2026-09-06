@@ -11,6 +11,7 @@ import { AuditService } from "./modules/audit/service.js";
 import { MessageIngestService } from "./services/message-ingest.js";
 import { InstanceManager } from "./services/instance-manager.js";
 import { ScheduledMessageWorker } from "./services/scheduler.js";
+import { FollowUpScheduler } from "./services/follow-up-scheduler.js";
 import { SessionScheduleWatcher } from "./services/session-schedule-watcher.js";
 import { createAzevedoOsClient } from "./services/azevedo-os-client.js";
 import { createSecretCipher } from "./lib/ai-secrets.js";
@@ -134,6 +135,7 @@ async function main(): Promise<void> {
     audit,
     storage,
     logger,
+    azevedoOs,
     aiRuntime,
   );
   instanceManager.wireProviderEvents();
@@ -142,6 +144,9 @@ async function main(): Promise<void> {
 
   const scheduler = new ScheduledMessageWorker(prisma, provider, io, logger);
   scheduler.start();
+
+  const followUpScheduler = new FollowUpScheduler(prisma, provider, io, logger, azevedoOs);
+  followUpScheduler.start();
 
   // Avisa e encerra as abas quando o horário de uso fecha. A API já recusa
   // requisição fora do horário; sem este vigia, a aba parada continuaria
@@ -163,6 +168,7 @@ async function main(): Promise<void> {
     logger.info({ event: "shutdown", signal });
     try {
       scheduler.stop();
+      followUpScheduler.stop();
       sessionScheduleWatcher.stop();
       aiRuntime.stop();
       await provider.shutdownAll();

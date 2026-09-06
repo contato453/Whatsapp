@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PrismaClient } from "@azvchat/database";
+import type { Server } from "socket.io";
 import pino from "pino";
 import { defaultAiAgentConfig, estimateCostMicros, resolveModelPricing } from "@azvchat/shared";
 import { executeTool, type ActionEnvironment } from "../src/services/ai/actions.js";
@@ -44,13 +45,21 @@ function fakePrisma(recorded: Recorded): PrismaClient {
         recorded.conversationUpdates.push(args);
         return {};
       },
+      // O motor de follow-up relê a conversa antes de decidir. Devolve o
+      // último status gravado, como o banco faria.
+      findUnique: async () => ({
+        id: "conv-1",
+        organizationId: "org-1",
+        whatsappInstanceId: "inst-1",
+        departmentId: null,
+        status: (recorded.conversationUpdates.at(-1) as { data?: { status?: string } } | undefined)?.data?.status ?? "open",
+        archivedAt: null,
+      }),
     },
-    scheduledMessage: {
-      create: (args: unknown) => {
-        recorded.scheduled.push(args);
-        return Promise.resolve({});
-      },
-    },
+    // O follow-up automático é consultado ao entrar em "aguardando cliente":
+    // sem regra cadastrada, nada começa.
+    followUpExecution: { findFirst: async () => null },
+    followUpRule: { findMany: async () => [] },
     $transaction: async (ops: Promise<unknown>[]) => Promise.all(ops),
   } as unknown as PrismaClient;
 }
@@ -82,6 +91,7 @@ function env(overrides: Partial<ActionEnvironment> = {}): ActionEnvironment {
 
 const deps = {
   logger: pino({ level: "silent" }),
+  io: { to: () => ({ emit: () => undefined }) } as unknown as Server,
   azevedoOs: {} as AzevedoOsClient,
 };
 
@@ -153,7 +163,7 @@ describe("executeTool — as três portas", () => {
     expect(recorded.notes).toHaveLength(0);
   });
 
-  it("transferir e concluir são terminais; follow-up agenda e encerra", async () => {
+  it("transferir e concluir são terminais; follow-up põe em aguardando cliente e encerra", async () => {
     const recorded: Recorded = { tagUpserts: [], tagDeletes: [], notes: [], conversationUpdates: [], scheduled: [] };
     const environment = env();
     environment.config.canDo.capabilities.schedule_followup = true;
@@ -162,9 +172,13 @@ describe("executeTool — as três portas", () => {
     expect(transfer.terminal?.kind).toBe("transfer");
     const finish = await executeTool({ ...deps, prisma }, environment, { id: "c2", name: "finish_conversation", arguments: { summary: "Resolvido" } }, "live");
     expect(finish.terminal?.kind).toBe("finish");
-    const followup = await executeTool({ ...deps, prisma }, environment, { id: "c3", name: "schedule_followup", arguments: { hours: 24, message: "Oi, conseguiu ver?" } }, "live");
-    expect(followup.terminal?.kind).toBe("followup");
-    expect(recorded.scheduled).toHaveLength(1);
+    const followup = await executeTool({ ...deps, prisma }, environment, { id: "c3", name: "schedule_followup", arguments: { reason: "Vai verificar com o sócio" } }, "live");
+    expect(followup.terminal).toEqual({ kind: "followup", ruleName: null });
+    // Sem regra de follow-up cadastrada: a conversa fica aguardando o cliente
+    // e o modelo é avisado para não prometer lembrete.
+    expect(recorded.conversationUpdates.at(-1)).toMatchObject({ data: { status: "waiting_client" } });
+    expect(followup.result).toContain("Não há regra de follow-up");
+    expect(recorded.scheduled).toHaveLength(0);
   });
 
   it("consulta de empresa é recusada sem vínculo, sem chamar o Azevedo-OS", async () => {

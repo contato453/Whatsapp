@@ -40,6 +40,7 @@ import {
   type QuotedPreview,
 } from "../../lib/serialize.js";
 import { resolveConversationPersonName } from "../../lib/person-profile.js";
+import { handleOutboundMessage } from "../../lib/follow-up-engine.js";
 import { resolveSenders, type SenderDirectory } from "../../lib/sender-directory.js";
 import { applySignature, type Signer } from "../../lib/signature.js";
 import { conversationAudience } from "../../realtime/socket.js";
@@ -113,6 +114,20 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
     deps.io
       .to(room)
       .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation, personName));
+
+    // Follow-up automático (seção 16 do pedido): a EQUIPE mandou mensagem
+    // enquanto a conversa aguardava o cliente — reinicia a contagem da
+    // etapa atual a partir de agora. Nunca deixa uma falha aqui atrapalhar
+    // o envio, que já aconteceu; só registra e segue.
+    try {
+      await handleOutboundMessage(deps, conversationId);
+    } catch (err) {
+      deps.logger?.warn({
+        conversationId,
+        event: "follow_up_outbound_hook_failed",
+        error: String(err),
+      });
+    }
   }
 
   /**

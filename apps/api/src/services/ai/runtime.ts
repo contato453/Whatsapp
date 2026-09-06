@@ -22,6 +22,7 @@ import { assignToUserData } from "../../lib/conversation-assignment.js";
 import { conversationInclude } from "../../lib/conversation-events.js";
 import { eligibleAssigneeWhere } from "../../lib/default-assignee.js";
 import { resolveConversationPersonName } from "../../lib/person-profile.js";
+import { handleOutboundMessage, reconcileConversation } from "../../lib/follow-up-engine.js";
 import { serializeConversation, serializeMessage } from "../../lib/serialize.js";
 import { conversationAudience } from "../../realtime/socket.js";
 import type { AuditService } from "../../modules/audit/service.js";
@@ -536,13 +537,14 @@ export class AiRuntime {
     }
     if (terminal?.kind === "followup") {
       if (reply?.trim()) await this.sendAiText(session, conversation, reply.trim(), credentials, model);
+      const followup = terminal.ruleName ? `follow-up automático "${terminal.ruleName}" iniciado` : "conversa aguardando o cliente (sem regra de follow-up aplicável)";
       await endAiSession(this.deps, {
         sessionId: session.id,
         organizationId,
         conversationId: conversation.id,
         reason: "resolved_by_ai",
-        summary: `Follow-up agendado para daqui a ${terminal.hours}h. ${state.summary ?? ""}`.trim(),
-        historyNote: `Atendimento por IA (${session.agent.name}) encerrado: follow-up agendado para daqui a ${terminal.hours}h.`,
+        summary: `${followup.charAt(0).toUpperCase()}${followup.slice(1)}. ${state.summary ?? ""}`.trim(),
+        historyNote: `Atendimento por IA (${session.agent.name}) encerrado: ${followup}.`,
       });
       return;
     }
@@ -804,6 +806,19 @@ export class AiRuntime {
       entityId: conversation.id,
       metadata: { sessionId: session.id, agentId: session.agentId, messageId: message.id },
     });
+    // Mensagem da IA conta como mensagem da equipe para o Follow-up
+    // Automático: reinicia a contagem da etapa em andamento, como faria a
+    // do composer. Aviso, não requisito — nunca derruba o envio.
+    await this.followUp(() => handleOutboundMessage(this.deps, conversation.id), conversation.id);
+  }
+
+  /** Chama o motor de follow-up sem deixar uma falha dele encostar no turno. */
+  private async followUp(work: () => Promise<void>, conversationId: string): Promise<void> {
+    try {
+      await work();
+    } catch (err) {
+      this.deps.logger.warn({ event: "ai_follow_up_hook_failed", conversationId, error: String(err) });
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -870,6 +885,8 @@ export class AiRuntime {
       data: { organizationId: conversation.organizationId, conversationId: conversation.id, userId: null, content: summary },
     });
     await this.routeConversationForHandoff(conversation, session.agent, config, terminal.reason);
+    // Volta a "aberto" na fila humana: uma régua de follow-up pendurada sai.
+    await this.followUp(() => reconcileConversation(this.deps, conversation.id), conversation.id);
     await endAiSession(this.deps, {
       sessionId: session.id,
       organizationId: conversation.organizationId,
@@ -1020,6 +1037,8 @@ export class AiRuntime {
       summary: summary || state.summary,
       historyNote: `Atendimento por IA (${session.agent.name}) concluído.`,
     });
+    // Concluída não é "aguardando cliente": cancela follow-up em andamento.
+    await this.followUp(() => reconcileConversation(this.deps, conversation.id), conversation.id);
     const full = await prisma.conversation.findUnique({ where: { id: conversation.id }, include: conversationInclude });
     if (full) {
       const personName = await resolveConversationPersonName(prisma, conversation.organizationId, full);

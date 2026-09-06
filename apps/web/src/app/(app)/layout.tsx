@@ -18,6 +18,7 @@ import {
   Users,
   Building2,
   BarChart3,
+  Workflow,
   Zap,
   Lock,
 } from "lucide-react";
@@ -114,6 +115,15 @@ const NAV: Array<{
     permission: "tag.manage",
   },
   { href: "/quick-replies", label: "Respostas rápidas", icon: Zap, minRole: "agent" },
+  // "Automações" é a área; hoje ela tem só este item, e o menu mostra
+  // direto o item — sem submenu para uma área com uma entrada só.
+  {
+    href: "/automations/follow-up",
+    label: "Follow-up Automático",
+    icon: Workflow,
+    minRole: "supervisor",
+    permission: "follow_up.manage",
+  },
   // Fica fora de Configurações de propósito: aquilo é escopo pessoal (perfil
   // e senha) e isto é regra do escritório inteiro.
   {

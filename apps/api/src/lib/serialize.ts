@@ -1,6 +1,10 @@
 import type {
   Conversation,
   Department,
+  FollowUpExecution,
+  FollowUpExecutionLog,
+  FollowUpRule,
+  FollowUpRuleStep,
   GroupParticipant,
   InternalNote,
   Message,
@@ -201,6 +205,109 @@ export function serializeQuickReply(reply: QuickReply & { departments?: Departme
         : null,
     lastUsedAt: reply.lastUsedAt?.toISOString() ?? null,
     createdAt: reply.createdAt.toISOString(),
+  };
+}
+
+export function serializeFollowUpRuleStep(step: FollowUpRuleStep) {
+  return {
+    id: step.id,
+    order: step.order,
+    waitAmount: step.waitAmount,
+    waitUnit: step.waitUnit,
+    action: step.action,
+    messageContent: step.messageContent,
+    tagId: step.tagId,
+    newStatus: step.newStatus,
+  };
+}
+
+/**
+ * A regra, no formato da tela principal e do formulário de edição. Os
+ * números de uso (execuções ativas, mensagens enviadas) NÃO entram aqui —
+ * eles exigem agregação própria (`_count`/`groupBy`), calculada na rota e
+ * misturada ao resultado, do mesmo jeito que `scheduledPendingCount` fica
+ * fora de `serializeConversation`.
+ */
+export function serializeFollowUpRule(
+  rule: FollowUpRule & {
+    departments?: DepartmentLink[];
+    steps?: FollowUpRuleStep[];
+    instance?: { id: string; name: string } | null;
+    finalizeTag?: { id: string; name: string; color: string } | null;
+  },
+) {
+  return {
+    id: rule.id,
+    name: rule.name,
+    description: rule.description,
+    status: rule.status,
+    isGeneral: rule.isGeneral,
+    departments: serializeResourceDepartments(rule.departments),
+    trigger: rule.trigger,
+    respectBusinessHours: rule.respectBusinessHours,
+    whatsappInstance: rule.instance ? { id: rule.instance.id, name: rule.instance.name } : null,
+    finalizeOnComplete: rule.finalizeOnComplete,
+    finalizeReason: rule.finalizeReason,
+    finalizeTag: rule.finalizeTag
+      ? { id: rule.finalizeTag.id, name: rule.finalizeTag.name, color: rule.finalizeTag.color }
+      : null,
+    steps: (rule.steps ?? []).map(serializeFollowUpRuleStep),
+    createdAt: rule.createdAt.toISOString(),
+    updatedAt: rule.updatedAt.toISOString(),
+  };
+}
+
+export function serializeFollowUpExecutionLog(entry: FollowUpExecutionLog) {
+  return {
+    id: entry.id,
+    eventType: entry.eventType,
+    stepOrder: entry.stepOrder,
+    actorUserId: entry.actorUserId,
+    messageId: entry.messageId,
+    detail: entry.detail,
+    createdAt: entry.createdAt.toISOString(),
+  };
+}
+
+/** Uma linha do Histórico (seção 33 do pedido) — contato, regra, etapa e desfecho, tudo junto. */
+export function serializeFollowUpExecution(
+  execution: FollowUpExecution & {
+    rule?: { id: string; name: string };
+    conversation?: {
+      id: string;
+      title: string;
+      customTitle: string | null;
+      externalChatId: string;
+      department?: { id: string; name: string } | null;
+      instance?: { id: string; name: string } | null;
+    };
+    logs?: FollowUpExecutionLog[];
+  },
+) {
+  return {
+    id: execution.id,
+    ruleId: execution.ruleId,
+    ruleName: execution.rule?.name ?? null,
+    conversationId: execution.conversationId,
+    conversation: execution.conversation
+      ? {
+          id: execution.conversation.id,
+          title: execution.conversation.customTitle || execution.conversation.title,
+          departmentId: execution.conversation.department?.id ?? null,
+          departmentName: execution.conversation.department?.name ?? null,
+          instanceId: execution.conversation.instance?.id ?? null,
+          instanceName: execution.conversation.instance?.name ?? null,
+        }
+      : null,
+    status: execution.status,
+    currentStepOrder: execution.currentStepOrder,
+    nextRunAt: execution.nextRunAt?.toISOString() ?? null,
+    pauseUntil: execution.pauseUntil?.toISOString() ?? null,
+    startedAt: execution.startedAt.toISOString(),
+    finishedAt: execution.finishedAt?.toISOString() ?? null,
+    finishReason: execution.finishReason,
+    messagesSentCount: execution.messagesSentCount,
+    logs: execution.logs?.map(serializeFollowUpExecutionLog),
   };
 }
 

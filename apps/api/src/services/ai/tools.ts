@@ -113,12 +113,9 @@ export function buildToolDefinitions(config: AiAgentConfig, context: ToolContext
     tools.push(
       definition(
         "schedule_followup",
-        "Agenda uma mensagem de follow-up para o cliente daqui a algumas horas, quando ele diz que vai pensar ou retornar. Encerra sua participação até lá.",
-        {
-          hours: { type: "integer", minimum: 1, maximum: 720, description: "Daqui a quantas horas" },
-          message: { type: "string", description: "Texto da mensagem que será enviada" },
-        },
-        ["hours", "message"],
+        "Quando o cliente diz que vai pensar, verificar ou retornar depois: coloca a conversa em 'aguardando cliente' e inicia o follow-up automático do escritório (a regra cadastrada pela equipe). Encerra sua participação.",
+        { reason: { type: "string", description: "Por que o cliente vai retornar, em uma frase" } },
+        [],
       ),
     );
   }

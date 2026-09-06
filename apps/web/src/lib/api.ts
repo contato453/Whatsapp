@@ -36,6 +36,11 @@ import type {
   CallLogResponse,
   ConversationDto,
   DashboardStatsDto,
+  FollowUpExecutionDto,
+  FollowUpRuleDto,
+  FollowUpStepAction,
+  FollowUpTimeUnit,
+  FollowUpTrigger,
   IntegrationTokenDto,
   MessageDto,
   PinnedItemDto,
@@ -282,6 +287,97 @@ export const quickRepliesApi = {
   /** Fire-and-forget após o envio: falha aqui não pode atrapalhar o atendimento. */
   markUsed: (id: string) =>
     api.post<{ ok: boolean }>(`/quick-replies/${id}/used`).catch(() => undefined),
+};
+
+/**
+ * Follow-up automático. O vínculo com departamento é o MESMO contrato da
+ * resposta rápida (`DepartmentTargetInput`) — uma regra vale para um, vários
+ * ou todos os departamentos, nunca duplicada.
+ */
+export interface FollowUpStepInput {
+  waitAmount: number;
+  waitUnit: FollowUpTimeUnit;
+  action: FollowUpStepAction;
+  messageContent?: string;
+  tagId?: string;
+  newStatus?: ConversationStatus;
+}
+
+export interface FollowUpRuleInput extends DepartmentTargetInput {
+  name: string;
+  description?: string;
+  status?: "active" | "inactive";
+  trigger?: FollowUpTrigger;
+  respectBusinessHours?: boolean;
+  whatsappInstanceId?: string | null;
+  finalizeOnComplete?: boolean;
+  finalizeReason?: string;
+  finalizeTagId?: string | null;
+  steps: FollowUpStepInput[];
+}
+
+export const followUpRulesApi = {
+  list: () =>
+    api.get<{ rules: FollowUpRuleDto[] }>("/follow-up-rules").then((data) => data.rules),
+  create: (input: FollowUpRuleInput) =>
+    api.post<{ rule: FollowUpRuleDto }>("/follow-up-rules", input).then((data) => data.rule),
+  update: (id: string, input: FollowUpRuleInput) =>
+    api
+      .patch<{ rule: FollowUpRuleDto }>(`/follow-up-rules/${id}`, input)
+      .then((data) => data.rule),
+  duplicate: (id: string) =>
+    api
+      .post<{ rule: FollowUpRuleDto }>(`/follow-up-rules/${id}/duplicate`)
+      .then((data) => data.rule),
+  activate: (id: string) =>
+    api
+      .post<{ rule: FollowUpRuleDto }>(`/follow-up-rules/${id}/activate`)
+      .then((data) => data.rule),
+  deactivate: (id: string) =>
+    api
+      .post<{ rule: FollowUpRuleDto }>(`/follow-up-rules/${id}/deactivate`)
+      .then((data) => data.rule),
+  remove: (id: string) => api.delete<{ ok: boolean }>(`/follow-up-rules/${id}`),
+  history: (id: string) =>
+    api.get<{
+      stats: {
+        totalExecutions: number;
+        departmentsUsed: number;
+        clientsReplied: number;
+        resolvedByRule: number;
+        canceledCount: number;
+      };
+      executions: FollowUpExecutionDto[];
+    }>(`/follow-up-rules/${id}/history`),
+};
+
+export const followUpExecutionsApi = {
+  list: (filters: { ruleId?: string; departmentId?: string; status?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (filters.ruleId) params.set("ruleId", filters.ruleId);
+    if (filters.departmentId) params.set("departmentId", filters.departmentId);
+    if (filters.status) params.set("status", filters.status);
+    const qs = params.toString();
+    return api
+      .get<{ executions: FollowUpExecutionDto[] }>(`/follow-up-executions${qs ? `?${qs}` : ""}`)
+      .then((data) => data.executions);
+  },
+};
+
+/** Ações do atendente dentro da conversa (seções 26-29 do pedido). */
+export const conversationFollowUpApi = {
+  current: (conversationId: string) =>
+    api
+      .get<{ execution: FollowUpExecutionDto | null }>(`/conversations/${conversationId}/follow-up`)
+      .then((data) => data.execution),
+  cancel: (conversationId: string) =>
+    api.post<{ ok: boolean }>(`/conversations/${conversationId}/follow-up/cancel`),
+  pause: (conversationId: string, untilAt?: string) =>
+    api.post<{ ok: boolean }>(`/conversations/${conversationId}/follow-up/pause`, { untilAt }),
+  resume: (conversationId: string) =>
+    api.post<{ ok: boolean }>(`/conversations/${conversationId}/follow-up/resume`),
+  postpone: (conversationId: string, until: string) =>
+    api.post<{ ok: boolean }>(`/conversations/${conversationId}/follow-up/postpone`, { until }),
 };
 
 

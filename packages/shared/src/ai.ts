@@ -19,10 +19,10 @@
  *     "treinada" de novo em cada uma.
  *
  * Este repositório NÃO tem construtor visual de fluxos, CRM nem follow-up
- * como módulos próprios (ver CLAUDE.md §19). A automação é o "bloco de IA"
+ * como módulos próprios (ver CLAUDE.md §20). A automação é o "bloco de IA"
  * possível hoje; as ações da IA reutilizam o que existe — etiquetas, notas
- * internas, status do atendimento, mensagem agendada (o follow-up da casa),
- * atribuição e transferência de departamento.
+ * internas, status do atendimento, o Follow-up Automático (a regra que valer
+ * para a conversa), atribuição e transferência de departamento.
  */
 
 import type { ConversationStatus, ConversationType } from "./enums.js";
@@ -346,7 +346,7 @@ export const AI_TOOL_LABELS: Record<AiToolName, string> = {
   remove_tag: "Remover etiqueta",
   add_internal_note: "Registrar nota interna",
   set_conversation_status: "Alterar status do atendimento",
-  schedule_followup: "Agendar follow-up",
+  schedule_followup: "Iniciar follow-up automático",
   search_knowledge_base: "Consultar base de conhecimento",
   lookup_company: "Consultar empresa (Azevedo-OS)",
   transfer_to_human: "Transferir para humano",
@@ -449,9 +449,9 @@ export const AI_CAPABILITIES: readonly AiCapabilityDefinition[] = [
   },
   {
     key: "schedule_followup",
-    label: "Agendar follow-up",
+    label: "Iniciar follow-up automático",
     description:
-      "Agenda uma mensagem para mais tarde (o follow-up da casa), quando o cliente diz que vai retornar.",
+      "Quando o cliente diz que vai retornar, põe a conversa em Aguardando cliente e inicia a regra de Follow-up Automático que valer para ela. A IA não cria regra: usa a que a equipe cadastrou.",
     tool: "schedule_followup",
     default: false,
   },

@@ -9,7 +9,9 @@ import {
   type ConversationStatus,
 } from "@azvchat/shared";
 import type { Logger } from "pino";
+import type { Server } from "socket.io";
 import type { AzevedoOsClient } from "../azevedo-os-client.js";
+import { getActiveExecution, reconcileConversation } from "../../lib/follow-up-engine.js";
 import { canApplyToConversation } from "../../lib/department-resource.js";
 import { retrieveKnowledge, type KnowledgeSourceInput } from "./knowledge.js";
 import type { AiToolCall } from "./provider.js";
@@ -54,7 +56,7 @@ export interface ActionEnvironment {
 export type TerminalAction =
   | { kind: "transfer"; reason: string; subject: string; need: string; summary: string }
   | { kind: "finish"; summary: string }
-  | { kind: "followup"; hours: number; message: string };
+  | { kind: "followup"; ruleName: string | null };
 
 export interface ActionOutcome {
   name: string;
@@ -69,6 +71,7 @@ export interface ActionOutcome {
 
 export interface ActionDeps {
   prisma: PrismaClient;
+  io: Server;
   logger: Logger;
   azevedoOs: AzevedoOsClient;
 }
@@ -80,7 +83,7 @@ const schemas = {
   remove_tag: z.object({ name: z.string().min(1).max(120) }),
   add_internal_note: z.object({ content: z.string().min(1).max(4000) }),
   set_conversation_status: z.object({ status: z.enum(["open", "waiting_client", "waiting_internal"]) }),
-  schedule_followup: z.object({ hours: z.number().int().min(1).max(720), message: z.string().min(1).max(2000) }),
+  schedule_followup: z.object({ reason: z.string().max(500).default("") }),
   search_knowledge_base: z.object({ query: z.string().min(1).max(500) }),
   lookup_company: z.object({}),
   transfer_to_human: z.object({
@@ -199,35 +202,38 @@ export async function executeTool(
       if (!AI_SETTABLE_STATUSES.includes(status)) return blocked(name, "status não permitido.");
       if (live) {
         await prisma.conversation.update({ where: { id: conversation.id }, data: { status } });
+        // Mesmo gatilho das rotas da equipe: entrar em "aguardando cliente"
+        // inicia a régua de follow-up aplicável; sair dele cancela.
+        await reconcileConversation(deps, conversation.id);
       }
       stamp(env.state, name);
       return done(name, `Status do atendimento: ${status}.`);
     }
 
     case "schedule_followup": {
-      const { hours, message } = args as { hours: number; message: string };
-      const scheduledFor = new Date(Date.now() + hours * 60 * 60 * 1000);
+      // A IA NÃO cria follow-up: ela põe a conversa em "aguardando cliente" e
+      // o motor de Follow-up Automático (seção 19 do CLAUDE.md) inicia a
+      // REGRA que a equipe cadastrou para este departamento/número — a mesma
+      // que iniciaria se um atendente trocasse o status na mão. Sem regra
+      // aplicável a conversa fica aguardando o cliente do mesmo jeito, e o
+      // modelo é avisado para não prometer um lembrete que não vai sair.
+      let ruleName: string | null = null;
       if (live) {
-        await prisma.$transaction([
-          prisma.scheduledMessage.create({
-            data: {
-              organizationId: conversation.organizationId,
-              conversationId: conversation.id,
-              content: message.trim(),
-              scheduledFor,
-              createdById: null,
-            },
-          }),
-          prisma.conversation.update({ where: { id: conversation.id }, data: { status: "waiting_client" } }),
-        ]);
+        await prisma.conversation.update({ where: { id: conversation.id }, data: { status: "waiting_client" } });
+        await reconcileConversation(deps, conversation.id);
+        const execution = await getActiveExecution(prisma, conversation.id);
+        ruleName = execution?.rule.name ?? null;
       }
-      env.state.followupScheduledAt = scheduledFor.toISOString();
       stamp(env.state, name);
-      return done(name, `Follow-up agendado para daqui a ${hours}h. Sua participação termina aqui.`, {
-        kind: "followup",
-        hours,
-        message: message.trim(),
-      });
+      return done(
+        name,
+        ruleName
+          ? `Conversa em "aguardando cliente" e follow-up automático "${ruleName}" iniciado. Sua participação termina aqui.`
+          : live
+            ? "Conversa em \"aguardando cliente\". Não há regra de follow-up automático para esta conversa: não prometa lembrete. Sua participação termina aqui."
+            : "Conversa em \"aguardando cliente\"; no atendimento real a regra de follow-up aplicável seria iniciada. Sua participação termina aqui.",
+        { kind: "followup", ruleName },
+      );
     }
 
     case "search_knowledge_base": {
