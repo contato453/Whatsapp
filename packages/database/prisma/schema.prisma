@@ -36,6 +36,13 @@ model Organization {
   personProfiles      PersonProfile[]
   pinnedItems         PinnedItem[]
   integrationTokens   IntegrationToken[]
+  crmPipelines        CrmPipeline[]
+  crmStages           CrmStage[]
+  crmOpportunities    CrmOpportunity[]
+  crmActivities       CrmActivity[]
+  crmOpportunityEvents CrmOpportunityEvent[]
+  crmProducts         CrmProduct[]
+  crmLossReasons      CrmLossReason[]
 
   @@map("organizations")
 }
@@ -109,6 +116,13 @@ model User {
   conversationReads     ConversationRead[]
   pinnedItems           PinnedItem[]
   integrationTokens     IntegrationToken[]              @relation("IntegrationTokenCreatedBy")
+  crmPipelinesCreated   CrmPipeline[]                   @relation("CrmPipelineCreatedBy")
+  crmStageActions       CrmStageAction[]                @relation("CrmStageActionUser")
+  crmAssignedOpportunities CrmOpportunity[]             @relation("CrmAssignedOpportunities")
+  crmCreatedOpportunities  CrmOpportunity[]             @relation("CrmCreatedOpportunities")
+  crmAssignedActivities CrmActivity[]                   @relation("CrmAssignedActivities")
+  crmCompletedActivities CrmActivity[]                  @relation("CrmCompletedActivities")
+  crmPerformedEvents    CrmOpportunityEvent[]           @relation("CrmPerformedEvents")
 
   @@index([organizationId])
   @@map("users")
@@ -147,6 +161,9 @@ model Department {
   instances       WhatsAppInstance[]
   tagLinks        TagDepartment[]
   quickReplyLinks QuickReplyDepartment[]
+  crmPipelineLinks CrmPipelineDepartment[]
+  crmOpportunities CrmOpportunity[]
+  crmStageActions  CrmStageAction[]      @relation("CrmStageActionDepartment")
 
   @@unique([organizationId, name])
   @@map("departments")
@@ -445,6 +462,9 @@ model Conversation {
   /// `IntegrationMessageLog`). Referência frouxa: apagar a conversa não apaga
   /// o log, só zera o ponteiro.
   integrationMessageLogs IntegrationMessageLog[]
+  /// Oportunidades do CRM abertas a partir desta conversa. A conversa é a
+  /// FONTE do contato — o CRM não copia nome, telefone nem empresa.
+  crmOpportunities       CrmOpportunity[]
 
   @@unique([whatsappInstanceId, externalChatId])
   @@index([organizationId, status])
@@ -679,6 +699,12 @@ model Tag {
   organization  Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   departments   TagDepartment[]
   conversations ConversationTag[]
+  /// Usos da etiqueta no CRM: nas oportunidades, nas automações de etapa e
+  /// como gatilho de criação automática de oportunidade. É a MESMA etiqueta
+  /// da conversa — o CRM nunca teve lista própria.
+  crmOpportunities   CrmOpportunityTag[]
+  crmStageActions    CrmStageAction[] @relation("CrmStageActionTag")
+  crmAutoCreatePipelines CrmPipeline[] @relation("CrmPipelineAutoCreateTag")
 
   // Nome único na organização inteira: a etiqueta aparece na conversa sem
   // dizer de qual departamento é, então dois "URGENTE" seriam indistinguíveis.
@@ -833,15 +859,26 @@ model ScheduledMessage {
   error          String?
   /// Tentativas de envio já realizadas (falhas temporárias são retentadas)
   attempts       Int                    @default(0)
+  /// Follow-up do CRM: qual oportunidade agendou esta mensagem. Nulo = o
+  /// agendamento normal do composer, feito por uma pessoa.
+  ///
+  /// A coluna existe para o cancelamento automático saber o que é dele: quando
+  /// o cliente responde, ou o card sai da etapa, só os agendamentos DAQUELA
+  /// oportunidade são cancelados — o compromisso que uma pessoa marcou à mão
+  /// com o cliente nunca é desmarcado pelo CRM. O motor de envio continua
+  /// sendo um só (`services/scheduler.ts`): o CRM não tem agendador próprio.
+  crmOpportunityId String?
   createdAt      DateTime               @default(now())
   updatedAt      DateTime               @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   createdBy    User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  crmOpportunity CrmOpportunity? @relation(fields: [crmOpportunityId], references: [id], onDelete: SetNull)
 
   @@index([status, scheduledFor])
   @@index([conversationId])
+  @@index([crmOpportunityId, status])
   @@map("scheduled_messages")
 }
 
@@ -1042,4 +1079,419 @@ model IntegrationMessageLog {
   @@unique([integrationTokenId, idempotencyKey])
   @@index([integrationTokenId, createdAt])
   @@map("integration_message_logs")
+}
+
+// ============================================================
+// CRM — funil de oportunidades sobre o atendimento
+// ============================================================
+
+/// Funil de vendas. É só a COLUNA DE ETAPAS e a regra de quem usa: contato,
+/// conversa, etiqueta, responsável e departamento continuam nas tabelas de
+/// sempre, e nada aqui os duplica.
+///
+/// A regra de departamento é a MESMA de `Tag` e `QuickReply`, de propósito:
+/// `isGeneral` liga o funil para a organização inteira; desligada, ele
+/// precisa de pelo menos um departamento em `departments`. Lista vazia não
+/// significa geral — excluir um departamento tornaria um funil restrito
+/// visível para todo mundo sem ninguém perceber (ver `lib/department-resource.ts`).
+model CrmPipeline {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  description    String?
+  /// Cor de identificação do funil na tela (hex). Dado de cadastro, não tema.
+  color          String   @default("#102a4c")
+  /// Funil desligado some dos seletores mas mantém o histórico de pé — o
+  /// mesmo motivo de revogar token em vez de apagar.
+  isActive       Boolean  @default(true)
+  /// Vale para todos os departamentos (ver acima).
+  isGeneral      Boolean  @default(false)
+  /// Ordem na lista de funis.
+  position       Int      @default(0)
+  /// Funil que abre quando ninguém escolheu nenhum. Um por organização, mas
+  /// sem constraint: a leitura pega o primeiro, então dois marcados degradam
+  /// para "abre o de menor posição", nunca para erro na cara do usuário.
+  isDefault      Boolean  @default(false)
+  /// Etiqueta que CRIA oportunidade sozinha: pendurada numa conversa, o
+  /// sistema abre um card na primeira etapa deste funil. Nulo = criação
+  /// automática desligada. Reusa a etiqueta que o escritório já tem — não
+  /// existe gatilho paralelo nem lista de palavras-chave.
+  autoCreateTagId String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization  Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  autoCreateTag Tag?                    @relation("CrmPipelineAutoCreateTag", fields: [autoCreateTagId], references: [id], onDelete: SetNull)
+  createdBy     User?                   @relation("CrmPipelineCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  departments   CrmPipelineDepartment[]
+  stages        CrmStage[]
+  opportunities CrmOpportunity[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId, isActive])
+  @@map("crm_pipelines")
+}
+
+/// O mesmo funil serve a vários departamentos — ver `TagDepartment`, que é o
+/// modelo copiado aqui de propósito. Nada de um funil clonado por área.
+model CrmPipelineDepartment {
+  pipelineId   String
+  departmentId String
+
+  pipeline   CrmPipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  department Department  @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@id([pipelineId, departmentId])
+  @@index([departmentId])
+  @@map("crm_pipeline_departments")
+}
+
+/// O que a etapa significa para o funil, independente do nome dado a ela.
+/// Sem o tipo, "ganhou" e "perdeu" teriam de ser adivinhados pelo nome da
+/// coluna — e um funil com a coluna "Fechamos!" quebraria em silêncio.
+enum CrmStageType {
+  open
+  in_progress
+  won
+  lost
+}
+
+/// Coluna do Kanban.
+model CrmStage {
+  id             String       @id @default(uuid())
+  organizationId String
+  pipelineId     String
+  name           String
+  /// Ordem da coluna no quadro (espaçada, ver CRM_POSITION_STEP no shared).
+  position       Int          @default(0)
+  color          String       @default("#64748b")
+  /// Chance de fechamento desta etapa, 0 a 100. Alimenta o valor ponderado.
+  probability    Int          @default(0)
+  type           CrmStageType @default(in_progress)
+  /// Dias para a oportunidade ser considerada PARADA nesta etapa. Nulo = sem
+  /// prazo. Derivado de `stageEnteredAt` na leitura — não existe processo
+  /// varrendo a tabela para marcar atraso, que mentiria se caísse.
+  slaDays        Int?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization  Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  pipeline      CrmPipeline      @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  actions       CrmStageAction[]
+  opportunities CrmOpportunity[]
+
+  @@unique([pipelineId, name])
+  @@index([pipelineId, position])
+  @@map("crm_stages")
+}
+
+enum CrmStageActionTrigger {
+  enter
+  leave
+}
+
+/// O que a ação FAZ. Toda opção já existia no AZVCHAT antes do CRM: etiqueta,
+/// responsável, departamento, nota interna e mensagem agendada. Nenhum motor
+/// novo — `schedule_message` cria uma `ScheduledMessage` de verdade, enviada
+/// pelo mesmo `services/scheduler.ts` das agendadas do composer.
+enum CrmStageActionType {
+  add_tag
+  remove_tag
+  assign_user
+  change_department
+  create_activity
+  schedule_message
+  internal_note
+}
+
+/// Automação de etapa: o que acontece ao ENTRAR ou SAIR de uma coluna.
+///
+/// Uma tabela com colunas opcionais em vez de JSON solto: o alvo de cada ação
+/// é uma chave estrangeira de verdade (etiqueta, usuário, departamento), então
+/// excluir a etiqueta apaga a ação junto em vez de deixar uma automação
+/// apontando para o nada e falhando toda vez que o card se mexe.
+model CrmStageAction {
+  id           String                @id @default(uuid())
+  stageId      String
+  trigger      CrmStageActionTrigger @default(enter)
+  type         CrmStageActionType
+  /// Alvo de `add_tag` / `remove_tag` — a etiqueta que o escritório já usa.
+  tagId        String?
+  /// Alvo de `assign_user`.
+  userId       String?
+  /// Alvo de `change_department`.
+  departmentId String?
+  /// `schedule_message`: quanto tempo depois da entrada a mensagem sai.
+  /// `create_activity`: prazo da atividade. Em minutos, para caber "2 horas"
+  /// e "3 dias" no mesmo campo.
+  delayMinutes Int                   @default(0)
+  /// Texto da mensagem agendada, da nota interna ou título da atividade.
+  content      String?
+  position     Int                   @default(0)
+  createdAt    DateTime              @default(now())
+
+  stage      CrmStage    @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  tag        Tag?        @relation("CrmStageActionTag", fields: [tagId], references: [id], onDelete: Cascade)
+  user       User?       @relation("CrmStageActionUser", fields: [userId], references: [id], onDelete: Cascade)
+  department Department? @relation("CrmStageActionDepartment", fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@index([stageId, trigger])
+  @@map("crm_stage_actions")
+}
+
+enum CrmOpportunityStatus {
+  open
+  won
+  lost
+}
+
+/// Serviço vendido pelo escritório ("Abertura de empresa", "Certificado
+/// digital"). Catálogo simples de propósito: sem preço de tabela, sem
+/// tributação, sem estoque — é rótulo para agrupar o relatório, e a estrutura
+/// já fica pronta para virar catálogo de verdade se o dia chegar.
+model CrmProduct {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  /// Valor sugerido, só para preencher o formulário. A oportunidade guarda o
+  /// valor dela — mudar a tabela não pode reescrever negociação fechada.
+  defaultValue   Decimal? @db.Decimal(12, 2)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization  Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  opportunities CrmOpportunity[]
+
+  @@unique([organizationId, name])
+  @@map("crm_products")
+}
+
+/// Motivo de perda. Tabela e não texto livre porque é isto que vira gráfico:
+/// "preço" digitado de seis jeitos diferentes não se agrupa.
+model CrmLossReason {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  active         Boolean  @default(true)
+  position       Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  organization  Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  opportunities CrmOpportunity[]
+
+  @@unique([organizationId, name])
+  @@map("crm_loss_reasons")
+}
+
+/// A oportunidade: uma intenção de negócio com um cliente.
+///
+/// O CONTATO NÃO É COPIADO PARA CÁ. `conversationId` aponta para a conversa
+/// do WhatsApp que já existe, e é dela que saem nome, telefone, foto, empresa
+/// do Azevedo-OS e histórico. Um cadastro de cliente aqui seria uma segunda
+/// base de contatos divergindo da primeira no dia seguinte. Os campos
+/// `contactName`/`contactPhone` existem só para a oportunidade avulsa (lead
+/// que ainda não tem conversa) e para o card não precisar de join na lista —
+/// quando há conversa, ela vence sempre na exibição.
+///
+/// A mesma pessoa pode ter várias oportunidades ao mesmo tempo (abertura de
+/// empresa, certificado, consultoria), cada uma com histórico próprio. O que
+/// o banco impede, por índice parcial criado na migration, é a MESMA conversa
+/// ter duas oportunidades ABERTAS no MESMO funil — que é o caso de duplicata
+/// de verdade (dois cliques no botão, dois webhooks, automação repetida).
+model CrmOpportunity {
+  id             String               @id @default(uuid())
+  organizationId String
+  pipelineId     String
+  stageId        String
+  title          String
+  /// A conversa do WhatsApp. Nulo = lead avulso, ainda sem conversa.
+  conversationId String?
+  /// Telefone/nome do lead avulso, ou a cópia de exibição do contato.
+  contactName    String?
+  contactPhone   String?
+  assignedUserId String?
+  /// Departamento da oportunidade — herdado da conversa na criação. É por ele
+  /// (mais o responsável) que o recorte de visibilidade acontece, com a mesma
+  /// forma de `conversationScope`. Nulo = sem departamento, visível a quem
+  /// alcança a conversa, igual à conversa sem departamento.
+  departmentId   String?
+  productId      String?
+  value          Decimal              @default(0) @db.Decimal(12, 2)
+  discount       Decimal?             @db.Decimal(12, 2)
+  /// Chance de fechamento definida à mão. Nulo = vale a probabilidade da
+  /// etapa. Mover de etapa NÃO apaga o ajuste manual: apagar faria a correção
+  /// de quem está negociando sumir no meio de um arrasto.
+  probability    Int?
+  expectedCloseDate DateTime?
+  /// Chave de `CRM_ORIGINS` (@azvchat/shared). Texto e não enum: origem nova
+  /// (uma campanha, um evento) não pode exigir migration.
+  origin         String?
+  status         CrmOpportunityStatus @default(open)
+  lossReasonId   String?
+  lossNote       String?
+  /// Valor efetivamente fechado, registrado no ganho. Separado de `value`
+  /// porque o estimado é o que se previu e este é o que aconteceu — sobrescrever
+  /// um com o outro apagaria a diferença que o relatório mede.
+  closedValue    Decimal?             @db.Decimal(12, 2)
+  closedAt       DateTime?
+  notes          String?
+  /// Ordem dentro da coluna, espaçada (ver CRM_POSITION_STEP no shared).
+  position       Float                @default(1000)
+  /// Quando entrou na etapa atual — é daqui que sai "2 dias nesta etapa" e o
+  /// alerta de oportunidade parada.
+  stageEnteredAt DateTime             @default(now())
+  /// Última mensagem do cliente na conversa vinculada. Alimenta o card e o
+  /// cancelamento de follow-up.
+  lastInteractionAt DateTime?
+  createdById    String?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  pipeline     CrmPipeline            @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  stage        CrmStage               @relation(fields: [stageId], references: [id], onDelete: Restrict)
+  conversation Conversation?          @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  assignedUser User?                  @relation("CrmAssignedOpportunities", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  department   Department?            @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  product      CrmProduct?            @relation(fields: [productId], references: [id], onDelete: SetNull)
+  lossReason   CrmLossReason?         @relation(fields: [lossReasonId], references: [id], onDelete: SetNull)
+  createdBy    User?                  @relation("CrmCreatedOpportunities", fields: [createdById], references: [id], onDelete: SetNull)
+  tags         CrmOpportunityTag[]
+  activities   CrmActivity[]
+  events       CrmOpportunityEvent[]
+  /// Follow-ups criados por este card (ver `ScheduledMessage.crmOpportunityId`).
+  followUps    ScheduledMessage[]
+
+  /// Kanban: uma coluna de um funil, ordenada.
+  @@index([organizationId, pipelineId, stageId, position])
+  @@index([organizationId, status, updatedAt])
+  @@index([conversationId])
+  @@index([assignedUserId])
+  @@index([departmentId])
+  @@map("crm_opportunities")
+}
+
+/// Etiqueta na oportunidade — a MESMA `Tag` da conversa. Etiqueta paralela
+/// obrigaria o escritório a manter duas listas com os mesmos nomes.
+model CrmOpportunityTag {
+  opportunityId String
+  tagId         String
+  createdAt     DateTime @default(now())
+
+  opportunity CrmOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  tag         Tag            @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([opportunityId, tagId])
+  @@index([tagId])
+  @@map("crm_opportunity_tags")
+}
+
+enum CrmActivityType {
+  call
+  whatsapp
+  meeting
+  proposal
+  document
+  billing
+  followup
+  task
+  other
+}
+
+enum CrmActivityStatus {
+  pending
+  done
+  canceled
+}
+
+enum CrmActivityPriority {
+  low
+  normal
+  high
+}
+
+/// Compromisso da equipe dentro de uma oportunidade ("ligar amanhã às 10h").
+///
+/// "Atrasada" NÃO é status gravado: é a leitura do relógio sobre uma pendente
+/// com prazo vencido. Gravar exigiria um processo varrendo a tabela na virada
+/// da hora, e uma queda dele faria a tela dizer que não há nada atrasado.
+model CrmActivity {
+  id             String              @id @default(uuid())
+  organizationId String
+  opportunityId  String
+  type           CrmActivityType     @default(task)
+  title          String
+  description    String?
+  assignedUserId String?
+  dueAt          DateTime
+  priority       CrmActivityPriority @default(normal)
+  status         CrmActivityStatus   @default(pending)
+  completedAt    DateTime?
+  completedById  String?
+  createdById    String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  opportunity  CrmOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  assignedUser User?          @relation("CrmAssignedActivities", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  completedBy  User?          @relation("CrmCompletedActivities", fields: [completedById], references: [id], onDelete: SetNull)
+
+  /// A agenda: pendentes por prazo, que é a pergunta da tela de Atividades.
+  @@index([organizationId, status, dueAt])
+  @@index([opportunityId, status, dueAt])
+  @@index([assignedUserId, status, dueAt])
+  @@map("crm_activities")
+}
+
+/// Linha do tempo da oportunidade. Um tipo por FATO, e não texto livre: o
+/// relatório de motivos e o filtro "movidas no período" leem daqui, e texto
+/// livre não se agrupa.
+enum CrmEventType {
+  created
+  stage_changed
+  assignee_changed
+  department_changed
+  value_changed
+  tag_added
+  tag_removed
+  activity_created
+  activity_done
+  follow_up_scheduled
+  follow_up_canceled
+  client_replied
+  won
+  lost
+  reopened
+  updated
+  note
+}
+
+model CrmOpportunityEvent {
+  id                String       @id @default(uuid())
+  organizationId    String
+  opportunityId     String
+  type              CrmEventType
+  /// Nulo = ação do sistema (automação de etapa, resposta do cliente), mesmo
+  /// padrão de `archivedByUserId`.
+  performedByUserId String?
+  fromStageId       String?
+  toStageId         String?
+  fromUserId        String?
+  toUserId          String?
+  /// Frase pronta para a timeline, montada por quem registrou o evento.
+  description       String?
+  /// Contexto extra por tipo (valor antes/depois, motivo da perda...).
+  metadata          Json?
+  createdAt         DateTime     @default(now())
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  opportunity  CrmOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  performedBy  User?          @relation("CrmPerformedEvents", fields: [performedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([opportunityId, createdAt])
+  @@index([organizationId, type, createdAt])
+  @@map("crm_opportunity_events")
 }

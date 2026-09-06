@@ -13,6 +13,7 @@ import type { Logger } from "pino";
 import { conversationAudience, instanceAudience } from "../realtime/socket.js";
 import { serializeConversation, serializeMessage, serializePinnedItems } from "../lib/serialize.js";
 import { resolveCallerIdentity } from "../lib/call-identity.js";
+import { handleCrmClientReply } from "../lib/crm-follow-up.js";
 import { resolveConversationPersonName } from "../lib/person-profile.js";
 import { pinnedItemsIfMessagePinned, unpinMessageIfPinned } from "../lib/pinned-items.js";
 import { extensionFromMime, type MediaStorage } from "../lib/media-storage.js";
@@ -167,6 +168,21 @@ export class InstanceManager {
           this.io
             .to(room)
             .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation, personName));
+          // CRM: o cliente respondeu. Marca a última interação nas
+          // oportunidades abertas desta conversa e INTERROMPE o follow-up que
+          // estava a caminho — mandar "ainda tem interesse?" depois de a
+          // pessoa responder é o erro que faz o cliente perder a confiança no
+          // escritório. Só mensagem RECEBIDA passa por aqui; a equipe
+          // respondendo não cancela nada, porque a régua existe justamente
+          // enquanto o cliente não responde. Nunca lança (ver a função).
+          if (persisted.direction === "inbound") {
+            await handleCrmClientReply(
+              { prisma: this.prisma, io: this.io, logger: this.logger },
+              organizationId,
+              conversation.id,
+              persisted.timestamp,
+            );
+          }
         } catch (err) {
           this.logger.error({
             instanceId: message.instanceId,

@@ -40,6 +40,21 @@ export const RealtimeEvents = {
    * interna, que não é `Message`.
    */
   PinnedItems: "conversation:pinned-items",
+  /**
+   * Oportunidade do CRM criada, movida, editada, ganha, perdida ou reaberta —
+   * um evento só, carregando o DTO INTEIRO do card.
+   *
+   * Um evento em vez de seis porque o Kanban precisa da mesma coisa em todos
+   * os casos: a versão atual do card, para trocá-lo de coluna ou tirá-lo do
+   * quadro quando ele deixa de casar com o filtro. Patches por tipo de
+   * mudança obrigariam a tela a reconstruir o card a partir de fragmentos, e
+   * um fragmento perdido deixaria dois usuários com quadros diferentes.
+   *
+   * A audiência é a MESMA do atendimento (`conversationAudience`), calculada
+   * pela conversa vinculada; oportunidade sem conversa usa a chave de número
+   * `"none"`. Ver `lib/crm-events.ts` na API.
+   */
+  CrmOpportunity: "crm:opportunity",
   InstanceStatus: "instance:status",
   InstanceQr: "instance:qr",
   /** Quantos agendamentos pendentes a conversa tem agora. */

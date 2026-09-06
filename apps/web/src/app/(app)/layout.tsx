@@ -15,6 +15,7 @@ import {
   SlidersHorizontal,
   Smartphone,
   Tags,
+  Target,
   Users,
   Building2,
   BarChart3,
@@ -98,6 +99,11 @@ const NAV: Array<{
     minRole: "supervisor",
     permission: "department.manage",
   },
+  // CRM: um item só na barra, e as telas de dentro (Kanban, Oportunidades,
+  // Atividades, Funis, Relatórios, Configurações) se dividem no topo da
+  // própria área — a barra lateral não tem submenu, e criar um por causa de
+  // uma área mudaria a navegação do sistema inteiro.
+  { href: "/crm", label: "CRM", icon: Target, minRole: "agent", permission: "crm.view" },
   {
     href: "/reports",
     label: "Relatórios",

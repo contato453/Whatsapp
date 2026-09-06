@@ -1,5 +1,6 @@
 export * from "./attachments.js";
 export * from "./attendance.js";
+export * from "./crm.js";
 export * from "./azevedo-os.js";
 export * from "./dashboard-filters.js";
 export * from "./enums.js";

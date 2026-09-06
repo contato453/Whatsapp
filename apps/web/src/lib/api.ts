@@ -16,6 +16,16 @@ import type {
   AgentReportDto,
   CallLogResponse,
   ConversationDto,
+  CrmActivityDto,
+  CrmBoardDto,
+  CrmEventDto,
+  CrmLossReasonDto,
+  CrmOpportunityDetailDto,
+  CrmOpportunityDto,
+  CrmPipelineDto,
+  CrmProductDto,
+  CrmReportDto,
+  CrmStageDto,
   DashboardStatsDto,
   IntegrationTokenDto,
   MessageDto,
@@ -730,3 +740,243 @@ export function invalidateUserAvatar(userId: string): void {
 export function invalidateConversationAvatar(conversationId: string): void {
   avatarCache.delete(`conv:${conversationId}`);
 }
+
+// ============================================================
+// CRM
+// ============================================================
+
+/**
+ * Filtros do quadro e da tabela. Listas viajam como parâmetro REPETIDO
+ * (?assignedUserId=a&assignedUserId=b), igual ao resto do sistema: os valores
+ * marcados somam entre si e os filtros diferentes cruzam.
+ */
+export interface CrmFilters {
+  pipelineId?: string;
+  search?: string;
+  assignedUserId?: string[];
+  departmentId?: string[];
+  tagId?: string[];
+  origin?: string[];
+  productId?: string[];
+  overdueActivity?: boolean;
+  status?: string[];
+  offset?: number;
+}
+
+function crmParams(filters: CrmFilters): string {
+  const params = new URLSearchParams();
+  if (filters.pipelineId) params.set("pipelineId", filters.pipelineId);
+  if (filters.search) params.set("search", filters.search);
+  for (const value of filters.assignedUserId ?? []) params.append("assignedUserId", value);
+  for (const value of filters.departmentId ?? []) params.append("departmentId", value);
+  for (const value of filters.tagId ?? []) params.append("tagId", value);
+  for (const value of filters.origin ?? []) params.append("origin", value);
+  for (const value of filters.productId ?? []) params.append("productId", value);
+  for (const value of filters.status ?? []) params.append("status", value);
+  if (filters.overdueActivity) params.set("overdueActivity", "true");
+  if (filters.offset != null) params.set("offset", String(filters.offset));
+  return params.toString();
+}
+
+export interface CrmOpportunityInput {
+  pipelineId: string;
+  stageId?: string | null;
+  title?: string;
+  conversationId?: string | null;
+  contactName?: string | null;
+  contactPhone?: string | null;
+  assignedUserId?: string | null;
+  departmentId?: string | null;
+  productId?: string | null;
+  value?: number | null;
+  discount?: number | null;
+  probability?: number | null;
+  expectedCloseDate?: string | null;
+  origin?: string | null;
+  notes?: string | null;
+  tagIds?: string[];
+}
+
+export const crmApi = {
+  pipelines: () =>
+    api.get<{ pipelines: CrmPipelineDto[] }>("/crm/pipelines").then((data) => data.pipelines),
+  createPipeline: (input: {
+    name: string;
+    description?: string | null;
+    color?: string;
+    isGeneral: boolean;
+    departmentIds: string[];
+    autoCreateTagId?: string | null;
+  }) => api.post<{ pipeline: CrmPipelineDto }>("/crm/pipelines", input).then((d) => d.pipeline),
+  updatePipeline: (
+    id: string,
+    input: Partial<{
+      name: string;
+      description: string | null;
+      color: string;
+      isActive: boolean;
+      isDefault: boolean;
+      autoCreateTagId: string | null;
+      isGeneral: boolean;
+      departmentIds: string[];
+    }>,
+  ) => api.patch<{ pipeline: CrmPipelineDto }>(`/crm/pipelines/${id}`, input).then((d) => d.pipeline),
+  removePipeline: (id: string) => api.delete<{ ok: boolean }>(`/crm/pipelines/${id}`),
+
+  createStage: (
+    pipelineId: string,
+    input: {
+      name: string;
+      color?: string;
+      probability?: number;
+      type?: string;
+      slaDays?: number | null;
+      actions?: unknown[];
+    },
+  ) =>
+    api
+      .post<{ stage: CrmStageDto }>(`/crm/pipelines/${pipelineId}/stages`, input)
+      .then((d) => d.stage),
+  updateStage: (
+    id: string,
+    input: Partial<{
+      name: string;
+      color: string;
+      probability: number;
+      type: string;
+      slaDays: number | null;
+      actions: unknown[];
+    }>,
+  ) => api.patch<{ stage: CrmStageDto }>(`/crm/stages/${id}`, input).then((d) => d.stage),
+  reorderStages: (pipelineId: string, stageIds: string[]) =>
+    api.post<{ ok: boolean }>(`/crm/pipelines/${pipelineId}/stages/reorder`, { stageIds }),
+  /** `moveToStageId` é obrigatório quando a etapa ainda tem cards. */
+  removeStage: (id: string, moveToStageId?: string) =>
+    api.delete<{ ok: boolean }>(
+      `/crm/stages/${id}${moveToStageId ? `?moveToStageId=${moveToStageId}` : ""}`,
+    ),
+
+  board: (filters: CrmFilters) => api.get<CrmBoardDto>(`/crm/board?${crmParams(filters)}`),
+  list: (filters: CrmFilters) =>
+    api.get<{ total: number; opportunities: CrmOpportunityDto[] }>(
+      `/crm/opportunities?${crmParams(filters)}`,
+    ),
+  get: (id: string) => api.get<CrmOpportunityDetailDto>(`/crm/opportunities/${id}`),
+  history: (id: string) =>
+    api.get<{ events: CrmEventDto[] }>(`/crm/opportunities/${id}/history`).then((d) => d.events),
+  create: (input: CrmOpportunityInput) =>
+    api.post<{ opportunity: CrmOpportunityDto; duplicated: boolean }>("/crm/opportunities", input),
+  update: (id: string, input: Partial<Omit<CrmOpportunityInput, "pipelineId">>) =>
+    api
+      .patch<{ opportunity: CrmOpportunityDto }>(`/crm/opportunities/${id}`, input)
+      .then((d) => d.opportunity),
+  /**
+   * Arrastar o card. `fromStageId` é a etapa que a TELA acredita ser a atual:
+   * o servidor recusa com 409 se o banco discordar, e a tela se corrige em vez
+   * de gravar por cima do que o colega acabou de fazer.
+   */
+  move: (
+    id: string,
+    input: {
+      stageId: string;
+      fromStageId?: string | null;
+      beforeId?: string | null;
+      afterId?: string | null;
+      lossReasonId?: string | null;
+      lossNote?: string | null;
+      closedValue?: number | null;
+    },
+  ) =>
+    api
+      .post<{ opportunity: CrmOpportunityDto }>(`/crm/opportunities/${id}/move`, input)
+      .then((d) => d.opportunity),
+  win: (id: string, closedValue?: number | null) =>
+    api
+      .post<{ opportunity: CrmOpportunityDto }>(`/crm/opportunities/${id}/win`, { closedValue })
+      .then((d) => d.opportunity),
+  lose: (id: string, lossReasonId: string, lossNote?: string | null) =>
+    api
+      .post<{ opportunity: CrmOpportunityDto }>(`/crm/opportunities/${id}/lose`, {
+        lossReasonId,
+        lossNote,
+      })
+      .then((d) => d.opportunity),
+  reopen: (id: string, stageId?: string | null) =>
+    api
+      .post<{ opportunity: CrmOpportunityDto }>(`/crm/opportunities/${id}/reopen`, { stageId })
+      .then((d) => d.opportunity),
+  addTag: (id: string, tagId: string) =>
+    api.post<{ ok: boolean }>(`/crm/opportunities/${id}/tags/${tagId}`),
+  removeTag: (id: string, tagId: string) =>
+    api.delete<{ ok: boolean }>(`/crm/opportunities/${id}/tags/${tagId}`),
+
+  activities: (params: {
+    range?: string;
+    mine?: boolean;
+    assignedUserId?: string;
+    opportunityId?: string;
+  }) => {
+    const search = new URLSearchParams();
+    if (params.range) search.set("range", params.range);
+    if (params.mine) search.set("mine", "true");
+    if (params.assignedUserId) search.set("assignedUserId", params.assignedUserId);
+    if (params.opportunityId) search.set("opportunityId", params.opportunityId);
+    return api.get<{ activities: CrmActivityDto[]; overdueCount: number }>(
+      `/crm/activities?${search.toString()}`,
+    );
+  },
+  createActivity: (
+    opportunityId: string,
+    input: {
+      type?: string;
+      title: string;
+      description?: string | null;
+      assignedUserId?: string | null;
+      dueAt: string;
+      priority?: string;
+    },
+  ) =>
+    api
+      .post<{ activity: CrmActivityDto }>(
+        `/crm/opportunities/${opportunityId}/activities`,
+        input,
+      )
+      .then((d) => d.activity),
+  updateActivity: (
+    id: string,
+    input: Partial<{
+      type: string;
+      title: string;
+      description: string | null;
+      assignedUserId: string | null;
+      dueAt: string;
+      priority: string;
+      status: string;
+    }>,
+  ) => api.patch<{ activity: CrmActivityDto }>(`/crm/activities/${id}`, input).then((d) => d.activity),
+
+  /** O que o painel de contexto da conversa mostra: os cards deste cliente. */
+  byConversation: (conversationId: string) =>
+    api
+      .get<{ opportunities: CrmOpportunityDto[] }>(`/conversations/${conversationId}/crm`)
+      .then((d) => d.opportunities),
+
+  settings: () =>
+    api.get<{ products: CrmProductDto[]; lossReasons: CrmLossReasonDto[] }>("/crm/settings"),
+  createProduct: (input: { name: string; defaultValue?: number | null }) =>
+    api.post<{ product: CrmProductDto }>("/crm/products", input).then((d) => d.product),
+  updateProduct: (id: string, input: Partial<{ name: string; defaultValue: number | null; active: boolean }>) =>
+    api.patch<{ product: CrmProductDto }>(`/crm/products/${id}`, input).then((d) => d.product),
+  createLossReason: (name: string) =>
+    api.post<{ lossReason: CrmLossReasonDto }>("/crm/loss-reasons", { name }).then((d) => d.lossReason),
+  updateLossReason: (id: string, input: Partial<{ name: string; active: boolean }>) =>
+    api.patch<{ lossReason: CrmLossReasonDto }>(`/crm/loss-reasons/${id}`, input).then((d) => d.lossReason),
+
+  reports: (params: { pipelineId?: string; from?: string; to?: string }) => {
+    const search = new URLSearchParams();
+    if (params.pipelineId) search.set("pipelineId", params.pipelineId);
+    if (params.from) search.set("from", params.from);
+    if (params.to) search.set("to", params.to);
+    return api.get<CrmReportDto>(`/crm/reports?${search.toString()}`);
+  },
+};

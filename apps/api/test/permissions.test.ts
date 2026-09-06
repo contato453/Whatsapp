@@ -229,6 +229,12 @@ describe("padrões de fábrica (Usuário / Supervisor)", () => {
     ["group_participant.rename", true, true],
     ["azevedo_os.link", true, true],
     ["azevedo_os.relink", false, true],
+    // CRM
+    ["crm.view", true, true],
+    ["crm.opportunity.manage", true, true],
+    ["crm.opportunity.reopen", false, true],
+    ["crm.pipeline.manage", false, true],
+    ["crm.reports.view", false, true],
     // Cadastros
     ["tag.manage", false, true],
     ["tag.delete", false, true],

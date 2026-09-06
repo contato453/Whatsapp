@@ -1919,6 +1919,15 @@ por token de máquina (amarrado a um número, com idempotência de 24h, rate lim
 tela de administração de tokens para admin), reaproveitando o caminho do envio manual — a
 mensagem aparece na Inbox como qualquer outra.
 
+CRM em Kanban integrado ao atendimento: funis por departamento com etapas configuráveis
+(probabilidade, prazo de parada e automações de entrada/saída), oportunidade criada de dentro
+da conversa reusando o contato existente, arrastar cards com recusa de conflito quando duas
+pessoas movem o mesmo card, atividades com atraso derivado do relógio, ganho com valor
+fechado e perda com motivo obrigatório, histórico completo, follow-up que reusa o agendador
+de mensagens e é interrompido quando o cliente responde, criação automática por etiqueta,
+indicadores de pipeline por responsável, origem e motivo de perda, e o card do CRM dentro do
+painel de contexto da conversa.
+
 **Falta** (ordem sugerida): validar o pareamento QR em rede aberta (o ambiente de
 desenvolvimento bloqueia `web.whatsapp.com`); votos de enquete agregados na Inbox;
 biblioteca de figurinhas; read receipts de saída; fila (BullMQ/Redis) para mídia em
@@ -2259,7 +2268,149 @@ conteúdo nem token em claro).
 
 ---
 
-## 18. Como escrever um bom prompt para este sistema
+## 18. CRM — funil de oportunidades sobre o atendimento
+
+O CRM **não é um sistema à parte**: é uma camada de INTENÇÃO COMERCIAL por cima do
+atendimento que já existe. A regra que decidiu todo o desenho é a mesma do resto da casa —
+nada é duplicado. Contato é a `Conversation`, etiqueta é a `Tag`, responsável é o `User`,
+departamento é o `Department`, follow-up é `ScheduledMessage` e visibilidade é `access.ts`.
+O que nasceu foi só o que não existia: funil, etapa, oportunidade, atividade e histórico.
+
+```
+CONVERSA DO WHATSAPP → OPORTUNIDADE → FUNIL → ETAPA → FOLLOW-UP → GANHO/PERDA
+```
+
+**O contato NUNCA é copiado.** `CrmOpportunity.conversationId` aponta para a conversa que já
+existe, e é dela que saem nome, telefone, foto, empresa do Azevedo-OS e histórico de
+mensagens. `contactName`/`contactPhone` na oportunidade existem só para o **lead avulso** (o
+que ainda não escreveu) e como cópia de exibição; havendo conversa, ela vence sempre. Um
+cadastro de cliente aqui seria uma segunda base divergindo da primeira no dia seguinte.
+
+**Modelo de dados** (migration `20260906120000_crm`): `CrmPipeline` (+ `CrmPipelineDepartment`
+N:N), `CrmStage` (+ `CrmStageAction`), `CrmOpportunity` (+ `CrmOpportunityTag`, que aponta
+para a `Tag` de sempre), `CrmActivity`, `CrmOpportunityEvent`, `CrmProduct`, `CrmLossReason`,
+mais a coluna `ScheduledMessage.crmOpportunityId`.
+
+**Visibilidade sai de `access.ts`, aplicada a outra tabela** (`lib/crm-access.ts`,
+`opportunityScope`). São três condições, todas herdadas: departamento (com o `null` passando,
+igual à conversa sem departamento), responsável para quem é `agent` (a dele mais as sem dono)
+e — a que não pode faltar — **a conversa vinculada precisa estar no alcance**, o que traz o
+recorte por NÚMERO junto. Sem ela, bastaria compartilhar o departamento para o card de um
+cliente de outro chip aparecer com valor e telefone. Oportunidade avulsa passa nessa terceira
+porque não há número a conferir. `apps/api/test/crm-access.test.ts` tranca a invariante da
+casa: com o catálogo INTEIRO ligado, o recorte do atendente é idêntico.
+
+**O funil segue a régua da etiqueta**: `isGeneral` + N:N de departamentos, lida pela MESMA
+`departmentResourceScope`. Lista vazia não significa geral (ver seção 13).
+
+**Permissões** (área `crm` do catálogo): `crm.view` (agente sim), `crm.opportunity.manage`
+(agente sim — é o trabalho do dia a dia), `crm.opportunity.reopen` (só supervisor: reabrir
+mexe em conversão e receita já contadas no mês), `crm.pipeline.manage` e `crm.reports.view`.
+Nenhuma delas fala de ALCANCE, e nenhuma pode passar a falar.
+
+**Follow-up é `ScheduledMessage`, e não existe agendador do CRM.** A ação de etapa
+`schedule_message` cria uma linha normal na tabela de agendadas, com `crmOpportunityId`
+preenchido, e quem envia continua sendo `services/scheduler.ts`. Dois agendadores discordando
+sobre o que já saiu é o pior defeito possível aqui — o cliente recebe a mesma cobrança duas
+vezes. O cancelamento (`lib/crm-follow-up.ts`) tem dois gatilhos: **o cliente respondeu**
+(gancho no `instance-manager`, só `inbound`) e **o card saiu da etapa**. O filtro é sempre
+`crmOpportunityId`, então **agendamento que uma PESSOA marcou nunca é cancelado pelo CRM**.
+
+**Automações de etapa** (`lib/crm-stage-actions.ts`) são ações de ENTRADA e SAÍDA, e cada uma
+chama o caminho que a equipe já usa na mão: etiqueta, responsável, departamento, atividade,
+nota interna, mensagem agendada. Regras: ação que falha **não derruba a movimentação** do
+card (vira log `crm_stage_action_failed`); ação que precisa de conversa é **pulada** na
+oportunidade avulsa; atribuição automática passa por `conversationAssigneeWhere`, a mesma
+régua da transferência manual; toda ação executada vira linha no histórico com autor nulo.
+
+**Criação automática por etiqueta**: `CrmPipeline.autoCreateTagId`. Pendurar aquela etiqueta
+numa conversa abre o card na primeira etapa do funil — reusa a classificação que a equipe já
+faz, em vez de um gatilho por palavra-chave. Roda no fim de `POST /conversations/:id/tags/:tagId`
+e engole a própria falha: etiquetar não pode quebrar porque o CRM tropeçou.
+
+**Duplicidade é decidida pelo BANCO**, pelo índice PARCIAL
+`crm_opportunities_open_per_conversation_pipeline`: a mesma conversa não tem duas
+oportunidades ABERTAS no mesmo funil (dois cliques, webhook repetido, automação disparando de
+novo). Parcial de propósito — o cliente PODE ter várias em funis diferentes e várias fechadas
+no mesmo funil ao longo do tempo. A rota traduz o P2002 em "toma a que já existe" e responde
+200 com `duplicated: true`; 409 faria a tela mostrar erro numa situação em que está tudo certo.
+
+**Concorrência no arrasto** (`lib/crm-move.ts`): a tela manda `fromStageId`, a etapa que ELA
+acredita ser a atual. Discordando do banco, 409 `crm_stage_conflict` e o quadro recarrega —
+sem isso o último arrasto vence sempre e o primeiro some sem ninguém ver. Card fechado não se
+move (409 `crm_opportunity_closed`); voltar ao funil é REABRIR, que tem chave própria.
+
+> **A ORDEM DENTRO DO `move` NÃO É DETALHE — já mordeu.** O cancelamento do follow-up da etapa
+> anterior tem de rodar ANTES das ações de entrada da etapa nova. Invertido (que foi como
+> nasceu, e o que a verificação de ponta a ponta pegou), o follow-up que a coluna de destino
+> acabou de agendar era cancelado no mesmo instante: nenhum erro, nada vermelho, e a mensagem
+> simplesmente não saindo para o cliente. `apps/api/test/crm-stage-actions.test.ts` fixa a
+> ordem. No FECHAMENTO (ganho/perda) o cancelamento depois é o certo: a oportunidade acabou.
+
+**Perda exige motivo** — `CrmLossReason`, tabela e não texto livre, porque é isto que vira
+gráfico ("preço" digitado de seis jeitos não se agrupa). Há CHECK no banco, além da validação
+da rota. **Ganho guarda `closedValue` separado do `value`**: um é o que se previu, o outro o
+que aconteceu, e sobrescrever apagaria a diferença que o relatório mede.
+
+**Ordem no Kanban** é posição ESPAÇADA (`CRM_POSITION_STEP`, 1000): mover um card no meio da
+coluna é UMA escrita (a média entre os vizinhos), não a renumeração da coluna inteira — que é
+o que trava um quadro grande e o que faz dois arrastos simultâneos embaralharem a ordem.
+
+**Contas do dinheiro em fonte única** (`packages/shared/src/crm.ts` + `lib/crm-metrics.ts`):
+valor final = estimado − desconto; ponderado = final × probabilidade; a probabilidade da
+PESSOA vence a da etapa (e zero é decisão, não ausência). O card, o topo da coluna e o
+relatório saem das MESMAS funções, resolvidas no servidor — quatro contas separadas
+discordariam por arredondamento, e "o total da coluna não bate com a soma dos cards" é como
+um painel perde a equipe (ver o histórico do Dashboard na seção 13).
+
+**"Atrasada" não é status gravado**: é atividade pendente com prazo vencido, derivada do
+relógio (`isCrmActivityOverdue`). Gravar exigiria um processo virando linhas na virada da
+hora, e a queda dele faria a tela dizer que não há nada atrasado.
+
+**Tempo real**: evento único `crm:opportunity` (`RealtimeEvents.CrmOpportunity`) carregando o
+DTO INTEIRO do card. A audiência é a MESMA `conversationAudience()`, calculada com o número da
+conversa vinculada — ou a chave `"none"` (`NO_INSTANCE`, em `realtime/socket.ts`) para a
+oportunidade avulsa, cujas salas o socket passa a assinar na conexão. Nenhum esquema de salas
+próprio: duas réguas de quem-recebe-o-quê divergiriam, e aqui a divergência é valor de cliente
+na tela errada.
+
+**Endpoints** (todos com Zod, escopo por `access.ts` e auditoria nas ações relevantes):
+
+```
+GET    /crm/pipelines            POST /crm/pipelines      PATCH|DELETE /crm/pipelines/:id
+POST   /crm/pipelines/:id/stages          PATCH|DELETE /crm/stages/:id
+POST   /crm/pipelines/:id/stages/reorder
+GET    /crm/board?pipelineId=&search=&assignedUserId=&departmentId=&tagId=&origin=&productId=&overdueActivity=
+       (colunas com uma PÁGINA de cards cada, mais os totais da coluna INTEIRA;
+        listas viajam repetidas — OU dentro do filtro, E entre filtros)
+GET    /crm/opportunities   POST /crm/opportunities   GET|PATCH /crm/opportunities/:id
+GET    /crm/opportunities/:id/history
+POST   /crm/opportunities/:id/move   (fromStageId = checagem otimista; 409 no conflito)
+POST   /crm/opportunities/:id/win    POST /crm/opportunities/:id/lose (motivo obrigatório)
+POST   /crm/opportunities/:id/reopen (chave própria)
+POST|DELETE /crm/opportunities/:id/tags/:tagId
+GET    /crm/activities?range=overdue|today|tomorrow|week|done|all[&mine=true]
+POST   /crm/opportunities/:id/activities      PATCH /crm/activities/:id
+GET    /conversations/:id/crm    (o card do painel de contexto da conversa)
+GET    /crm/settings   POST|PATCH /crm/products   POST|PATCH /crm/loss-reasons
+GET    /crm/reports?pipelineId=&from=&to=     (crm.reports.view)
+```
+
+**Funil inicial semeado sob demanda** (`lib/crm-bootstrap.ts`), na primeira carga de
+`GET /crm/pipelines`: o seed só roda em instalação nova, e a organização que já existe em
+produção abriria um quadro sem colunas. É idempotente e **não ressuscita** o funil que alguém
+apagou de propósito (só semeia quando não existe funil nenhum).
+
+**Na tela**: um item "CRM" no menu (a barra lateral não tem submenu) e as seis telas divididas
+no topo da própria área — Kanban, Oportunidades, Atividades, Funis, Relatórios e
+Configurações. O arrastar é **HTML5 nativo**, sem biblioteca nova. Na conversa, o card
+`components/inbox/crm-card.tsx` fica logo abaixo do card do Azevedo-OS, mostra as
+oportunidades abertas do cliente e traz o "+ Criar oportunidade" que aproveita a conversa
+(nada de nome e telefone perguntados de novo).
+
+---
+
+## 19. Como escrever um bom prompt para este sistema
 
 Um prompt fica bom aqui quando responde, nesta ordem:
 

@@ -92,6 +92,13 @@ export function createRealtime(
       for (const instanceId of access.instanceIds) {
         joinInstanceRooms(socket, instanceId);
       }
+      // Oportunidade do CRM sem conversa vinculada (lead que ainda não
+      // escreveu) usa a MESMA máquina de salas com a chave de número
+      // `"none"`. Reusar em vez de criar um esquema de salas só para o CRM
+      // mantém uma régua só: departamento e responsável decidem igual nos
+      // dois lados. Conversa sempre tem número de verdade (uuid), então
+      // nenhuma mensagem cai nestas salas.
+      joinInstanceRooms(socket, NO_INSTANCE);
     }
 
     options.logger.debug({ event: "socket_connected", userId: user.sub });
@@ -104,6 +111,12 @@ export function createRealtime(
 }
 
 const NO_DEPARTMENT = "none";
+
+/**
+ * Chave de número das oportunidades do CRM sem conversa vinculada. Ver
+ * `crmAudience` em `lib/crm-events.ts` e o `joinInstanceRooms` da conexão.
+ */
+export const NO_INSTANCE = "none";
 
 /**
  * Salas de um número para um socket já autenticado. Conversa sem

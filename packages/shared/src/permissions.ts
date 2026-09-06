@@ -31,12 +31,13 @@ export function isConfigurableRole(value: string): value is ConfigurableRole {
 }
 
 /** Áreas do catálogo — viram as seções da tela, nesta ordem. */
-export const PERMISSION_AREAS = ["atendimento", "ligacoes", "cadastros", "visao"] as const;
+export const PERMISSION_AREAS = ["atendimento", "ligacoes", "crm", "cadastros", "visao"] as const;
 export type PermissionArea = (typeof PERMISSION_AREAS)[number];
 
 export const PERMISSION_AREA_LABELS: Record<PermissionArea, string> = {
   atendimento: "Atendimento",
   ligacoes: "Ligações",
+  crm: "CRM",
   cadastros: "Cadastros",
   visao: "Visão e relatórios",
 };
@@ -44,6 +45,7 @@ export const PERMISSION_AREA_LABELS: Record<PermissionArea, string> = {
 export const PERMISSION_AREA_DESCRIPTIONS: Record<PermissionArea, string> = {
   atendimento: "O que a equipe pode fazer dentro de uma conversa já em andamento.",
   ligacoes: "Quem atende ligações e quem acessa o registro e as gravações de chamadas.",
+  crm: "Quem trabalha o funil de oportunidades e quem configura os funis do escritório.",
   cadastros: "Quem mexe nas listas que o escritório inteiro usa.",
   visao: "Quais números e registros do escritório cada perfil consegue consultar.",
 };
@@ -163,6 +165,48 @@ export const PERMISSION_ACTIONS = [
     description:
       "Mexe em classificação que outra pessoa já fez. Errar aqui anexa a conversa ao cliente errado, por isso é chave separada da anterior.",
     area: "atendimento",
+    defaults: { agent: false, supervisor: true },
+  },
+
+  // ---------- CRM ----------
+  {
+    key: "crm.view",
+    label: "Abrir o CRM",
+    description:
+      "Ver o Kanban, a lista de oportunidades e as atividades. O recorte continua o mesmo do atendimento: cada um enxerga as oportunidades dos departamentos e conversas que já enxerga.",
+    area: "crm",
+    defaults: { agent: true, supervisor: true },
+  },
+  {
+    key: "crm.opportunity.manage",
+    label: "Criar, editar e mover oportunidade",
+    description:
+      "Abre oportunidade a partir da conversa, arrasta o card entre etapas, muda valor, responsável e atividades. É o trabalho do dia a dia de quem vende.",
+    area: "crm",
+    defaults: { agent: true, supervisor: true },
+  },
+  {
+    key: "crm.opportunity.reopen",
+    label: "Reabrir oportunidade ganha ou perdida",
+    description:
+      "Traz de volta para o funil algo que já foi encerrado. Mexe em número fechado (conversão e receita do período), por isso é chave separada de mover card.",
+    area: "crm",
+    defaults: { agent: false, supervisor: true },
+  },
+  {
+    key: "crm.pipeline.manage",
+    label: "Criar e editar funis, etapas e automações do CRM",
+    description:
+      "Mexe nas colunas do Kanban, nas probabilidades, nos motivos de perda, nos serviços e nas ações automáticas de cada etapa. Vale para o escritório inteiro.",
+    area: "crm",
+    defaults: { agent: false, supervisor: true },
+  },
+  {
+    key: "crm.reports.view",
+    label: "Ver os indicadores do CRM",
+    description:
+      "Abre os números do funil: valor do pipeline, conversão, ticket médio, desempenho por responsável e por origem.",
+    area: "crm",
     defaults: { agent: false, supervisor: true },
   },
 

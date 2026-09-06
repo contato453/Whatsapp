@@ -42,6 +42,7 @@ import { useAuth } from "@/lib/auth-context";
 import { Badge, Button, Textarea } from "@/components/ui";
 import { appliesToConversation } from "@/components/department-picker";
 import { AzevedoOsCard } from "./azevedo-os-card";
+import { CrmConversationCard } from "./crm-card";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
 import { InternalNotePanelItem, useCanManageNote } from "./internal-note";
 import { AssigneeSelect } from "./assignee-select";
@@ -482,6 +483,17 @@ export function ContextPanel({
         canLink={can("azevedo_os.link")}
         canRelink={can("azevedo_os.relink")}
         onChanged={onChanged}
+      />
+
+      {/*
+        CRM. Vem logo depois do cliente porque a sequência do painel é a da
+        pergunta: quem é o cliente, o que estamos vendendo para ele, e só
+        então etiquetas e notas. O card carrega e falha sozinho — CRM fora do
+        ar não pode atrapalhar quem está atendendo.
+      */}
+      <CrmConversationCard
+        conversationId={conversation.id}
+        conversationTitle={conversation.title}
       />
 
       {/* Etiquetas */}
