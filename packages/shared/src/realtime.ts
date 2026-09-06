@@ -1,3 +1,4 @@
+import type { AiBudgetPolicy, AiSessionDto } from "./ai.js";
 import type { ConnectionStatus, MessageStatus } from "./enums.js";
 
 /**
@@ -56,7 +57,37 @@ export const RealtimeEvents = {
   SessionClosing: "session:closing",
   /** O horário fechou: a sessão acabou de ser encerrada. */
   SessionClosed: "session:closed",
+  /**
+   * O atendimento por IA de uma conversa mudou: começou, respondeu (contador
+   * de mensagens), transferiu, foi assumido ou encerrado. Carrega a sessão
+   * inteira (ou `null` quando nunca houve) — é a faixa "Atendimento por IA"
+   * da Inbox. Vai para a `conversationAudience()` da conversa, como todo
+   * evento de conversa. Evento próprio, e não `conversation:updated`, pelo
+   * mesmo motivo das fixações: aquele DTO é o da lista, e carregar a sessão
+   * de IA nele pagaria uma consulta por linha.
+   */
+  AiSession: "ai:session",
+  /**
+   * O consumo de IA cruzou um degrau do orçamento mensal (50/80/90/100%).
+   * Vai para a sala da organização (só administradores a ouvem).
+   */
+  AiBudgetAlert: "ai:budget-alert",
 } as const;
+
+/** Sessão de IA de uma conversa mudou. `session` nulo = nenhuma sessão. */
+export interface AiSessionPayload {
+  conversationId: string;
+  session: AiSessionDto | null;
+}
+
+export interface AiBudgetAlertPayload {
+  threshold: number;
+  percent: number;
+  spentMicros: number;
+  monthlyBudgetCents: number;
+  /** Política aplicada ao cruzar 100%. */
+  policy: AiBudgetPolicy;
+}
 
 /**
  * Aviso de que o horário de uso do sistema está para fechar.

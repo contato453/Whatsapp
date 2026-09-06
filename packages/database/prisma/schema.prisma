@@ -38,6 +38,13 @@ model Organization {
   integrationTokens   IntegrationToken[]
   followUpRules       FollowUpRule[]
   followUpExecutions  FollowUpExecution[]
+  aiProviderConfigs   AiProviderConfig[]
+  aiSettings          AiSettings?
+  aiAgents            AiAgent[]
+  aiKnowledgeSources  AiKnowledgeSource[]
+  aiAutomations       AiAutomation[]
+  aiSessions          AiSession[]
+  aiUsageLogs         AiUsageLog[]
 
   @@map("organizations")
 }
@@ -113,6 +120,13 @@ model User {
   integrationTokens     IntegrationToken[]              @relation("IntegrationTokenCreatedBy")
   followUpRulesCreated  FollowUpRule[]                  @relation("FollowUpRuleCreatedBy")
   followUpLogActions    FollowUpExecutionLog[]          @relation("FollowUpExecutionLogActor")
+  aiAgentsCreated       AiAgent[]                       @relation("AiAgentCreatedBy")
+  aiAgentsUpdated       AiAgent[]                       @relation("AiAgentUpdatedBy")
+  aiAgentVersions       AiAgentVersion[]                @relation("AiAgentVersionCreatedBy")
+  aiHandoffTargets      AiAgent[]                       @relation("AiAgentHandoffAssignee")
+  aiSessionsEnded       AiSession[]                     @relation("AiSessionEndedBy")
+  aiSettingsUpdated     AiSettings[]                    @relation("AiSettingsUpdatedBy")
+  aiKnowledgeCreated    AiKnowledgeSource[]             @relation("AiKnowledgeCreatedBy")
 
   @@index([organizationId])
   @@map("users")
@@ -152,6 +166,10 @@ model Department {
   tagLinks          TagDepartment[]
   quickReplyLinks   QuickReplyDepartment[]
   followUpRuleLinks FollowUpRuleDepartment[]
+  aiAgentLinks      AiAgentDepartment[]
+  aiHandoffAgents   AiAgent[]                @relation("AiAgentHandoffDepartment")
+  aiAutomations     AiAutomation[]
+  aiUsageLogs       AiUsageLog[]
 
   @@unique([organizationId, name])
   @@map("departments")
@@ -202,6 +220,7 @@ model WhatsAppInstance {
   userAccess        UserWhatsAppInstance[]
   integrationTokens IntegrationToken[]
   followUpRules     FollowUpRule[]
+  aiAutomations     AiAutomation[]
 
   @@index([organizationId])
   @@index([departmentId])
@@ -453,6 +472,10 @@ model Conversation {
   /// `IntegrationMessageLog`). Referência frouxa: apagar a conversa não apaga
   /// o log, só zera o ponteiro.
   integrationMessageLogs IntegrationMessageLog[]
+  /// Atendimentos por IA desta conversa (no máximo um ativo por vez —
+  /// índice parcial na migration).
+  aiSessions             AiSession[]
+  aiUsageLogs            AiUsageLog[]
 
   @@unique([whatsappInstanceId, externalChatId])
   @@index([organizationId, status])
@@ -689,6 +712,7 @@ model Tag {
   conversations         ConversationTag[]
   followUpSteps         FollowUpRuleStep[]
   followUpFinalizeRules FollowUpRule[]
+  aiAutomations         AiAutomation[]
 
   // Nome único na organização inteira: a etiqueta aparece na conversa sem
   // dizer de qual departamento é, então dois "URGENTE" seriam indistinguíveis.
@@ -1259,4 +1283,349 @@ model IntegrationMessageLog {
   @@unique([integrationTokenId, idempotencyKey])
   @@index([integrationTokenId, createdAt])
   @@map("integration_message_logs")
+}
+
+// ============================================================
+// Inteligência artificial
+// ============================================================
+//
+// A separação central: o AGENTE é a configuração reutilizável (objetivo,
+// limites, conhecimento, permissões), a AUTOMAÇÃO é o gatilho que o põe para
+// atender numa conversa, e a SESSÃO é um atendimento concreto. Configura-se a
+// "IA Comercial" uma vez e ela serve a quantas automações forem precisas.
+// Ver CLAUDE.md §20.
+
+enum AiProviderStatus {
+  not_connected
+  connected
+  error
+}
+
+enum AiAgentStatus {
+  draft
+  active
+  inactive
+}
+
+enum AiSessionStatus {
+  active
+  resolved
+  transferred
+  stopped
+  limit_reached
+  error
+  expired
+}
+
+enum AiKnowledgeKind {
+  text
+  faq
+}
+
+enum AiBudgetPolicy {
+  alert_only
+  block_new
+  transfer_human
+}
+
+enum AiUsageKind {
+  chat
+  test
+  connection_test
+  models
+}
+
+enum AiUsageOutcome {
+  ok
+  error
+  timeout
+  blocked
+}
+
+/// Credencial de um provedor de IA, por organização. A chave é gravada
+/// CIFRADA (AES-256-GCM, chave em `AI_SECRETS_KEY` no processo da API — ver
+/// `lib/ai-secrets.ts`) e nunca sai da API: para a tela vai só `apiKeyHint`
+/// ("sk-••••8F2A"). Não há `NEXT_PUBLIC_` equivalente e nunca haverá.
+model AiProviderConfig {
+  id              String           @id @default(uuid())
+  organizationId  String
+  /// "openai" hoje; texto (e não enum) para provedor novo não exigir migration.
+  provider        String
+  apiKeyEncrypted String?
+  apiKeyHint      String?
+  defaultModel    String?
+  status          AiProviderStatus @default(not_connected)
+  lastTestedAt    DateTime?
+  /// Última falha do teste de conexão, em português e sem detalhe sensível.
+  lastTestError   String?
+  /// Lista de modelos devolvida pelo provedor, para a tela não bater nele a
+  /// cada abertura. Só ids e rótulos — nada de segredo.
+  modelsCache     Json?
+  modelsFetchedAt DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, provider])
+  @@map("ai_provider_configs")
+}
+
+/// Configurações gerais de IA da organização: orçamento, política ao
+/// estourar, timeout do provedor. Uma linha por organização; ausente = os
+/// padrões de `@azvchat/shared`.
+model AiSettings {
+  id                  String         @id @default(uuid())
+  organizationId      String         @unique
+  /// Orçamento mensal em CENTAVOS de dólar (a moeda do provedor). Nulo = sem teto.
+  monthlyBudgetCents  Int?
+  /// Percentuais que disparam alerta (50, 80, 90, 100).
+  alertThresholds     Int[]          @default([50, 80, 90, 100])
+  budgetPolicy        AiBudgetPolicy @default(alert_only)
+  /// Timeout de cada chamada ao provedor, em ms.
+  timeoutMs           Int            @default(30000)
+  /// Quantas mensagens recentes vão ao modelo quando o agente não define.
+  contextMessageLimit Int            @default(20)
+  /// Preço por modelo sobreposto pelo escritório (USD por 1M tokens).
+  pricingOverrides    Json?
+  /// Mês (AAAA-MM) e degraus já avisados nele — para o alerta de 80% não
+  /// repetir a cada chamada.
+  alertedMonth        String?
+  alertedThresholds   Int[]          @default([])
+  updatedById         String?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  updatedBy    User?        @relation("AiSettingsUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@map("ai_settings")
+}
+
+/// Agente de IA: a configuração reutilizável. `config` é o JSON estruturado
+/// validado pelo Zod da rota (`AiAgentConfig`, em `@azvchat/shared`) — são
+/// dezenas de campos que só a IA lê, e uma coluna por campo obrigaria uma
+/// migration a cada ajuste de prompt. O que é consultado por SQL (status,
+/// modelo, departamentos) tem coluna própria.
+model AiAgent {
+  id                  String        @id @default(uuid())
+  organizationId      String
+  name                String
+  description         String        @default("")
+  status              AiAgentStatus @default(draft)
+  /// Vale para todos os departamentos (mesma regra de etiqueta/resposta rápida).
+  isGeneral           Boolean       @default(false)
+  /// Modelo do agente; nulo = padrão do sistema.
+  model               String?
+  /// Configuração ATUAL (a última salva). Cada gravação que muda algo também
+  /// grava uma `AiAgentVersion`, e é a versão que a sessão referencia.
+  config              Json
+  currentVersion      Int           @default(1)
+  /// Departamento e responsável de transferência — colunas (e não só JSON)
+  /// para o banco apagar a referência quando o alvo some.
+  handoffDepartmentId String?
+  handoffAssigneeId   String?
+  createdById         String?
+  updatedById         String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  organization      Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy         User?                    @relation("AiAgentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy         User?                    @relation("AiAgentUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  handoffDepartment Department?              @relation("AiAgentHandoffDepartment", fields: [handoffDepartmentId], references: [id], onDelete: SetNull)
+  handoffAssignee   User?                    @relation("AiAgentHandoffAssignee", fields: [handoffAssigneeId], references: [id], onDelete: SetNull)
+  departments       AiAgentDepartment[]
+  versions          AiAgentVersion[]
+  knowledgeSources  AiAgentKnowledgeSource[]
+  automations       AiAutomation[]
+  sessions          AiSession[]
+  usageLogs         AiUsageLog[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId, status])
+  @@map("ai_agents")
+}
+
+model AiAgentDepartment {
+  agentId      String
+  departmentId String
+
+  agent      AiAgent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@id([agentId, departmentId])
+  @@index([departmentId])
+  @@map("ai_agent_departments")
+}
+
+/// Foto da configuração no momento de cada gravação. A sessão aponta para a
+/// versão com que começou: mudar a IA Comercial enquanto há atendimentos em
+/// andamento não troca as regras no meio da conversa.
+model AiAgentVersion {
+  id          String   @id @default(uuid())
+  agentId     String
+  version     Int
+  model       String?
+  config      Json
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  agent     AiAgent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  createdBy User?       @relation("AiAgentVersionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  sessions  AiSession[]
+
+  @@unique([agentId, version])
+  @@map("ai_agent_versions")
+}
+
+/// Fonte da base de conhecimento: texto livre ou perguntas e respostas. A
+/// busca é lexical, por trechos (`services/ai/knowledge.ts`) — só os trechos
+/// relevantes vão ao modelo, nunca a base inteira.
+model AiKnowledgeSource {
+  id             String          @id @default(uuid())
+  organizationId String
+  title          String
+  kind           AiKnowledgeKind @default(text)
+  content        String
+  active         Boolean         @default(true)
+  createdById    String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?                    @relation("AiKnowledgeCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  agents       AiAgentKnowledgeSource[]
+
+  @@index([organizationId, active])
+  @@map("ai_knowledge_sources")
+}
+
+model AiAgentKnowledgeSource {
+  agentId  String
+  sourceId String
+
+  agent  AiAgent           @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  source AiKnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@id([agentId, sourceId])
+  @@index([sourceId])
+  @@map("ai_agent_knowledge_sources")
+}
+
+/// Automação: o gatilho que põe um agente para atender — o "bloco de IA".
+/// Casa a mensagem que chega por número, departamento e tipo de conversa;
+/// nulo = qualquer. `onlyWithoutDepartment` é o caso "só conversa que o
+/// número não classificou" (departamento nulo não é "qualquer" nem um id).
+model AiAutomation {
+  id                    String   @id @default(uuid())
+  organizationId        String
+  name                  String
+  active                Boolean  @default(true)
+  agentId               String
+  whatsappInstanceId    String?
+  departmentId          String?
+  onlyWithoutDepartment Boolean  @default(false)
+  conversationType      String   @default("any")
+  /// Só entra em conversa sem responsável (o normal: a IA não toma conversa de gente).
+  onlyUnassigned        Boolean  @default(true)
+  /// Só na PRIMEIRA mensagem de uma conversa nova.
+  onlyNewConversations  Boolean  @default(false)
+  /// Etiqueta aplicada quando a IA resolve sozinha.
+  resolvedTagId         String?
+  /// Menor vence quando mais de uma casa.
+  priority              Int      @default(100)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent        AiAgent           @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  instance     WhatsAppInstance? @relation(fields: [whatsappInstanceId], references: [id], onDelete: Cascade)
+  department   Department?       @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  resolvedTag  Tag?              @relation(fields: [resolvedTagId], references: [id], onDelete: SetNull)
+  sessions     AiSession[]
+
+  @@index([organizationId, active, priority])
+  @@map("ai_automations")
+}
+
+/// Um atendimento por IA: uma conversa, um agente (numa versão), do começo ao
+/// fim. `state` é a memória do atendimento (dados coletados, assunto,
+/// resumo). Índice parcial garante NO MÁXIMO UMA ativa por conversa.
+model AiSession {
+  id                     String          @id @default(uuid())
+  organizationId         String
+  conversationId         String
+  agentId                String
+  agentVersionId         String?
+  automationId           String?
+  status                 AiSessionStatus @default(active)
+  state                  Json?
+  aiMessageCount         Int             @default(0)
+  customerMessageCount   Int             @default(0)
+  failedAttempts         Int             @default(0)
+  inputTokens            Int             @default(0)
+  outputTokens           Int             @default(0)
+  /// Custo estimado em micro-dólares (1 USD = 1.000.000).
+  costMicros             Int             @default(0)
+  /// Última mensagem recebida já processada — idempotência entre turnos e
+  /// após reinício.
+  lastProcessedMessageId String?
+  summary                String?
+  endReason              String?
+  endedByUserId          String?
+  startedAt              DateTime        @default(now())
+  lastActivityAt         DateTime        @default(now())
+  endedAt                DateTime?
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  agent        AiAgent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  agentVersion AiAgentVersion? @relation(fields: [agentVersionId], references: [id], onDelete: SetNull)
+  automation   AiAutomation?   @relation(fields: [automationId], references: [id], onDelete: SetNull)
+  endedBy      User?           @relation("AiSessionEndedBy", fields: [endedByUserId], references: [id], onDelete: SetNull)
+  usageLogs    AiUsageLog[]
+
+  @@index([conversationId, status])
+  @@index([organizationId, status, startedAt])
+  @@index([agentId, startedAt])
+  @@map("ai_sessions")
+}
+
+/// Uma chamada ao provedor: tokens, custo estimado, duração, ferramentas
+/// pedidas/executadas/bloqueadas. NUNCA o conteúdo da conversa nem a chave.
+model AiUsageLog {
+  id             String         @id @default(uuid())
+  organizationId String
+  sessionId      String?
+  agentId        String?
+  /// Nome na hora da chamada — sobrevive à exclusão do agente.
+  agentName      String?
+  conversationId String?
+  departmentId   String?
+  provider       String
+  model          String
+  kind           AiUsageKind    @default(chat)
+  outcome        AiUsageOutcome @default(ok)
+  inputTokens    Int            @default(0)
+  outputTokens   Int            @default(0)
+  /// Nulo = modelo sem tabela de preço; a chamada fica fora do custo total.
+  costMicros     Int?
+  durationMs     Int            @default(0)
+  errorCode      String?
+  toolsRequested Json?
+  toolsExecuted  Json?
+  toolsBlocked   Json?
+  handoffReason  String?
+  createdAt      DateTime       @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  session      AiSession?    @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  agent        AiAgent?      @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  department   Department?   @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([agentId, createdAt])
+  @@map("ai_usage_logs")
 }

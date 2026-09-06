@@ -1,3 +1,4 @@
+export * from "./ai.js";
 export * from "./attachments.js";
 export * from "./attendance.js";
 export * from "./azevedo-os.js";

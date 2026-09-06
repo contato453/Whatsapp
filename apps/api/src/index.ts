@@ -14,6 +14,8 @@ import { ScheduledMessageWorker } from "./services/scheduler.js";
 import { FollowUpScheduler } from "./services/follow-up-scheduler.js";
 import { SessionScheduleWatcher } from "./services/session-schedule-watcher.js";
 import { createAzevedoOsClient } from "./services/azevedo-os-client.js";
+import { createSecretCipher } from "./lib/ai-secrets.js";
+import { AiRuntime } from "./services/ai/runtime.js";
 import { loadConversationAccess } from "./lib/access.js";
 import type { AuthTokenPayload } from "./lib/auth.js";
 import type { AppDeps } from "./types.js";
@@ -49,6 +51,17 @@ async function main(): Promise<void> {
     logger.warn(
       { event: "azevedo_os_integration_disabled", missingVars: azevedoOs.missingVars },
       "Integração com o Azevedo-OS desligada: defina as variáveis que faltam no .env da VPS (ou nos segredos do GitHub, se o deploy por SSH estiver ligado)",
+    );
+  }
+
+  // Cifra da chave de API dos provedores de IA. Sem AI_SECRETS_KEY ela cai
+  // na derivação do JWT_SECRET — funciona, mas avisa: trocar o JWT_SECRET
+  // nesse modo invalida a chave gravada.
+  const aiCipher = createSecretCipher({ aiSecretsKey: config.AI_SECRETS_KEY, jwtSecret: config.JWT_SECRET });
+  if (!aiCipher.dedicatedKey) {
+    logger.warn(
+      { event: "ai_secrets_key_missing" },
+      "AI_SECRETS_KEY não definida: a chave do provedor de IA está cifrada com derivação do JWT_SECRET (gere uma com `openssl rand -hex 32`)",
     );
   }
 
@@ -89,7 +102,8 @@ async function main(): Promise<void> {
     audit,
     ingest,
     azevedoOs,
-    // io e instanceManager são atribuídos logo abaixo, antes de listen().
+    aiCipher,
+    // io, instanceManager e aiRuntime são atribuídos logo abaixo, antes de listen().
   } as unknown as AppDeps;
 
   const app = await buildApp(deps);
@@ -107,6 +121,12 @@ async function main(): Promise<void> {
   });
   deps.io = io;
 
+  // Motor do atendimento por IA: recebe a mensagem depois de gravada e
+  // decide se algum agente responde. Nasce antes do instance-manager, que é
+  // quem o avisa.
+  const aiRuntime = new AiRuntime({ prisma, io, logger: logger.child({ module: "ai" }), provider, audit, azevedoOs, cipher: aiCipher });
+  deps.aiRuntime = aiRuntime;
+
   const instanceManager = new InstanceManager(
     prisma,
     provider,
@@ -116,9 +136,11 @@ async function main(): Promise<void> {
     storage,
     logger,
     azevedoOs,
+    aiRuntime,
   );
   instanceManager.wireProviderEvents();
   deps.instanceManager = instanceManager;
+  aiRuntime.start();
 
   const scheduler = new ScheduledMessageWorker(prisma, provider, io, logger);
   scheduler.start();
@@ -148,6 +170,7 @@ async function main(): Promise<void> {
       scheduler.stop();
       followUpScheduler.stop();
       sessionScheduleWatcher.stop();
+      aiRuntime.stop();
       await provider.shutdownAll();
       io.close();
       await app.close();

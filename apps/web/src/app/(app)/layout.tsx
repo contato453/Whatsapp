@@ -38,6 +38,7 @@ import { CallProvider } from "@/lib/call-context";
 import { MessageSound } from "@/components/message-sound";
 import { SessionSchedule } from "@/components/session-schedule";
 import { UnreadTitle } from "@/components/unread-title";
+import { AiBudgetAlert } from "@/components/ai/budget-alert";
 import { Logo, LogoMark } from "@/components/logo";
 
 /**
@@ -448,6 +449,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       <UnreadTitle />
       {/* Aviso de fechamento do horário de uso, e saída quando ele chega. */}
       <SessionSchedule />
+      {/* Orçamento de IA cruzou um degrau: só o admin recebe. */}
+      <AiBudgetAlert />
     </div>
     </CallProvider>
   );

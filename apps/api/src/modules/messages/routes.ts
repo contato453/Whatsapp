@@ -46,6 +46,7 @@ import { applySignature, type Signer } from "../../lib/signature.js";
 import { conversationAudience } from "../../realtime/socket.js";
 import { buildPreview } from "../../services/message-ingest.js";
 import type { AppDeps } from "../../types.js";
+import { interruptAiSessionForHuman } from "../../services/ai/session.js";
 
 const listQuerySchema = z.object({
   before: z.string().datetime().optional(),
@@ -68,7 +69,23 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
     conversationId: string,
     organizationId: string,
     messageId: string,
+    /**
+     * Quem enviou. Um atendente escrevendo ao cliente significa que ele
+     * assumiu a conversa na prática: o atendimento por IA em andamento (se
+     * houver) para AQUI, antes de publicar — IA e humano nunca respondem em
+     * paralelo. Vale para texto, mídia, enquete, encaminhamento e áudio, que
+     * passam todos por esta função.
+     */
+    actor?: { sub: string; name: string },
   ): Promise<void> {
+    if (actor) {
+      await interruptAiSessionForHuman(deps, {
+        organizationId,
+        conversationId,
+        userId: actor.sub,
+        userName: actor.name,
+      });
+    }
     const [conversation, message] = await Promise.all([
       deps.prisma.conversation.findUnique({
         where: { id: conversationId },
@@ -378,7 +395,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       entityType: "Conversation",
       entityId: id,
     });
-    await afterOutboundPersist(id, request.user.organizationId, message.id);
+    await afterOutboundPersist(id, request.user.organizationId, message.id, request.user);
     return reply.status(201).send({ message: serializeMessage(message) });
   });
 
@@ -823,7 +840,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       entityId: id,
       metadata: { toConversationId: target.id },
     });
-    await afterOutboundPersist(target.id, request.user.organizationId, forwarded.id);
+    await afterOutboundPersist(target.id, request.user.organizationId, forwarded.id, request.user);
     return reply.status(201).send({ message: serializeMessage(forwarded) });
   });
 
@@ -950,7 +967,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
       entityType: "Conversation",
       entityId: id,
     });
-    await afterOutboundPersist(id, request.user.organizationId, message.id);
+    await afterOutboundPersist(id, request.user.organizationId, message.id, request.user);
     return reply.status(201).send({ message: serializeMessage(message) });
   });
 
@@ -1089,7 +1106,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
         entityId: id,
         metadata: { mediaType },
       });
-      await afterOutboundPersist(id, request.user.organizationId, message.id);
+      await afterOutboundPersist(id, request.user.organizationId, message.id, request.user);
       return reply.status(201).send({ message: serializeMessage(message) });
     },
   );
@@ -1218,7 +1235,7 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
         entityId: id,
         metadata: { mediaType, quickReplyId: quickReply.id },
       });
-      await afterOutboundPersist(id, request.user.organizationId, message.id);
+      await afterOutboundPersist(id, request.user.organizationId, message.id, request.user);
       return reply.status(201).send({ message: serializeMessage(message) });
     },
   );
