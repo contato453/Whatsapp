@@ -11,6 +11,7 @@ import { messageRoutes } from "../src/modules/messages/routes.js";
 import { permissionRoutes } from "../src/modules/permissions/routes.js";
 import { userRoutes } from "../src/modules/users/routes.js";
 import type { AppDeps } from "../src/types.js";
+import { followUpExecutionStub, followUpRuleStub } from "./helpers/follow-up.js";
 
 /**
  * A configuração da organização mandando de verdade, pela rota — não só na
@@ -115,6 +116,8 @@ function fakePrisma(
     userWhatsAppInstance: { findMany: async () => [{ whatsappInstanceId: "inst-1" }] },
     userDepartment: { findMany: async () => [{ departmentId: "dep-1" }] },
     department: { findFirst: async () => ({ id: "dep-1", organizationId: "org-1" }) },
+    followUpRule: followUpRuleStub,
+    followUpExecution: followUpExecutionStub,
     conversation: {
       findFirst: async () => conversa(),
       findUnique: async () => conversa(),
