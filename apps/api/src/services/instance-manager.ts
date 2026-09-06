@@ -16,8 +16,10 @@ import { resolveCallerIdentity } from "../lib/call-identity.js";
 import { resolveConversationPersonName } from "../lib/person-profile.js";
 import { pinnedItemsIfMessagePinned, unpinMessageIfPinned } from "../lib/pinned-items.js";
 import { extensionFromMime, type MediaStorage } from "../lib/media-storage.js";
+import { handleInboundMessage, handleOutboundMessage } from "../lib/follow-up-engine.js";
 import type { MessageIngestService } from "./message-ingest.js";
 import type { AuditService } from "../modules/audit/service.js";
+import type { AzevedoOsClient } from "./azevedo-os-client.js";
 
 /** Intervalo entre downloads de foto para não sobrecarregar o WhatsApp. */
 const AVATAR_FETCH_DELAY_MS = 300;
@@ -60,7 +62,17 @@ export class InstanceManager {
     private readonly audit: AuditService,
     private readonly storage: MediaStorage,
     private readonly logger: Logger,
+    /**
+     * Só para o motor de Follow-up Automático resolver `{{empresa.*}}` nas
+     * mensagens que ele manda sozinho — nada aqui muda o que já existia.
+     */
+    private readonly azevedoOs: AzevedoOsClient,
   ) {}
+
+  /** Pacote de dependências que o motor de follow-up pede. */
+  private followUpDeps() {
+    return { prisma: this.prisma, io: this.io, logger: this.logger, provider: this.provider, azevedoOs: this.azevedoOs };
+  }
 
   wireProviderEvents(): void {
     this.provider.on("status", (event) => {
@@ -152,6 +164,25 @@ export class InstanceManager {
             this.prisma.message.findUnique({ where: { id: result.messageId } }),
           ]);
           if (!conversation || !persisted) return;
+          // Follow-up automático: cliente respondendo cancela a régua em
+          // andamento; mensagem de SAÍDA que chegou por aqui (outro
+          // aparelho ligado à mesma conta, não o composer — que hoje já
+          // cria a mensagem direto e nunca passa por `ingest()`) reinicia a
+          // contagem, exatamente como reiniciaria se tivesse saído daqui.
+          // Nunca derruba a publicação em tempo real: é aviso, não requisito.
+          try {
+            if (message.direction === "inbound") {
+              await handleInboundMessage(this.followUpDeps(), result.conversationId);
+            } else {
+              await handleOutboundMessage(this.followUpDeps(), result.conversationId);
+            }
+          } catch (err) {
+            this.logger.warn({
+              conversationId: result.conversationId,
+              event: "follow_up_message_hook_failed",
+              error: String(err),
+            });
+          }
           // Conversa individual leva o nome da PESSOA no título — o DTO da
           // mensagem não pode sobrescrever o nome corrigido na lista.
           const personName = await resolveConversationPersonName(

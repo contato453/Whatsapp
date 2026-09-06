@@ -13,6 +13,7 @@ import type { MediaStorage } from "../src/lib/media-storage.js";
 import type { AppDeps } from "../src/types.js";
 import { rolePermissionStub } from "./helpers/permissions.js";
 import { personProfileStub } from "./helpers/person-profile.js";
+import { followUpExecutionStub, followUpRuleStub } from "./helpers/follow-up.js";
 
 /**
  * O que estes testes fixam sobre o arquivamento:
@@ -80,6 +81,8 @@ function fakeConversationPrisma(conversation: Record<string, unknown> | null): P
   return {
     rolePermission: rolePermissionStub,
     personProfile: personProfileStub,
+    followUpRule: followUpRuleStub,
+    followUpExecution: followUpExecutionStub,
     userWhatsAppInstance: { findMany: async () => [] },
     userDepartment: { findMany: async () => [] },
     conversation: {

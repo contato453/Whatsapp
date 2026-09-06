@@ -36,6 +36,8 @@ model Organization {
   personProfiles      PersonProfile[]
   pinnedItems         PinnedItem[]
   integrationTokens   IntegrationToken[]
+  followUpRules       FollowUpRule[]
+  followUpExecutions  FollowUpExecution[]
 
   @@map("organizations")
 }
@@ -109,6 +111,8 @@ model User {
   conversationReads     ConversationRead[]
   pinnedItems           PinnedItem[]
   integrationTokens     IntegrationToken[]              @relation("IntegrationTokenCreatedBy")
+  followUpRulesCreated  FollowUpRule[]                  @relation("FollowUpRuleCreatedBy")
+  followUpLogActions    FollowUpExecutionLog[]          @relation("FollowUpExecutionLogActor")
 
   @@index([organizationId])
   @@map("users")
@@ -140,13 +144,14 @@ model Department {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  defaultAssignee User?                  @relation("DepartmentDefaultAssignee", fields: [defaultAssigneeId], references: [id], onDelete: SetNull)
-  conversations   Conversation[]
-  userAccess      UserDepartment[]
-  instances       WhatsAppInstance[]
-  tagLinks        TagDepartment[]
-  quickReplyLinks QuickReplyDepartment[]
+  organization      Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  defaultAssignee   User?                    @relation("DepartmentDefaultAssignee", fields: [defaultAssigneeId], references: [id], onDelete: SetNull)
+  conversations     Conversation[]
+  userAccess        UserDepartment[]
+  instances         WhatsAppInstance[]
+  tagLinks          TagDepartment[]
+  quickReplyLinks   QuickReplyDepartment[]
+  followUpRuleLinks FollowUpRuleDepartment[]
 
   @@unique([organizationId, name])
   @@map("departments")
@@ -188,14 +193,15 @@ model WhatsAppInstance {
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
-  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  department      Department?            @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  defaultAssignee User?                  @relation("InstanceDefaultAssignee", fields: [defaultAssigneeId], references: [id], onDelete: SetNull)
+  organization      Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  department        Department?            @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  defaultAssignee   User?                  @relation("InstanceDefaultAssignee", fields: [defaultAssigneeId], references: [id], onDelete: SetNull)
   conversations     Conversation[]
   groups            WhatsAppGroup[]
   contacts          Contact[]
   userAccess        UserWhatsAppInstance[]
   integrationTokens IntegrationToken[]
+  followUpRules     FollowUpRule[]
 
   @@index([organizationId])
   @@index([departmentId])
@@ -426,21 +432,23 @@ model Conversation {
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
-  organization      Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  instance          WhatsAppInstance                @relation(fields: [whatsappInstanceId], references: [id], onDelete: Cascade)
-  assignedUser      User?                           @relation("AssignedConversations", fields: [assignedUserId], references: [id], onDelete: SetNull)
-  archivedBy        User?                           @relation("ArchivedConversations", fields: [archivedByUserId], references: [id], onDelete: SetNull)
-  department        Department?                     @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  messages          Message[]
-  group             WhatsAppGroup?
-  internalNotes     InternalNote[]
-  tags              ConversationTag[]
-  assignmentHistory ConversationAssignmentHistory[]
-  scheduledMessages ScheduledMessage[]
-  reads             ConversationRead[]
+  organization           Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  instance               WhatsAppInstance                @relation(fields: [whatsappInstanceId], references: [id], onDelete: Cascade)
+  assignedUser           User?                           @relation("AssignedConversations", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  archivedBy             User?                           @relation("ArchivedConversations", fields: [archivedByUserId], references: [id], onDelete: SetNull)
+  department             Department?                     @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  messages               Message[]
+  group                  WhatsAppGroup?
+  internalNotes          InternalNote[]
+  tags                   ConversationTag[]
+  assignmentHistory      ConversationAssignmentHistory[]
+  scheduledMessages      ScheduledMessage[]
+  reads                  ConversationRead[]
   /// Fixadas no topo — INTERNO ao AZVCHAT, nunca propagado ao WhatsApp (ver
   /// `PinnedItem`).
-  pinnedItems       PinnedItem[]
+  pinnedItems            PinnedItem[]
+  /// Execuções de follow-up automático já rodadas ou rodando nesta conversa.
+  followUpExecutions     FollowUpExecution[]
   /// Registros de idempotência de envios pela API de integração (ver
   /// `IntegrationMessageLog`). Referência frouxa: apagar a conversa não apaga
   /// o log, só zera o ponteiro.
@@ -551,12 +559,12 @@ model Message {
   metadata          Json?
   createdAt         DateTime         @default(now())
 
-  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  conversation Conversation       @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sentByUser   User?              @relation(fields: [sentByUserId], references: [id], onDelete: SetNull)
-  reactions    MessageReaction[]
-  readMarks    ConversationRead[]
-  pinnedItems  PinnedItem[]
+  organization           Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation           Conversation            @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sentByUser             User?                   @relation(fields: [sentByUserId], references: [id], onDelete: SetNull)
+  reactions              MessageReaction[]
+  readMarks              ConversationRead[]
+  pinnedItems            PinnedItem[]
   integrationMessageLogs IntegrationMessageLog[]
 
   @@unique([conversationId, externalMessageId])
@@ -676,9 +684,11 @@ model Tag {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization  Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  departments   TagDepartment[]
-  conversations ConversationTag[]
+  organization          Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  departments           TagDepartment[]
+  conversations         ConversationTag[]
+  followUpSteps         FollowUpRuleStep[]
+  followUpFinalizeRules FollowUpRule[]
 
   // Nome único na organização inteira: a etiqueta aparece na conversa sem
   // dizer de qual departamento é, então dois "URGENTE" seriam indistinguíveis.
@@ -843,6 +853,213 @@ model ScheduledMessage {
   @@index([status, scheduledFor])
   @@index([conversationId])
   @@map("scheduled_messages")
+}
+
+// ============================================================
+// Follow-up automático
+// ============================================================
+
+/// Regra ativa dispara; inativa fica no cadastro sem gerar execução nova
+/// (a execução já em andamento é cancelada — regra desligada não deixa
+/// timer solto rodando por trás).
+enum FollowUpRuleStatus {
+  active
+  inactive
+}
+
+enum FollowUpTimeUnit {
+  minutes
+  hours
+  days
+}
+
+/// O que uma etapa faz quando o prazo dela vence. "Encaminhar" e
+/// "webhook/API" (citados no pedido original) ficaram de fora desta
+/// entrega — abrir uma automação a HTTP arbitrário é superfície de ataque
+/// que merece desenho próprio, e "encaminhar" precisaria da mesma régua de
+/// `conversationAssigneeWhere` que a transferência manual já usa.
+enum FollowUpStepAction {
+  send_message
+  add_tag
+  remove_tag
+  change_status
+}
+
+/// Gatilho que inicia a régua. Só existe UM hoje — status = aguardando
+/// cliente, o pedido explicitamente como prioridade —, mas o campo já vem
+/// como enum (e não como boolean fixo) para os gatilhos "citados se
+/// compatíveis" (tag, departamento, fila) entrarem sem migration de novo.
+enum FollowUpTrigger {
+  waiting_client
+}
+
+enum FollowUpExecutionStatus {
+  active
+  paused
+  canceled
+  completed
+  /// Etapa não pôde ser aplicada (número desconectado, etc.) e a régua
+  /// desistiu — nunca reprocessa sozinha; o histórico mostra o erro.
+  failed
+}
+
+/// Todo evento relevante da execução, para o Histórico (seção 33 do
+/// pedido) — contato, etapa, horário previsto x executado, cancelamento,
+/// adiamento, pausa, erro, tudo em UMA tabela, na mesma ideia do AuditLog.
+enum FollowUpLogEventType {
+  started
+  step_executed
+  step_failed
+  restarted
+  canceled
+  paused
+  resumed
+  postponed
+  completed
+}
+
+/// Regra de follow-up automático — dispara mensagens (e outras ações) por
+/// tempo sem resposta do cliente. Departamento é N:N, EXATAMENTE como em
+/// `QuickReply`/`Tag`: `isGeneral` vale para a organização inteira, ou a
+/// regra tem uma ou mais linhas em `FollowUpRuleDepartment` — nunca as duas
+/// coisas, mesma validação de `lib/department-resource.ts`. Isso é o que
+/// permite UMA regra ser usada por vários departamentos sem duplicar linha
+/// nenhuma: `Comercial + Financeiro` é a mesma `FollowUpRule`, com dois
+/// vínculos.
+model FollowUpRule {
+  id                   String             @id @default(uuid())
+  organizationId       String
+  name                 String
+  description          String?
+  status               FollowUpRuleStatus @default(active)
+  /// Vale para todos os departamentos. Espelha `Tag.isGeneral`.
+  isGeneral            Boolean            @default(false)
+  trigger              FollowUpTrigger    @default(waiting_client)
+  /// Fora do expediente configurado (`AttendanceSettings`), a etapa vencida
+  /// não sai: `lib/business-schedule.ts` empurra `nextRunAt` para a abertura
+  /// do próximo dia útil. Desligado, a régua roda a qualquer hora.
+  respectBusinessHours Boolean            @default(true)
+  /// Filtro opcional por número — a maioria das regras vale para qualquer
+  /// número do departamento; quando marcado, só dispara em conversas deste.
+  whatsappInstanceId   String?
+  /// Depois da última etapa, encerra o atendimento sozinho (seção 13/31 do
+  /// pedido). Desligado, a régua só envia mensagens e para na última etapa.
+  finalizeOnComplete   Boolean            @default(true)
+  finalizeReason       String             @default("Sem retorno do cliente")
+  /// Etiqueta opcional aplicada junto do encerramento automático.
+  finalizeTagId        String?
+  createdById          String?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?                    @relation("FollowUpRuleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  instance     WhatsAppInstance?        @relation(fields: [whatsappInstanceId], references: [id], onDelete: SetNull)
+  finalizeTag  Tag?                     @relation(fields: [finalizeTagId], references: [id], onDelete: SetNull)
+  departments  FollowUpRuleDepartment[]
+  steps        FollowUpRuleStep[]
+  executions   FollowUpExecution[]
+
+  // Nome único na organização, como o atalho da resposta rápida — a tela
+  // principal lista por nome e duplicidade confundiria qual regra é qual.
+  @@unique([organizationId, name])
+  @@index([organizationId, status])
+  @@map("follow_up_rules")
+}
+
+model FollowUpRuleDepartment {
+  ruleId       String
+  departmentId String
+
+  rule       FollowUpRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  department Department   @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@id([ruleId, departmentId])
+  @@index([departmentId])
+  @@map("follow_up_rule_departments")
+}
+
+/// Uma etapa da régua ("aguardar N, depois fazer X"), em ordem. `order`
+/// começa em 1 — é também o "etapa 1 de 3" mostrado na conversa.
+model FollowUpRuleStep {
+  id             String              @id @default(uuid())
+  ruleId         String
+  order          Int
+  waitAmount     Int
+  waitUnit       FollowUpTimeUnit
+  action         FollowUpStepAction
+  /// Texto da mensagem — aceita o MESMO catálogo de variáveis da resposta
+  /// rápida (`{{primeiro_nome}}` etc.), resolvido na hora do disparo.
+  messageContent String?
+  /// Etiqueta alvo de add_tag/remove_tag.
+  tagId          String?
+  /// Status alvo de change_status.
+  newStatus      ConversationStatus?
+
+  rule FollowUpRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  tag  Tag?         @relation(fields: [tagId], references: [id], onDelete: SetNull)
+
+  @@unique([ruleId, order])
+  @@map("follow_up_rule_steps")
+}
+
+/// Uma régua RODANDO sobre uma conversa específica — o "timer" do pedido.
+/// Só uma ATIVA ou PAUSADA por conversa ao mesmo tempo (índice parcial na
+/// migration, `follow_up_executions_one_active_per_conversation`): é o que
+/// impede dois timers correndo em paralelo sobre o mesmo atendimento.
+model FollowUpExecution {
+  id                String                  @id @default(uuid())
+  organizationId    String
+  ruleId            String
+  conversationId    String
+  status            FollowUpExecutionStatus @default(active)
+  /// Etapa que está para rodar (1-based, casa com `FollowUpRuleStep.order`).
+  currentStepOrder  Int                     @default(1)
+  /// Hora da próxima ação. Nulo quando pausada sem prazo, cancelada,
+  /// concluída ou com falha — a varredura do worker só olha `active`.
+  nextRunAt         DateTime?
+  /// Pausa COM prazo (seção 29): reativa sozinha ao chegar aqui. Nulo com
+  /// `status = paused` é pausa SEM prazo — só o atendente destrava.
+  pauseUntil        DateTime?
+  startedAt         DateTime                @default(now())
+  finishedAt        DateTime?
+  /// "client_replied" | "completed_no_reply" | "canceled_manual" |
+  /// "canceled_status_change" | "canceled_department_change" |
+  /// "rule_deactivated" | "conversation_archived" | "send_failed".
+  finishReason      String?
+  messagesSentCount Int                     @default(0)
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+
+  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  rule         FollowUpRule           @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  conversation Conversation           @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  logs         FollowUpExecutionLog[]
+
+  @@index([conversationId])
+  @@index([status, nextRunAt])
+  @@index([organizationId, ruleId])
+  @@map("follow_up_executions")
+}
+
+/// Histórico completo (seção 33/34 do pedido): uma linha por evento da
+/// execução. `actorUserId` presente = ação manual do atendente (cancelar,
+/// adiar, pausar, retomar); nulo = o worker agiu sozinho.
+model FollowUpExecutionLog {
+  id          String               @id @default(uuid())
+  executionId String
+  eventType   FollowUpLogEventType
+  stepOrder   Int?
+  actorUserId String?
+  messageId   String?
+  detail      String?
+  createdAt   DateTime             @default(now())
+
+  execution FollowUpExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  actor     User?             @relation("FollowUpExecutionLogActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([executionId, createdAt])
+  @@map("follow_up_execution_logs")
 }
 
 // ============================================================

@@ -165,6 +165,14 @@ export const PERMISSION_ACTIONS = [
     area: "atendimento",
     defaults: { agent: false, supervisor: true },
   },
+  {
+    key: "follow_up.control",
+    label: "Cancelar, adiar, pausar e retomar o follow-up da conversa",
+    description:
+      "Controla a régua automática que já está rodando numa conversa. Criar e editar a REGRA em si é outra chave, em Cadastros.",
+    area: "atendimento",
+    defaults: { agent: true, supervisor: true },
+  },
 
   // ---------- Cadastros ----------
   {
@@ -193,6 +201,14 @@ export const PERMISSION_ACTIONS = [
     label: "Criar resposta rápida compartilhada com todos",
     description:
       "Cria atalho geral, que aparece para a organização inteira em vez de ficar restrito a departamentos.",
+    area: "cadastros",
+    defaults: { agent: false, supervisor: true },
+  },
+  {
+    key: "follow_up.manage",
+    label: "Criar, editar e excluir regra de follow-up automático",
+    description:
+      "Cadastra as automações de Follow-up Automático (etapas, prazos e departamentos) e ativa ou desativa cada regra.",
     area: "cadastros",
     defaults: { agent: false, supervisor: true },
   },

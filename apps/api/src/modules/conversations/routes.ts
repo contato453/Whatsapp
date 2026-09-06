@@ -35,6 +35,7 @@ import { loadPermissions, requirePermission } from "../../lib/permissions.js";
 import {
   accessibleConversationWhere,
 } from "../../lib/conversation-access.js";
+import { reconcileConversation } from "../../lib/follow-up-engine.js";
 import {
   assignmentFilterWhere,
   assignToAllData,
@@ -1003,6 +1004,9 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
         }),
       ]);
       await emitConversationUpdated(id, request.user.organizationId);
+      // Departamento novo pode ter regra diferente (ou nenhuma) — seção 17
+      // do pedido: reavalia em vez de deixar a régua do time antigo rodando.
+      await reconcileConversation(deps, id);
       return { ok: true };
     },
   );
@@ -1134,6 +1138,8 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       entityId: id,
     });
     await emitConversationUpdated(id, request.user.organizationId);
+    // Arquivada não fica em fila nenhuma — cancela follow-up em andamento.
+    await reconcileConversation(deps, id);
     return { ok: true };
   });
 
@@ -1158,6 +1164,9 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       entityId: id,
     });
     await emitConversationUpdated(id, request.user.organizationId);
+    // Volta com o status de antes: se era "aguardando cliente", a régua
+    // aplicável reinicia do zero — desarquivar não retoma um timer velho.
+    await reconcileConversation(deps, id);
     return { ok: true };
   });
 
@@ -1183,6 +1192,8 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       entityId: id,
     });
     await emitConversationUpdated(id, request.user.organizationId);
+    // Concluído não é mais "aguardando cliente" — cancela o follow-up ativo.
+    await reconcileConversation(deps, id);
     return { ok: true };
   });
 
@@ -1201,6 +1212,9 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       }),
     ]);
     await emitConversationUpdated(id, request.user.organizationId);
+    // "Aberto" não é "aguardando cliente" — nenhuma régua começa aqui, mas
+    // se por algum motivo havia uma pendurada (não deveria), sai agora.
+    await reconcileConversation(deps, id);
     return { ok: true };
   });
 
@@ -1243,6 +1257,10 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       metadata: { from: conversation.status, to: status },
     });
     await emitConversationUpdated(id, request.user.organizationId);
+    // Gatilho principal do follow-up automático (seção 7/8 do pedido):
+    // entrar em "aguardando cliente" inicia a régua aplicável; sair dele
+    // cancela a que estiver rodando.
+    await reconcileConversation(deps, id);
     return { ok: true };
   });
 
