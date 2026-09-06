@@ -23,6 +23,7 @@ import {
   AZEVEDO_OS_SOURCE,
   QUICK_REPLY_MEDIA_TYPE_LABELS,
   RealtimeEvents,
+  type AiSessionPayload,
   MENTION_ALL_TOKEN,
   activeMentions,
   buildOutboundMention,
@@ -81,6 +82,7 @@ import type {
 import { Avatar, Button, EmptyState, Input, Modal, Spinner, Textarea } from "@/components/ui";
 import { appliesToConversation } from "@/components/department-picker";
 import { ArchivedBanner } from "./archived-banner";
+import { AiSessionBanner } from "@/components/ai/ai-session-banner";
 import { ConversationListItem } from "./conversation-list";
 import {
   pendingUnresolved,
@@ -836,6 +838,12 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       if (payload.conversationId !== conversationId) return;
       applyPinnedItems(payload.items);
     };
+    // Atendimento por IA começou, respondeu, transferiu ou foi encerrado: a
+    // faixa do topo acompanha sem reload. O payload traz a sessão inteira.
+    const onAiSession = (payload: AiSessionPayload) => {
+      if (payload.conversationId !== conversationId) return;
+      setDetail((current) => (current ? { ...current, aiSession: payload.session } : current));
+    };
     socket.on(RealtimeEvents.MessageNew, onMessageNew);
     socket.on(RealtimeEvents.ConversationUpdated, onConversationUpdated);
     socket.on(RealtimeEvents.MessageStatus, onMessageStatus);
@@ -846,6 +854,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     socket.on(RealtimeEvents.InternalNote, onNote);
     socket.on(RealtimeEvents.ScheduledPending, onScheduledPending);
     socket.on(RealtimeEvents.PinnedItems, onPinnedItems);
+    socket.on(RealtimeEvents.AiSession, onAiSession);
     return () => {
       socket.off(RealtimeEvents.MessageNew, onMessageNew);
       socket.off(RealtimeEvents.ConversationUpdated, onConversationUpdated);
@@ -857,6 +866,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       socket.off(RealtimeEvents.InternalNote, onNote);
       socket.off(RealtimeEvents.ScheduledPending, onScheduledPending);
       socket.off(RealtimeEvents.PinnedItems, onPinnedItems);
+      socket.off(RealtimeEvents.AiSession, onAiSession);
     };
     // `filters`/`meId` entram nas dependências porque os handlers casam a
     // conversa com o filtro ativo — reassinar os listeners é barato e a
@@ -1757,6 +1767,16 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                 </Button>
               </div>
             </header>
+
+            {/* Atendimento por IA em andamento (ou recém-encerrado): agente,
+                contadores e os botões de assumir/encerrar/devolver. */}
+            <AiSessionBanner
+              session={detail?.aiSession ?? null}
+              onChanged={() => {
+                loadDetail();
+                loadConversations();
+              }}
+            />
 
             {/* Conversa arquivada avisa no topo e oferece o desarquivar. */}
             <ArchivedBanner

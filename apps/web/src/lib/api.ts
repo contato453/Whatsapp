@@ -2,6 +2,25 @@
 
 import { AZEVEDO_OS_SOURCE } from "@azvchat/shared";
 import type {
+  AiAgentDto,
+  AiAgentSummaryDto,
+  AiAgentVersionDto,
+  AiAutomationDto,
+  AiKnowledgeSourceDto,
+  AiModelDto,
+  AiProviderBillingDto,
+  AiProviderDto,
+  AiProviderKind,
+  AiSessionDto,
+  AiSettingsDto,
+  AiStatsDto,
+  AiTestRequestDto,
+  AiTestResultDto,
+  AiUsageDto,
+  AiUsageKind,
+  AiUsageLogDto,
+  AiUsageOutcome,
+  AiUsagePeriod,
   AttendanceSettings,
   AzevedoOsCompanyDto,
   AzevedoOsFacetsDto,
@@ -328,6 +347,115 @@ export const integrationTokensApi = {
     api
       .post<{ integrationToken: IntegrationTokenDto }>(`/integration-tokens/${id}/revoke`)
       .then((data) => data.integrationToken),
+};
+
+/** Corpo de criação/edição de agente — o mesmo Zod da API. */
+export interface AiAgentInput {
+  name: string;
+  description: string;
+  status?: AiAgentDto["status"];
+  isGeneral: boolean;
+  departmentIds: string[];
+  model: string | null;
+  knowledgeSourceIds: string[];
+  config: AiAgentDto["config"];
+}
+
+export interface AiAutomationInput {
+  name: string;
+  active: boolean;
+  agentId: string;
+  whatsappInstanceId: string | null;
+  departmentId: string | null;
+  onlyWithoutDepartment: boolean;
+  conversationType: AiAutomationDto["conversationType"];
+  onlyUnassigned: boolean;
+  onlyNewConversations: boolean;
+  resolvedTagId: string | null;
+  priority: number;
+}
+
+export interface AiKnowledgeInput {
+  title: string;
+  kind: AiKnowledgeSourceDto["kind"];
+  content: string;
+  active: boolean;
+}
+
+export interface AiLogsQuery {
+  limit?: number;
+  before?: string;
+  agentId?: string;
+  kind?: AiUsageKind;
+  outcome?: AiUsageOutcome;
+}
+
+/**
+ * Inteligência artificial. A chave do provedor sobe UMA vez, no PUT, e
+ * nunca volta — todo DTO daqui traz no máximo o `apiKeyHint`.
+ */
+export const aiApi = {
+  providers: () => api.get<{ providers: AiProviderDto[]; dedicatedSecretsKey: boolean }>("/ai/providers"),
+  saveProvider: (provider: AiProviderKind, input: { apiKey?: string; defaultModel?: string }) =>
+    api.put<{ provider: AiProviderDto; test: { ok: boolean; message: string } | null }>(`/ai/providers/${provider}`, input),
+  testProvider: (provider: AiProviderKind) =>
+    api.post<{ provider: AiProviderDto; test: { ok: boolean; message: string } }>(`/ai/providers/${provider}/test`),
+  disconnectProvider: (provider: AiProviderKind) =>
+    api.post<{ provider: AiProviderDto }>(`/ai/providers/${provider}/disconnect`).then((data) => data.provider),
+  models: (provider: AiProviderKind, refresh = false) =>
+    api.get<{ models: AiModelDto[]; source: "provider" | "catalog"; fetchedAt: string | null }>(
+      `/ai/providers/${provider}/models${refresh ? "?refresh=1" : ""}`,
+    ),
+  billing: (provider: AiProviderKind) => api.get<AiProviderBillingDto>(`/ai/providers/${provider}/billing`),
+
+  settings: () => api.get<{ settings: AiSettingsDto }>("/ai/settings").then((data) => data.settings),
+  saveSettings: (input: Omit<AiSettingsDto, "updatedAt">) =>
+    api.put<{ settings: AiSettingsDto }>("/ai/settings", input).then((data) => data.settings),
+
+  usage: (period: AiUsagePeriod) => api.get<{ usage: AiUsageDto }>(`/ai/usage?period=${period}`).then((data) => data.usage),
+  stats: (period: AiUsagePeriod) => api.get<{ stats: AiStatsDto }>(`/ai/stats?period=${period}`).then((data) => data.stats),
+  logs: (query: AiLogsQuery = {}) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== "") params.set(key, String(value));
+    const suffix = params.toString();
+    return api.get<{ logs: AiUsageLogDto[]; hasMore: boolean }>(`/ai/logs${suffix ? `?${suffix}` : ""}`);
+  },
+
+  agents: () => api.get<{ agents: AiAgentSummaryDto[] }>("/ai/agents").then((data) => data.agents),
+  agent: (id: string) => api.get<{ agent: AiAgentDto }>(`/ai/agents/${id}`).then((data) => data.agent),
+  createAgent: (input: AiAgentInput) => api.post<{ agent: AiAgentDto }>("/ai/agents", input).then((data) => data.agent),
+  updateAgent: (id: string, input: AiAgentInput) =>
+    api.patch<{ agent: AiAgentDto }>(`/ai/agents/${id}`, input).then((data) => data.agent),
+  setAgentStatus: (id: string, status: AiAgentDto["status"]) =>
+    api.post<{ agent: AiAgentDto }>(`/ai/agents/${id}/status`, { status }).then((data) => data.agent),
+  duplicateAgent: (id: string) => api.post<{ agent: AiAgentDto }>(`/ai/agents/${id}/duplicate`).then((data) => data.agent),
+  deleteAgent: (id: string) => api.delete<{ ok: true }>(`/ai/agents/${id}`),
+  agentVersions: (id: string) =>
+    api.get<{ versions: AiAgentVersionDto[] }>(`/ai/agents/${id}/versions`).then((data) => data.versions),
+  testAgent: (id: string, input: AiTestRequestDto) =>
+    api.post<{ result: AiTestResultDto }>(`/ai/agents/${id}/test`, input).then((data) => data.result),
+  options: () => api.get<{ users: UserDirectoryDto[] }>("/ai/options"),
+
+  knowledge: () => api.get<{ sources: AiKnowledgeSourceDto[] }>("/ai/knowledge").then((data) => data.sources),
+  createKnowledge: (input: AiKnowledgeInput) =>
+    api.post<{ source: AiKnowledgeSourceDto }>("/ai/knowledge", input).then((data) => data.source),
+  updateKnowledge: (id: string, input: Partial<AiKnowledgeInput>) =>
+    api.patch<{ source: AiKnowledgeSourceDto }>(`/ai/knowledge/${id}`, input).then((data) => data.source),
+  deleteKnowledge: (id: string) => api.delete<{ ok: true }>(`/ai/knowledge/${id}`),
+
+  automations: () => api.get<{ automations: AiAutomationDto[] }>("/ai/automations").then((data) => data.automations),
+  createAutomation: (input: AiAutomationInput) =>
+    api.post<{ automation: AiAutomationDto }>("/ai/automations", input).then((data) => data.automation),
+  updateAutomation: (id: string, input: AiAutomationInput) =>
+    api.patch<{ automation: AiAutomationDto }>(`/ai/automations/${id}`, input).then((data) => data.automation),
+  deleteAutomation: (id: string) => api.delete<{ ok: true }>(`/ai/automations/${id}`),
+
+  conversationSession: (conversationId: string) =>
+    api.get<{ session: AiSessionDto | null }>(`/conversations/${conversationId}/ai`).then((data) => data.session),
+  stopSession: (conversationId: string) =>
+    api.post<{ session: AiSessionDto | null }>(`/conversations/${conversationId}/ai/stop`).then((data) => data.session),
+  resumeSession: (conversationId: string) =>
+    api.post<{ session: AiSessionDto | null }>(`/conversations/${conversationId}/ai/resume`).then((data) => data.session),
 };
 
 export const messagesApi = {

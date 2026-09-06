@@ -60,6 +60,13 @@ export class InstanceManager {
     private readonly audit: AuditService,
     private readonly storage: MediaStorage,
     private readonly logger: Logger,
+    /**
+     * Motor do atendimento por IA. Opcional para os testes que sobem o
+     * instance-manager sem IA; em produção é sempre passado. Avisado DEPOIS
+     * da publicação em tempo real: a mensagem já está no banco e na tela
+     * antes de qualquer agente pensar em responder.
+     */
+    private readonly aiRuntime?: { onInboundMessage(input: { organizationId: string; conversationId: string; messageId: string }): void },
   ) {}
 
   wireProviderEvents(): void {
@@ -167,6 +174,16 @@ export class InstanceManager {
           this.io
             .to(room)
             .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation, personName));
+          // Só mensagem RECEBIDA aciona a IA — o eco do que a equipe (ou a
+          // própria IA) enviou nunca vira turno. O motor tem fila e debounce
+          // próprios e nunca lança.
+          if (persisted.direction === "inbound" && !conversation.archivedAt) {
+            this.aiRuntime?.onInboundMessage({
+              organizationId,
+              conversationId: conversation.id,
+              messageId: persisted.id,
+            });
+          }
         } catch (err) {
           this.logger.error({
             instanceId: message.instanceId,

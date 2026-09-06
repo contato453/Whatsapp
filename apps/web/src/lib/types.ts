@@ -1,4 +1,5 @@
 import type {
+  AiSessionDto,
   ConnectionStatus,
   ConversationStatus,
   ConversationType,
@@ -380,6 +381,11 @@ export interface ConversationDetailDto {
   group: GroupDetailDto | null;
   assignmentHistory: AssignmentHistoryDto[];
   notes: NoteDto[];
+  /**
+   * Atendimento por IA mais recente da conversa (ativo ou encerrado); nulo
+   * quando nunca houve. Depois da carga, o evento `ai:session` mantém em dia.
+   */
+  aiSession: AiSessionDto | null;
 }
 
 export interface ScheduledMessageDto {

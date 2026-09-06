@@ -31,7 +31,7 @@ export function isConfigurableRole(value: string): value is ConfigurableRole {
 }
 
 /** Áreas do catálogo — viram as seções da tela, nesta ordem. */
-export const PERMISSION_AREAS = ["atendimento", "ligacoes", "cadastros", "visao"] as const;
+export const PERMISSION_AREAS = ["atendimento", "ligacoes", "cadastros", "visao", "ia"] as const;
 export type PermissionArea = (typeof PERMISSION_AREAS)[number];
 
 export const PERMISSION_AREA_LABELS: Record<PermissionArea, string> = {
@@ -39,6 +39,7 @@ export const PERMISSION_AREA_LABELS: Record<PermissionArea, string> = {
   ligacoes: "Ligações",
   cadastros: "Cadastros",
   visao: "Visão e relatórios",
+  ia: "Inteligência artificial",
 };
 
 export const PERMISSION_AREA_DESCRIPTIONS: Record<PermissionArea, string> = {
@@ -46,6 +47,7 @@ export const PERMISSION_AREA_DESCRIPTIONS: Record<PermissionArea, string> = {
   ligacoes: "Quem atende ligações e quem acessa o registro e as gravações de chamadas.",
   cadastros: "Quem mexe nas listas que o escritório inteiro usa.",
   visao: "Quais números e registros do escritório cada perfil consegue consultar.",
+  ia: "Quem configura e acompanha o atendimento por IA. A chave da OpenAI e o orçamento continuam só do administrador.",
 };
 
 /**
@@ -299,6 +301,43 @@ export const PERMISSION_ACTIONS = [
       "Apaga em definitivo as gravações de um período para liberar espaço. Não pode ser desfeito — por padrão, ninguém além do administrador.",
     area: "ligacoes",
     defaults: { agent: false, supervisor: false },
+  },
+  // ---------- Inteligência artificial ----------
+  // A chave do provedor (OpenAI), o orçamento e as configurações gerais são
+  // FIXOS em admin, sem chave: são credencial e dinheiro. O que é configurável
+  // é o dia a dia — agentes, base de conhecimento, automações, indicadores e
+  // o controle do atendimento por IA dentro da conversa.
+  {
+    key: "ai.agent.manage",
+    label: "Criar e editar agentes de IA, base de conhecimento e automações",
+    description:
+      "Configura o que cada IA faz, o que ela sabe e em quais conversas entra. Inclui o testador. A chave da OpenAI continua só do administrador.",
+    area: "ia",
+    defaults: { agent: false, supervisor: true },
+  },
+  {
+    key: "ai.view_usage",
+    label: "Ver consumo, indicadores e logs de IA",
+    description:
+      "Abre os números do atendimento por IA: atendimentos, taxa de resolução, tokens, custo estimado e o registro de cada chamada.",
+    area: "ia",
+    defaults: { agent: false, supervisor: true },
+  },
+  {
+    key: "ai.session.stop",
+    label: "Assumir ou encerrar um atendimento por IA",
+    description:
+      "Dentro da conversa, tira a IA do atendimento na hora — ao assumir a conversa ou pelo botão Encerrar IA. Sem esta chave a IA continua até transferir sozinha.",
+    area: "ia",
+    defaults: { agent: true, supervisor: true },
+  },
+  {
+    key: "ai.session.resume",
+    label: "Devolver a conversa para a IA",
+    description:
+      "Depois que alguém assumiu ou encerrou, coloca o mesmo agente de volta no atendimento. Ação explícita, para humano e IA não se alternarem sozinhos.",
+    area: "ia",
+    defaults: { agent: false, supervisor: true },
   },
 ] as const;
 

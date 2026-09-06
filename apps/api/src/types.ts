@@ -5,6 +5,8 @@ import type { Logger } from "pino";
 import type { AppConfig } from "./config.js";
 import type { MediaStorage } from "./lib/media-storage.js";
 import type { AuditService } from "./modules/audit/service.js";
+import type { SecretCipher } from "./lib/ai-secrets.js";
+import type { AiRuntime } from "./services/ai/runtime.js";
 import type { AzevedoOsClient } from "./services/azevedo-os-client.js";
 import type { InstanceManager } from "./services/instance-manager.js";
 import type { MessageIngestService } from "./services/message-ingest.js";
@@ -22,4 +24,8 @@ export interface AppDeps {
   ingest: MessageIngestService;
   /** Leitura do cadastro empresarial no Azevedo-OS (ver azevedo-os-client). */
   azevedoOs: AzevedoOsClient;
+  /** Cifra da chave de API dos provedores de IA (ver lib/ai-secrets). */
+  aiCipher: SecretCipher;
+  /** Motor do atendimento por IA (ver services/ai/runtime). */
+  aiRuntime: AiRuntime;
 }

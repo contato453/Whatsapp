@@ -124,6 +124,9 @@ function fakePrisma(
       },
     },
     conversationAssignmentHistory: { create: async () => ({}) },
+    // Transferir e atribuir consultam o atendimento por IA da conversa
+    // (para interrompê-lo): sem sessão, a rota segue como antes.
+    aiSession: { findFirst: async () => null },
     message: {
       findFirst: async () => ({
         id: MSG_ID,

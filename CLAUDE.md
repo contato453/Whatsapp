@@ -54,6 +54,7 @@ apps/
   api/                      # Fastify
     src/modules/<dominio>/routes.ts   # rotas HTTP por domínio
     src/services/           # instance-manager, message-ingest, scheduler
+    src/services/ai/        # motor de atendimento por IA (provider, prompt, ferramentas, runtime)
     src/realtime/socket.ts  # Socket.IO, salas e audiência
     src/lib/                # auth, access, errors, serialize, media-storage, signature...
     test/                   # vitest
@@ -221,6 +222,10 @@ snake_case e id `uuid`.
   (`pending|sent|failed|canceled`, com `attempts`), `ConversationAssignmentHistory`
   (`assigned|transferred_user|transferred_department|unassigned|resolved|reopened`),
   `AuditLog`.
+
+**Inteligência artificial** — `AiProviderConfig`, `AiSettings`, `AiAgent` (+ `AiAgentDepartment`,
+`AiAgentVersion`, `AiAgentKnowledgeSource`), `AiKnowledgeSource`, `AiAutomation`, `AiSession`,
+`AiUsageLog`. Ver a seção 19.
 
 **Permissões**
 - `RolePermission` — o que cada perfil PODE FAZER nesta organização, por par
@@ -514,6 +519,21 @@ POST   /integrations/messages           (token de máquina, NÃO sessão; ver a 
         desconectada/excluída 409, idempotência de 24h, rate limit por token 429.
         Reaproveita o caminho do envio manual — não expõe leitura nenhuma)
 
+GET    /ai/providers                 PUT /ai/providers/:provider   (admin; a chave sobe UMA vez,
+POST   /ai/providers/:provider/test  POST /ai/providers/:provider/disconnect   volta só o hint)
+GET    /ai/providers/:provider/models[?refresh=1]   GET /ai/providers/:provider/billing
+GET    /ai/settings (ai.view_usage|ai.agent.manage)  PUT /ai/settings (admin; orçamento, política,
+       timeout, contexto, tabela de preço)
+GET    /ai/usage?period=   GET /ai/stats?period=   GET /ai/logs   (ai.view_usage)
+GET    /ai/agents (manage|view_usage)  GET|POST /ai/agents  PATCH|DELETE /ai/agents/:id
+POST   /ai/agents/:id/status  POST /ai/agents/:id/duplicate  GET /ai/agents/:id/versions
+POST   /ai/agents/:id/test   (testador: nada sai pelo WhatsApp; consumo entra como `test`)
+GET|POST /ai/knowledge  PATCH|DELETE /ai/knowledge/:id     GET /ai/options
+GET|POST /ai/automations  PATCH|DELETE /ai/automations/:id  (tudo isso: ai.agent.manage)
+GET    /conversations/:id/ai           (sessão de IA mais recente da conversa)
+POST   /conversations/:id/ai/stop      (ai.session.stop)   POST /conversations/:id/ai/resume (ai.session.resume)
+       (ver a seção 19)
+
 GET    /permissions          (admin; o que a organização gravou por cima do catálogo —
        o catálogo em si NÃO vem por aqui, a tela o importa de @azvchat/shared)
 PUT    /permissions          (admin; grava em bloco, apaga a linha quando o valor volta ao
@@ -566,7 +586,12 @@ sempre `RealtimeEvents.X`:
 `message:new`, `message:status`, `message:reaction`, `message:updated`, `call:incoming`,
 `conversation:updated`, `conversation:read`, `group:participants`, `note:new`,
 `conversation:pinned-items`, `instance:status`, `instance:qr`, `scheduled:pending`,
-`session:closing`, `session:closed`.
+`session:closing`, `session:closed`, `ai:session`, `ai:budget-alert`.
+
+`ai:session` (`{ conversationId, session }`) sai para a `conversationAudience()` sempre que o
+atendimento por IA da conversa muda (começou, respondeu, transferiu, foi assumido/encerrado)
+e carrega a sessão inteira, nunca um patch — é a faixa "Atendimento por IA" da Inbox.
+`ai:budget-alert` vai só para a sala da organização (admin), uma vez por degrau por mês.
 
 `conversation:pinned-items` (`{ conversationId, items }`) sai sempre que a fixação (pin) de
 uma conversa muda — fixar, desafixar, substituir a mais antiga, ou a mensagem fixada ser
@@ -828,7 +853,7 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
 
 Rotas em `apps/web/src/app/(app)/`: `dashboard`, `inbox` (+ `inbox/[conversationId]`),
 `whatsapp`, `users` (+ `new`, `[id]`), `departments`, `reports`, `tags`, `quick-replies`,
-`settings`. Fora do grupo: `login`. **Os rótulos do menu não seguem os nomes das rotas**:
+`settings`, `settings/ai` (+ `settings/ai/agents/[id]`, com `new`). Fora do grupo: `login`. **Os rótulos do menu não seguem os nomes das rotas**:
 `/inbox` aparece como "Conversas" e `/whatsapp` como "Conexões" — as rotas ficaram como
 estão para não quebrar favoritos nem os links dos cards do dashboard. Nos textos da
 interface, a tela se chama "Conversas" (ou "lista de conversas"); "Inbox" segue sendo o
@@ -2258,6 +2283,145 @@ qualquer outra, e o endpoint **não expõe leitura** de conversa/mensagem/contat
 conteúdo nem token em claro).
 
 ---
+
+## 19. Inteligência artificial (atendimento por IA)
+
+Módulo nativo: uma IA atende conversas do WhatsApp dentro da Inbox, com regras, limites,
+conhecimento e custo sob controle. Tela em **Configurações → Inteligência artificial**
+(`/settings/ai`, abas Visão geral, Provedores, Agentes, Automações, Base de conhecimento,
+Consumo e limites, Logs, Configurações gerais). Fonte única do domínio:
+`packages/shared/src/ai.ts`.
+
+**O que este repositório NÃO tinha, e como foi resolvido.** O pedido original falava em
+construtor visual de fluxos, CRM, follow-up automático, filas e campos personalizados de
+contato. Nada disso existe aqui (é o Azevedo-OS que tem CRM; a "fila" da casa é a conversa
+sem responsável). Em vez de inventar um sistema paralelo para cada um:
+- o "bloco Atendimento por IA" é a **automação** (`AiAutomation`): gatilho por número,
+  departamento, tipo de conversa e "só sem responsável"/"só conversa nova" → agente. As
+  saídas do bloco são: **resolvido** (conclui a conversa + etiqueta da automação),
+  **transferido** (destino de transferência do agente) e **erro/limite** (mensagem de
+  fallback do agente + fila humana);
+- "CRM" é o que a casa já usa para classificar: **etiquetas**, **nota interna** (o registro
+  de oportunidade/atividade) e **status** do atendimento;
+- "follow-up" é a **mensagem agendada** (`ScheduledMessage`) — a ferramenta
+  `schedule_followup` agenda a mensagem, põe a conversa em "Aguardando cliente" e encerra a
+  participação da IA; quando o cliente responde, a automação pode abrir um ciclo novo;
+- "campos a coletar" vivem na **memória do atendimento** (`AiSession.state.collected`) e vão
+  no resumo ao atendente; o nome coletado pode virar `customTitle` da conversa, quando a
+  capacidade está ligada. Não há tabela de campos personalizados de contato.
+
+**As três peças, separadas de propósito** (é a decisão mais importante do desenho):
+- `AiAgent` — a configuração REUTILIZÁVEL: identidade, objetivo, "pode/não pode" (texto +
+  **capacidades estruturadas**), limites, gatilhos de transferência e destino, comunicação,
+  condutas, dados a coletar, fontes de conhecimento, avançado. `config` é JSON validado por
+  Zod (`services/ai/config-schema.ts`, mesma forma de `AiAgentConfig` do shared) — dezenas de
+  campos que só a IA lê; o que é consultado por SQL (status, modelo, departamentos N:N em
+  `AiAgentDepartment` com `isGeneral`, destino de transferência com FK) tem coluna;
+- `AiAgentVersion` — foto da config a cada gravação que muda config/modelo. **A sessão
+  aponta para a versão com que começou**: alterar a IA Comercial não troca as regras no meio
+  de uma conversa. Renomear ou trocar departamento não é versão;
+- `AiSession` — um atendimento (conversa + agente numa versão), com `state` (memória:
+  dados coletados, assunto, resumo, ações), contadores, tokens, custo, `lastProcessedMessageId`
+  e `endReason`. **Índice parcial garante uma sessão ativa por conversa.**
+Mais `AiProviderConfig` (chave cifrada + hint + modelo padrão + cache de modelos),
+`AiSettings` (orçamento, política, timeout, contexto, tabela de preço, degraus já avisados),
+`AiKnowledgeSource` + `AiAgentKnowledgeSource`, `AiAutomation`, `AiUsageLog` (uma linha por
+chamada ao provedor: tokens, custo estimado, duração, ferramentas pedidas/executadas/bloqueadas,
+erro — **nunca conteúdo nem chave**). Migration `20260906120000_ai_module`.
+
+**A chave da OpenAI é segredo.** Sobe UMA vez (`PUT /ai/providers/openai`), é cifrada com
+AES-256-GCM (`lib/ai-secrets.ts`, chave em `AI_SECRETS_KEY`; sem ela deriva do `JWT_SECRET`
+e o boot avisa — trocar o `JWT_SECRET` nesse modo invalida a chave gravada), e decifrada só
+no processo da API, na hora da chamada. Para a tela vai apenas `apiKeyHint`
+("sk-••••8F2A"); não há `NEXT_PUBLIC_` e nunca haverá; o erro do provedor nunca é
+repassado (ele ecoa o cabeçalho, que leva a chave); auditoria grava só o hint.
+`apps/api/test/ai-routes.test.ts` fixa que a chave não aparece em resposta nenhuma.
+
+**Provedor é abstração** (`services/ai/provider.ts`: `testConnection`, `listModels`, `chat`
+com function calling, `fetchBilling`). `OpenAiProvider` fala por `fetch` puro; provedor novo
+entra em `createAiProvider` (`credentials.ts`) e em `AI_PROVIDERS`. **Modelos**: a lista vem
+de `GET /v1/models` (filtrada para chat) com cache de 6h; sem chave/provedor mudo, sai o
+catálogo local (`AI_MODEL_CATALOG`, com finalidade e preço), marcado como tal. Modelo global
+(padrão do sistema) e por agente (`advanced.model`). **Saldo**: a OpenAI não expõe saldo
+pré-pago por API e só informa custo faturado a Admin key — a tela tenta, e sem acesso diz
+"Saldo não disponibilizado pelo provedor" em vez de inventar número.
+
+**O motor** (`services/ai/runtime.ts`). Ingestão grava a mensagem como sempre → o
+instance-manager avisa `aiRuntime.onInboundMessage` (só `inbound`, só não arquivada) →
+debounce de 2,5s por conversa (duas mensagens rápidas viram um turno) → fila por conversa em
+memória (nunca dois turnos da mesma conversa; mensagem que chega durante o turno agenda o
+próximo) → sem sessão ativa, alguma automação casa? (`automationMatches`, puro e testado) →
+turno: prompt de sistema montado dos campos (`prompt-builder.ts`, puro) + histórico recente
+(mensagens NOVAS por último) + trechos da base (`knowledge.ts`, busca **lexical** por trecho,
+sem embeddings, nunca a base inteira) → provedor com ferramentas filtradas pela capacidade
+(`tools.ts`) → cada ferramenta pedida passa por `actions.ts` (capacidade ligada? argumentos
+válidos? alvo permitido para ESTA conversa?) → resposta pelo **mesmo** `provider.sendText`
+com `Message.metadata.origem = "ai"` (+ agente, sessão, provedor, modelo) → consumo em
+`AiUsageLog` → `ai:session`. **`lastProcessedMessageId` avança só depois de o provedor
+responder**: falha antes disso reprocessa as mesmas mensagens; a varredura de 1 min
+(`sweep`) retoma turno pendente após reinício, encerra sessão além do tempo máximo e a de
+conversa arquivada. **Humano assumiu = IA para na hora**: `interruptAiSessionForHuman`
+(`session.ts`) é chamado por atribuir, transferir departamento e por TODO envio da equipe
+(`afterOutboundPersist` em `messages/routes.ts`), e o turno RELÊ a sessão antes de enviar —
+resposta gerada para sessão interrompida é descartada. "Devolver para IA" é ação explícita
+(`POST /conversations/:id/ai/resume`, chave própria) que reaproveita a memória.
+
+**Ferramentas** (`AI_TOOL_NAMES`): `save_collected_data`, `update_contact_name`, `add_tag`,
+`remove_tag`, `add_internal_note`, `set_conversation_status`, `schedule_followup`,
+`search_knowledge_base`, `lookup_company` (Azevedo-OS, só cadastro — nada financeiro),
+`transfer_to_human`, `finish_conversation`. Cada uma é liberada por UMA capacidade
+(`AI_CAPABILITIES`); desligada, nem é oferecida ao modelo, e se ele pedir pelo nome o backend
+recusa e registra em `toolsBlocked`. **O modelo pede; o backend decide. O prompt nunca é
+controle de acesso.** As terminais (`transfer_to_human`, `finish_conversation`,
+`schedule_followup`) encerram o laço: não há nova volta ao modelo.
+
+**Transferência**: resumo determinístico (`buildHandoffSummary`: cliente, assunto,
+necessidade, dados coletados, motivo, contagens) vira **nota interna** ANTES de a conversa
+mudar de sala; a conversa é roteada ao departamento do agente e ao responsável conforme o
+modo (`rules` = responsável padrão do departamento/número via `eligibleAssigneeWhere`;
+`specific` só se a pessoa enxerga a conversa; `unassigned` = fila); histórico de atribuição
+com a nota; sessão `transferred`. Erro permanente do provedor (chave, modelo, cota), tentativas
+esgotadas, limite de mensagens/tempo, orçamento e agente desativado passam por
+`finishWithFallback`: mensagem de fallback ao cliente + a mesma transferência.
+**Nunca silêncio.**
+
+**Orçamento** (`budget.ts`): gasto do mês = soma de `AiUsageLog.costMicros` (custo
+estimado por `estimateCostMicros`, tabela em `AI_MODEL_CATALOG` + sobreposição da
+organização; modelo sem preço → `costMicros` nulo e a tela avisa, **nunca zero**). Degraus
+50/80/90/100 avisam o admin uma vez por mês por degrau (`ai:budget-alert`). Ao estourar:
+`alert_only` segue; `block_new` não abre sessão nova; `transfer_human` idem e ainda roteia a
+conversa ao destino do agente. Sessão em andamento com bloqueio é encerrada com fallback no
+turno seguinte.
+
+**Permissões**: chave da OpenAI, orçamento e configurações gerais são `requireRole("admin")`
+(credencial e dinheiro). Catálogo: `ai.agent.manage` (agentes, base, automações, testador),
+`ai.view_usage` (consumo, indicadores, logs), `ai.session.stop` (assumir/encerrar na
+conversa; padrão também para Usuário), `ai.session.resume` (devolver). Agente segue o recorte
+de departamento de etiqueta/resposta rápida (`departmentResourceScope`, geral só admin).
+**Nada encosta em `access.ts`**: quem enxerga a conversa enxerga a faixa de IA dela.
+
+**Testador** (`POST /ai/agents/:id/test`): mesmo prompt, mesmas ferramentas, mesmas recusas,
+em modo `dryRun` — nada gravado, nada pelo WhatsApp; o consumo entra como `kind = test`. O
+estado (dados coletados) viaja de ida e volta no corpo. Modo debug mostra conhecimento
+usado, ferramentas pedidas/bloqueadas/executadas, tokens, custo e motivo de transferência —
+nunca raciocínio interno do modelo.
+
+**Inbox**: `GET /conversations/:id` traz `aiSession` (a mais recente); a faixa
+`components/ai/ai-session-banner.tsx` mostra agente, mensagens, tempo e os botões
+(Assumir = `POST /assign` de sempre; Encerrar IA; Ver configuração; Devolver para IA). Bolha
+enviada pela IA mostra ícone + "· IA" (`isAiMessage(metadata)`, nunca deduzido do texto).
+
+**Testes**: `ai-secrets`, `ai-knowledge`, `ai-prompt` (prompt/ferramentas/config),
+`ai-actions` (as três portas + `automationMatches` + custo), `ai-runtime` (motor de ponta a
+ponta com Prisma em memória — `test/helpers/memory-prisma.ts` — e `fetch` da OpenAI simulado:
+sessão, debounce, transferência, humano no meio do turno, ferramenta bloqueada, fallback,
+orçamento), `ai-routes` (chave nunca vaza, papéis, versão).
+
+**Limitações desta entrega** (registradas, não escondidas): a IA responde só em texto (sem
+mídia); base de conhecimento é texto/FAQ com busca lexical (sem documentos/embeddings);
+não há construtor visual de fluxos — a automação é o bloco; a pesquisa de saldo da OpenAI
+depende de Admin key; a API roda em instância única (a fila por conversa é em memória, como
+o scheduler).
 
 ## 18. Como escrever um bom prompt para este sistema
 

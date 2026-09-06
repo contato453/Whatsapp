@@ -249,6 +249,11 @@ describe("padrões de fábrica (Usuário / Supervisor)", () => {
     ["call.view", true, true],
     ["call.recording.play", false, true],
     ["call.recording.delete", false, false],
+    // Inteligência artificial
+    ["ai.agent.manage", false, true],
+    ["ai.view_usage", false, true],
+    ["ai.session.stop", true, true],
+    ["ai.session.resume", false, true],
   ];
 
   it.each(esperado)("%s → Usuário %s, Supervisor %s", (action, agent, supervisor) => {
