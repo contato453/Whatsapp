@@ -31,13 +31,14 @@ export function isConfigurableRole(value: string): value is ConfigurableRole {
 }
 
 /** Áreas do catálogo — viram as seções da tela, nesta ordem. */
-export const PERMISSION_AREAS = ["atendimento", "ligacoes", "cadastros", "visao", "ia"] as const;
+export const PERMISSION_AREAS = ["atendimento", "ligacoes", "cadastros", "automacoes", "visao", "ia"] as const;
 export type PermissionArea = (typeof PERMISSION_AREAS)[number];
 
 export const PERMISSION_AREA_LABELS: Record<PermissionArea, string> = {
   atendimento: "Atendimento",
   ligacoes: "Ligações",
   cadastros: "Cadastros",
+  automacoes: "Automações",
   visao: "Visão e relatórios",
   ia: "Inteligência artificial",
 };
@@ -46,6 +47,7 @@ export const PERMISSION_AREA_DESCRIPTIONS: Record<PermissionArea, string> = {
   atendimento: "O que a equipe pode fazer dentro de uma conversa já em andamento.",
   ligacoes: "Quem atende ligações e quem acessa o registro e as gravações de chamadas.",
   cadastros: "Quem mexe nas listas que o escritório inteiro usa.",
+  automacoes: "Quem monta, publica e acompanha os fluxos automáticos de atendimento.",
   visao: "Quais números e registros do escritório cada perfil consegue consultar.",
   ia: "Quem configura e acompanha o atendimento por IA. A chave da OpenAI e o orçamento continuam só do administrador.",
 };
@@ -318,6 +320,24 @@ export const PERMISSION_ACTIONS = [
     area: "ligacoes",
     defaults: { agent: false, supervisor: false },
   },
+
+  // ---------- Automações ----------
+  {
+    key: "automation.manage",
+    label: "Criar, editar e publicar fluxos de automação",
+    description:
+      "Abre o construtor visual, monta os blocos, publica e ativa/desativa fluxos. Não muda quem vê qual conversa.",
+    area: "automacoes",
+    defaults: { agent: false, supervisor: true },
+  },
+  {
+    key: "automation.view_history",
+    label: "Ver histórico e métricas das automações",
+    description: "Consulta as execuções dos fluxos: por onde passaram, o que responderam, onde pararam.",
+    area: "automacoes",
+    defaults: { agent: false, supervisor: true },
+  },
+
   // ---------- Inteligência artificial ----------
   // A chave do provedor (OpenAI), o orçamento e as configurações gerais são
   // FIXOS em admin, sem chave: são credencial e dinheiro. O que é configurável

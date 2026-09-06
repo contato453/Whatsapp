@@ -26,6 +26,7 @@ import { financeiroLembreteRoutes } from "./modules/integrations/financeiro-lemb
 import { integrationMessageApiRoutes } from "./modules/integrations/message-api.js";
 import { astracallsWebhookRoutes } from "./modules/integrations/astracalls-webhook.js";
 import { permissionRoutes } from "./modules/permissions/routes.js";
+import { automationRoutes } from "./modules/automation/routes.js";
 import { aiRoutes } from "./modules/ai/routes.js";
 import type { AppDeps } from "./types.js";
 
@@ -88,6 +89,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     await integrationMessageApiRoutes(instance, deps);
     await astracallsWebhookRoutes(instance, deps);
     await permissionRoutes(instance, deps);
+    await automationRoutes(instance, deps);
     await aiRoutes(instance, deps);
   });
 

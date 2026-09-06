@@ -333,6 +333,8 @@ export function serializeAttendanceSettings(settings: AttendanceSettings) {
       startTime: day.startTime,
       endTime: day.endTime,
     })),
+    greeting: settings.greeting,
+    outOfHours: settings.outOfHours,
   };
 }
 

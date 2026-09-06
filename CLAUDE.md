@@ -1942,18 +1942,29 @@ por conversa, sem prazo de validade, navegação entre elas e atualização em t
 todo mundo com a conversa aberta; API de integração para sistema externo disparar mensagem
 por token de máquina (amarrado a um número, com idempotência de 24h, rate limit por token e
 tela de administração de tokens para admin), reaproveitando o caminho do envio manual — a
-mensagem aparece na Inbox como qualquer outra; **follow-up automático** (seção 19): regra
-reutilizável por um, vários ou todos os departamentos, com etapas de aguardar e agir
-(mandar mensagem com variáveis, etiquetar, mudar status), disparada quando a conversa entra
-em "aguardando cliente", cancelada na hora se o cliente responde ou se o atendimento sai
-desse status, reiniciada quando a equipe manda mensagem nova, respeitando expediente e
-rodando inteiramente no backend (sobrevive a reinício e a fechar o navegador).
+mensagem aparece na Inbox como qualquer outra; **automações — construtor visual de fluxos**
+(seção 18): gatilho, enviar mensagem, fazer pergunta com validação por tipo, menu, condição,
+aguardar com retomada por resposta, etiqueta, status, encaminhar setor/atendente, devolver
+para a fila, webhook, finalizar com protocolo, motor de execução no backend (não depende de
+aba aberta), rascunho/publicação sem quebrar execução em andamento, prioridade e cooldown
+entre fluxos, handoff automático quando um atendente assume, templates prontos (o de
+Atendimento Geral funcional de ponta a ponta), histórico de execução e saudação/fora do
+expediente de zero configuração; **follow-up automático** (seção 19): regra reutilizável por
+um, vários ou todos os departamentos, com etapas de aguardar e agir (mandar mensagem com
+variáveis, etiquetar, mudar status), disparada quando a conversa entra em "aguardando
+cliente", cancelada na hora se o cliente responde ou se o atendimento sai desse status,
+reiniciada quando a equipe manda mensagem nova, respeitando expediente e rodando inteiramente
+no backend (sobrevive a reinício e a fechar o navegador); **atendimento por IA** (seção 20):
+agente configurável por objetivo/limites/conhecimento, disparado por automação própria (não
+pelo construtor de fluxos), com transferência para humano e resumo em nota interna.
 
 **Falta** (ordem sugerida): validar o pareamento QR em rede aberta (o ambiente de
 desenvolvimento bloqueia `web.whatsapp.com`); votos de enquete agregados na Inbox;
 biblioteca de figurinhas; read receipts de saída; fila (BullMQ/Redis) para mídia em
 volume; tela de auditoria no frontend (API pronta); storage S3/Supabase (interface pronta);
-testes de integração com banco; multi-organização real (cadastro e billing).
+testes de integração com banco; multi-organização real (cadastro e billing); envio de mídia
+pelo bloco "Enviar mensagem" das automações; distribuição automática por round-robin nas
+automações (ver as lacunas detalhadas ao fim da seção 18).
 
 ---
 
@@ -2289,36 +2300,173 @@ conteúdo nem token em claro).
 
 ---
 
-## 18. Como escrever um bom prompt para este sistema
+## 18. Automações — construtor visual de fluxos e motor de execução
 
-Um prompt fica bom aqui quando responde, nesta ordem:
+Módulo de automação de atendimento: mensagens automáticas, menus, perguntas,
+condições, esperas, encaminhamentos e finalização, montados visualmente e
+executados pelo backend, sem depender de aba de navegador aberta.
 
-1. **O quê e para quem** — a mudança em uma frase, e qual papel (admin, supervisor,
-   usuário) sente o efeito.
-2. **Onde encosta** — cite as camadas pelo nome real: `schema.prisma` + migration,
-   `modules/<dominio>/routes.ts`, `lib/access.ts`, `shared/enums.ts` ou `realtime.ts`,
-   `web/src/lib/api.ts`, tela/componente.
-3. **Regra de visibilidade** — quem passa a ver ou deixa de ver. Se a resposta for "não
-   muda", diga isso explicitamente, para a IA não inventar filtro.
-4. **Comportamento nas bordas** — conversa sem departamento, sem responsável, número
-   desconectado, usuário desativado, grupo sem participante sincronizado.
-5. **Tempo real** — a mudança precisa aparecer sem reload? Então tem evento e audiência.
-6. **Auditoria** — a ação entra no `AuditLog`? Com qual `action`?
-7. **Critério de pronto** — `pnpm typecheck && pnpm lint && pnpm test` verdes, mais o teste
-   novo que prova a regra.
+**Camadas.** `packages/shared/src/automation.ts` (catálogo de tipos de nó,
+gatilhos, validação de grafo, templates) e `automation-variables.ts`
+(`{{variáveis}}` da mensagem do fluxo — catálogo PRÓPRIO, diferente do da
+resposta rápida: contexto de execução, não de conversa aberta com empresa em
+mãos). `apps/api/src/services/automation/engine.ts` é o motor
+(`AutomationEngine`); `worker.ts` é quem o chama periodicamente
+(`AutomationWorker`, mesmo padrão do `ScheduledMessageWorker`).
+`apps/api/src/modules/automation/routes.ts` é a API do construtor e do
+histórico. `apps/web/src/app/(app)/automations/` são as telas (Fluxos,
+Templates, Histórico — todas com abas em `components/automations/
+automation-tabs.tsx`), e `automations/[id]/page.tsx` é o construtor visual
+(React Flow / `@xyflow/react`), com paleta de blocos
+(`node-palette.tsx`), nó customizado (`flow-node.tsx`) e o painel de
+configuração por tipo (`node-inspector.tsx`).
 
-Esqueleto pronto:
+**O GRAFO (nós + arestas) é um valor JSON, não tabelas `automation_nodes`/
+`automation_edges`.** Ver o comentário do bloco "Automações" em
+`schema.prisma`: React Flow já trabalha nativamente com array de nós e de
+arestas serializáveis, e duplicar ou versionar um fluxo inteiro vira copiar
+um valor em vez de recriar dezenas de linhas mantendo IDs coerentes entre
+três tabelas. `AutomationFlow.draftGraph` é o que o construtor edita a cada
+autosave; `AutomationFlow.publishedVersionId` aponta para uma
+`AutomationFlowVersion` CONGELADA — publicar cria uma versão nova a partir
+do rascunho, e cada `AutomationExecution` referencia a versão que estava
+valendo quando ela começou, nunca o rascunho. **É assim que editar um fluxo
+ATIVO nunca quebra uma execução já em andamento** (seção 24 do pedido
+original): o rascunho pode seguir mudando por cima sem afetar quem já
+publicou.
 
-> No AZVCHAT (monorepo `contato453/Whatsapp`, Fastify + Prisma + Next.js), quero **\<mudança\>**.
-> Contexto: **\<por que, na operação do escritório\>**.
-> Camadas afetadas: **\<liste\>**.
-> Visibilidade: **\<quem vê / não muda\>** — usar as funções de `lib/access.ts`, sem `where` na mão.
-> Bordas: **\<conversa sem departamento, sem responsável, ...\>**.
-> Tempo real: **\<evento e audiência, ou "não precisa"\>**. Auditoria: **\<action, ou "não"\>**.
-> Seguir as convenções do `CLAUDE.md` (Zod em toda entrada, serializer dedicado, enums em
-> `@azvchat/shared`, kit de UI, textos em português, comentário explicando o porquê).
-> Ao final: migration nova (nunca editar migration aplicada), teste cobrindo a regra, e
-> `pnpm typecheck && pnpm lint && pnpm test` verdes. Commit e push na branch de trabalho.
+**Não existe tabela "waiting jobs" separada.** `AutomationExecution` carrega
+o próprio estado de espera (`status: waiting`, `waitingReason:
+"timer"|"reply"`, `waitingUntil`) — duas tabelas para a mesma coisa
+divergiriam sobre "está esperando o quê". O worker varre `status = waiting
+AND waitingReason = "timer" AND waitingUntil <= now()`.
+
+**Templates são catálogo no código (`AUTOMATION_TEMPLATES`), não linhas no
+banco.** São conteúdo do sistema, iguais para toda organização — o mesmo
+raciocínio de `PERMISSION_ACTIONS` e `QUICK_REPLY_VARIABLES`. "Usar
+template" cria um `AutomationFlow` novo (rascunho) copiando o grafo do
+template; a cópia nunca referencia o template de volta, então editar a cópia
+nunca toca no catálogo.
+
+**Só uma execução ATIVA (`running`/`waiting`) por conversa ao mesmo tempo.**
+Reforçado por um índice único PARCIAL criado à mão na migration (Prisma não
+declara índice parcial no schema — mesmo caso de
+`conversations_assigned_to_all_without_user`): o motor confere antes de
+criar, e o banco nunca deixa passar duas sob concorrência (duas mensagens
+quase simultâneas colidem no P2002, e quem perde simplesmente não inicia um
+segundo fluxo por cima do primeiro — mesmo padrão de corrida do
+`message-ingest.ts`).
+
+**Gatilhos implementados**: `new_message`, `first_message`, `keyword`,
+`no_reply_timeout` (varrido pelo worker: conversa não resolvida, cuja
+ÚLTIMA mensagem é NOSSA e mais velha que o configurado), `conversation_resolved`
+(hook em `POST /conversations/:id/resolve` e em `.../status` quando o
+destino é `resolved`) e `tag_added` (hook em `POST /conversations/:id/tags/:tagId`).
+Cada `handleXxx` do `AutomationEngine` NUNCA lança — mesma regra do
+`MessageIngestService.ingest()` — e todos são chamados com `void` a partir
+da rota/serviço, nunca bloqueando o caminho principal.
+
+**Prioridade entre fluxos** (seção 27 do pedido): `AutomationFlow.priority`,
+MENOR NÚMERO VENCE. Vários fluxos ativos cujo gatilho combina com a mesma
+mensagem são avaliados em ordem de prioridade, e **só um** começa por
+mensagem — o primeiro que passar também no cooldown (`cooldownMinutes`,
+por fluxo+conversa, contra repetir "nova mensagem" a cada mensagem).
+
+**Saudação e fora do expediente (seções 4/5) moram em `AttendanceSettings`,
+não em `AutomationFlow`.** São o caminho de ZERO CONFIGURAÇÃO — quem não
+quer montar um fluxo ainda tem mensagem automática. `AutomationEngine.
+maybeSendAttendanceAutoMessages` só roda quando NENHUM fluxo do construtor
+capturou a mensagem (um fluxo de verdade, como o template "Atendimento
+Geral", já inclui a própria saudação e nunca deixa cair aqui para a mesma
+conversa). Fora do expediente tem prioridade sobre saudação — nunca os dois
+juntos na mesma mensagem. A tela fica em `/attendance-settings` (reaproveitada,
+não duplicada) — é por isso que "Configurações de Atendimento", no menu de
+Automações, é um LINK para lá, e não uma tela própria.
+
+**Handoff para humano.** `POST /conversations/:id/assign` (a ação EXPLÍCITA
+de uma pessoa assumindo) chama `AutomationEngine.handleHumanTakeover`, que
+marca a execução ativa (se houver) como `handed_off` — status que não é
+`running` nem `waiting`, então a automação simplesmente para de processar
+aquela execução (o worker não a retoma, e uma resposta do cliente não é mais
+capturada por ela). **A atribuição automática de responsável padrão
+(`message-ingest.ts`) NÃO passa por esta rota**, então nunca aciona o
+handoff — do contrário, todo departamento com responsável padrão configurado
+jamais veria um fluxo de automação rodar. Limitação conhecida: o motor não
+guarda "humano no controle" como estado permanente da conversa, só da
+execução — um gatilho `first_message` nunca refire (deixou de ser a primeira
+mensagem), mas um `keyword`/`new_message` mal desenhado poderia, em tese,
+recomeçar depois que um humano já resolveu tudo. Fluxo de saudação deve
+preferir `first_message`, não `new_message`, por este motivo.
+
+**Tipos de nó** (`AUTOMATION_NODE_TYPES`, em `shared/automation.ts`):
+`trigger`, `send_message` (só TEXTO enviado pelo motor nesta entrega — os
+demais tipos de mídia existem no catálogo/UI para o dia em que o envio for
+implementado, mas hoje só logam `automation_media_not_supported` e seguem em
+frente), `ask_question` (valida a resposta por tipo — texto, número, CPF,
+CNPJ, e-mail, data, opção — e RESSENTA a pergunta com uma mensagem de erro
+quando inválida, sem avançar o fluxo), `menu` (uma saída por opção,
+selecionada por número ou por texto aproximado da resposta), `condition`
+(campo + valor, combinados por E/OU; ver `AUTOMATION_CONDITION_FIELDS`),
+`wait` (por tempo, ou até o próximo expediente; opcionalmente interrompido
+por uma resposta do cliente — `resumeOnReply`), `tag_add`/`tag_remove`,
+`change_status`, `forward_department` (reaproveita a mesma mecânica de
+"transferir departamento": zera o responsável), `assign_user` (confere
+elegibilidade com a MESMA `conversationAssigneeWhere` de `lib/access.ts` — um
+fluxo não pode atribuir a quem não enxergaria a conversa), `unassign`,
+`webhook` (POST simples, 5s de timeout, falha vira log e o fluxo segue —
+nunca trava a automação por um sistema externo fora do ar), `finish`
+(mensagem final opcional, concluir atendimento, adicionar etiqueta, gerar
+protocolo — `AZV-<timestamp36>-<random4>`, disponível como
+`{{protocolo}}`). Não existe "fila" como entidade própria — o pedido original
+pede "encaminhar para fila/setor/atendente"; aqui isso é
+`forward_department` (setor) + `unassign` (devolver para a fila do setor) +
+`assign_user` (atendente específico), porque o AZVCHAT não tem conceito de
+fila separado de departamento (ver seção 5) — inventar um seria duplicar
+estrutura que já existe.
+
+**Variáveis de mensagem do fluxo** (`resolveAutomationTemplate`, em
+`automation-variables.ts`): `{{nome}}`, `{{primeiro_nome}}`, `{{telefone}}`,
+`{{atendente}}`, `{{departamento}}`, `{{protocolo}}`, `{{data}}`, `{{hora}}`,
+mais `{{campo.<saveKey>}}` para respostas coletadas por um bloco "Fazer
+pergunta" anterior na mesma execução. Variável sem valor vira **string
+vazia** (nunca `{{chave}}` literal nem trava o envio) — diferente da
+resposta rápida, a mensagem do fluxo sai sozinha, sem ninguém para revisar
+antes.
+
+**Validação antes de publicar** (seção 25): `validateAutomationGraph`
+(shared — forma do grafo: gatilho presente e único, bloco desconectado,
+condição sem os dois caminhos, menu com opção sem destino, "aguardar com
+retomada" sem as duas saídas) mais `validateAutomationFlowForPublish`
+(`lib/automation/validate.ts` — departamento/etiqueta/usuário referenciados
+existem NESTA organização). `POST /automation-flows/:id/publish` recusa com
+422 e a lista de pendências quando alguma coisa falha; o motor em si também
+confere de novo em runtime (nó sem aresta de saída completa a execução como
+concluída em vez de travar; laço entre blocos é cortado no passo 60 e a
+execução falha com `automation_execution_failed`, nunca derruba o processo).
+
+**Permissões**: `automation.manage` (construir, publicar, ativar/desativar,
+templates — padrão supervisor+) e `automation.view_history` (padrão
+supervisor+), catálogo `packages/shared/src/permissions.ts`, área
+"Automações". Nada aqui toca `lib/access.ts`: o histórico de execução é
+recortado por `conversationScope`, a mesma régua de sempre — quem não
+enxerga a conversa não vê a execução dela.
+
+**Histórico** (`AutomationExecutionLog`, seção 28): nunca guarda o texto que
+o cliente escreveu — só o que o NÓ decidiu (qual opção do menu, qual
+etiqueta, o resultado). `GET /automation-executions` e `.../\:id` (com os
+logs) alimentam a tela de Histórico.
+
+**O que ficou de fora desta entrega** (documentado para não ser
+redescoberto): distribuição automática por round-robin/menor fila (hoje só
+`assign_user` para uma pessoa específica, decidida na hora de montar o
+fluxo); envio de mídia (imagem/áudio/vídeo/documento) pelo bloco "Enviar
+mensagem" — o tipo existe no catálogo, o motor ainda não sobe pelo storage;
+gatilho de webhook RECEBIDO (só existe o de webhook SAÍDA); "campo
+personalizado" do contato como destino de resposta — só existe variável de
+execução (`{{campo.*}}`), porque o AZVCHAT não tem um `Contact`/`PersonProfile`
+com campos livres, e criar um só para isto duplicaria estrutura; condição em
+árvore booleana (hoje é uma lista plana combinada por um único E/OU, não
+grupos aninhados).
 
 ---
 
@@ -2634,3 +2782,36 @@ mídia); base de conhecimento é texto/FAQ com busca lexical (sem documentos/emb
 não há construtor visual de fluxos — a automação é o bloco; a pesquisa de saldo da OpenAI
 depende de Admin key; a API roda em instância única (a fila por conversa é em memória, como
 o scheduler).
+
+---
+
+## 21. Como escrever um bom prompt para este sistema
+
+Um prompt fica bom aqui quando responde, nesta ordem:
+
+1. **O quê e para quem** — a mudança em uma frase, e qual papel (admin, supervisor,
+   usuário) sente o efeito.
+2. **Onde encosta** — cite as camadas pelo nome real: `schema.prisma` + migration,
+   `modules/<dominio>/routes.ts`, `lib/access.ts`, `shared/enums.ts` ou `realtime.ts`,
+   `web/src/lib/api.ts`, tela/componente.
+3. **Regra de visibilidade** — quem passa a ver ou deixa de ver. Se a resposta for "não
+   muda", diga isso explicitamente, para a IA não inventar filtro.
+4. **Comportamento nas bordas** — conversa sem departamento, sem responsável, número
+   desconectado, usuário desativado, grupo sem participante sincronizado.
+5. **Tempo real** — a mudança precisa aparecer sem reload? Então tem evento e audiência.
+6. **Auditoria** — a ação entra no `AuditLog`? Com qual `action`?
+7. **Critério de pronto** — `pnpm typecheck && pnpm lint && pnpm test` verdes, mais o teste
+   novo que prova a regra.
+
+Esqueleto pronto:
+
+> No AZVCHAT (monorepo `contato453/Whatsapp`, Fastify + Prisma + Next.js), quero **\<mudança\>**.
+> Contexto: **\<por que, na operação do escritório\>**.
+> Camadas afetadas: **\<liste\>**.
+> Visibilidade: **\<quem vê / não muda\>** — usar as funções de `lib/access.ts`, sem `where` na mão.
+> Bordas: **\<conversa sem departamento, sem responsável, ...\>**.
+> Tempo real: **\<evento e audiência, ou "não precisa"\>**. Auditoria: **\<action, ou "não"\>**.
+> Seguir as convenções do `CLAUDE.md` (Zod em toda entrada, serializer dedicado, enums em
+> `@azvchat/shared`, kit de UI, textos em português, comentário explicando o porquê).
+> Ao final: migration nova (nunca editar migration aplicada), teste cobrindo a regra, e
+> `pnpm typecheck && pnpm lint && pnpm test` verdes. Commit e push na branch de trabalho.

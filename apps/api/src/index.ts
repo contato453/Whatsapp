@@ -11,6 +11,8 @@ import { AuditService } from "./modules/audit/service.js";
 import { MessageIngestService } from "./services/message-ingest.js";
 import { InstanceManager } from "./services/instance-manager.js";
 import { ScheduledMessageWorker } from "./services/scheduler.js";
+import { AutomationEngine } from "./services/automation/engine.js";
+import { AutomationWorker } from "./services/automation/worker.js";
 import { FollowUpScheduler } from "./services/follow-up-scheduler.js";
 import { SessionScheduleWatcher } from "./services/session-schedule-watcher.js";
 import { createAzevedoOsClient } from "./services/azevedo-os-client.js";
@@ -121,6 +123,14 @@ async function main(): Promise<void> {
   });
   deps.io = io;
 
+  // Motor de automações (construtor visual de fluxos) — precisa do `io`
+  // (eventos de tempo real) e do `provider` (envio das mensagens do fluxo),
+  // então nasce aqui, depois do socket. `InstanceManager` o recebe para
+  // acionar os gatilhos de mensagem logo depois que `ingest` grava a
+  // mensagem recebida.
+  const automation = new AutomationEngine(prisma, provider, io, logger);
+  deps.automation = automation;
+
   // Motor do atendimento por IA: recebe a mensagem depois de gravada e
   // decide se algum agente responde. Nasce antes do instance-manager, que é
   // quem o avisa.
@@ -135,6 +145,7 @@ async function main(): Promise<void> {
     audit,
     storage,
     logger,
+    automation,
     azevedoOs,
     aiRuntime,
   );
@@ -144,6 +155,9 @@ async function main(): Promise<void> {
 
   const scheduler = new ScheduledMessageWorker(prisma, provider, io, logger);
   scheduler.start();
+
+  const automationWorker = new AutomationWorker(automation, logger);
+  automationWorker.start();
 
   const followUpScheduler = new FollowUpScheduler(prisma, provider, io, logger, azevedoOs);
   followUpScheduler.start();
@@ -168,6 +182,7 @@ async function main(): Promise<void> {
     logger.info({ event: "shutdown", signal });
     try {
       scheduler.stop();
+      automationWorker.stop();
       followUpScheduler.stop();
       sessionScheduleWatcher.stop();
       aiRuntime.stop();

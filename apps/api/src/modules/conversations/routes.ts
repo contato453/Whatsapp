@@ -971,6 +971,11 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       userName: request.user.name,
     });
     await emitConversationUpdated(id, request.user.organizationId);
+    // Um HUMANO acabou de assumir esta conversa — é aqui, e só aqui, que a
+    // automação para de interferir (ver `AutomationEngine.handleHumanTakeover`).
+    // A atribuição automática de responsável padrão (`message-ingest.ts`) NÃO
+    // passa por esta rota, então continua sem afetar fluxo nenhum.
+    void deps.automation?.handleHumanTakeover(id);
     return { ok: true };
     },
   );
@@ -1217,6 +1222,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       entityId: id,
     });
     await emitConversationUpdated(id, request.user.organizationId);
+    void deps.automation?.handleConversationResolved(request.user.organizationId, id);
     // Concluído não é mais "aguardando cliente" — cancela o follow-up ativo.
     await reconcileConversation(deps, id);
     return { ok: true };
@@ -1282,6 +1288,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       metadata: { from: conversation.status, to: status },
     });
     await emitConversationUpdated(id, request.user.organizationId);
+    if (status === "resolved") void deps.automation?.handleConversationResolved(request.user.organizationId, id);
     // Gatilho principal do follow-up automático (seção 7/8 do pedido):
     // entrar em "aguardando cliente" inicia a régua aplicável; sair dele
     // cancela a que estiver rodando.
@@ -1648,6 +1655,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       metadata: { tagId },
     });
     await emitConversationUpdated(id, request.user.organizationId);
+    void deps.automation?.handleTagAdded(request.user.organizationId, id, tagId);
     return { ok: true };
   });
 

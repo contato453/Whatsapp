@@ -108,6 +108,13 @@ const NAV: Array<{
     permission: "reports.view",
   },
   {
+    href: "/automations",
+    label: "Automações",
+    icon: Workflow,
+    minRole: "supervisor",
+    permission: "automation.manage",
+  },
+  {
     href: "/tags",
     label: "Etiquetas",
     icon: Tags,

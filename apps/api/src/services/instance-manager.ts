@@ -19,6 +19,7 @@ import { extensionFromMime, type MediaStorage } from "../lib/media-storage.js";
 import { handleInboundMessage, handleOutboundMessage } from "../lib/follow-up-engine.js";
 import type { MessageIngestService } from "./message-ingest.js";
 import type { AuditService } from "../modules/audit/service.js";
+import type { AutomationEngine } from "./automation/engine.js";
 import type { AzevedoOsClient } from "./azevedo-os-client.js";
 
 /** Intervalo entre downloads de foto para não sobrecarregar o WhatsApp. */
@@ -62,6 +63,8 @@ export class InstanceManager {
     private readonly audit: AuditService,
     private readonly storage: MediaStorage,
     private readonly logger: Logger,
+    /** Motor de automações (construtor visual de fluxos) — acionado logo depois que a mensagem é gravada. */
+    private readonly automation: AutomationEngine,
     /**
      * Só para o motor de Follow-up Automático resolver `{{empresa.*}}` nas
      * mensagens que ele manda sozinho — nada aqui muda o que já existia.
@@ -205,6 +208,20 @@ export class InstanceManager {
           this.io
             .to(room)
             .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation, personName));
+
+          // Motor de automações (construtor visual de fluxos): só mensagem de
+          // ENTRADA nova aciona gatilho — a mensagem que a própria equipe
+          // manda (ou que a automação acabou de mandar) nunca reabre a
+          // checagem de fluxo. `handleIncomingMessage` nunca lança, mesma
+          // regra do `ingest()`.
+          if (message.direction === "inbound") {
+            void this.automation.handleIncomingMessage({
+              organizationId,
+              conversationId: conversation.id,
+              content: persisted.content,
+            });
+          }
+
           // Só mensagem RECEBIDA aciona a IA — o eco do que a equipe (ou a
           // própria IA) enviou nunca vira turno. O motor tem fila e debounce
           // próprios e nunca lança.
