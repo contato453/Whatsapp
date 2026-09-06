@@ -18,6 +18,7 @@ import {
   Users,
   Building2,
   BarChart3,
+  Workflow,
   Zap,
   Lock,
 } from "lucide-react";
@@ -104,6 +105,13 @@ const NAV: Array<{
     icon: BarChart3,
     minRole: "supervisor",
     permission: "reports.view",
+  },
+  {
+    href: "/automations",
+    label: "Automações",
+    icon: Workflow,
+    minRole: "supervisor",
+    permission: "automation.manage",
   },
   {
     href: "/tags",

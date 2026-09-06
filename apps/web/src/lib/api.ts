@@ -3,6 +3,8 @@
 import { AZEVEDO_OS_SOURCE } from "@azvchat/shared";
 import type {
   AttendanceSettings,
+  AutomationGraph,
+  AutomationTriggerType,
   AzevedoOsCompanyDto,
   AzevedoOsFacetsDto,
   AzevedoOsHealthDto,
@@ -14,6 +16,12 @@ import type {
 import type { DashboardFilters } from "./dashboard-filters";
 import type {
   AgentReportDto,
+  AutomationExecutionDetailDto,
+  AutomationExecutionSummaryDto,
+  AutomationFlowDetailDto,
+  AutomationFlowProblemDto,
+  AutomationFlowSummaryDto,
+  AutomationTemplateSummaryDto,
   CallLogResponse,
   ConversationDto,
   DashboardStatsDto,
@@ -652,6 +660,56 @@ export const attendanceSettingsApi = {
     api
       .put<{ settings: AttendanceSettings }>("/attendance-settings", input)
       .then((data) => data.settings),
+};
+
+export interface AutomationFlowUpdateInput {
+  name?: string;
+  description?: string | null;
+  triggerType?: AutomationTriggerType;
+  triggerConfig?: Record<string, unknown> | null;
+  whatsappInstanceId?: string | null;
+  priority?: number;
+  cooldownMinutes?: number;
+  draftGraph?: AutomationGraph;
+}
+
+/** Construtor de fluxos, templates e histórico de execução — ver `modules/automation`. */
+export const automationApi = {
+  listFlows: () =>
+    api.get<{ flows: AutomationFlowSummaryDto[] }>("/automation-flows").then((data) => data.flows),
+  createFlow: (input: { name: string; description?: string; triggerType?: AutomationTriggerType; whatsappInstanceId?: string; templateKey?: string }) =>
+    api.post<{ flow: AutomationFlowDetailDto }>("/automation-flows", input).then((data) => data.flow),
+  getFlow: (id: string) =>
+    api.get<{ flow: AutomationFlowDetailDto }>(`/automation-flows/${id}`).then((data) => data.flow),
+  updateFlow: (id: string, input: AutomationFlowUpdateInput) =>
+    api.patch<{ flow: AutomationFlowDetailDto }>(`/automation-flows/${id}`, input).then((data) => data.flow),
+  validateFlow: (id: string) =>
+    api.get<{ problems: AutomationFlowProblemDto[] }>(`/automation-flows/${id}/validate`).then((data) => data.problems),
+  publishFlow: (id: string) =>
+    api.post<{ flow: AutomationFlowDetailDto }>(`/automation-flows/${id}/publish`).then((data) => data.flow),
+  activateFlow: (id: string) =>
+    api.post<{ flow: AutomationFlowDetailDto }>(`/automation-flows/${id}/activate`).then((data) => data.flow),
+  deactivateFlow: (id: string) =>
+    api.post<{ flow: AutomationFlowDetailDto }>(`/automation-flows/${id}/deactivate`).then((data) => data.flow),
+  duplicateFlow: (id: string) =>
+    api.post<{ flow: AutomationFlowDetailDto }>(`/automation-flows/${id}/duplicate`).then((data) => data.flow),
+  deleteFlow: (id: string) => api.delete<{ ok: boolean }>(`/automation-flows/${id}`),
+  listTemplates: () =>
+    api.get<{ templates: AutomationTemplateSummaryDto[] }>("/automation-templates").then((data) => data.templates),
+  useTemplate: (key: string) =>
+    api.post<{ flow: AutomationFlowDetailDto }>(`/automation-templates/${key}/use`).then((data) => data.flow),
+  listExecutions: (filters: { flowId?: string; conversationId?: string; status?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (filters.flowId) params.set("flowId", filters.flowId);
+    if (filters.conversationId) params.set("conversationId", filters.conversationId);
+    if (filters.status) params.set("status", filters.status);
+    const query = params.toString();
+    return api
+      .get<{ executions: AutomationExecutionSummaryDto[] }>(`/automation-executions${query ? `?${query}` : ""}`)
+      .then((data) => data.executions);
+  },
+  getExecution: (id: string) =>
+    api.get<{ execution: AutomationExecutionDetailDto }>(`/automation-executions/${id}`).then((data) => data.execution),
 };
 
 /**

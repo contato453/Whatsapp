@@ -35,6 +35,15 @@ interface StoredSettings {
   loginRestrictionEnabled: boolean;
   businessHours: Array<{ weekday: number; active: boolean; startTime: string; endTime: string }>;
   loginHours: Array<{ weekday: number; active: boolean; startTime: string; endTime: string }>;
+  greetingEnabled: boolean;
+  greetingMessage: string | null;
+  greetingFirstContactOnly: boolean;
+  greetingCooldownMinutes: number;
+  greetingInstanceId: string | null;
+  outOfHoursEnabled: boolean;
+  outOfHoursMessage: string | null;
+  outOfHoursCooldownMinutes: number;
+  outOfHoursInstanceId: string | null;
 }
 
 let stored: StoredSettings | null = null;
@@ -47,8 +56,8 @@ function fakePrisma(): PrismaClient {
       create,
       update,
     }: {
-      create: { responseLimitMinutes?: number; timezone?: string; loginRestrictionEnabled?: boolean };
-      update: { responseLimitMinutes: number; timezone: string; loginRestrictionEnabled: boolean };
+      create: Partial<StoredSettings>;
+      update: Omit<StoredSettings, "id" | "businessHours" | "loginHours">;
     }) => {
       if (!stored) {
         stored = {
@@ -58,11 +67,29 @@ function fakePrisma(): PrismaClient {
           loginRestrictionEnabled: create.loginRestrictionEnabled ?? false,
           businessHours: [],
           loginHours: [],
+          greetingEnabled: create.greetingEnabled ?? false,
+          greetingMessage: create.greetingMessage ?? null,
+          greetingFirstContactOnly: create.greetingFirstContactOnly ?? true,
+          greetingCooldownMinutes: create.greetingCooldownMinutes ?? 360,
+          greetingInstanceId: create.greetingInstanceId ?? null,
+          outOfHoursEnabled: create.outOfHoursEnabled ?? false,
+          outOfHoursMessage: create.outOfHoursMessage ?? null,
+          outOfHoursCooldownMinutes: create.outOfHoursCooldownMinutes ?? 180,
+          outOfHoursInstanceId: create.outOfHoursInstanceId ?? null,
         };
       } else {
         stored.responseLimitMinutes = update.responseLimitMinutes;
         stored.timezone = update.timezone;
         stored.loginRestrictionEnabled = update.loginRestrictionEnabled;
+        stored.greetingEnabled = update.greetingEnabled;
+        stored.greetingMessage = update.greetingMessage;
+        stored.greetingFirstContactOnly = update.greetingFirstContactOnly;
+        stored.greetingCooldownMinutes = update.greetingCooldownMinutes;
+        stored.greetingInstanceId = update.greetingInstanceId;
+        stored.outOfHoursEnabled = update.outOfHoursEnabled;
+        stored.outOfHoursMessage = update.outOfHoursMessage;
+        stored.outOfHoursCooldownMinutes = update.outOfHoursCooldownMinutes;
+        stored.outOfHoursInstanceId = update.outOfHoursInstanceId;
       }
       return { ...stored, organizationId: ORG };
     },
@@ -136,6 +163,8 @@ const VALID_BODY = {
   businessHours: DEFAULT_ATTENDANCE_SETTINGS.businessHours,
   loginRestrictionEnabled: false,
   loginHours: DEFAULT_ATTENDANCE_SETTINGS.loginHours,
+  greeting: DEFAULT_ATTENDANCE_SETTINGS.greeting,
+  outOfHours: DEFAULT_ATTENDANCE_SETTINGS.outOfHours,
 };
 
 describe("rotas de parâmetros de atendimento", () => {
@@ -173,6 +202,8 @@ describe("rotas de parâmetros de atendimento", () => {
       // nenhuma não pode trancar a equipe do lado de fora.
       loginRestrictionEnabled: false,
       loginHours: DEFAULT_ATTENDANCE_SETTINGS.loginHours,
+      greeting: DEFAULT_ATTENDANCE_SETTINGS.greeting,
+      outOfHours: DEFAULT_ATTENDANCE_SETTINGS.outOfHours,
     });
     await app.close();
   });

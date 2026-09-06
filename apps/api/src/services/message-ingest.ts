@@ -24,7 +24,7 @@ import { eligibleAssigneeWhere } from "../lib/default-assignee.js";
  * falhar: o `create` já aconteceu do outro lado, então a linha existe e o
  * caminho certo é buscá-la, não desistir da mensagem.
  */
-function isUniqueViolation(err: unknown): boolean {
+export function isUniqueViolation(err: unknown): boolean {
   return (
     typeof err === "object" &&
     err !== null &&

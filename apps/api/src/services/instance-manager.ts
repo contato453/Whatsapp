@@ -18,6 +18,7 @@ import { pinnedItemsIfMessagePinned, unpinMessageIfPinned } from "../lib/pinned-
 import { extensionFromMime, type MediaStorage } from "../lib/media-storage.js";
 import type { MessageIngestService } from "./message-ingest.js";
 import type { AuditService } from "../modules/audit/service.js";
+import type { AutomationEngine } from "./automation/engine.js";
 
 /** Intervalo entre downloads de foto para não sobrecarregar o WhatsApp. */
 const AVATAR_FETCH_DELAY_MS = 300;
@@ -60,6 +61,8 @@ export class InstanceManager {
     private readonly audit: AuditService,
     private readonly storage: MediaStorage,
     private readonly logger: Logger,
+    /** Motor de automações — acionado logo depois que a mensagem é gravada. */
+    private readonly automation: AutomationEngine,
   ) {}
 
   wireProviderEvents(): void {
@@ -167,6 +170,18 @@ export class InstanceManager {
           this.io
             .to(room)
             .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation, personName));
+
+          // Motor de automações: só mensagem de ENTRADA nova aciona gatilho —
+          // a mensagem que a própria equipe manda (ou que a automação acabou
+          // de mandar) nunca reabre a checagem de fluxo. `handleIncomingMessage`
+          // nunca lança, mesma regra do `ingest()`.
+          if (message.direction === "inbound") {
+            void this.automation.handleIncomingMessage({
+              organizationId,
+              conversationId: conversation.id,
+              content: persisted.content,
+            });
+          }
         } catch (err) {
           this.logger.error({
             instanceId: message.instanceId,

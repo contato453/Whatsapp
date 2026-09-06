@@ -1,4 +1,8 @@
 import type {
+  AutomationExecutionStatus,
+  AutomationFlowStatus,
+  AutomationGraph,
+  AutomationTriggerType,
   ConnectionStatus,
   ConversationStatus,
   ConversationType,
@@ -587,4 +591,75 @@ export interface CompanyFilterStateDto {
   truncated: boolean;
   /** Conversas do recorte atual que ficaram de fora por não terem empresa. */
   unlinkedExcluded: number;
+}
+
+/* ------------------------------------------------------------------ *
+ * Automações
+ * ------------------------------------------------------------------ */
+
+export interface AutomationFlowSummaryDto {
+  id: string;
+  name: string;
+  description: string | null;
+  status: AutomationFlowStatus;
+  triggerType: AutomationTriggerType;
+  whatsappInstanceId: string | null;
+  instanceName: string | null;
+  priority: number;
+  cooldownMinutes: number;
+  hasPublishedVersion: boolean;
+  executionsCount: number;
+  updatedAt: string;
+}
+
+export interface AutomationFlowDetailDto extends AutomationFlowSummaryDto {
+  triggerConfig: Record<string, unknown> | null;
+  draftGraph: AutomationGraph;
+  publishedGraph: AutomationGraph | null;
+  publishedVersion: number | null;
+}
+
+export interface AutomationTemplateSummaryDto {
+  key: string;
+  name: string;
+  description: string;
+  category: string;
+  triggerType: AutomationTriggerType;
+}
+
+export interface AutomationFlowProblemDto {
+  nodeId?: string;
+  message: string;
+}
+
+export interface AutomationExecutionLogDto {
+  id: string;
+  at: string;
+  nodeId: string | null;
+  nodeType: string | null;
+  level: string;
+  event: string;
+  message: string | null;
+  data: Record<string, unknown> | null;
+}
+
+export interface AutomationExecutionSummaryDto {
+  id: string;
+  flowId: string;
+  flowName: string;
+  conversationId: string;
+  conversationTitle: string;
+  whatsappInstanceId: string;
+  status: AutomationExecutionStatus;
+  triggerType: AutomationTriggerType;
+  resultSummary: string | null;
+  error: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export interface AutomationExecutionDetailDto extends AutomationExecutionSummaryDto {
+  context: Record<string, unknown>;
+  currentNodeId: string | null;
+  logs: AutomationExecutionLogDto[];
 }

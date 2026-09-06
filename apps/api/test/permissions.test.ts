@@ -244,6 +244,9 @@ describe("padrões de fábrica (Usuário / Supervisor)", () => {
     ["dashboard.view_team", false, true],
     ["audit.view", false, true],
     ["attendance_settings.manage", false, true],
+    // Automações
+    ["automation.manage", false, true],
+    ["automation.view_history", false, true],
     // Ligações
     ["call.answer", true, true],
     ["call.view", true, true],

@@ -36,6 +36,8 @@ model Organization {
   personProfiles      PersonProfile[]
   pinnedItems         PinnedItem[]
   integrationTokens   IntegrationToken[]
+  automationFlows     AutomationFlow[]
+  automationExecutions AutomationExecution[]
 
   @@map("organizations")
 }
@@ -196,6 +198,9 @@ model WhatsAppInstance {
   contacts          Contact[]
   userAccess        UserWhatsAppInstance[]
   integrationTokens IntegrationToken[]
+  automationFlows   AutomationFlow[]
+  greetingForSettings   AttendanceSettings[] @relation("AttendanceGreetingInstance")
+  outOfHoursForSettings AttendanceSettings[] @relation("AttendanceOutOfHoursInstance")
 
   @@index([organizationId])
   @@index([departmentId])
@@ -445,6 +450,9 @@ model Conversation {
   /// `IntegrationMessageLog`). Referência frouxa: apagar a conversa não apaga
   /// o log, só zera o ponteiro.
   integrationMessageLogs IntegrationMessageLog[]
+  /// Execuções do motor de automação nesta conversa (histórico completo,
+  /// inclusive as já concluídas/canceladas/entregues ao humano).
+  automationExecutions AutomationExecution[]
 
   @@unique([whatsappInstanceId, externalChatId])
   @@index([organizationId, status])
@@ -925,12 +933,38 @@ model AttendanceSettings {
   /// Liga a restrição de horário de login. Desligada por padrão: ligada de
   /// saída, um deploy trancaria do lado de fora quem já estava trabalhando.
   loginRestrictionEnabled Boolean  @default(false)
+  /// Mensagem automática de saudação — dispara na PRIMEIRA mensagem que uma
+  /// conversa recebe (ou, se `greetingFirstContactOnly = false`, em toda
+  /// mensagem nova fora do intervalo mínimo). Mora aqui, e não em tabela
+  /// própria: é parâmetro de atendimento do escritório inteiro, como o SLA e
+  /// o expediente — não há por-departamento nem por-número hoje.
+  greetingEnabled          Boolean   @default(false)
+  greetingMessage          String?
+  /// true = só na primeira mensagem que a CONVERSA recebe (o caso comum).
+  /// false = repete quando passar o intervalo mínimo abaixo.
+  greetingFirstContactOnly Boolean   @default(true)
+  /// Intervalo mínimo entre saudações da MESMA conversa, em minutos — trava
+  /// contra repetir a cada mensagem quando `greetingFirstContactOnly = false`.
+  greetingCooldownMinutes  Int       @default(360)
+  /// Número específico, ou null = todos os números conectados.
+  greetingInstanceId       String?
+  /// Mensagem automática fora do expediente — dispara quando chega mensagem
+  /// do cliente fora do horário configurado em `AttendanceBusinessHours`.
+  outOfHoursEnabled         Boolean  @default(false)
+  outOfHoursMessage         String?
+  /// Intervalo mínimo entre avisos de fora do expediente da MESMA conversa —
+  /// sem ele, uma sequência de mensagens do cliente à noite dispararia uma
+  /// resposta automática atrás da outra.
+  outOfHoursCooldownMinutes Int      @default(180)
+  outOfHoursInstanceId      String?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
-  organization  Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  businessHours AttendanceBusinessHours[]
-  loginHours    AttendanceLoginHours[]
+  organization    Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  businessHours   AttendanceBusinessHours[]
+  loginHours      AttendanceLoginHours[]
+  greetingInstance   WhatsAppInstance? @relation("AttendanceGreetingInstance", fields: [greetingInstanceId], references: [id], onDelete: SetNull)
+  outOfHoursInstance WhatsAppInstance? @relation("AttendanceOutOfHoursInstance", fields: [outOfHoursInstanceId], references: [id], onDelete: SetNull)
 
   @@map("attendance_settings")
 }
@@ -1042,4 +1076,203 @@ model IntegrationMessageLog {
   @@unique([integrationTokenId, idempotencyKey])
   @@index([integrationTokenId, createdAt])
   @@map("integration_message_logs")
+}
+
+// ============================================================
+// Automações — construtor visual de fluxos e motor de execução
+// ============================================================
+//
+// O GRAFO (nós + conexões) fica em UM CAMPO JSON por versão
+// (`AutomationFlowVersion.graph`), e não em tabelas relacionais
+// `automation_nodes`/`automation_edges`. Decisão deliberada: o editor visual
+// (React Flow) já trabalha nativamente com um array de nós e um de arestas
+// serializáveis, salvar e carregar é um `JSON.stringify`/`parse`, e duplicar
+// ou versionar um fluxo inteiro vira copiar um valor em vez de recriar dezenas
+// de linhas em três tabelas mantendo IDs coerentes entre elas. O preço é não
+// poder fazer `WHERE` relacional dentro de um nó específico — o que este
+// sistema nunca precisa: a leitura é sempre "o fluxo inteiro", nunca "o nó X
+// de algum fluxo qualquer". Rascunho e publicação são o que garante a regra
+// da seção 24: alterar o rascunho de um fluxo ATIVO nunca afeta uma execução
+// já em andamento, porque cada `AutomationExecution` referencia a VERSÃO
+// publicada que estava valendo quando ela começou (`flowVersionId`), nunca o
+// rascunho.
+
+enum AutomationFlowStatus {
+  draft
+  active
+  inactive
+}
+
+/// O que faz um fluxo COMEÇAR a rodar para uma conversa. Cobre a seção 8 do
+/// pedido; o que a arquitetura atual do AZVCHAT sustenta de verdade (e não a
+/// lista inteira, que inclui coisas como "webhook recebido" sem um endpoint
+/// genérico de entrada — ver o relatório final).
+enum AutomationTriggerType {
+  new_message
+  first_message
+  keyword
+  no_reply_timeout
+  conversation_resolved
+  tag_added
+}
+
+/// Estado de UMA execução do motor para UMA conversa.
+enum AutomationExecutionStatus {
+  running
+  /// Parado num nó "Aguardar" (tempo) ou "Fazer pergunta" (resposta do
+  /// cliente) — `waitingUntil`/`waitingReason` dizem o quê e até quando.
+  waiting
+  completed
+  failed
+  canceled
+  /// Um HUMANO assumiu a conversa enquanto o fluxo rodava. O motor para de
+  /// interferir a partir daqui — é o oposto de `canceled` (que é decisão do
+  /// próprio fluxo ou de quem desativa): aqui quem decidiu foi a atendente.
+  handed_off
+}
+
+/// Um fluxo de automação — o que aparece na tela "Fluxos".
+///
+/// `draftGraph` é o que o construtor visual lê e grava a cada autosave.
+/// `publishedVersionId` aponta para a versão CONGELADA que está valendo no
+/// atendimento agora — nula em fluxo que nunca foi publicado (status
+/// `draft`). Publicar copia `draftGraph` para uma `AutomationFlowVersion`
+/// nova e aponta `publishedVersionId` para ela; o rascunho pode seguir sendo
+/// editado por cima sem afetar quem já está publicado.
+model AutomationFlow {
+  id             String               @id @default(uuid())
+  organizationId String
+  name           String
+  description    String?
+  status         AutomationFlowStatus @default(draft)
+  triggerType    AutomationTriggerType @default(new_message)
+  /// Config extra do gatilho (ex.: lista de palavras-chave do tipo `keyword`,
+  /// minutos do tipo `no_reply_timeout`, id da etiqueta de `tag_added`).
+  triggerConfig  Json?
+  /// Número específico, ou null = todos os números conectados da organização.
+  whatsappInstanceId String?
+  /// Ordem de disputa entre fluxos cujo gatilho combina ao mesmo tempo
+  /// (seção 27) — MENOR NÚMERO VENCE. Fluxo específico de palavra-chave nasce
+  /// com prioridade menor (mais forte) que o atendimento geral, por padrão.
+  priority       Int                  @default(100)
+  /// Intervalo mínimo, em minutos, entre duas execuções DESTE fluxo para a
+  /// MESMA conversa — trava contra saudação/fluxo repetindo a cada mensagem
+  /// (seção 26). Zero = sem trava própria (o motor ainda impede duas
+  /// execuções ATIVAS simultâneas da mesma conversa, ver `AutomationExecution`).
+  cooldownMinutes Int                 @default(0)
+  draftGraph      Json
+  publishedVersionId String?          @unique
+  createdById     String?
+  updatedById     String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  organization    Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  whatsappInstance WhatsAppInstance?        @relation(fields: [whatsappInstanceId], references: [id], onDelete: SetNull)
+  versions        AutomationFlowVersion[]   @relation("AutomationFlowVersions")
+  publishedVersion AutomationFlowVersion?   @relation("AutomationFlowPublished", fields: [publishedVersionId], references: [id], onDelete: SetNull)
+  executions      AutomationExecution[]
+
+  @@index([organizationId, status])
+  @@map("automation_flows")
+}
+
+/// Uma foto congelada do grafo, tirada a cada publicação. Nunca é editada
+/// depois de criada — é o que faz "editar rascunho não quebra execução em
+/// andamento" ser verdade: a execução referencia o ID desta linha, não o
+/// `AutomationFlow.draftGraph` que pode ter mudado embaixo dela.
+model AutomationFlowVersion {
+  id            String   @id @default(uuid())
+  flowId        String
+  /// Sequencial por fluxo (1, 2, 3...), só para a tela de histórico mostrar
+  /// "versão 3" em vez do uuid.
+  version       Int
+  graph         Json
+  publishedById String?
+  publishedAt   DateTime @default(now())
+
+  flow          AutomationFlow        @relation("AutomationFlowVersions", fields: [flowId], references: [id], onDelete: Cascade)
+  publishedFlow AutomationFlow?       @relation("AutomationFlowPublished")
+  executions    AutomationExecution[]
+
+  @@unique([flowId, version])
+  @@map("automation_flow_versions")
+}
+
+/// Uma execução do motor, do gatilho até o fim, para UMA conversa.
+///
+/// Não existe tabela separada de "waiting jobs": guardar o estado de espera
+/// (`waitingUntil`/`waitingReason`) na própria execução evita duas linhas que
+/// podem discordar entre si sobre "está esperando o quê" — o worker
+/// (`AutomationWorker`, mesmo padrão do `ScheduledMessageWorker`) varre
+/// `status = waiting AND waitingUntil <= now()` direto aqui.
+///
+/// Só uma execução ATIVA (`running` ou `waiting`) por conversa ao mesmo
+/// tempo — reforçado por um índice único PARCIAL criado à mão na migration
+/// (Prisma não expressa índice parcial no schema; ver o comentário lá), no
+/// mesmo espírito da constraint `conversations_assigned_to_all_without_user`
+/// documentada no restante do sistema.
+model AutomationExecution {
+  id             String                    @id @default(uuid())
+  organizationId String
+  flowId         String
+  flowVersionId  String
+  conversationId String
+  /// Cópia do número da conversa no início — útil para relatório/filtro sem
+  /// join, e não muda durante a execução mesmo que a conversa seja transferida.
+  whatsappInstanceId String
+  status         AutomationExecutionStatus @default(running)
+  /// Nó onde a execução está parada (aguardando) ou onde falhou.
+  currentNodeId  String?
+  /// "timer" (nó Aguardar) ou "reply" (nó Fazer pergunta / Menu esperando
+  /// resposta). Null quando `status` não é `waiting`.
+  waitingReason  String?
+  /// Quando retomar sozinha (nó Aguardar, ou timeout do "aguardar resposta").
+  /// Null em espera SEM prazo (pergunta sem timeout configurado).
+  waitingUntil   DateTime?
+  /// Variáveis coletadas (respostas de pergunta, protocolo gerado, o que o
+  /// gatilho entregou) — é o que os nós seguintes e as variáveis de mensagem
+  /// (`{{campo.*}}`) leem.
+  context        Json                      @default("{}")
+  triggerType    AutomationTriggerType
+  /// Frase curta para a lista de Histórico ("Encaminhado para Financeiro"),
+  /// preenchida ao concluir (ou ao falhar/cancelar).
+  resultSummary  String?
+  error          String?
+  startedAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+  finishedAt     DateTime?
+
+  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  flow         AutomationFlow         @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  flowVersion  AutomationFlowVersion  @relation(fields: [flowVersionId], references: [id], onDelete: Cascade)
+  conversation Conversation           @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  logs         AutomationExecutionLog[]
+
+  @@index([organizationId, startedAt])
+  @@index([conversationId, startedAt])
+  @@index([status, waitingUntil])
+  @@index([flowId, conversationId, startedAt])
+  @@map("automation_executions")
+}
+
+/// Trilha de auditoria de UMA execução — o que a tela de Histórico expande.
+/// Nunca guarda o texto que o cliente escreveu (mesma regra de log do resto
+/// do sistema): `data` carrega o que o NÓ decidiu (ex.: qual opção do menu),
+/// nunca conteúdo livre de mensagem.
+model AutomationExecutionLog {
+  id          String   @id @default(uuid())
+  executionId String
+  at          DateTime @default(now())
+  nodeId      String?
+  nodeType    String?
+  level       String   @default("info")
+  event       String
+  message     String?
+  data        Json?
+
+  execution AutomationExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@index([executionId, at])
+  @@map("automation_execution_logs")
 }
