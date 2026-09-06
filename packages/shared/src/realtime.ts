@@ -1,3 +1,4 @@
+import type { AiBudgetPolicy, AiSessionDto } from "./ai.js";
 import type { ConnectionStatus, MessageStatus } from "./enums.js";
 
 /**
@@ -44,11 +45,49 @@ export const RealtimeEvents = {
   InstanceQr: "instance:qr",
   /** Quantos agendamentos pendentes a conversa tem agora. */
   ScheduledPending: "scheduled:pending",
+  /**
+   * Follow-up automático da conversa mudou (iniciou, avançou de etapa,
+   * foi cancelado, pausado, retomado, adiado ou concluído). Carrega o
+   * estado inteiro da execução ativa (ou `null`, quando não há mais
+   * nenhuma) — mesma ideia do `PinnedItems`: reenviar tudo é mais simples
+   * do que sincronizar patch, e o payload é pequeno por construção.
+   */
+  FollowUpUpdated: "followup:updated",
   /** Falta pouco para o horário de uso fechar — aviso na tela. */
   SessionClosing: "session:closing",
   /** O horário fechou: a sessão acabou de ser encerrada. */
   SessionClosed: "session:closed",
+  /**
+   * O atendimento por IA de uma conversa mudou: começou, respondeu (contador
+   * de mensagens), transferiu, foi assumido ou encerrado. Carrega a sessão
+   * inteira (ou `null` quando nunca houve) — é a faixa "Atendimento por IA"
+   * da Inbox. Vai para a `conversationAudience()` da conversa, como todo
+   * evento de conversa. Evento próprio, e não `conversation:updated`, pelo
+   * mesmo motivo das fixações: aquele DTO é o da lista, e carregar a sessão
+   * de IA nele pagaria uma consulta por linha.
+   */
+  AiSession: "ai:session",
+  /**
+   * O consumo de IA cruzou um degrau do orçamento mensal (50/80/90/100%).
+   * Vai para a sala da organização (só administradores a ouvem).
+   */
+  AiBudgetAlert: "ai:budget-alert",
 } as const;
+
+/** Sessão de IA de uma conversa mudou. `session` nulo = nenhuma sessão. */
+export interface AiSessionPayload {
+  conversationId: string;
+  session: AiSessionDto | null;
+}
+
+export interface AiBudgetAlertPayload {
+  threshold: number;
+  percent: number;
+  spentMicros: number;
+  monthlyBudgetCents: number;
+  /** Política aplicada ao cruzar 100%. */
+  policy: AiBudgetPolicy;
+}
 
 /**
  * Aviso de que o horário de uso do sistema está para fechar.
@@ -97,6 +136,28 @@ export interface ScheduledPendingPayload {
 export interface ConversationReadPayload {
   conversationId: string;
   unreadCount: number;
+}
+
+/**
+ * Estado do follow-up automático ATIVO de uma conversa, para a faixa
+ * discreta no topo do chat (seção 26 do pedido). `null` quando não há
+ * execução ativa nem pausada — a faixa some da tela.
+ */
+export interface FollowUpUpdatedPayload {
+  conversationId: string;
+  execution: {
+    id: string;
+    ruleId: string;
+    ruleName: string;
+    status: "active" | "paused";
+    /** Etapa que vai rodar (1-based) e total de etapas da regra. */
+    currentStepOrder: number;
+    totalSteps: number;
+    /** ISO da próxima ação; `null` = pausado sem prazo. */
+    nextRunAt: string | null;
+    departmentId: string | null;
+    departmentName: string | null;
+  } | null;
 }
 
 export interface InstanceStatusPayload {

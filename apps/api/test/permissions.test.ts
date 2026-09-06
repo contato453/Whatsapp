@@ -229,11 +229,13 @@ describe("padrões de fábrica (Usuário / Supervisor)", () => {
     ["group_participant.rename", true, true],
     ["azevedo_os.link", true, true],
     ["azevedo_os.relink", false, true],
+    ["follow_up.control", true, true],
     // Cadastros
     ["tag.manage", false, true],
     ["tag.delete", false, true],
     ["quick_reply.manage", true, true],
     ["quick_reply.create_shared", false, true],
+    ["follow_up.manage", false, true],
     ["user.deactivate", false, false],
     ["department.manage", false, true],
     ["whatsapp_instance.manage", false, true],
@@ -252,6 +254,11 @@ describe("padrões de fábrica (Usuário / Supervisor)", () => {
     ["call.view", true, true],
     ["call.recording.play", false, true],
     ["call.recording.delete", false, false],
+    // Inteligência artificial
+    ["ai.agent.manage", false, true],
+    ["ai.view_usage", false, true],
+    ["ai.session.stop", true, true],
+    ["ai.session.resume", false, true],
   ];
 
   it.each(esperado)("%s → Usuário %s, Supervisor %s", (action, agent, supervisor) => {

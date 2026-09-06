@@ -31,7 +31,7 @@ export function isConfigurableRole(value: string): value is ConfigurableRole {
 }
 
 /** Áreas do catálogo — viram as seções da tela, nesta ordem. */
-export const PERMISSION_AREAS = ["atendimento", "ligacoes", "cadastros", "automacoes", "visao"] as const;
+export const PERMISSION_AREAS = ["atendimento", "ligacoes", "cadastros", "automacoes", "visao", "ia"] as const;
 export type PermissionArea = (typeof PERMISSION_AREAS)[number];
 
 export const PERMISSION_AREA_LABELS: Record<PermissionArea, string> = {
@@ -40,6 +40,7 @@ export const PERMISSION_AREA_LABELS: Record<PermissionArea, string> = {
   cadastros: "Cadastros",
   automacoes: "Automações",
   visao: "Visão e relatórios",
+  ia: "Inteligência artificial",
 };
 
 export const PERMISSION_AREA_DESCRIPTIONS: Record<PermissionArea, string> = {
@@ -48,6 +49,7 @@ export const PERMISSION_AREA_DESCRIPTIONS: Record<PermissionArea, string> = {
   cadastros: "Quem mexe nas listas que o escritório inteiro usa.",
   automacoes: "Quem monta, publica e acompanha os fluxos automáticos de atendimento.",
   visao: "Quais números e registros do escritório cada perfil consegue consultar.",
+  ia: "Quem configura e acompanha o atendimento por IA. A chave da OpenAI e o orçamento continuam só do administrador.",
 };
 
 /**
@@ -167,6 +169,14 @@ export const PERMISSION_ACTIONS = [
     area: "atendimento",
     defaults: { agent: false, supervisor: true },
   },
+  {
+    key: "follow_up.control",
+    label: "Cancelar, adiar, pausar e retomar o follow-up da conversa",
+    description:
+      "Controla a régua automática que já está rodando numa conversa. Criar e editar a REGRA em si é outra chave, em Cadastros.",
+    area: "atendimento",
+    defaults: { agent: true, supervisor: true },
+  },
 
   // ---------- Cadastros ----------
   {
@@ -195,6 +205,14 @@ export const PERMISSION_ACTIONS = [
     label: "Criar resposta rápida compartilhada com todos",
     description:
       "Cria atalho geral, que aparece para a organização inteira em vez de ficar restrito a departamentos.",
+    area: "cadastros",
+    defaults: { agent: false, supervisor: true },
+  },
+  {
+    key: "follow_up.manage",
+    label: "Criar, editar e excluir regra de follow-up automático",
+    description:
+      "Cadastra as automações de Follow-up Automático (etapas, prazos e departamentos) e ativa ou desativa cada regra.",
     area: "cadastros",
     defaults: { agent: false, supervisor: true },
   },
@@ -317,6 +335,44 @@ export const PERMISSION_ACTIONS = [
     label: "Ver histórico e métricas das automações",
     description: "Consulta as execuções dos fluxos: por onde passaram, o que responderam, onde pararam.",
     area: "automacoes",
+    defaults: { agent: false, supervisor: true },
+  },
+
+  // ---------- Inteligência artificial ----------
+  // A chave do provedor (OpenAI), o orçamento e as configurações gerais são
+  // FIXOS em admin, sem chave: são credencial e dinheiro. O que é configurável
+  // é o dia a dia — agentes, base de conhecimento, automações, indicadores e
+  // o controle do atendimento por IA dentro da conversa.
+  {
+    key: "ai.agent.manage",
+    label: "Criar e editar agentes de IA, base de conhecimento e automações",
+    description:
+      "Configura o que cada IA faz, o que ela sabe e em quais conversas entra. Inclui o testador. A chave da OpenAI continua só do administrador.",
+    area: "ia",
+    defaults: { agent: false, supervisor: true },
+  },
+  {
+    key: "ai.view_usage",
+    label: "Ver consumo, indicadores e logs de IA",
+    description:
+      "Abre os números do atendimento por IA: atendimentos, taxa de resolução, tokens, custo estimado e o registro de cada chamada.",
+    area: "ia",
+    defaults: { agent: false, supervisor: true },
+  },
+  {
+    key: "ai.session.stop",
+    label: "Assumir ou encerrar um atendimento por IA",
+    description:
+      "Dentro da conversa, tira a IA do atendimento na hora — ao assumir a conversa ou pelo botão Encerrar IA. Sem esta chave a IA continua até transferir sozinha.",
+    area: "ia",
+    defaults: { agent: true, supervisor: true },
+  },
+  {
+    key: "ai.session.resume",
+    label: "Devolver a conversa para a IA",
+    description:
+      "Depois que alguém assumiu ou encerrou, coloca o mesmo agente de volta no atendimento. Ação explícita, para humano e IA não se alternarem sozinhos.",
+    area: "ia",
     defaults: { agent: false, supervisor: true },
   },
 ] as const;

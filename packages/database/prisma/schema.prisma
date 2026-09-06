@@ -17,27 +17,36 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users               User[]
-  departments         Department[]
-  whatsappInstances   WhatsAppInstance[]
-  conversations       Conversation[]
-  contacts            Contact[]
-  groups              WhatsAppGroup[]
-  messages            Message[]
-  tags                Tag[]
-  internalNotes       InternalNote[]
-  assignmentHistories ConversationAssignmentHistory[]
-  auditLogs           AuditLog[]
-  quickReplies        QuickReply[]
-  scheduledMessages   ScheduledMessage[]
-  conversationReads   ConversationRead[]
-  attendanceSettings  AttendanceSettings?
-  rolePermissions     RolePermission[]
-  personProfiles      PersonProfile[]
-  pinnedItems         PinnedItem[]
-  integrationTokens   IntegrationToken[]
-  automationFlows     AutomationFlow[]
+  users                User[]
+  departments          Department[]
+  whatsappInstances    WhatsAppInstance[]
+  conversations        Conversation[]
+  contacts             Contact[]
+  groups               WhatsAppGroup[]
+  messages             Message[]
+  tags                 Tag[]
+  internalNotes        InternalNote[]
+  assignmentHistories  ConversationAssignmentHistory[]
+  auditLogs            AuditLog[]
+  quickReplies         QuickReply[]
+  scheduledMessages    ScheduledMessage[]
+  conversationReads    ConversationRead[]
+  attendanceSettings   AttendanceSettings?
+  rolePermissions      RolePermission[]
+  personProfiles       PersonProfile[]
+  pinnedItems          PinnedItem[]
+  integrationTokens    IntegrationToken[]
+  automationFlows      AutomationFlow[]
   automationExecutions AutomationExecution[]
+  followUpRules        FollowUpRule[]
+  followUpExecutions   FollowUpExecution[]
+  aiProviderConfigs    AiProviderConfig[]
+  aiSettings           AiSettings?
+  aiAgents             AiAgent[]
+  aiKnowledgeSources   AiKnowledgeSource[]
+  aiAutomations        AiAutomation[]
+  aiSessions           AiSession[]
+  aiUsageLogs          AiUsageLog[]
 
   @@map("organizations")
 }
@@ -111,6 +120,15 @@ model User {
   conversationReads     ConversationRead[]
   pinnedItems           PinnedItem[]
   integrationTokens     IntegrationToken[]              @relation("IntegrationTokenCreatedBy")
+  followUpRulesCreated  FollowUpRule[]                  @relation("FollowUpRuleCreatedBy")
+  followUpLogActions    FollowUpExecutionLog[]          @relation("FollowUpExecutionLogActor")
+  aiAgentsCreated       AiAgent[]                       @relation("AiAgentCreatedBy")
+  aiAgentsUpdated       AiAgent[]                       @relation("AiAgentUpdatedBy")
+  aiAgentVersions       AiAgentVersion[]                @relation("AiAgentVersionCreatedBy")
+  aiHandoffTargets      AiAgent[]                       @relation("AiAgentHandoffAssignee")
+  aiSessionsEnded       AiSession[]                     @relation("AiSessionEndedBy")
+  aiSettingsUpdated     AiSettings[]                    @relation("AiSettingsUpdatedBy")
+  aiKnowledgeCreated    AiKnowledgeSource[]             @relation("AiKnowledgeCreatedBy")
 
   @@index([organizationId])
   @@map("users")
@@ -142,13 +160,18 @@ model Department {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  defaultAssignee User?                  @relation("DepartmentDefaultAssignee", fields: [defaultAssigneeId], references: [id], onDelete: SetNull)
-  conversations   Conversation[]
-  userAccess      UserDepartment[]
-  instances       WhatsAppInstance[]
-  tagLinks        TagDepartment[]
-  quickReplyLinks QuickReplyDepartment[]
+  organization      Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  defaultAssignee   User?                    @relation("DepartmentDefaultAssignee", fields: [defaultAssigneeId], references: [id], onDelete: SetNull)
+  conversations     Conversation[]
+  userAccess        UserDepartment[]
+  instances         WhatsAppInstance[]
+  tagLinks          TagDepartment[]
+  quickReplyLinks   QuickReplyDepartment[]
+  followUpRuleLinks FollowUpRuleDepartment[]
+  aiAgentLinks      AiAgentDepartment[]
+  aiHandoffAgents   AiAgent[]                @relation("AiAgentHandoffDepartment")
+  aiAutomations     AiAutomation[]
+  aiUsageLogs       AiUsageLog[]
 
   @@unique([organizationId, name])
   @@map("departments")
@@ -190,17 +213,19 @@ model WhatsAppInstance {
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
-  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  department      Department?            @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  defaultAssignee User?                  @relation("InstanceDefaultAssignee", fields: [defaultAssigneeId], references: [id], onDelete: SetNull)
-  conversations     Conversation[]
-  groups            WhatsAppGroup[]
-  contacts          Contact[]
-  userAccess        UserWhatsAppInstance[]
-  integrationTokens IntegrationToken[]
-  automationFlows   AutomationFlow[]
-  greetingForSettings   AttendanceSettings[] @relation("AttendanceGreetingInstance")
-  outOfHoursForSettings AttendanceSettings[] @relation("AttendanceOutOfHoursInstance")
+  organization          Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  department            Department?            @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  defaultAssignee       User?                  @relation("InstanceDefaultAssignee", fields: [defaultAssigneeId], references: [id], onDelete: SetNull)
+  conversations         Conversation[]
+  groups                WhatsAppGroup[]
+  contacts              Contact[]
+  userAccess            UserWhatsAppInstance[]
+  integrationTokens     IntegrationToken[]
+  automationFlows       AutomationFlow[]
+  greetingForSettings   AttendanceSettings[]   @relation("AttendanceGreetingInstance")
+  outOfHoursForSettings AttendanceSettings[]   @relation("AttendanceOutOfHoursInstance")
+  followUpRules         FollowUpRule[]
+  aiAutomations         AiAutomation[]
 
   @@index([organizationId])
   @@index([departmentId])
@@ -431,28 +456,34 @@ model Conversation {
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
-  organization      Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  instance          WhatsAppInstance                @relation(fields: [whatsappInstanceId], references: [id], onDelete: Cascade)
-  assignedUser      User?                           @relation("AssignedConversations", fields: [assignedUserId], references: [id], onDelete: SetNull)
-  archivedBy        User?                           @relation("ArchivedConversations", fields: [archivedByUserId], references: [id], onDelete: SetNull)
-  department        Department?                     @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  messages          Message[]
-  group             WhatsAppGroup?
-  internalNotes     InternalNote[]
-  tags              ConversationTag[]
-  assignmentHistory ConversationAssignmentHistory[]
-  scheduledMessages ScheduledMessage[]
-  reads             ConversationRead[]
+  organization           Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  instance               WhatsAppInstance                @relation(fields: [whatsappInstanceId], references: [id], onDelete: Cascade)
+  assignedUser           User?                           @relation("AssignedConversations", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  archivedBy             User?                           @relation("ArchivedConversations", fields: [archivedByUserId], references: [id], onDelete: SetNull)
+  department             Department?                     @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  messages               Message[]
+  group                  WhatsAppGroup?
+  internalNotes          InternalNote[]
+  tags                   ConversationTag[]
+  assignmentHistory      ConversationAssignmentHistory[]
+  scheduledMessages      ScheduledMessage[]
+  reads                  ConversationRead[]
   /// Fixadas no topo — INTERNO ao AZVCHAT, nunca propagado ao WhatsApp (ver
   /// `PinnedItem`).
-  pinnedItems       PinnedItem[]
+  pinnedItems            PinnedItem[]
+  /// Execuções de follow-up automático já rodadas ou rodando nesta conversa.
+  followUpExecutions     FollowUpExecution[]
   /// Registros de idempotência de envios pela API de integração (ver
   /// `IntegrationMessageLog`). Referência frouxa: apagar a conversa não apaga
   /// o log, só zera o ponteiro.
   integrationMessageLogs IntegrationMessageLog[]
   /// Execuções do motor de automação nesta conversa (histórico completo,
   /// inclusive as já concluídas/canceladas/entregues ao humano).
-  automationExecutions AutomationExecution[]
+  automationExecutions   AutomationExecution[]
+  /// Atendimentos por IA desta conversa (no máximo um ativo por vez —
+  /// índice parcial na migration).
+  aiSessions             AiSession[]
+  aiUsageLogs            AiUsageLog[]
 
   @@unique([whatsappInstanceId, externalChatId])
   @@index([organizationId, status])
@@ -559,12 +590,12 @@ model Message {
   metadata          Json?
   createdAt         DateTime         @default(now())
 
-  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  conversation Conversation       @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sentByUser   User?              @relation(fields: [sentByUserId], references: [id], onDelete: SetNull)
-  reactions    MessageReaction[]
-  readMarks    ConversationRead[]
-  pinnedItems  PinnedItem[]
+  organization           Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation           Conversation            @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sentByUser             User?                   @relation(fields: [sentByUserId], references: [id], onDelete: SetNull)
+  reactions              MessageReaction[]
+  readMarks              ConversationRead[]
+  pinnedItems            PinnedItem[]
   integrationMessageLogs IntegrationMessageLog[]
 
   @@unique([conversationId, externalMessageId])
@@ -684,9 +715,12 @@ model Tag {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization  Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  departments   TagDepartment[]
-  conversations ConversationTag[]
+  organization          Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  departments           TagDepartment[]
+  conversations         ConversationTag[]
+  followUpSteps         FollowUpRuleStep[]
+  followUpFinalizeRules FollowUpRule[]
+  aiAutomations         AiAutomation[]
 
   // Nome único na organização inteira: a etiqueta aparece na conversa sem
   // dizer de qual departamento é, então dois "URGENTE" seriam indistinguíveis.
@@ -854,6 +888,213 @@ model ScheduledMessage {
 }
 
 // ============================================================
+// Follow-up automático
+// ============================================================
+
+/// Regra ativa dispara; inativa fica no cadastro sem gerar execução nova
+/// (a execução já em andamento é cancelada — regra desligada não deixa
+/// timer solto rodando por trás).
+enum FollowUpRuleStatus {
+  active
+  inactive
+}
+
+enum FollowUpTimeUnit {
+  minutes
+  hours
+  days
+}
+
+/// O que uma etapa faz quando o prazo dela vence. "Encaminhar" e
+/// "webhook/API" (citados no pedido original) ficaram de fora desta
+/// entrega — abrir uma automação a HTTP arbitrário é superfície de ataque
+/// que merece desenho próprio, e "encaminhar" precisaria da mesma régua de
+/// `conversationAssigneeWhere` que a transferência manual já usa.
+enum FollowUpStepAction {
+  send_message
+  add_tag
+  remove_tag
+  change_status
+}
+
+/// Gatilho que inicia a régua. Só existe UM hoje — status = aguardando
+/// cliente, o pedido explicitamente como prioridade —, mas o campo já vem
+/// como enum (e não como boolean fixo) para os gatilhos "citados se
+/// compatíveis" (tag, departamento, fila) entrarem sem migration de novo.
+enum FollowUpTrigger {
+  waiting_client
+}
+
+enum FollowUpExecutionStatus {
+  active
+  paused
+  canceled
+  completed
+  /// Etapa não pôde ser aplicada (número desconectado, etc.) e a régua
+  /// desistiu — nunca reprocessa sozinha; o histórico mostra o erro.
+  failed
+}
+
+/// Todo evento relevante da execução, para o Histórico (seção 33 do
+/// pedido) — contato, etapa, horário previsto x executado, cancelamento,
+/// adiamento, pausa, erro, tudo em UMA tabela, na mesma ideia do AuditLog.
+enum FollowUpLogEventType {
+  started
+  step_executed
+  step_failed
+  restarted
+  canceled
+  paused
+  resumed
+  postponed
+  completed
+}
+
+/// Regra de follow-up automático — dispara mensagens (e outras ações) por
+/// tempo sem resposta do cliente. Departamento é N:N, EXATAMENTE como em
+/// `QuickReply`/`Tag`: `isGeneral` vale para a organização inteira, ou a
+/// regra tem uma ou mais linhas em `FollowUpRuleDepartment` — nunca as duas
+/// coisas, mesma validação de `lib/department-resource.ts`. Isso é o que
+/// permite UMA regra ser usada por vários departamentos sem duplicar linha
+/// nenhuma: `Comercial + Financeiro` é a mesma `FollowUpRule`, com dois
+/// vínculos.
+model FollowUpRule {
+  id                   String             @id @default(uuid())
+  organizationId       String
+  name                 String
+  description          String?
+  status               FollowUpRuleStatus @default(active)
+  /// Vale para todos os departamentos. Espelha `Tag.isGeneral`.
+  isGeneral            Boolean            @default(false)
+  trigger              FollowUpTrigger    @default(waiting_client)
+  /// Fora do expediente configurado (`AttendanceSettings`), a etapa vencida
+  /// não sai: `lib/business-schedule.ts` empurra `nextRunAt` para a abertura
+  /// do próximo dia útil. Desligado, a régua roda a qualquer hora.
+  respectBusinessHours Boolean            @default(true)
+  /// Filtro opcional por número — a maioria das regras vale para qualquer
+  /// número do departamento; quando marcado, só dispara em conversas deste.
+  whatsappInstanceId   String?
+  /// Depois da última etapa, encerra o atendimento sozinho (seção 13/31 do
+  /// pedido). Desligado, a régua só envia mensagens e para na última etapa.
+  finalizeOnComplete   Boolean            @default(true)
+  finalizeReason       String             @default("Sem retorno do cliente")
+  /// Etiqueta opcional aplicada junto do encerramento automático.
+  finalizeTagId        String?
+  createdById          String?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?                    @relation("FollowUpRuleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  instance     WhatsAppInstance?        @relation(fields: [whatsappInstanceId], references: [id], onDelete: SetNull)
+  finalizeTag  Tag?                     @relation(fields: [finalizeTagId], references: [id], onDelete: SetNull)
+  departments  FollowUpRuleDepartment[]
+  steps        FollowUpRuleStep[]
+  executions   FollowUpExecution[]
+
+  // Nome único na organização, como o atalho da resposta rápida — a tela
+  // principal lista por nome e duplicidade confundiria qual regra é qual.
+  @@unique([organizationId, name])
+  @@index([organizationId, status])
+  @@map("follow_up_rules")
+}
+
+model FollowUpRuleDepartment {
+  ruleId       String
+  departmentId String
+
+  rule       FollowUpRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  department Department   @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@id([ruleId, departmentId])
+  @@index([departmentId])
+  @@map("follow_up_rule_departments")
+}
+
+/// Uma etapa da régua ("aguardar N, depois fazer X"), em ordem. `order`
+/// começa em 1 — é também o "etapa 1 de 3" mostrado na conversa.
+model FollowUpRuleStep {
+  id             String              @id @default(uuid())
+  ruleId         String
+  order          Int
+  waitAmount     Int
+  waitUnit       FollowUpTimeUnit
+  action         FollowUpStepAction
+  /// Texto da mensagem — aceita o MESMO catálogo de variáveis da resposta
+  /// rápida (`{{primeiro_nome}}` etc.), resolvido na hora do disparo.
+  messageContent String?
+  /// Etiqueta alvo de add_tag/remove_tag.
+  tagId          String?
+  /// Status alvo de change_status.
+  newStatus      ConversationStatus?
+
+  rule FollowUpRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  tag  Tag?         @relation(fields: [tagId], references: [id], onDelete: SetNull)
+
+  @@unique([ruleId, order])
+  @@map("follow_up_rule_steps")
+}
+
+/// Uma régua RODANDO sobre uma conversa específica — o "timer" do pedido.
+/// Só uma ATIVA ou PAUSADA por conversa ao mesmo tempo (índice parcial na
+/// migration, `follow_up_executions_one_active_per_conversation`): é o que
+/// impede dois timers correndo em paralelo sobre o mesmo atendimento.
+model FollowUpExecution {
+  id                String                  @id @default(uuid())
+  organizationId    String
+  ruleId            String
+  conversationId    String
+  status            FollowUpExecutionStatus @default(active)
+  /// Etapa que está para rodar (1-based, casa com `FollowUpRuleStep.order`).
+  currentStepOrder  Int                     @default(1)
+  /// Hora da próxima ação. Nulo quando pausada sem prazo, cancelada,
+  /// concluída ou com falha — a varredura do worker só olha `active`.
+  nextRunAt         DateTime?
+  /// Pausa COM prazo (seção 29): reativa sozinha ao chegar aqui. Nulo com
+  /// `status = paused` é pausa SEM prazo — só o atendente destrava.
+  pauseUntil        DateTime?
+  startedAt         DateTime                @default(now())
+  finishedAt        DateTime?
+  /// "client_replied" | "completed_no_reply" | "canceled_manual" |
+  /// "canceled_status_change" | "canceled_department_change" |
+  /// "rule_deactivated" | "conversation_archived" | "send_failed".
+  finishReason      String?
+  messagesSentCount Int                     @default(0)
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+
+  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  rule         FollowUpRule           @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  conversation Conversation           @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  logs         FollowUpExecutionLog[]
+
+  @@index([conversationId])
+  @@index([status, nextRunAt])
+  @@index([organizationId, ruleId])
+  @@map("follow_up_executions")
+}
+
+/// Histórico completo (seção 33/34 do pedido): uma linha por evento da
+/// execução. `actorUserId` presente = ação manual do atendente (cancelar,
+/// adiar, pausar, retomar); nulo = o worker agiu sozinho.
+model FollowUpExecutionLog {
+  id          String               @id @default(uuid())
+  executionId String
+  eventType   FollowUpLogEventType
+  stepOrder   Int?
+  actorUserId String?
+  messageId   String?
+  detail      String?
+  createdAt   DateTime             @default(now())
+
+  execution FollowUpExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  actor     User?             @relation("FollowUpExecutionLogActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([executionId, createdAt])
+  @@map("follow_up_execution_logs")
+}
+
+// ============================================================
 // Auditoria
 // ============================================================
 
@@ -922,32 +1163,32 @@ model AuditLog {
 /// para a organização: no dia em que existir parâmetro por departamento,
 /// basta uma nova linha aqui. Nenhuma coluna de departamento agora.
 model AttendanceSettings {
-  id                      String   @id @default(uuid())
-  organizationId          String   @unique
+  id                        String   @id @default(uuid())
+  organizationId            String   @unique
   /// Minutos sem resposta, contados só dentro do expediente, para o
   /// atendimento entrar como atrasado.
-  responseLimitMinutes    Int      @default(30)
+  responseLimitMinutes      Int      @default(30)
   /// Fuso do escritório. Todo corte de data do dashboard usa este fuso,
   /// nunca o UTC do servidor.
-  timezone                String   @default("America/Sao_Paulo")
+  timezone                  String   @default("America/Sao_Paulo")
   /// Liga a restrição de horário de login. Desligada por padrão: ligada de
   /// saída, um deploy trancaria do lado de fora quem já estava trabalhando.
-  loginRestrictionEnabled Boolean  @default(false)
+  loginRestrictionEnabled   Boolean  @default(false)
   /// Mensagem automática de saudação — dispara na PRIMEIRA mensagem que uma
   /// conversa recebe (ou, se `greetingFirstContactOnly = false`, em toda
   /// mensagem nova fora do intervalo mínimo). Mora aqui, e não em tabela
   /// própria: é parâmetro de atendimento do escritório inteiro, como o SLA e
   /// o expediente — não há por-departamento nem por-número hoje.
-  greetingEnabled          Boolean   @default(false)
-  greetingMessage          String?
+  greetingEnabled           Boolean  @default(false)
+  greetingMessage           String?
   /// true = só na primeira mensagem que a CONVERSA recebe (o caso comum).
   /// false = repete quando passar o intervalo mínimo abaixo.
-  greetingFirstContactOnly Boolean   @default(true)
+  greetingFirstContactOnly  Boolean  @default(true)
   /// Intervalo mínimo entre saudações da MESMA conversa, em minutos — trava
   /// contra repetir a cada mensagem quando `greetingFirstContactOnly = false`.
-  greetingCooldownMinutes  Int       @default(360)
+  greetingCooldownMinutes   Int      @default(360)
   /// Número específico, ou null = todos os números conectados.
-  greetingInstanceId       String?
+  greetingInstanceId        String?
   /// Mensagem automática fora do expediente — dispara quando chega mensagem
   /// do cliente fora do horário configurado em `AttendanceBusinessHours`.
   outOfHoursEnabled         Boolean  @default(false)
@@ -957,14 +1198,14 @@ model AttendanceSettings {
   /// resposta automática atrás da outra.
   outOfHoursCooldownMinutes Int      @default(180)
   outOfHoursInstanceId      String?
-  createdAt               DateTime @default(now())
-  updatedAt               DateTime @updatedAt
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
 
-  organization    Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  businessHours   AttendanceBusinessHours[]
-  loginHours      AttendanceLoginHours[]
-  greetingInstance   WhatsAppInstance? @relation("AttendanceGreetingInstance", fields: [greetingInstanceId], references: [id], onDelete: SetNull)
-  outOfHoursInstance WhatsAppInstance? @relation("AttendanceOutOfHoursInstance", fields: [outOfHoursInstanceId], references: [id], onDelete: SetNull)
+  organization       Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  businessHours      AttendanceBusinessHours[]
+  loginHours         AttendanceLoginHours[]
+  greetingInstance   WhatsAppInstance?         @relation("AttendanceGreetingInstance", fields: [greetingInstanceId], references: [id], onDelete: SetNull)
+  outOfHoursInstance WhatsAppInstance?         @relation("AttendanceOutOfHoursInstance", fields: [outOfHoursInstanceId], references: [id], onDelete: SetNull)
 
   @@map("attendance_settings")
 }
@@ -1140,38 +1381,38 @@ enum AutomationExecutionStatus {
 /// nova e aponta `publishedVersionId` para ela; o rascunho pode seguir sendo
 /// editado por cima sem afetar quem já está publicado.
 model AutomationFlow {
-  id             String               @id @default(uuid())
-  organizationId String
-  name           String
-  description    String?
-  status         AutomationFlowStatus @default(draft)
-  triggerType    AutomationTriggerType @default(new_message)
+  id                 String                @id @default(uuid())
+  organizationId     String
+  name               String
+  description        String?
+  status             AutomationFlowStatus  @default(draft)
+  triggerType        AutomationTriggerType @default(new_message)
   /// Config extra do gatilho (ex.: lista de palavras-chave do tipo `keyword`,
   /// minutos do tipo `no_reply_timeout`, id da etiqueta de `tag_added`).
-  triggerConfig  Json?
+  triggerConfig      Json?
   /// Número específico, ou null = todos os números conectados da organização.
   whatsappInstanceId String?
   /// Ordem de disputa entre fluxos cujo gatilho combina ao mesmo tempo
   /// (seção 27) — MENOR NÚMERO VENCE. Fluxo específico de palavra-chave nasce
   /// com prioridade menor (mais forte) que o atendimento geral, por padrão.
-  priority       Int                  @default(100)
+  priority           Int                   @default(100)
   /// Intervalo mínimo, em minutos, entre duas execuções DESTE fluxo para a
   /// MESMA conversa — trava contra saudação/fluxo repetindo a cada mensagem
   /// (seção 26). Zero = sem trava própria (o motor ainda impede duas
   /// execuções ATIVAS simultâneas da mesma conversa, ver `AutomationExecution`).
-  cooldownMinutes Int                 @default(0)
-  draftGraph      Json
-  publishedVersionId String?          @unique
-  createdById     String?
-  updatedById     String?
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
+  cooldownMinutes    Int                   @default(0)
+  draftGraph         Json
+  publishedVersionId String?               @unique
+  createdById        String?
+  updatedById        String?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
 
-  organization    Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  whatsappInstance WhatsAppInstance?        @relation(fields: [whatsappInstanceId], references: [id], onDelete: SetNull)
-  versions        AutomationFlowVersion[]   @relation("AutomationFlowVersions")
-  publishedVersion AutomationFlowVersion?   @relation("AutomationFlowPublished", fields: [publishedVersionId], references: [id], onDelete: SetNull)
-  executions      AutomationExecution[]
+  organization     Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  whatsappInstance WhatsAppInstance?       @relation(fields: [whatsappInstanceId], references: [id], onDelete: SetNull)
+  versions         AutomationFlowVersion[] @relation("AutomationFlowVersions")
+  publishedVersion AutomationFlowVersion?  @relation("AutomationFlowPublished", fields: [publishedVersionId], references: [id], onDelete: SetNull)
+  executions       AutomationExecution[]
 
   @@index([organizationId, status])
   @@map("automation_flows")
@@ -1213,40 +1454,40 @@ model AutomationFlowVersion {
 /// mesmo espírito da constraint `conversations_assigned_to_all_without_user`
 /// documentada no restante do sistema.
 model AutomationExecution {
-  id             String                    @id @default(uuid())
-  organizationId String
-  flowId         String
-  flowVersionId  String
-  conversationId String
+  id                 String                    @id @default(uuid())
+  organizationId     String
+  flowId             String
+  flowVersionId      String
+  conversationId     String
   /// Cópia do número da conversa no início — útil para relatório/filtro sem
   /// join, e não muda durante a execução mesmo que a conversa seja transferida.
   whatsappInstanceId String
-  status         AutomationExecutionStatus @default(running)
+  status             AutomationExecutionStatus @default(running)
   /// Nó onde a execução está parada (aguardando) ou onde falhou.
-  currentNodeId  String?
+  currentNodeId      String?
   /// "timer" (nó Aguardar) ou "reply" (nó Fazer pergunta / Menu esperando
   /// resposta). Null quando `status` não é `waiting`.
-  waitingReason  String?
+  waitingReason      String?
   /// Quando retomar sozinha (nó Aguardar, ou timeout do "aguardar resposta").
   /// Null em espera SEM prazo (pergunta sem timeout configurado).
-  waitingUntil   DateTime?
+  waitingUntil       DateTime?
   /// Variáveis coletadas (respostas de pergunta, protocolo gerado, o que o
   /// gatilho entregou) — é o que os nós seguintes e as variáveis de mensagem
   /// (`{{campo.*}}`) leem.
-  context        Json                      @default("{}")
-  triggerType    AutomationTriggerType
+  context            Json                      @default("{}")
+  triggerType        AutomationTriggerType
   /// Frase curta para a lista de Histórico ("Encaminhado para Financeiro"),
   /// preenchida ao concluir (ou ao falhar/cancelar).
-  resultSummary  String?
-  error          String?
-  startedAt      DateTime                  @default(now())
-  updatedAt      DateTime                  @updatedAt
-  finishedAt     DateTime?
+  resultSummary      String?
+  error              String?
+  startedAt          DateTime                  @default(now())
+  updatedAt          DateTime                  @updatedAt
+  finishedAt         DateTime?
 
-  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  flow         AutomationFlow         @relation(fields: [flowId], references: [id], onDelete: Cascade)
-  flowVersion  AutomationFlowVersion  @relation(fields: [flowVersionId], references: [id], onDelete: Cascade)
-  conversation Conversation           @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  flow         AutomationFlow           @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  flowVersion  AutomationFlowVersion    @relation(fields: [flowVersionId], references: [id], onDelete: Cascade)
+  conversation Conversation             @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   logs         AutomationExecutionLog[]
 
   @@index([organizationId, startedAt])
@@ -1275,4 +1516,349 @@ model AutomationExecutionLog {
 
   @@index([executionId, at])
   @@map("automation_execution_logs")
+}
+
+// ============================================================
+// Inteligência artificial
+// ============================================================
+//
+// A separação central: o AGENTE é a configuração reutilizável (objetivo,
+// limites, conhecimento, permissões), a AUTOMAÇÃO é o gatilho que o põe para
+// atender numa conversa, e a SESSÃO é um atendimento concreto. Configura-se a
+// "IA Comercial" uma vez e ela serve a quantas automações forem precisas.
+// Ver CLAUDE.md §20.
+
+enum AiProviderStatus {
+  not_connected
+  connected
+  error
+}
+
+enum AiAgentStatus {
+  draft
+  active
+  inactive
+}
+
+enum AiSessionStatus {
+  active
+  resolved
+  transferred
+  stopped
+  limit_reached
+  error
+  expired
+}
+
+enum AiKnowledgeKind {
+  text
+  faq
+}
+
+enum AiBudgetPolicy {
+  alert_only
+  block_new
+  transfer_human
+}
+
+enum AiUsageKind {
+  chat
+  test
+  connection_test
+  models
+}
+
+enum AiUsageOutcome {
+  ok
+  error
+  timeout
+  blocked
+}
+
+/// Credencial de um provedor de IA, por organização. A chave é gravada
+/// CIFRADA (AES-256-GCM, chave em `AI_SECRETS_KEY` no processo da API — ver
+/// `lib/ai-secrets.ts`) e nunca sai da API: para a tela vai só `apiKeyHint`
+/// ("sk-••••8F2A"). Não há `NEXT_PUBLIC_` equivalente e nunca haverá.
+model AiProviderConfig {
+  id              String           @id @default(uuid())
+  organizationId  String
+  /// "openai" hoje; texto (e não enum) para provedor novo não exigir migration.
+  provider        String
+  apiKeyEncrypted String?
+  apiKeyHint      String?
+  defaultModel    String?
+  status          AiProviderStatus @default(not_connected)
+  lastTestedAt    DateTime?
+  /// Última falha do teste de conexão, em português e sem detalhe sensível.
+  lastTestError   String?
+  /// Lista de modelos devolvida pelo provedor, para a tela não bater nele a
+  /// cada abertura. Só ids e rótulos — nada de segredo.
+  modelsCache     Json?
+  modelsFetchedAt DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, provider])
+  @@map("ai_provider_configs")
+}
+
+/// Configurações gerais de IA da organização: orçamento, política ao
+/// estourar, timeout do provedor. Uma linha por organização; ausente = os
+/// padrões de `@azvchat/shared`.
+model AiSettings {
+  id                  String         @id @default(uuid())
+  organizationId      String         @unique
+  /// Orçamento mensal em CENTAVOS de dólar (a moeda do provedor). Nulo = sem teto.
+  monthlyBudgetCents  Int?
+  /// Percentuais que disparam alerta (50, 80, 90, 100).
+  alertThresholds     Int[]          @default([50, 80, 90, 100])
+  budgetPolicy        AiBudgetPolicy @default(alert_only)
+  /// Timeout de cada chamada ao provedor, em ms.
+  timeoutMs           Int            @default(30000)
+  /// Quantas mensagens recentes vão ao modelo quando o agente não define.
+  contextMessageLimit Int            @default(20)
+  /// Preço por modelo sobreposto pelo escritório (USD por 1M tokens).
+  pricingOverrides    Json?
+  /// Mês (AAAA-MM) e degraus já avisados nele — para o alerta de 80% não
+  /// repetir a cada chamada.
+  alertedMonth        String?
+  alertedThresholds   Int[]          @default([])
+  updatedById         String?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  updatedBy    User?        @relation("AiSettingsUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@map("ai_settings")
+}
+
+/// Agente de IA: a configuração reutilizável. `config` é o JSON estruturado
+/// validado pelo Zod da rota (`AiAgentConfig`, em `@azvchat/shared`) — são
+/// dezenas de campos que só a IA lê, e uma coluna por campo obrigaria uma
+/// migration a cada ajuste de prompt. O que é consultado por SQL (status,
+/// modelo, departamentos) tem coluna própria.
+model AiAgent {
+  id                  String        @id @default(uuid())
+  organizationId      String
+  name                String
+  description         String        @default("")
+  status              AiAgentStatus @default(draft)
+  /// Vale para todos os departamentos (mesma regra de etiqueta/resposta rápida).
+  isGeneral           Boolean       @default(false)
+  /// Modelo do agente; nulo = padrão do sistema.
+  model               String?
+  /// Configuração ATUAL (a última salva). Cada gravação que muda algo também
+  /// grava uma `AiAgentVersion`, e é a versão que a sessão referencia.
+  config              Json
+  currentVersion      Int           @default(1)
+  /// Departamento e responsável de transferência — colunas (e não só JSON)
+  /// para o banco apagar a referência quando o alvo some.
+  handoffDepartmentId String?
+  handoffAssigneeId   String?
+  createdById         String?
+  updatedById         String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  organization      Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy         User?                    @relation("AiAgentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy         User?                    @relation("AiAgentUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  handoffDepartment Department?              @relation("AiAgentHandoffDepartment", fields: [handoffDepartmentId], references: [id], onDelete: SetNull)
+  handoffAssignee   User?                    @relation("AiAgentHandoffAssignee", fields: [handoffAssigneeId], references: [id], onDelete: SetNull)
+  departments       AiAgentDepartment[]
+  versions          AiAgentVersion[]
+  knowledgeSources  AiAgentKnowledgeSource[]
+  automations       AiAutomation[]
+  sessions          AiSession[]
+  usageLogs         AiUsageLog[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId, status])
+  @@map("ai_agents")
+}
+
+model AiAgentDepartment {
+  agentId      String
+  departmentId String
+
+  agent      AiAgent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@id([agentId, departmentId])
+  @@index([departmentId])
+  @@map("ai_agent_departments")
+}
+
+/// Foto da configuração no momento de cada gravação. A sessão aponta para a
+/// versão com que começou: mudar a IA Comercial enquanto há atendimentos em
+/// andamento não troca as regras no meio da conversa.
+model AiAgentVersion {
+  id          String   @id @default(uuid())
+  agentId     String
+  version     Int
+  model       String?
+  config      Json
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  agent     AiAgent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  createdBy User?       @relation("AiAgentVersionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  sessions  AiSession[]
+
+  @@unique([agentId, version])
+  @@map("ai_agent_versions")
+}
+
+/// Fonte da base de conhecimento: texto livre ou perguntas e respostas. A
+/// busca é lexical, por trechos (`services/ai/knowledge.ts`) — só os trechos
+/// relevantes vão ao modelo, nunca a base inteira.
+model AiKnowledgeSource {
+  id             String          @id @default(uuid())
+  organizationId String
+  title          String
+  kind           AiKnowledgeKind @default(text)
+  content        String
+  active         Boolean         @default(true)
+  createdById    String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?                    @relation("AiKnowledgeCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  agents       AiAgentKnowledgeSource[]
+
+  @@index([organizationId, active])
+  @@map("ai_knowledge_sources")
+}
+
+model AiAgentKnowledgeSource {
+  agentId  String
+  sourceId String
+
+  agent  AiAgent           @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  source AiKnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@id([agentId, sourceId])
+  @@index([sourceId])
+  @@map("ai_agent_knowledge_sources")
+}
+
+/// Automação: o gatilho que põe um agente para atender — o "bloco de IA".
+/// Casa a mensagem que chega por número, departamento e tipo de conversa;
+/// nulo = qualquer. `onlyWithoutDepartment` é o caso "só conversa que o
+/// número não classificou" (departamento nulo não é "qualquer" nem um id).
+model AiAutomation {
+  id                    String   @id @default(uuid())
+  organizationId        String
+  name                  String
+  active                Boolean  @default(true)
+  agentId               String
+  whatsappInstanceId    String?
+  departmentId          String?
+  onlyWithoutDepartment Boolean  @default(false)
+  conversationType      String   @default("any")
+  /// Só entra em conversa sem responsável (o normal: a IA não toma conversa de gente).
+  onlyUnassigned        Boolean  @default(true)
+  /// Só na PRIMEIRA mensagem de uma conversa nova.
+  onlyNewConversations  Boolean  @default(false)
+  /// Etiqueta aplicada quando a IA resolve sozinha.
+  resolvedTagId         String?
+  /// Menor vence quando mais de uma casa.
+  priority              Int      @default(100)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent        AiAgent           @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  instance     WhatsAppInstance? @relation(fields: [whatsappInstanceId], references: [id], onDelete: Cascade)
+  department   Department?       @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  resolvedTag  Tag?              @relation(fields: [resolvedTagId], references: [id], onDelete: SetNull)
+  sessions     AiSession[]
+
+  @@index([organizationId, active, priority])
+  @@map("ai_automations")
+}
+
+/// Um atendimento por IA: uma conversa, um agente (numa versão), do começo ao
+/// fim. `state` é a memória do atendimento (dados coletados, assunto,
+/// resumo). Índice parcial garante NO MÁXIMO UMA ativa por conversa.
+model AiSession {
+  id                     String          @id @default(uuid())
+  organizationId         String
+  conversationId         String
+  agentId                String
+  agentVersionId         String?
+  automationId           String?
+  status                 AiSessionStatus @default(active)
+  state                  Json?
+  aiMessageCount         Int             @default(0)
+  customerMessageCount   Int             @default(0)
+  failedAttempts         Int             @default(0)
+  inputTokens            Int             @default(0)
+  outputTokens           Int             @default(0)
+  /// Custo estimado em micro-dólares (1 USD = 1.000.000).
+  costMicros             Int             @default(0)
+  /// Última mensagem recebida já processada — idempotência entre turnos e
+  /// após reinício.
+  lastProcessedMessageId String?
+  summary                String?
+  endReason              String?
+  endedByUserId          String?
+  startedAt              DateTime        @default(now())
+  lastActivityAt         DateTime        @default(now())
+  endedAt                DateTime?
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  agent        AiAgent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  agentVersion AiAgentVersion? @relation(fields: [agentVersionId], references: [id], onDelete: SetNull)
+  automation   AiAutomation?   @relation(fields: [automationId], references: [id], onDelete: SetNull)
+  endedBy      User?           @relation("AiSessionEndedBy", fields: [endedByUserId], references: [id], onDelete: SetNull)
+  usageLogs    AiUsageLog[]
+
+  @@index([conversationId, status])
+  @@index([organizationId, status, startedAt])
+  @@index([agentId, startedAt])
+  @@map("ai_sessions")
+}
+
+/// Uma chamada ao provedor: tokens, custo estimado, duração, ferramentas
+/// pedidas/executadas/bloqueadas. NUNCA o conteúdo da conversa nem a chave.
+model AiUsageLog {
+  id             String         @id @default(uuid())
+  organizationId String
+  sessionId      String?
+  agentId        String?
+  /// Nome na hora da chamada — sobrevive à exclusão do agente.
+  agentName      String?
+  conversationId String?
+  departmentId   String?
+  provider       String
+  model          String
+  kind           AiUsageKind    @default(chat)
+  outcome        AiUsageOutcome @default(ok)
+  inputTokens    Int            @default(0)
+  outputTokens   Int            @default(0)
+  /// Nulo = modelo sem tabela de preço; a chamada fica fora do custo total.
+  costMicros     Int?
+  durationMs     Int            @default(0)
+  errorCode      String?
+  toolsRequested Json?
+  toolsExecuted  Json?
+  toolsBlocked   Json?
+  handoffReason  String?
+  createdAt      DateTime       @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  session      AiSession?    @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  agent        AiAgent?      @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  department   Department?   @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([agentId, createdAt])
+  @@map("ai_usage_logs")
 }

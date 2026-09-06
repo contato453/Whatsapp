@@ -38,6 +38,7 @@ import { CallProvider } from "@/lib/call-context";
 import { MessageSound } from "@/components/message-sound";
 import { SessionSchedule } from "@/components/session-schedule";
 import { UnreadTitle } from "@/components/unread-title";
+import { AiBudgetAlert } from "@/components/ai/budget-alert";
 import { Logo, LogoMark } from "@/components/logo";
 
 /**
@@ -121,6 +122,15 @@ const NAV: Array<{
     permission: "tag.manage",
   },
   { href: "/quick-replies", label: "Respostas rápidas", icon: Zap, minRole: "agent" },
+  // "Automações" é a área; hoje ela tem só este item, e o menu mostra
+  // direto o item — sem submenu para uma área com uma entrada só.
+  {
+    href: "/automations/follow-up",
+    label: "Follow-up Automático",
+    icon: Workflow,
+    minRole: "supervisor",
+    permission: "follow_up.manage",
+  },
   // Fica fora de Configurações de propósito: aquilo é escopo pessoal (perfil
   // e senha) e isto é regra do escritório inteiro.
   {
@@ -446,6 +456,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       <UnreadTitle />
       {/* Aviso de fechamento do horário de uso, e saída quando ele chega. */}
       <SessionSchedule />
+      {/* Orçamento de IA cruzou um degrau: só o admin recebe. */}
+      <AiBudgetAlert />
     </div>
     </CallProvider>
   );

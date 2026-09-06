@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Camera, KeyRound, Play, Save } from "lucide-react";
+import Link from "next/link";
+import { Bot, Camera, ChevronRight, KeyRound, Play, Save } from "lucide-react";
 import {
   NOTIFICATION_SOUNDS,
   NOTIFICATION_SOUND_DESCRIPTIONS,
@@ -23,12 +24,31 @@ import { IntegrationTokensCard } from "@/components/settings/integration-tokens"
 import { AzevedoOsHealthCard } from "@/components/settings/azevedo-os-health";
 
 export default function SettingsPage() {
-  const { user, setSession, setUser } = useAuth();
+  const { user, setSession, setUser, can } = useAuth();
+  // Esconder e recusar andam juntos: o card aparece para quem alguma aba da
+  // tela de IA aceita (admin, ou as chaves de agentes/consumo).
+  const showAi = user?.role === "admin" || can("ai.agent.manage") || can("ai.view_usage");
 
   return (
     <div className="thin-scroll h-full overflow-y-auto p-8">
       <h1 className="mb-6 text-2xl font-bold text-slate-900">Configurações</h1>
       <div className="max-w-xl space-y-4">
+        {showAi && (
+          <Link href="/settings/ai" className="block">
+            <Card className="flex items-center gap-3 p-5 transition-colors hover:bg-slate-50">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-100 text-brand-700">
+                <Bot className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-sm font-semibold text-slate-900">Inteligência artificial</h2>
+                <p className="text-xs text-slate-400">
+                  Provedores, agentes de IA, automações, base de conhecimento, consumo e logs.
+                </p>
+              </div>
+              <ChevronRight className="h-4 w-4 text-slate-400" />
+            </Card>
+          </Link>
+        )}
         {user && <AvatarCard user={user} onChanged={setUser} />}
         {user && <ProfileCard user={user} onSaved={setSession} />}
         {user && <NotificationsCard user={user} onSaved={setSession} />}

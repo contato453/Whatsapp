@@ -35,6 +35,7 @@ import { loadPermissions, requirePermission } from "../../lib/permissions.js";
 import {
   accessibleConversationWhere,
 } from "../../lib/conversation-access.js";
+import { reconcileConversation } from "../../lib/follow-up-engine.js";
 import {
   assignmentFilterWhere,
   assignToAllData,
@@ -83,6 +84,11 @@ import {
 } from "../../lib/person-profile.js";
 import { conversationAudience, userRoom } from "../../realtime/socket.js";
 import type { AppDeps } from "../../types.js";
+import {
+  interruptAiSessionForHuman,
+  loadLatestSession,
+  serializeAiSession,
+} from "../../services/ai/session.js";
 
 /**
  * Filtros da lista de conversas.
@@ -451,7 +457,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     const conversation = await findConversationOr404(id, request.user);
 
     // Painel de contexto: grupo + participantes + histórico de atribuição
-    const [group, history, notes, scheduledPendingCount, pinnedItems] = await Promise.all([
+    const [group, history, notes, scheduledPendingCount, pinnedItems, aiSession] = await Promise.all([
       conversation.type === "group"
         ? deps.prisma.whatsAppGroup.findFirst({
             where: {
@@ -479,6 +485,9 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       // Faixa fixa do topo. Depois da carga inicial, quem mantém isto em dia
       // é o evento `conversation:pinned-items`.
       loadPinnedItems(deps.prisma, id),
+      // Atendimento por IA (a sessão mais recente, ativa ou não): a faixa
+      // "Atendimento por IA". Depois, o evento `ai:session` mantém em dia.
+      loadLatestSession(deps.prisma, id),
     ]);
 
     // Busca as fotos dos participantes em segundo plano; o frontend é
@@ -553,6 +562,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
         pinnedItems,
         personName,
       ),
+      aiSession: aiSession ? serializeAiSession(aiSession) : null,
       group: group
         ? {
             id: group.id,
@@ -952,6 +962,14 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       entityType: "Conversation",
       entityId: id,
     });
+    // Gente assumiu: a IA para na hora. "Assumir atendimento" da faixa de IA
+    // é exatamente esta rota, com o próprio usuário como alvo.
+    await interruptAiSessionForHuman(deps, {
+      organizationId: request.user.organizationId,
+      conversationId: id,
+      userId: request.user.sub,
+      userName: request.user.name,
+    });
     await emitConversationUpdated(id, request.user.organizationId);
     // Um HUMANO acabou de assumir esta conversa — é aqui, e só aqui, que a
     // automação para de interferir (ver `AutomationEngine.handleHumanTakeover`).
@@ -1007,7 +1025,18 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
           },
         }),
       ]);
+      // Mudou de time por decisão de gente: o atendimento por IA em
+      // andamento (se houver) para — o time novo decide se devolve.
+      await interruptAiSessionForHuman(deps, {
+        organizationId: request.user.organizationId,
+        conversationId: id,
+        userId: request.user.sub,
+        userName: request.user.name,
+      });
       await emitConversationUpdated(id, request.user.organizationId);
+      // Departamento novo pode ter regra diferente (ou nenhuma) — seção 17
+      // do pedido: reavalia em vez de deixar a régua do time antigo rodando.
+      await reconcileConversation(deps, id);
       return { ok: true };
     },
   );
@@ -1139,6 +1168,8 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       entityId: id,
     });
     await emitConversationUpdated(id, request.user.organizationId);
+    // Arquivada não fica em fila nenhuma — cancela follow-up em andamento.
+    await reconcileConversation(deps, id);
     return { ok: true };
   });
 
@@ -1163,6 +1194,9 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       entityId: id,
     });
     await emitConversationUpdated(id, request.user.organizationId);
+    // Volta com o status de antes: se era "aguardando cliente", a régua
+    // aplicável reinicia do zero — desarquivar não retoma um timer velho.
+    await reconcileConversation(deps, id);
     return { ok: true };
   });
 
@@ -1189,6 +1223,8 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     });
     await emitConversationUpdated(id, request.user.organizationId);
     void deps.automation?.handleConversationResolved(request.user.organizationId, id);
+    // Concluído não é mais "aguardando cliente" — cancela o follow-up ativo.
+    await reconcileConversation(deps, id);
     return { ok: true };
   });
 
@@ -1207,6 +1243,9 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       }),
     ]);
     await emitConversationUpdated(id, request.user.organizationId);
+    // "Aberto" não é "aguardando cliente" — nenhuma régua começa aqui, mas
+    // se por algum motivo havia uma pendurada (não deveria), sai agora.
+    await reconcileConversation(deps, id);
     return { ok: true };
   });
 
@@ -1250,6 +1289,10 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     });
     await emitConversationUpdated(id, request.user.organizationId);
     if (status === "resolved") void deps.automation?.handleConversationResolved(request.user.organizationId, id);
+    // Gatilho principal do follow-up automático (seção 7/8 do pedido):
+    // entrar em "aguardando cliente" inicia a régua aplicável; sair dele
+    // cancela a que estiver rodando.
+    await reconcileConversation(deps, id);
     return { ok: true };
   });
 

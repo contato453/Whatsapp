@@ -16,9 +16,11 @@ import { resolveCallerIdentity } from "../lib/call-identity.js";
 import { resolveConversationPersonName } from "../lib/person-profile.js";
 import { pinnedItemsIfMessagePinned, unpinMessageIfPinned } from "../lib/pinned-items.js";
 import { extensionFromMime, type MediaStorage } from "../lib/media-storage.js";
+import { handleInboundMessage, handleOutboundMessage } from "../lib/follow-up-engine.js";
 import type { MessageIngestService } from "./message-ingest.js";
 import type { AuditService } from "../modules/audit/service.js";
 import type { AutomationEngine } from "./automation/engine.js";
+import type { AzevedoOsClient } from "./azevedo-os-client.js";
 
 /** Intervalo entre downloads de foto para não sobrecarregar o WhatsApp. */
 const AVATAR_FETCH_DELAY_MS = 300;
@@ -61,9 +63,26 @@ export class InstanceManager {
     private readonly audit: AuditService,
     private readonly storage: MediaStorage,
     private readonly logger: Logger,
-    /** Motor de automações — acionado logo depois que a mensagem é gravada. */
+    /** Motor de automações (construtor visual de fluxos) — acionado logo depois que a mensagem é gravada. */
     private readonly automation: AutomationEngine,
+    /**
+     * Só para o motor de Follow-up Automático resolver `{{empresa.*}}` nas
+     * mensagens que ele manda sozinho — nada aqui muda o que já existia.
+     */
+    private readonly azevedoOs: AzevedoOsClient,
+    /**
+     * Motor do atendimento por IA. Opcional para os testes que sobem o
+     * instance-manager sem IA; em produção é sempre passado. Avisado DEPOIS
+     * da publicação em tempo real: a mensagem já está no banco e na tela
+     * antes de qualquer agente pensar em responder.
+     */
+    private readonly aiRuntime?: { onInboundMessage(input: { organizationId: string; conversationId: string; messageId: string }): void },
   ) {}
+
+  /** Pacote de dependências que o motor de follow-up pede. */
+  private followUpDeps() {
+    return { prisma: this.prisma, io: this.io, logger: this.logger, provider: this.provider, azevedoOs: this.azevedoOs };
+  }
 
   wireProviderEvents(): void {
     this.provider.on("status", (event) => {
@@ -155,6 +174,25 @@ export class InstanceManager {
             this.prisma.message.findUnique({ where: { id: result.messageId } }),
           ]);
           if (!conversation || !persisted) return;
+          // Follow-up automático: cliente respondendo cancela a régua em
+          // andamento; mensagem de SAÍDA que chegou por aqui (outro
+          // aparelho ligado à mesma conta, não o composer — que hoje já
+          // cria a mensagem direto e nunca passa por `ingest()`) reinicia a
+          // contagem, exatamente como reiniciaria se tivesse saído daqui.
+          // Nunca derruba a publicação em tempo real: é aviso, não requisito.
+          try {
+            if (message.direction === "inbound") {
+              await handleInboundMessage(this.followUpDeps(), result.conversationId);
+            } else {
+              await handleOutboundMessage(this.followUpDeps(), result.conversationId);
+            }
+          } catch (err) {
+            this.logger.warn({
+              conversationId: result.conversationId,
+              event: "follow_up_message_hook_failed",
+              error: String(err),
+            });
+          }
           // Conversa individual leva o nome da PESSOA no título — o DTO da
           // mensagem não pode sobrescrever o nome corrigido na lista.
           const personName = await resolveConversationPersonName(
@@ -171,15 +209,27 @@ export class InstanceManager {
             .to(room)
             .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversation, personName));
 
-          // Motor de automações: só mensagem de ENTRADA nova aciona gatilho —
-          // a mensagem que a própria equipe manda (ou que a automação acabou
-          // de mandar) nunca reabre a checagem de fluxo. `handleIncomingMessage`
-          // nunca lança, mesma regra do `ingest()`.
+          // Motor de automações (construtor visual de fluxos): só mensagem de
+          // ENTRADA nova aciona gatilho — a mensagem que a própria equipe
+          // manda (ou que a automação acabou de mandar) nunca reabre a
+          // checagem de fluxo. `handleIncomingMessage` nunca lança, mesma
+          // regra do `ingest()`.
           if (message.direction === "inbound") {
             void this.automation.handleIncomingMessage({
               organizationId,
               conversationId: conversation.id,
               content: persisted.content,
+            });
+          }
+
+          // Só mensagem RECEBIDA aciona a IA — o eco do que a equipe (ou a
+          // própria IA) enviou nunca vira turno. O motor tem fila e debounce
+          // próprios e nunca lança.
+          if (persisted.direction === "inbound" && !conversation.archivedAt) {
+            this.aiRuntime?.onInboundMessage({
+              organizationId,
+              conversationId: conversation.id,
+              messageId: persisted.id,
             });
           }
         } catch (err) {
