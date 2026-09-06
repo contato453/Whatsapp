@@ -21,6 +21,7 @@ import {
   Workflow,
   Zap,
   Lock,
+  ChevronDown,
 } from "lucide-react";
 import {
   USER_ROLE_LABELS,
@@ -50,7 +51,7 @@ import { Logo, LogoMark } from "@/components/logo";
  * cai na tela de acesso restrito abaixo, e a API barra de novo por conta
  * própria — a autorização de verdade é sempre a do servidor.
  */
-const NAV: Array<{
+interface NavLeaf {
   href: string;
   label: string;
   icon: typeof Inbox;
@@ -69,7 +70,34 @@ const NAV: Array<{
    * /users/:id são o cadastro inteiro, que segue fixo em admin.
    */
   adminOnlySubRoutes?: boolean;
-}> = [
+}
+
+/**
+ * Uma ÁREA com mais de uma tela — hoje só "Automações": o construtor de
+ * fluxos e o Follow-up Automático nasceram em PRs separados e cada um
+ * chegou com o próprio item solto na barra, os dois com o mesmo ícone. O
+ * grupo não tem `href` nem `permission` próprios — não é uma tela, é só o
+ * rótulo que abre/fecha os filhos; quem decide o que aparece continua sendo
+ * a permissão de CADA filho.
+ */
+interface NavGroup {
+  label: string;
+  icon: typeof Inbox;
+  children: NavLeaf[];
+}
+
+type NavEntry = NavLeaf | NavGroup;
+
+function isNavGroup(item: NavEntry): item is NavGroup {
+  return "children" in item;
+}
+
+/** Todas as telas navegáveis, grupo ou não — o que `pathAllowed`/`current` precisam. */
+function flattenNav(nav: NavEntry[]): NavLeaf[] {
+  return nav.flatMap((item) => (isNavGroup(item) ? item.children : [item]));
+}
+
+const NAV: NavEntry[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, minRole: "agent" },
   // Os rótulos falam a língua da equipe; as rotas continuam /inbox e
   // /whatsapp — mudá-las quebraria favoritos e os links dos cards do
@@ -108,11 +136,24 @@ const NAV: Array<{
     permission: "reports.view",
   },
   {
-    href: "/automations",
     label: "Automações",
     icon: Workflow,
-    minRole: "supervisor",
-    permission: "automation.manage",
+    children: [
+      {
+        href: "/automations",
+        label: "Fluxos",
+        icon: Workflow,
+        minRole: "supervisor",
+        permission: "automation.manage",
+      },
+      {
+        href: "/automations/follow-up",
+        label: "Follow-up Automático",
+        icon: Workflow,
+        minRole: "supervisor",
+        permission: "follow_up.manage",
+      },
+    ],
   },
   {
     href: "/tags",
@@ -122,15 +163,6 @@ const NAV: Array<{
     permission: "tag.manage",
   },
   { href: "/quick-replies", label: "Respostas rápidas", icon: Zap, minRole: "agent" },
-  // "Automações" é a área; hoje ela tem só este item, e o menu mostra
-  // direto o item — sem submenu para uma área com uma entrada só.
-  {
-    href: "/automations/follow-up",
-    label: "Follow-up Automático",
-    icon: Workflow,
-    minRole: "supervisor",
-    permission: "follow_up.manage",
-  },
   // Fica fora de Configurações de propósito: aquilo é escopo pessoal (perfil
   // e senha) e isto é regra do escritório inteiro.
   {
@@ -149,7 +181,7 @@ const NAV: Array<{
 
 /** Uma tela do menu está liberada para esta sessão? */
 function navAllowed(
-  item: (typeof NAV)[number],
+  item: NavLeaf,
   role: UserRole,
   can: (action: PermissionAction) => boolean,
 ): boolean {
@@ -163,7 +195,7 @@ function navAllowed(
  * `requireRole("admin")` que a API aplica lá.
  */
 function pathAllowed(
-  item: (typeof NAV)[number],
+  item: NavLeaf,
   pathname: string,
   role: UserRole,
   can: (action: PermissionAction) => boolean,
@@ -228,6 +260,11 @@ function Sidebar({
   const [hydrated, setHydrated] = useState(false);
   const [hoverOpen, setHoverOpen] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Grupo aberto/fechado (ex.: "Automações"), por rótulo. Não é preferência
+  // de navegador como o recolher da barra inteira — reabrir sozinho quando
+  // a página atual é de um filho já cobre o caso comum, e persistir uma
+  // escolha de UM grupo hoje seria infraestrutura para uma área só.
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     setCollapsed(readCollapsedPreference());
@@ -275,7 +312,15 @@ function Sidebar({
     setHoverOpen(false);
   };
 
-  const items = NAV.filter((item) => navAllowed(item, user.role, can));
+  // Grupo sobrevive ao filtro só com os filhos que a sessão enxerga — grupo
+  // sem nenhum filho liberado simplesmente some, como qualquer item solto.
+  const items = NAV.map((item): NavEntry | null => {
+    if (isNavGroup(item)) {
+      const children = item.children.filter((child) => navAllowed(child, user.role, can));
+      return children.length > 0 ? { ...item, children } : null;
+    }
+    return navAllowed(item, user.role, can) ? item : null;
+  }).filter((item): item is NavEntry => item !== null);
 
   return (
     <div
@@ -327,6 +372,86 @@ function Sidebar({
         </div>
         <nav className="flex-1 space-y-0.5 px-2">
           {items.map((item) => {
+            if (isNavGroup(item)) {
+              const hasActiveChild = item.children.some(
+                (child) => pathname === child.href || pathname.startsWith(`${child.href}/`),
+              );
+              // Sem escolha manual nesta sessão, abre sozinho quando a
+              // página atual é de um filho — senão quem chega em
+              // /automations/follow-up pela URL veria o grupo fechado
+              // escondendo a própria tela ativa.
+              const open = openGroups[item.label] ?? hasActiveChild;
+              return (
+                <div key={item.label}>
+                  {expanded ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setOpenGroups((prev) => ({ ...prev, [item.label]: !open }))
+                      }
+                      aria-expanded={open}
+                      className={cn(
+                        "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                        "text-slate-400 hover:bg-slate-800/60 hover:text-slate-200",
+                      )}
+                    >
+                      <item.icon className="h-4 w-4 shrink-0" />
+                      <span className="flex-1 truncate text-left">{item.label}</span>
+                      <ChevronDown
+                        className={cn(
+                          "h-3.5 w-3.5 shrink-0 transition-transform",
+                          open && "rotate-180",
+                        )}
+                      />
+                    </button>
+                  ) : (
+                    // Recolhida, o grupo vira um ícone só, como qualquer
+                    // item — o hover já expande a barra inteira e revela
+                    // os filhos; o clique direto (antes do hover abrir) vai
+                    // para o primeiro filho, para o ícone nunca ser um
+                    // beco sem saída.
+                    <Tooltip label={item.label}>
+                      <Link
+                        href={item.children[0].href}
+                        aria-label={item.label}
+                        className={cn(
+                          "flex w-full items-center justify-center rounded-lg px-0 py-2 text-sm font-medium transition-colors",
+                          hasActiveChild
+                            ? "bg-slate-800 text-white"
+                            : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-200",
+                        )}
+                      >
+                        <item.icon className="h-4 w-4 shrink-0" />
+                      </Link>
+                    </Tooltip>
+                  )}
+                  {expanded && open && (
+                    <div className="ml-4 mt-0.5 space-y-0.5 border-l border-slate-800 pl-2.5">
+                      {item.children.map((child) => {
+                        const active =
+                          pathname === child.href || pathname.startsWith(`${child.href}/`);
+                        return (
+                          <Link
+                            key={child.href}
+                            href={child.href}
+                            aria-current={active ? "page" : undefined}
+                            className={cn(
+                              "block truncate rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+                              active
+                                ? "bg-slate-800 text-white"
+                                : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-200",
+                            )}
+                          >
+                            {child.label}
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
             const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
             const link = (
               <Link
@@ -436,7 +561,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   // A tela atual pode não estar no menu (ex.: /users/new): a permissão é a
   // do item cujo caminho a URL começa, e caminho desconhecido fica liberado.
-  const current = NAV.find(
+  // `flattenNav` acha tanto os itens soltos quanto os de dentro de um grupo.
+  const current = flattenNav(NAV).find(
     (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),
   );
   const allowed = !current || pathAllowed(current, pathname, user.role, can);
