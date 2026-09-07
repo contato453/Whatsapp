@@ -244,7 +244,12 @@ function MenuFields({ config, set }: { config: MenuNodeData; set: (patch: Partia
           className="mt-2"
           onClick={() => {
             const label = `Opção ${options.length + 1}`;
-            set({ options: [...options, { id: slug(label) + "_" + (options.length + 1), label }] });
+            // O sufixo é sempre aleatório, nunca o índice: com o índice, excluir
+            // uma opção do meio e adicionar outra gerava o MESMO id de uma opção
+            // que já existia (ex.: "opcao_3" reaparecendo), e as duas passavam a
+            // dividir a mesma saída no fluxo — a aresta antiga, ainda apontando
+            // para o destino de quem foi excluído, "ressuscitava" na opção nova.
+            set({ options: [...options, { id: `${slug(label)}_${Math.random().toString(36).slice(2, 6)}`, label }] });
           }}
         >
           <Plus className="h-3.5 w-3.5" />

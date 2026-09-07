@@ -536,6 +536,20 @@ export function validateAutomationGraph(graph: AutomationGraph): AutomationFlowP
       if (options.length === 0) {
         problems.push({ nodeId: node.id, message: "O menu precisa de pelo menos uma opção." });
       }
+      // Duas opções com o MESMO id dividem a mesma saída no fluxo: a aresta
+      // aponta para um destino só, e o motor nunca sabe qual das duas o
+      // cliente escolheu de verdade. Bloqueia antes de publicar em vez de
+      // deixar o defeito aparecer só quando o cliente escolhe a opção errada.
+      const seenIds = new Set<string>();
+      for (const option of options) {
+        if (seenIds.has(option.id)) {
+          problems.push({
+            nodeId: node.id,
+            message: `Duas opções do menu estão com o mesmo identificador interno — remova e recrie a opção "${option.label || option.id}".`,
+          });
+        }
+        seenIds.add(option.id);
+      }
       const handles = new Set(outgoing.map((edge) => edge.sourceHandle));
       for (const option of options) {
         if (!handles.has(option.id)) {
