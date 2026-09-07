@@ -20,6 +20,9 @@ import {
   AI_SUGGESTED_COLLECT_FIELDS,
   AI_TONES,
   AI_TONE_LABELS,
+  SCHEDULE_MODES,
+  SCHEDULE_MODE_HINTS,
+  SCHEDULE_MODE_LABELS,
   type AiAgentConfig,
   type AiCollectField,
   type AiKnowledgeSourceDto,
@@ -494,6 +497,19 @@ function AdvancedSection({
             A espera vale para TODA mensagem que a IA manda (apresentação, resposta, transferência e aviso de
             encerramento) — simula o tempo de digitação de uma pessoa, para o atendimento não parecer instantâneo.
           </p>
+          <Field label="Quando este agente pode iniciar atendimento">
+            <Select
+              value={config.advanced.scheduleMode}
+              onChange={(event) => onPatch({ scheduleMode: event.target.value as AiAgentConfig["advanced"]["scheduleMode"] })}
+            >
+              {SCHEDULE_MODES.map((mode) => (
+                <option key={mode} value={mode}>
+                  {SCHEDULE_MODE_LABELS[mode]}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <p className="text-xs text-slate-400">{SCHEDULE_MODE_HINTS[config.advanced.scheduleMode]}</p>
           <Field label="Instruções adicionais para a IA (complemento; não substitui os campos acima)">
             <Textarea rows={5} maxLength={8000} value={config.advanced.additionalInstructions} onChange={(event) => onPatch({ additionalInstructions: event.target.value })} />
           </Field>

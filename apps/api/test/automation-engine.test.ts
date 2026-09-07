@@ -347,6 +347,7 @@ function buildFakeEnvironment(opts?: {
     whatsappInstanceId?: string | null;
     priority?: number;
     cooldownMinutes?: number;
+    scheduleMode?: string;
     graph: AutomationGraph;
     status?: string;
   }) {
@@ -364,6 +365,8 @@ function buildFakeEnvironment(opts?: {
       whatsappInstanceId: input.whatsappInstanceId ?? null,
       priority: input.priority ?? 100,
       cooldownMinutes: input.cooldownMinutes ?? 0,
+      // Mesmo padrão da coluna real: NOT NULL DEFAULT 'always'.
+      scheduleMode: input.scheduleMode ?? "always",
       draftGraph: input.graph,
       publishedVersionId: versionId,
       updatedAt: new Date(),
@@ -410,6 +413,7 @@ function buildFakeEnvironment(opts?: {
     conversationTags,
     sentMessages,
     logger,
+    flows,
     createConversation,
     createFlow,
     addTag,
@@ -462,6 +466,78 @@ describe("AutomationEngine", () => {
       expect(env.sentMessages[0]?.text).toBe("Fora do expediente.");
       const execution = [...env.executions.values()][0];
       expect(execution?.status).toBe("completed");
+  });
+
+  describe("scheduleMode — quando o FLUXO pode ser escolhido, não o que ele faz por dentro", () => {
+    // Grafo mínimo: só precisa provar se a execução COMEÇOU ou não — o que
+    // o fluxo faria depois não é o que este bloco testa.
+    const minimalGraph: AutomationGraph = {
+      nodes: [
+        { id: "trigger", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+        { id: "finish", type: "finish", position: { x: 100, y: 0 }, data: {} },
+      ],
+      edges: [{ id: "e1", source: "trigger", target: "finish" }],
+    };
+
+    it("'business_hours': só vira candidato DENTRO do expediente", async () => {
+      const env = buildFakeEnvironment();
+      env.createFlow({ name: "Só de dia", triggerType: "first_message", scheduleMode: "business_hours", graph: minimalGraph });
+
+      vi.setSystemTime(new Date("2026-03-01T03:00:00-03:00")); // domingo de madrugada
+      await env.inbound(env.createConversation().id as string, "Oi");
+      expect(env.executions.size).toBe(0);
+
+      vi.setSystemTime(new Date("2026-03-05T10:00:00-03:00")); // quinta às 10h
+      await env.inbound(env.createConversation().id as string, "Oi");
+      expect(env.executions.size).toBe(1);
+    });
+
+    it("'outside_business_hours': só vira candidato FORA do expediente — o inverso do padrão", async () => {
+      const env = buildFakeEnvironment();
+      env.createFlow({ name: "Plantão noturno", triggerType: "first_message", scheduleMode: "outside_business_hours", graph: minimalGraph });
+
+      vi.setSystemTime(new Date("2026-03-05T10:00:00-03:00")); // quinta às 10h — expediente
+      await env.inbound(env.createConversation().id as string, "Oi");
+      expect(env.executions.size).toBe(0);
+
+      vi.setSystemTime(new Date("2026-03-01T03:00:00-03:00")); // domingo de madrugada
+      await env.inbound(env.createConversation().id as string, "Oi");
+      expect(env.executions.size).toBe(1);
+    });
+
+    it("fluxo de plantão (prioridade melhor) cede a vez ao fluxo 'always' durante o expediente", async () => {
+      const env = buildFakeEnvironment();
+      env.createFlow({
+        name: "Plantão noturno",
+        triggerType: "first_message",
+        scheduleMode: "outside_business_hours",
+        priority: 50, // número menor = mais forte — venceria se a hora não desqualificasse
+        graph: minimalGraph,
+      });
+      const dayFlowId = env.createFlow({ name: "Atendimento geral", triggerType: "first_message", scheduleMode: "always", priority: 100, graph: minimalGraph });
+
+      vi.setSystemTime(new Date("2026-03-05T10:00:00-03:00")); // quinta às 10h — expediente
+      await env.inbound(env.createConversation().id as string, "Oi");
+
+      // A execução tem que ser do fluxo "Atendimento geral" — o de plantão
+      // foi descartado pela hora, mesmo com prioridade melhor.
+      expect(env.executions.size).toBe(1);
+      const [execution] = [...env.executions.values()];
+      expect(execution?.flowId).toBe(dayFlowId);
+    });
+
+    it("campo ausente (fake antigo/linha sem o valor) equivale a 'always', nunca a uma restrição", async () => {
+      const env = buildFakeEnvironment();
+      const flowId = env.createFlow({ name: "Legado", triggerType: "first_message", graph: minimalGraph });
+      // Simula uma linha sem o campo — o que uma migration futura NUNCA
+      // produziria (a coluna é NOT NULL DEFAULT 'always'), mas é o estado de
+      // qualquer fake que ainda não conhece esta coluna.
+      delete env.flows.get(flowId)?.scheduleMode;
+
+      vi.setSystemTime(new Date("2026-03-01T03:00:00-03:00")); // domingo de madrugada
+      await env.inbound(env.createConversation().id as string, "Oi");
+      expect(env.executions.size).toBe(1);
+    });
   });
 
   it("cenário de aceitação: saudação, menu, pergunta, etiqueta, encaminhamento e protocolo", async () => {

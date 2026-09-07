@@ -10,6 +10,7 @@ import {
   AI_RESPONSE_LENGTHS,
   AI_TONES,
   defaultAiAgentConfig,
+  SCHEDULE_MODES,
   type AiAgentConfig,
 } from "@azvchat/shared";
 
@@ -122,6 +123,7 @@ export const aiAgentConfigSchema: z.ZodType<AiAgentConfig> = z.object({
       .int()
       .min(AI_CONFIG_LIMITS.responseDelaySeconds.min)
       .max(AI_CONFIG_LIMITS.responseDelaySeconds.max),
+    scheduleMode: z.enum(SCHEDULE_MODES),
   }),
 });
 

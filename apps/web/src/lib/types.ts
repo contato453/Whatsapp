@@ -17,6 +17,7 @@ import type {
   ParticipantClientRole,
   PermissionAction,
   QuickReplyMediaType,
+  ScheduleMode,
   UserRole,
 } from "@azvchat/shared";
 
@@ -700,6 +701,7 @@ export interface AutomationFlowSummaryDto {
   instanceName: string | null;
   priority: number;
   cooldownMinutes: number;
+  scheduleMode: ScheduleMode;
   hasPublishedVersion: boolean;
   executionsCount: number;
   updatedAt: string;

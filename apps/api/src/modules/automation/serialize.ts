@@ -9,6 +9,7 @@ import type {
   AutomationFlowStatus,
   AutomationGraph,
   AutomationTriggerType,
+  ScheduleMode,
 } from "@azvchat/shared";
 
 export interface AutomationFlowSummaryDto {
@@ -21,6 +22,7 @@ export interface AutomationFlowSummaryDto {
   instanceName: string | null;
   priority: number;
   cooldownMinutes: number;
+  scheduleMode: ScheduleMode;
   hasPublishedVersion: boolean;
   executionsCount: number;
   updatedAt: string;
@@ -42,6 +44,7 @@ export function serializeAutomationFlowSummary(
     instanceName: flow.whatsappInstance?.name ?? null,
     priority: flow.priority,
     cooldownMinutes: flow.cooldownMinutes,
+    scheduleMode: flow.scheduleMode,
     hasPublishedVersion: flow.publishedVersionId != null,
     executionsCount: flow._count?.executions ?? 0,
     updatedAt: flow.updatedAt.toISOString(),
