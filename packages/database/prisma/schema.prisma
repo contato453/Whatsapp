@@ -1559,6 +1559,13 @@ enum AiSessionStatus {
 enum AiKnowledgeKind {
   text
   faq
+  /// Texto extraído de uma página da web. Extração é só um jeito a mais de
+  /// PREENCHER `content` — a página não é revisitada depois, e nada além do
+  /// texto é guardado.
+  url
+  /// Texto extraído de um PDF/DOCX/TXT enviado. Mesma regra do `url`: o
+  /// arquivo em si nunca é guardado, só o texto que saiu dele.
+  document
 }
 
 enum AiBudgetPolicy {
@@ -1727,6 +1734,10 @@ model AiKnowledgeSource {
   title          String
   kind           AiKnowledgeKind @default(text)
   content        String
+  /// De onde o texto veio (o link, ou o nome do arquivo enviado) — só para
+  /// EXIBIÇÃO na lista, nunca usado para buscar de novo nem para decidir
+  /// nada. Nulo para `text`/`faq`, que a equipe digitou direto.
+  sourceRef      String?
   active         Boolean         @default(true)
   createdById    String?
   createdAt      DateTime        @default(now())

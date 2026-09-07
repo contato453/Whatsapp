@@ -738,12 +738,22 @@ export function agentAllowsTool(config: AiAgentConfig, tool: AiToolName): boolea
 // Base de conhecimento
 // ---------------------------------------------------------------------------
 
-export const AI_KNOWLEDGE_KINDS = ["text", "faq"] as const;
+export const AI_KNOWLEDGE_KINDS = ["text", "faq", "url", "document"] as const;
 export type AiKnowledgeKind = (typeof AI_KNOWLEDGE_KINDS)[number];
 export const AI_KNOWLEDGE_KIND_LABELS: Record<AiKnowledgeKind, string> = {
   text: "Texto livre",
   faq: "Perguntas e respostas",
+  url: "Link (URL)",
+  document: "Documento (PDF, DOCX, TXT)",
 };
+
+/**
+ * `url` e `document` só mudam COMO o texto chegou até o campo `content` —
+ * a tela extrai e a equipe revisa/edita antes de salvar. Depois de salvo,
+ * a fonte se comporta EXATAMENTE como `text` (mesmo `chunkSource`, mesma
+ * busca lexical): não existe reextração automática nem arquivo guardado.
+ */
+export const AI_KNOWLEDGE_EXTRACTED_KINDS: readonly AiKnowledgeKind[] = ["url", "document"];
 
 /** Teto do conteúdo de uma fonte — é texto, não anexo. */
 export const AI_KNOWLEDGE_MAX_CHARS = 60_000;
@@ -928,10 +938,20 @@ export interface AiKnowledgeSourceDto {
   title: string;
   kind: AiKnowledgeKind;
   content: string;
+  /** Link ou nome do arquivo de origem — só exibição; nulo em text/faq. */
+  sourceRef: string | null;
   active: boolean;
   /** Quantos agentes usam esta fonte. */
   agentsCount: number;
   updatedAt: string;
+}
+
+/** Resultado de uma extração (link ou documento) — nada é gravado ainda. */
+export interface AiKnowledgeExtractionResult {
+  title: string;
+  content: string;
+  /** O texto extraído passou do teto e foi cortado. */
+  truncated: boolean;
 }
 
 export interface AiAutomationDto {
