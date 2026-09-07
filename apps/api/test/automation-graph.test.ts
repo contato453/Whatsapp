@@ -129,6 +129,37 @@ describe("validateAutomationGraph", () => {
     expect(problems.some((p) => p.message.includes('"B"'))).toBe(true);
   });
 
+  it("duas opções de menu com o mesmo id são recusadas", () => {
+    // Reproduz o defeito real: excluir uma opção do meio e adicionar outra
+    // podia gerar o MESMO id de uma opção que já existia — as duas passavam
+    // a dividir a mesma saída, e o motor nunca saberia qual o cliente
+    // escolheu de verdade.
+    const graph: AutomationGraph = {
+      nodes: [
+        { id: "trigger", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+        {
+          id: "menu",
+          type: "menu",
+          position: { x: 100, y: 0 },
+          data: {
+            question: "Escolha",
+            options: [
+              { id: "opcao_a1b2", label: "Comercial" },
+              { id: "opcao_a1b2", label: "Financeiro" },
+            ],
+          },
+        },
+        { id: "finish", type: "finish", position: { x: 200, y: 0 }, data: {} },
+      ],
+      edges: [
+        { id: "e1", source: "trigger", target: "menu" },
+        { id: "e2", source: "menu", sourceHandle: "opcao_a1b2", target: "finish" },
+      ],
+    };
+    const problems = validateAutomationGraph(graph);
+    expect(problems.some((p) => p.message.includes("mesmo identificador"))).toBe(true);
+  });
+
   it("aguardar com retomada por resposta exige as duas saídas", () => {
     const graph: AutomationGraph = {
       nodes: [
