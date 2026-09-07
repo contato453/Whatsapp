@@ -5,11 +5,21 @@ name: Deploy
 # pela aba Actions (Run workflow), útil para repetir um deploy que falhou no
 # meio sem precisar de um commit novo.
 #
+# A STACK É A `azvchat2` (docker-compose.azvchat2.yml + .env.azvchat2), NUNCA
+# a `docker-compose.prod.yml` da raiz — essa está morta em produção (ver
+# CLAUDE.md §11, achado de 05/09/2026: os domínios reais apontam para os
+# containers azvapi/azvweb/azvpg da stack azvchat2, não para os desta). O
+# caminho do clone (`VPS_PATH`) tem como padrão `~/Whatsapp-ajustes`, mas
+# continua configurável — confira contra o que o `docker compose ps` mostrar
+# na VPS antes de confiar cegamente no padrão.
+#
 # Este caminho é OPCIONAL: exige guardar a chave privada da VPS como segredo.
 # A alternativa, sem segredo nenhum, é a VPS se atualizar sozinha —
-# `deploy/instalar-atualizacao-automatica.sh`, descrito no DEPLOY.md. Quando os
-# segredos não estão configurados, o job avisa e sai sem falhar, para não
-# pintar de vermelho todo merge de quem usa a atualização automática.
+# `deploy/instalar-atualizacao-automatica.sh`, descrito no DEPLOY.md (esse
+# script também aponta para a stack antiga; não foi adaptado para a
+# `azvchat2` porque a atualização automática não é o caminho em uso hoje).
+# Quando os segredos não estão configurados, o job avisa e sai sem falhar,
+# para não pintar de vermelho todo merge de quem usa a atualização automática.
 on:
   workflow_run:
     workflows: ["CI"]
@@ -85,17 +95,20 @@ jobs:
           fi
           chmod 600 ~/.ssh/known_hosts
 
-      # Escreve as variáveis da integração com o Azevedo-OS no .env da VPS.
+      # Escreve as variáveis da integração com o Azevedo-OS no .env.azvchat2
+      # da VPS — o arquivo que o `docker compose --env-file` desta stack lê
+      # de verdade (a stack azvchat2 não usa `.env`).
       #
       # Existe para que ligar a integração não exija SSH: quem administra
-      # cadastra os segredos aqui no GitHub e o deploy leva para a VPS. O .env
-      # continua sendo a fonte em produção — este passo só o mantém em dia.
+      # cadastra os segredos aqui no GitHub e o deploy leva para a VPS. O
+      # `.env.azvchat2` continua sendo a fonte em produção — este passo só o
+      # mantém em dia.
       #
       # Três decisões que valem explicação:
       #
-      # 1. **Sem os segredos, não encosta no .env.** Faltando URL ou token o
-      #    passo sai em verde sem escrever nada, porque quem configurou à mão
-      #    na VPS não pode ter o arquivo apagado por um deploy.
+      # 1. **Sem os segredos, não encosta no arquivo.** Faltando URL ou token
+      #    o passo sai em verde sem escrever nada, porque quem configurou à
+      #    mão na VPS não pode ter o arquivo apagado por um deploy.
       # 2. **Remove antes de acrescentar.** Sem isso cada deploy empilharia uma
       #    cópia das linhas; a última venceria e o diagnóstico do dia em que o
       #    valor mudasse seria um inferno.
@@ -117,7 +130,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${AZEVEDO_OS_API_URL:-}" ] || [ -z "${AZEVEDO_OS_API_TOKEN:-}" ]; then
-            echo "::notice::Integração com o Azevedo-OS não configurada (faltam os segredos AZEVEDO_OS_API_URL e/ou AZEVEDO_OS_API_TOKEN). O .env da VPS fica como está."
+            echo "::notice::Integração com o Azevedo-OS não configurada (faltam os segredos AZEVEDO_OS_API_URL e/ou AZEVEDO_OS_API_TOKEN). O .env.azvchat2 da VPS fica como está."
             exit 0
           fi
           porta="${VPS_PORT:-22}"
@@ -136,16 +149,16 @@ jobs:
             "$VPS_USER@$VPS_HOST" \
             "CAMINHO='$caminho' bash -s" <<REMOTO
           set -eu
-          cd "\${CAMINHO:-\$HOME/Whatsapp}"
+          cd "\${CAMINHO:-\$HOME/Whatsapp-ajustes}"
           umask 077
-          touch .env
+          touch .env.azvchat2
           # grep -v sai 1 quando não sobra nenhuma linha (arquivo só com essas,
           # ou vazio). Não é erro aqui, daí o || true.
-          grep -v '^AZEVEDO_OS_' .env > .env.deploy || true
-          printf '%s' '$fragmento' | base64 -d >> .env.deploy
-          mv .env.deploy .env
-          chmod 600 .env
-          echo "==> .env atualizado: \$(grep -c '^AZEVEDO_OS_' .env) variáveis do Azevedo-OS"
+          grep -v '^AZEVEDO_OS_' .env.azvchat2 > .env.azvchat2.deploy || true
+          printf '%s' '$fragmento' | base64 -d >> .env.azvchat2.deploy
+          mv .env.azvchat2.deploy .env.azvchat2
+          chmod 600 .env.azvchat2
+          echo "==> .env.azvchat2 atualizado: \$(grep -c '^AZEVEDO_OS_' .env.azvchat2) variáveis do Azevedo-OS"
           REMOTO
 
       - name: Atualizar e subir os containers
@@ -154,7 +167,9 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
-          # Onde o repositório está clonado na VPS. Padrão: ~/Whatsapp
+          # Onde o repositório está clonado na VPS. Padrão: ~/Whatsapp-ajustes
+          # — o clone de trabalho de onde a stack azvchat2 é subida (ver o
+          # comentário do topo do arquivo).
           VPS_PATH: ${{ secrets.VPS_PATH }}
           DEPLOY_BRANCH: claude/whatsapp-support-platform-ezyvx0
         run: |
@@ -165,7 +180,7 @@ jobs:
             "$VPS_USER@$VPS_HOST" \
             "DEPLOY_BRANCH='$DEPLOY_BRANCH' CAMINHO='$caminho' bash -s" <<'REMOTO'
           set -euo pipefail
-          cd "${CAMINHO:-$HOME/Whatsapp}"
+          cd "${CAMINHO:-$HOME/Whatsapp-ajustes}"
 
           echo "==> Atualizando o código"
           git fetch origin "$DEPLOY_BRANCH"
@@ -178,13 +193,13 @@ jobs:
           git merge --ff-only "origin/$DEPLOY_BRANCH"
           echo "Commit em produção: $(git rev-parse --short HEAD) — $(git log -1 --pretty=%s)"
 
-          echo "==> Subindo os containers"
+          echo "==> Subindo os containers (stack azvchat2 — NUNCA docker-compose.prod.yml, que está morta)"
           # As migrations rodam no boot da API; as sessões de WhatsApp ficam
           # em volume nomeado e sobrevivem ao restart.
-          docker compose -f docker-compose.prod.yml up -d --build
+          docker compose -f docker-compose.azvchat2.yml --env-file .env.azvchat2 up -d --build
 
           echo "==> Estado dos containers"
-          docker compose -f docker-compose.prod.yml ps
+          docker compose -f docker-compose.azvchat2.yml --env-file .env.azvchat2 ps
           REMOTO
 
       - name: Confirmar que a API subiu
@@ -202,17 +217,19 @@ jobs:
             "$VPS_USER@$VPS_HOST" \
             "CAMINHO='$caminho' bash -s" <<'REMOTO'
           set -euo pipefail
-          cd "${CAMINHO:-$HOME/Whatsapp}"
+          cd "${CAMINHO:-$HOME/Whatsapp-ajustes}"
           # A API leva alguns segundos para aplicar migrations e abrir a porta.
+          # O serviço se chama "azvapi" nesta stack, não "api" — conferido
+          # contra o `docker compose ps` da azvchat2 (SERVICE azvapi/azvpg/azvweb).
           for tentativa in $(seq 1 20); do
-            if docker compose -f docker-compose.prod.yml logs --since 5m api 2>/dev/null | grep -q api_started; then
+            if docker compose -f docker-compose.azvchat2.yml --env-file .env.azvchat2 logs --since 5m azvapi 2>/dev/null | grep -q api_started; then
               echo "API no ar."
               exit 0
             fi
             sleep 5
           done
           echo "A API não registrou api_started em 100s. Últimas linhas do log:"
-          docker compose -f docker-compose.prod.yml logs --tail=40 api
+          docker compose -f docker-compose.azvchat2.yml --env-file .env.azvchat2 logs --tail=40 azvapi
           exit 1
           REMOTO
 
