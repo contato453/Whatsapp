@@ -18,6 +18,7 @@ import {
   Users,
   Building2,
   BarChart3,
+  Bot,
   Workflow,
   Zap,
   Lock,
@@ -58,11 +59,14 @@ interface NavLeaf {
   /** Papel mínimo — usado só onde a tela é fixa no código (admin). */
   minRole: UserRole;
   /**
-   * Chave do catálogo que a tela exige. Quando existe, é ELA que decide, e
-   * não o papel: o item precisa sumir exatamente quando a API recusa, senão
-   * desligar a chave produziria um menu que só dá 403.
+   * Chave (ou chaves) do catálogo que a tela exige. Quando existe, é ELA que
+   * decide, e não o papel: o item precisa sumir exatamente quando a API
+   * recusa, senão desligar a chave produziria um menu que só dá 403. Uma
+   * lista é OU entre as chaves — o caso de Inteligência artificial, cuja
+   * tela abre com `ai.agent.manage` OU `ai.view_usage` (o mesmo `showAi` do
+   * card em Configurações).
    */
-  permission?: PermissionAction;
+  permission?: PermissionAction | PermissionAction[];
   /**
    * Telas ABAIXO deste caminho continuam exclusivas do administrador, mesmo
    * que a lista esteja liberada por chave. É o caso de /users: quem tem
@@ -75,10 +79,14 @@ interface NavLeaf {
 /**
  * Uma ÁREA com mais de uma tela — hoje só "Automações": o construtor de
  * fluxos e o Follow-up Automático nasceram em PRs separados e cada um
- * chegou com o próprio item solto na barra, os dois com o mesmo ícone. O
- * grupo não tem `href` nem `permission` próprios — não é uma tela, é só o
- * rótulo que abre/fecha os filhos; quem decide o que aparece continua sendo
- * a permissão de CADA filho.
+ * chegou com o próprio item solto na barra, os dois com o mesmo ícone.
+ * "Inteligência artificial" entrou depois como ATALHO — a tela continua
+ * sendo `/settings/ai`, a mesma que o card de Configurações já abre (mesmo
+ * padrão de "Configurações de Atendimento" dentro do construtor de fluxos,
+ * seção 18 do CLAUDE.md: link para uma tela que já existe, não uma cópia
+ * dela). O grupo não tem `href` nem `permission` próprios — não é uma tela,
+ * é só o rótulo que abre/fecha os filhos; quem decide o que aparece
+ * continua sendo a permissão de CADA filho.
  */
 interface NavGroup {
   label: string;
@@ -153,6 +161,13 @@ const NAV: NavEntry[] = [
         minRole: "supervisor",
         permission: "follow_up.manage",
       },
+      {
+        href: "/settings/ai",
+        label: "Inteligência artificial",
+        icon: Bot,
+        minRole: "supervisor",
+        permission: ["ai.agent.manage", "ai.view_usage"],
+      },
     ],
   },
   {
@@ -186,7 +201,9 @@ function navAllowed(
   can: (action: PermissionAction) => boolean,
 ): boolean {
   // Admin passa em qualquer chave, então `can` já o cobre nos dois ramos.
-  return item.permission ? can(item.permission) : hasRole(role, item.minRole);
+  if (!item.permission) return hasRole(role, item.minRole);
+  const permissions = Array.isArray(item.permission) ? item.permission : [item.permission];
+  return permissions.some((permission) => can(permission));
 }
 
 /**
