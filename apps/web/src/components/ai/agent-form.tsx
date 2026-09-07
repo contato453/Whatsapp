@@ -460,7 +460,7 @@ function AdvancedSection({
     >
       {open && (
         <div className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-4">
             <Field label="Modelo deste agente">
               <Select value={model ?? ""} onChange={(event) => onModel(event.target.value || null)}>
                 <option value="">Padrão do sistema{options.defaultModel ? ` (${options.defaultModel})` : ""}</option>
@@ -478,7 +478,22 @@ function AdvancedSection({
             <Field label={`Mensagens recentes no contexto (${AI_CONFIG_LIMITS.contextMessageLimit.min}–${AI_CONFIG_LIMITS.contextMessageLimit.max})`}>
               <Input type="number" min={AI_CONFIG_LIMITS.contextMessageLimit.min} max={AI_CONFIG_LIMITS.contextMessageLimit.max} value={config.advanced.contextMessageLimit} onChange={(event) => onPatch({ contextMessageLimit: Number(event.target.value) || AI_CONFIG_LIMITS.contextMessageLimit.default })} />
             </Field>
+            <Field label={`Espera antes de responder, em segundos (${AI_CONFIG_LIMITS.responseDelaySeconds.min}–${AI_CONFIG_LIMITS.responseDelaySeconds.max}; 0 = imediato)`}>
+              <Input
+                type="number"
+                min={AI_CONFIG_LIMITS.responseDelaySeconds.min}
+                max={AI_CONFIG_LIMITS.responseDelaySeconds.max}
+                value={config.advanced.responseDelaySeconds}
+                onChange={(event) =>
+                  onPatch({ responseDelaySeconds: Number(event.target.value) || AI_CONFIG_LIMITS.responseDelaySeconds.default })
+                }
+              />
+            </Field>
           </div>
+          <p className="text-xs text-slate-400">
+            A espera vale para TODA mensagem que a IA manda (apresentação, resposta, transferência e aviso de
+            encerramento) — simula o tempo de digitação de uma pessoa, para o atendimento não parecer instantâneo.
+          </p>
           <Field label="Instruções adicionais para a IA (complemento; não substitui os campos acima)">
             <Textarea rows={5} maxLength={8000} value={config.advanced.additionalInstructions} onChange={(event) => onPatch({ additionalInstructions: event.target.value })} />
           </Field>

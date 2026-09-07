@@ -644,6 +644,15 @@ export interface AiAgentConfig {
     temperature: number | null;
     /** Quantas mensagens recentes da conversa vão a cada chamada. */
     contextMessageLimit: number;
+    /**
+     * Espera, em segundos, entre o modelo decidir o texto e a mensagem sair
+     * de verdade pelo WhatsApp — simula o tempo de digitação de uma pessoa,
+     * para o atendimento não parecer instantâneo/robótico. 0 (padrão) é
+     * imediato, o comportamento de sempre; vale para TODA mensagem que a IA
+     * manda (apresentação, resposta, transferência, encerramento e aviso de
+     * fallback), porque a espera fica dentro do envio, não de um caminho só.
+     */
+    responseDelaySeconds: number;
   };
 }
 
@@ -655,6 +664,9 @@ export const AI_CONFIG_LIMITS = {
   temperature: { min: 0, max: 2 },
   allowedLinks: { max: 30 },
   collectFields: { max: 20 },
+  // Teto de 60s: mais que isso é o cliente achando que a IA travou, não que
+  // está digitando — e o debounce de entrada (2,5s) já é uma espera à parte.
+  responseDelaySeconds: { min: 0, max: 60, default: 0 },
 } as const;
 
 export const AI_DEFAULT_TRANSFER_MESSAGE =
@@ -710,6 +722,7 @@ export function defaultAiAgentConfig(): AiAgentConfig {
       model: null,
       temperature: null,
       contextMessageLimit: AI_CONFIG_LIMITS.contextMessageLimit.default,
+      responseDelaySeconds: AI_CONFIG_LIMITS.responseDelaySeconds.default,
     },
   };
 }

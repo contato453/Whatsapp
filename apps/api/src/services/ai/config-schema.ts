@@ -117,6 +117,11 @@ export const aiAgentConfigSchema: z.ZodType<AiAgentConfig> = z.object({
       .int()
       .min(AI_CONFIG_LIMITS.contextMessageLimit.min)
       .max(AI_CONFIG_LIMITS.contextMessageLimit.max),
+    responseDelaySeconds: z
+      .number()
+      .int()
+      .min(AI_CONFIG_LIMITS.responseDelaySeconds.min)
+      .max(AI_CONFIG_LIMITS.responseDelaySeconds.max),
   }),
 });
 
