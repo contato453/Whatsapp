@@ -82,6 +82,10 @@ const SWEEP_MS = 60_000;
 /** Turno pendente há mais que isto sem trava em memória = ficou do reinício. */
 const STALE_PENDING_MS = 45_000;
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export interface AiRuntimeDeps {
   prisma: PrismaClient;
   io: Server;
@@ -400,7 +404,7 @@ export class AiRuntime {
       // (é determinística e a equipe a escreveu palavra por palavra).
       const config = parseStoredAgentConfig(session.agentVersion?.config ?? session.agent.config);
       if (config.identity.sendGreeting && config.identity.greeting.trim()) {
-        await this.sendAiText(session, conversation, config.identity.greeting.trim(), credentials);
+        await this.sendAiText(session, conversation, config.identity.greeting.trim(), credentials, config);
       }
       return session;
     } catch (err) {
@@ -620,17 +624,17 @@ export class AiRuntime {
 
     if (terminal?.kind === "transfer") {
       const message = reply?.trim() || config.handoff.transferMessage.trim();
-      if (message) await this.sendAiText(session, conversation, message, credentials, model);
+      if (message) await this.sendAiText(session, conversation, message, credentials, config, model);
       await this.transferToHuman(session, conversation, config, terminal, state);
       return;
     }
     if (terminal?.kind === "finish") {
-      if (reply?.trim()) await this.sendAiText(session, conversation, reply.trim(), credentials, model);
+      if (reply?.trim()) await this.sendAiText(session, conversation, reply.trim(), credentials, config, model);
       await this.resolveByAi(session, conversation, terminal.summary, state);
       return;
     }
     if (terminal?.kind === "followup") {
-      if (reply?.trim()) await this.sendAiText(session, conversation, reply.trim(), credentials, model);
+      if (reply?.trim()) await this.sendAiText(session, conversation, reply.trim(), credentials, config, model);
       const followup = terminal.ruleName ? `follow-up automático "${terminal.ruleName}" iniciado` : "conversa aguardando o cliente (sem regra de follow-up aplicável)";
       await endAiSession(this.deps, {
         sessionId: session.id,
@@ -644,7 +648,7 @@ export class AiRuntime {
     }
 
     if (reply?.trim()) {
-      await this.sendAiText(session, conversation, reply.trim(), credentials, model);
+      await this.sendAiText(session, conversation, reply.trim(), credentials, config, model);
     } else {
       logger.info({ event: "ai_turn_empty_reply", sessionId: session.id });
     }
@@ -848,9 +852,22 @@ export class AiRuntime {
     conversation: Conversation,
     text: string,
     credentials: ResolvedCredentials,
+    config: AiAgentConfig,
     model?: string,
   ): Promise<void> {
     const { prisma, provider, io } = this.deps;
+    if (config.advanced.responseDelaySeconds > 0) {
+      await delay(config.advanced.responseDelaySeconds * 1000);
+      // Humano pode ter assumido enquanto a IA "esperava para digitar" —
+      // mesma trava do fim do turno (`ai_turn_discarded`), agora depois da
+      // espera também: gerar a mensagem não é o único jeito de chegar tarde
+      // demais.
+      const fresh = await prisma.aiSession.findUnique({ where: { id: session.id }, select: { status: true } });
+      if (!fresh || fresh.status !== "active") {
+        this.deps.logger.info({ event: "ai_response_discarded_after_delay", sessionId: session.id });
+        return;
+      }
+    }
     const result = await provider.sendText(conversation.whatsappInstanceId, conversation.externalChatId, text);
     const metadata: AiMessageOriginMetadata = {
       origem: AI_MESSAGE_ORIGIN,
@@ -932,7 +949,7 @@ export class AiRuntime {
     const fallback = config.handoff.fallbackMessage.trim();
     if (fallback && creds) {
       try {
-        await this.sendAiText(session, conversation, fallback, creds);
+        await this.sendAiText(session, conversation, fallback, creds, config);
       } catch (err) {
         this.deps.logger.warn({ event: "ai_fallback_send_failed", sessionId: session.id, error: String(err) });
       }

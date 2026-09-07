@@ -356,6 +356,55 @@ describe("AiRuntime — turno de ponta a ponta", () => {
     expect(s.db.rows("conversationAssignmentHistory").some((row) => String(row.note).includes("assumido por Ana"))).toBe(true);
   });
 
+  it("espera configurada (advanced.responseDelaySeconds) atrasa o envio, não o resto do turno", async () => {
+    const s = scenario({
+      config: (config) => {
+        config.identity.sendGreeting = false;
+        config.advanced.responseDelaySeconds = 5;
+      },
+    });
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", mockFetch([() => openAiResponse("Resposta com espera.")], calls));
+
+    const message = inbound(s.db, s.conversationId, "Oi");
+    s.runtime.onInboundMessage({ organizationId: ORG, conversationId: s.conversationId, messageId: message.id as string });
+    // Passa o debounce (2,5s): o modelo já respondeu e o turno já gravou o
+    // estado (lastProcessedMessageId, contadores) — só falta a espera de 5s
+    // configurada antes do envio de verdade.
+    await vi.advanceTimersByTimeAsync(2_600);
+    expect(s.sent).toHaveLength(0);
+    expect(s.db.rows("aiSession")[0]?.lastProcessedMessageId).toBe(message.id);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s.sent).toHaveLength(1);
+    expect(s.sent[0]?.text).toBe("Resposta com espera.");
+  });
+
+  it("humano assume DURANTE a espera configurada: a resposta gerada não sai", async () => {
+    const s = scenario({
+      config: (config) => {
+        config.identity.sendGreeting = false;
+        config.advanced.responseDelaySeconds = 5;
+      },
+    });
+    const deps = { prisma: s.db.client(), io: { to: () => ({ emit: () => undefined }) } as never, logger: pino({ level: "silent" }) };
+    vi.stubGlobal("fetch", mockFetch([() => openAiResponse("Resposta que não pode sair.")], []));
+
+    const message = inbound(s.db, s.conversationId, "Oi");
+    s.runtime.onInboundMessage({ organizationId: ORG, conversationId: s.conversationId, messageId: message.id as string });
+    // Debounce passado e modelo já respondeu — a IA está "esperando para
+    // digitar" quando a Ana assume, diferente do outro teste (que assume
+    // enquanto o modelo ainda pensa).
+    await vi.advanceTimersByTimeAsync(2_600);
+    await interruptAiSessionForHuman(deps, { organizationId: ORG, conversationId: s.conversationId, userId: "user-1", userName: "Ana" });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(s.sent).toHaveLength(0);
+    const session = s.db.rows("aiSession")[0];
+    expect(session?.status).toBe("stopped");
+    expect(session?.endReason).toBe("human_takeover");
+  });
+
   it("ferramenta não liberada é recusada e registrada, e o modelo é avisado", async () => {
     const s = scenario({
       config: (config) => {
