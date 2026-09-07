@@ -9,6 +9,8 @@ import {
   AUTOMATION_CONDITION_FIELD_LABELS,
   AUTOMATION_NODE_TYPE_DEFINITIONS,
   AUTOMATION_WAIT_UNITS,
+  type AiAgentDirectoryDto,
+  type AiAgentNodeData,
   type AskQuestionNodeData,
   type AssignUserNodeData,
   type AutomationConditionField,
@@ -38,6 +40,7 @@ interface InspectorProps {
   tags: TagDto[];
   departments: DepartmentDto[];
   users: UserDirectoryDto[];
+  agents: AiAgentDirectoryDto[];
 }
 
 function slug(text: string): string {
@@ -49,7 +52,7 @@ function slug(text: string): string {
     .replace(/^_+|_+$/g, "") || `opcao_${Math.random().toString(36).slice(2, 6)}`;
 }
 
-export function NodeInspector({ kind, config, onChange, onDelete, onClose, tags, departments, users }: InspectorProps) {
+export function NodeInspector({ kind, config, onChange, onDelete, onClose, tags, departments, users, agents }: InspectorProps) {
   const definition = AUTOMATION_NODE_TYPE_DEFINITIONS[kind];
 
   function set<T extends Record<string, unknown>>(patch: Partial<T>): void {
@@ -95,6 +98,9 @@ export function NodeInspector({ kind, config, onChange, onDelete, onClose, tags,
         )}
         {kind === "unassign" && (
           <p className="text-sm text-slate-500">Tira o responsável da conversa — sem configuração adicional.</p>
+        )}
+        {kind === "ai_agent" && (
+          <AiAgentFields config={config as unknown as AiAgentNodeData} set={set} agents={agents} />
         )}
         {kind === "webhook" && <WebhookFields config={config as unknown as WebhookNodeData} set={set} />}
         {kind === "finish" && (
@@ -522,6 +528,46 @@ function UserField({
           ))}
       </select>
     </Field>
+  );
+}
+
+function AiAgentFields({
+  config,
+  set,
+  agents,
+}: {
+  config: AiAgentNodeData;
+  set: (patch: Partial<AiAgentNodeData>) => void;
+  agents: AiAgentDirectoryDto[];
+}) {
+  const active = agents.filter((agent) => agent.status === "active");
+  return (
+    <>
+      <Field label="Agente de IA">
+        <select
+          className={SELECT_CLASS}
+          value={config.agentId ?? ""}
+          onChange={(event) => set({ agentId: event.target.value })}
+        >
+          <option value="">Selecione</option>
+          {active.map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              {agent.name}
+            </option>
+          ))}
+        </select>
+      </Field>
+      {active.length === 0 && (
+        <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-700">
+          Nenhum agente ativo. Cadastre um em Configurações → Inteligência artificial.
+        </p>
+      )}
+      <p className="text-xs text-slate-500">
+        A conversa entra em espera aqui até a IA concluir, transferir ou encerrar. As duas saídas
+        deste bloco são para depois disso — deixe uma delas sem conexão se não houver mais nada a
+        fazer naquele caminho.
+      </p>
+    </>
   );
 }
 

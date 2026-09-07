@@ -1955,8 +1955,9 @@ variáveis, etiquetar, mudar status), disparada quando a conversa entra em "agua
 cliente", cancelada na hora se o cliente responde ou se o atendimento sai desse status,
 reiniciada quando a equipe manda mensagem nova, respeitando expediente e rodando inteiramente
 no backend (sobrevive a reinício e a fechar o navegador); **atendimento por IA** (seção 20):
-agente configurável por objetivo/limites/conhecimento, disparado por automação própria (não
-pelo construtor de fluxos), com transferência para humano e resumo em nota interna.
+agente configurável por objetivo/limites/conhecimento, disparado por automação própria de
+zero configuração OU por um bloco "Atendimento por IA" dentro do construtor de fluxos (as
+duas portas abrem a mesma sessão), com transferência para humano e resumo em nota interna.
 
 **Falta** (ordem sugerida): validar o pareamento QR em rede aberta (o ambiente de
 desenvolvimento bloqueia `web.whatsapp.com`); votos de enquete agregados na Inbox;
@@ -2398,6 +2399,66 @@ mensagem), mas um `keyword`/`new_message` mal desenhado poderia, em tese,
 recomeçar depois que um humano já resolveu tudo. Fluxo de saudação deve
 preferir `first_message`, não `new_message`, por este motivo.
 
+**Bloco "Atendimento por IA" — onde este motor encosta no da seção 20.**
+Antes desta entrega, a IA só entrava numa conversa pelo próprio gatilho
+(`AiAutomation`, seção 20), sem passar pelo construtor visual — era a
+lacuna que a documentação da IA registrava como "não há construtor visual
+de fluxos". O bloco `ai_agent` fecha essa lacuna **sem fundir os dois
+motores**: continuam duas peças separadas, com UM ÚNICO fio de mão dupla
+entre elas.
+
+- **A direção do acoplamento é só uma**: `AutomationEngine → AiRuntime`.
+  O motor de fluxos conhece uma interface ESTREITA
+  (`AiRuntimeForFlow.startSessionForFlow`, em `services/automation/engine.ts`)
+  — não a classe `AiRuntime` inteira —, injetada como último parâmetro
+  (opcional, para os testes que sobem o motor sem IA) do construtor. Em
+  `index.ts`, por causa disso, o `AiRuntime` nasce **antes** do
+  `AutomationEngine`, ordem invertida da intuitiva. O `AiRuntime`, por sua
+  vez, **não conhece a existência do motor de automações** — nunca chama
+  nada dele.
+- **A volta (sessão terminou → retomar o fluxo) é VARREDURA, não chamada
+  direta.** `AutomationEngine.tick()` (o mesmo worker de 30s que já retoma
+  timer e "sem resposta") ganhou `resumeDueAiSessions`: lê as execuções
+  `waiting`/`ai_session`, olha o `status` da `AiSession` que cada uma
+  guardou em `context.aiSessionId`, e só age quando ela não está mais
+  `active`. Decisão deliberada — encerrar a sessão já é bastante coisa
+  (nota interna, roteamento, histórico); fazer isso TAMBÉM acionar
+  sincronamente um motor que nem precisa saber que existe seria a mesma
+  aposta de acoplamento que a seção 15 evita entre AZVCHAT e Azevedo-OS.
+  Custo aceito: até 30s de atraso entre a IA terminar e o fluxo continuar —
+  imperceptível num atendimento que já é conversacional.
+- **As duas saídas do bloco** (`resolvido` / `transferido`) são a
+  tradução dos sete `AiSessionStatus` em dois caminhos: só `resolved` cai em
+  "Resolvido pela IA"; QUALQUER outro fim (`transferred`, `stopped`,
+  `limit_reached`, `error`, `expired` — inclusive "Encerrar IA" pela tela,
+  que nem passa pela rota de assumir) cai em "Transferido / encerrado". As
+  duas são opcionais individualmente (a regra genérica de "todo bloco tem
+  que ter para onde ir" já basta) — um fluxo pode deixar só uma conectada.
+- **`AiSession` ganhou `automationExecutionId`** (migration
+  `20260907030000_ai_session_flow_link`), ao lado do `automationId` que já
+  existia para o gatilho de `AiAutomation`. **Nunca os dois juntos** — é o
+  que diz de onde a sessão nasceu. `AiRuntime.createSessionForAgent` é o
+  código ÚNICO que grava a linha nos dois casos (o que muda é só qual dos
+  dois campos vem preenchido); `startSessionForFlow` é a entrada nova, que
+  pula a etapa de "qual automação casa" porque aqui o agente já veio
+  escolhido dentro do bloco.
+- **Sem agente configurado, sem `AiRuntime` injetado (testes) ou agente
+  indisponível** (inativo, sem crédito no orçamento, provedor
+  desconectado) **o bloco nunca trava a execução**: segue direto por
+  "Transferido / encerrado", como se a IA já tivesse desistido. Diferente
+  do caminho do gatilho de `AiAutomation` (que roteia pelo destino de
+  handoff configurado no AGENTE), aqui quem decide para onde vai a
+  conversa quando a IA não começa é o PRÓPRIO FLUXO — por isso
+  `startSessionForFlow`, ao contrário de `tryStartSession`, não chama
+  `routeConversationForHandoff` no caminho de orçamento estourado.
+- **Escolher o agente no bloco não exige `ai.agent.manage`/`ai.view_usage`.**
+  `GET /ai/agents/directory` é um recorte mínimo (id/nome/status, mesmo
+  espírito de `serializeUserDirectory`) liberado também por
+  `automation.manage` — quem monta fluxos referencia um agente já
+  cadastrado, exatamente como já referencia etiqueta/departamento/pessoa
+  sem precisar da chave de quem cadastra aquilo. Custo, sessões e
+  configuração do agente continuam exclusivos da tela de IA.
+
 **Tipos de nó** (`AUTOMATION_NODE_TYPES`, em `shared/automation.ts`):
 `trigger`, `send_message` (só TEXTO enviado pelo motor nesta entrega — os
 demais tipos de mídia existem no catálogo/UI para o dia em que o envio for
@@ -2413,6 +2474,8 @@ por uma resposta do cliente — `resumeOnReply`), `tag_add`/`tag_remove`,
 "transferir departamento": zera o responsável), `assign_user` (confere
 elegibilidade com a MESMA `conversationAssigneeWhere` de `lib/access.ts` — um
 fluxo não pode atribuir a quem não enxergaria a conversa), `unassign`,
+`ai_agent` (**"Atendimento por IA" dentro do fluxo** — ver o bloco próprio
+mais abaixo, é o ponto onde este motor encosta no da seção 20),
 `webhook` (POST simples, 5s de timeout, falha vira log e o fluxo segue —
 nunca trava a automação por um sistema externo fora do ar), `finish`
 (mensagem final opcional, concluir atendimento, adicionar etiqueta, gerar
@@ -2670,6 +2733,17 @@ sem responsável). Em vez de inventar um sistema paralelo para cada um:
   no resumo ao atendente; o nome coletado pode virar `customTitle` da conversa, quando a
   capacidade está ligada. Não há tabela de campos personalizados de contato.
 
+**Atualização:** o parágrafo acima descreve como a entrega original resolveu "sem
+construtor visual de fluxos" — na época, verdade: não existia um. O construtor da seção 18
+chegou depois, e ganhou um bloco `ai_agent` que entrega a conversa a um agente **dentro** de
+um fluxo desenhado visualmente. As duas portas de entrada continuam existindo, para casos
+diferentes: `AiAutomation` (este item) é o gatilho de ZERO CONFIGURAÇÃO, direto por número/
+departamento/tipo de conversa, sem montar nada visual; o bloco `ai_agent` é para quando a IA
+é UMA ETAPA dentro de algo maior (ex.: menu → "Comercial" → IA → se não resolver, humano). Os
+dois criam a MESMA `AiSession`, só com origem diferente (`automationId` vs.
+`automationExecutionId` — nunca os dois). Ver o bloco dedicado na seção 18 para como as duas
+peças se encaixam sem se fundir.
+
 **As três peças, separadas de propósito** (é a decisão mais importante do desenho):
 - `AiAgent` — a configuração REUTILIZÁVEL: identidade, objetivo, "pode/não pode" (texto +
   **capacidades estruturadas**), limites, gatilhos de transferência e destino, comunicação,
@@ -2778,10 +2852,11 @@ sessão, debounce, transferência, humano no meio do turno, ferramenta bloqueada
 orçamento), `ai-routes` (chave nunca vaza, papéis, versão).
 
 **Limitações desta entrega** (registradas, não escondidas): a IA responde só em texto (sem
-mídia); base de conhecimento é texto/FAQ com busca lexical (sem documentos/embeddings);
-não há construtor visual de fluxos — a automação é o bloco; a pesquisa de saldo da OpenAI
-depende de Admin key; a API roda em instância única (a fila por conversa é em memória, como
-o scheduler).
+mídia); base de conhecimento é texto/FAQ com busca lexical (sem documentos/embeddings); a
+pesquisa de saldo da OpenAI depende de Admin key; a API roda em instância única (a fila por
+conversa é em memória, como o scheduler). O construtor visual de fluxos chegou depois desta
+entrega (seção 18) e ganhou um bloco que entrega a conversa a um agente — ver "Atualização"
+mais acima e o bloco dedicado na seção 18.
 
 ---
 

@@ -4,6 +4,7 @@ import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import {
   AUTOMATION_NODE_TYPE_DEFINITIONS,
+  type AiAgentNodeData,
   type AskQuestionNodeData,
   type AutomationNodeType,
   type ChangeStatusNodeData,
@@ -42,6 +43,8 @@ function summaryFor(kind: AutomationNodeType, config: Record<string, unknown>): 
       return (config as unknown as ChangeStatusNodeData).status ?? null;
     case "finish":
       return (config as unknown as FinishNodeData).message?.slice(0, 60) || null;
+    case "ai_agent":
+      return (config as unknown as AiAgentNodeData).agentId ? "Agente selecionado" : "Nenhum agente selecionado";
     default:
       return null;
   }
@@ -50,6 +53,12 @@ function summaryFor(kind: AutomationNodeType, config: Record<string, unknown>): 
 /** Saídas nomeadas deste nó — usadas para desenhar um "handle" por saída. */
 function outputsFor(kind: AutomationNodeType, config: Record<string, unknown>): { id: string; label: string }[] {
   if (kind === "condition") return [{ id: "true", label: "Sim" }, { id: "false", label: "Não" }];
+  if (kind === "ai_agent") {
+    return [
+      { id: "resolvido", label: "Resolvido" },
+      { id: "transferido", label: "Transferido" },
+    ];
+  }
   if (kind === "wait") {
     const data = config as unknown as WaitNodeData;
     return data.resumeOnReply

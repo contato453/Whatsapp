@@ -15,6 +15,9 @@ export interface AutomationConversationRef {
 export interface AutomationExecutionContextData {
   answers?: Record<string, string>;
   protocol?: string;
+  /** `AiSession` aberta pelo bloco "Atendimento por IA" — o que o worker lê
+   * em `resumeDueAiSessions` para saber quando retomar o fluxo. */
+  aiSessionId?: string;
   [key: string]: unknown;
 }
 
