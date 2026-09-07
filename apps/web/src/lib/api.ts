@@ -2,6 +2,7 @@
 
 import { AZEVEDO_OS_SOURCE } from "@azvchat/shared";
 import type {
+  AiAgentDirectoryDto,
   AiAgentDto,
   AiAgentSummaryDto,
   AiAgentVersionDto,
@@ -526,6 +527,10 @@ export const aiApi = {
   },
 
   agents: () => api.get<{ agents: AiAgentSummaryDto[] }>("/ai/agents").then((data) => data.agents),
+  // Recorte mínimo (id/nome/status) para o construtor de fluxos escolher um
+  // agente sem precisar de `ai.agent.manage`/`ai.view_usage`.
+  agentsDirectory: () =>
+    api.get<{ agents: AiAgentDirectoryDto[] }>("/ai/agents/directory").then((data) => data.agents),
   agent: (id: string) => api.get<{ agent: AiAgentDto }>(`/ai/agents/${id}`).then((data) => data.agent),
   createAgent: (input: AiAgentInput) => api.post<{ agent: AiAgentDto }>("/ai/agents", input).then((data) => data.agent),
   updateAgent: (id: string, input: AiAgentInput) =>

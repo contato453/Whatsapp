@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@azvchat/database";
 import {
   validateAutomationGraph,
+  type AiAgentNodeData,
   type AssignUserNodeData,
   type AutomationFlowProblem,
   type AutomationGraph,
@@ -27,6 +28,7 @@ export async function validateAutomationFlowForPublish(
   const tagIds = new Set<string>();
   const departmentIds = new Set<string>();
   const userIds = new Set<string>();
+  const agentIds = new Set<string>();
 
   for (const node of graph.nodes) {
     if (node.type === "tag_add" || node.type === "tag_remove") {
@@ -41,13 +43,17 @@ export async function validateAutomationFlowForPublish(
       const id = (node.data as unknown as AssignUserNodeData).userId;
       if (id) userIds.add(id);
     }
+    if (node.type === "ai_agent") {
+      const id = (node.data as unknown as AiAgentNodeData).agentId;
+      if (id) agentIds.add(id);
+    }
     if (node.type === "finish") {
       const id = (node.data as unknown as FinishNodeData).addTagId;
       if (id) tagIds.add(id);
     }
   }
 
-  const [tags, departments, users] = await Promise.all([
+  const [tags, departments, users, agents] = await Promise.all([
     tagIds.size
       ? prisma.tag.findMany({ where: { id: { in: [...tagIds] }, organizationId }, select: { id: true } })
       : Promise.resolve([]),
@@ -60,11 +66,15 @@ export async function validateAutomationFlowForPublish(
     userIds.size
       ? prisma.user.findMany({ where: { id: { in: [...userIds] }, organizationId }, select: { id: true } })
       : Promise.resolve([]),
+    agentIds.size
+      ? prisma.aiAgent.findMany({ where: { id: { in: [...agentIds] }, organizationId }, select: { id: true } })
+      : Promise.resolve([]),
   ]);
 
   const foundTags = new Set(tags.map((tag) => tag.id));
   const foundDepartments = new Set(departments.map((department) => department.id));
   const foundUsers = new Set(users.map((user) => user.id));
+  const foundAgents = new Set(agents.map((agent) => agent.id));
 
   for (const id of tagIds) {
     if (!foundTags.has(id)) problems.push({ message: "Um dos blocos de etiqueta aponta para uma etiqueta que não existe mais." });
@@ -77,6 +87,11 @@ export async function validateAutomationFlowForPublish(
   for (const id of userIds) {
     if (!foundUsers.has(id)) {
       problems.push({ message: "O bloco de atribuir atendente aponta para uma pessoa que não existe mais." });
+    }
+  }
+  for (const id of agentIds) {
+    if (!foundAgents.has(id)) {
+      problems.push({ message: "O bloco de atendimento por IA aponta para um agente que não existe mais." });
     }
   }
 

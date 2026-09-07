@@ -888,6 +888,20 @@ export interface AiAgentDto extends AiAgentSummaryDto {
   config: AiAgentConfig;
 }
 
+/**
+ * Recorte mínimo para QUEM REFERENCIA um agente sem gerenciar IA — hoje, o
+ * bloco "Atendimento por IA" do construtor de fluxos. Mesmo padrão de
+ * `serializeUserDirectory`: a tela de origem (`ai.agent.manage`/
+ * `ai.view_usage`) continua sendo a única a ver custo, sessões e config;
+ * quem só tem `automation.manage` recebe apenas o suficiente para escolher
+ * um agente numa lista.
+ */
+export interface AiAgentDirectoryDto {
+  id: string;
+  name: string;
+  status: AiAgentStatus;
+}
+
 export interface AiAgentVersionDto {
   id: string;
   version: number;

@@ -123,19 +123,21 @@ async function main(): Promise<void> {
   });
   deps.io = io;
 
+  // Motor do atendimento por IA — nasce ANTES do de automações porque o
+  // bloco "Atendimento por IA" do construtor de fluxos entrega a conversa a
+  // ele (`startSessionForFlow`); a volta (sessão terminou, retomar o fluxo)
+  // não usa chamada direta, é varredura no `tick()`, então esta é a ÚNICA
+  // direção de acoplamento entre os dois motores.
+  const aiRuntime = new AiRuntime({ prisma, io, logger: logger.child({ module: "ai" }), provider, audit, azevedoOs, cipher: aiCipher });
+  deps.aiRuntime = aiRuntime;
+
   // Motor de automações (construtor visual de fluxos) — precisa do `io`
   // (eventos de tempo real) e do `provider` (envio das mensagens do fluxo),
   // então nasce aqui, depois do socket. `InstanceManager` o recebe para
   // acionar os gatilhos de mensagem logo depois que `ingest` grava a
   // mensagem recebida.
-  const automation = new AutomationEngine(prisma, provider, io, logger);
+  const automation = new AutomationEngine(prisma, provider, io, logger, aiRuntime);
   deps.automation = automation;
-
-  // Motor do atendimento por IA: recebe a mensagem depois de gravada e
-  // decide se algum agente responde. Nasce antes do instance-manager, que é
-  // quem o avisa.
-  const aiRuntime = new AiRuntime({ prisma, io, logger: logger.child({ module: "ai" }), provider, audit, azevedoOs, cipher: aiCipher });
-  deps.aiRuntime = aiRuntime;
 
   const instanceManager = new InstanceManager(
     prisma,

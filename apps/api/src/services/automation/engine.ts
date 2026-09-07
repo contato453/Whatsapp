@@ -2,6 +2,7 @@ import type { Conversation, Prisma, PrismaClient } from "@azvchat/database";
 import {
   RealtimeEvents,
   resolveAutomationTemplate,
+  type AiAgentNodeData,
   type AskQuestionNodeData,
   type AssignUserNodeData,
   type AutomationConditionClause,
@@ -65,9 +66,24 @@ interface RuntimeExtra {
   latestMessageContent?: string | null;
 }
 
+/**
+ * O que o bloco "Atendimento por IA" pede ao motor de IA — interface
+ * ESTREITA para não amarrar este arquivo à classe `AiRuntime` inteira (só
+ * `index.ts` conhece as duas). É a ÚNICA direção de acoplamento entre os
+ * dois motores: a volta (sessão terminou → retomar o fluxo) é varredura no
+ * `tick()`, não chamada direta — ver `resumeDueAiSessions`.
+ */
+export interface AiRuntimeForFlow {
+  startSessionForFlow(input: {
+    conversationId: string;
+    agentId: string;
+    automationExecutionId: string;
+  }): Promise<{ id: string } | null>;
+}
+
 type NodeStepResult =
   | { type: "continue"; handle?: string }
-  | { type: "wait"; reason: "reply" | "timer"; until: Date | null }
+  | { type: "wait"; reason: "reply" | "timer" | "ai_session"; until: Date | null }
   | { type: "finish"; summary: string | null }
   | { type: "failed"; error: string };
 
@@ -176,6 +192,8 @@ export class AutomationEngine {
     private readonly provider: WhatsAppProvider,
     private readonly io: Server,
     private readonly logger: Logger,
+    /** Opcional só para os testes que sobem o motor sem IA; em produção é sempre passado. */
+    private readonly aiRuntime?: AiRuntimeForFlow,
   ) {}
 
   /* ------------------------------------------------------------------ *
@@ -267,6 +285,11 @@ export class AutomationEngine {
       await this.resumeDueWaits();
     } catch (err) {
       this.logger.error({ event: "automation_resume_waits_failed", error: String(err) });
+    }
+    try {
+      await this.resumeDueAiSessions();
+    } catch (err) {
+      this.logger.error({ event: "automation_resume_ai_sessions_failed", error: String(err) });
     }
     try {
       await this.scanNoReplyTimeouts();
@@ -831,6 +854,31 @@ export class AutomationEngine {
         return { type: "continue" };
       }
 
+      case "ai_agent": {
+        const data = node.data as unknown as AiAgentNodeData;
+        if (!data.agentId || !this.aiRuntime) {
+          // Sem agente configurado (fluxo publicado antes de escolher um) ou
+          // sem motor de IA disponível (testes) — não trava o atendimento:
+          // segue como se a IA já tivesse encerrado, para a fila humana.
+          return { type: "continue", handle: "transferido" };
+        }
+        const session = await this.aiRuntime.startSessionForFlow({
+          conversationId: conversation.id,
+          agentId: data.agentId,
+          automationExecutionId: execution.id,
+        });
+        if (!session) {
+          // Agente inativo, sem crédito no orçamento, provedor desconectado —
+          // qualquer motivo de recusa cai no mesmo lugar: a conversa segue
+          // para um humano, em vez de a automação ficar esperando um
+          // atendimento que nunca vai começar.
+          await this.log(execution.id, "warn", "automation_ai_agent_unavailable", { nodeId: node.id });
+          return { type: "continue", handle: "transferido" };
+        }
+        contextData.aiSessionId = session.id;
+        return { type: "wait", reason: "ai_session", until: null };
+      }
+
       case "webhook": {
         const data = node.data as unknown as WebhookNodeData;
         if (data.url) {
@@ -1010,7 +1058,7 @@ export class AutomationEngine {
   private async persistWaiting(
     executionId: string,
     nodeId: string,
-    reason: "reply" | "timer",
+    reason: "reply" | "timer" | "ai_session",
     until: Date | null,
     contextData: AutomationExecutionContextData,
   ): Promise<void> {
@@ -1131,6 +1179,75 @@ export class AutomationEngine {
       await this.advanceFrom(execution, conversation, graph, edge.target, contextData, {});
     } catch (err) {
       await this.failExecution(execution.id, `Falha ao retomar espera: ${String(err)}`);
+    }
+  }
+
+  /**
+   * Retoma execuções paradas no bloco "Atendimento por IA" cuja sessão já
+   * terminou. É VARREDURA, não chamada direta do fim da sessão de propósito
+   * — é a única direção de acoplamento entre os dois motores ser
+   * `AutomationEngine → AiRuntime` (`startSessionForFlow`), nunca o
+   * contrário; a IA não precisa saber que uma automação existe.
+   */
+  private async resumeDueAiSessions(): Promise<void> {
+    const due = await this.prisma.automationExecution.findMany({
+      where: { status: "waiting", waitingReason: "ai_session" },
+      take: 50,
+    });
+    for (const execution of due) {
+      await this.resumeAiSessionExecution(execution);
+    }
+  }
+
+  private async resumeAiSessionExecution(execution: {
+    id: string;
+    conversationId: string;
+    flowVersionId: string;
+    currentNodeId: string | null;
+    context: Prisma.JsonValue;
+  }): Promise<void> {
+    try {
+      const contextData = ((execution.context as AutomationExecutionContextData) ?? {}) as AutomationExecutionContextData;
+      const sessionId = contextData.aiSessionId;
+      if (!sessionId) {
+        // Não deveria acontecer — é gravado no mesmo passo que entra em
+        // espera —, mas sem o id não há como saber quando retomar.
+        await this.failExecution(execution.id, "A execução ficou esperando a IA sem guardar qual sessão.", contextData);
+        return;
+      }
+      const session = await this.prisma.aiSession.findUnique({ where: { id: sessionId }, select: { status: true } });
+      if (!session) {
+        await this.failExecution(execution.id, "A sessão de IA que esta execução esperava não existe mais.", contextData);
+        return;
+      }
+      if (session.status === "active") return; // ainda em atendimento — confere de novo no próximo tick
+
+      const conversation = await this.prisma.conversation.findUnique({ where: { id: execution.conversationId } });
+      if (!conversation) {
+        await this.failExecution(execution.id, "A conversa não existe mais.", contextData);
+        return;
+      }
+      const flowVersion = await this.prisma.automationFlowVersion.findUnique({
+        where: { id: execution.flowVersionId },
+      });
+      if (!flowVersion) {
+        await this.failExecution(execution.id, "A versão publicada deste fluxo não existe mais.", contextData);
+        return;
+      }
+      const graph = flowVersion.graph as unknown as AutomationGraph;
+      // Só "resolved" conta como "Resolvido pela IA" — qualquer outro fim
+      // (transferido, interrompido, limite, erro, expirado) é "alguém ou
+      // algo fora da IA assumiu", e o fluxo trata os dois casos como
+      // "transferido": um humano (ou nada) está de posse da conversa agora.
+      const handle = session.status === "resolved" ? "resolvido" : "transferido";
+      const edge = pickNextEdge(graph, execution.currentNodeId ?? "", handle);
+      if (!edge) {
+        await this.completeExecution(execution.id, contextData, null);
+        return;
+      }
+      await this.advanceFrom(execution, conversation, graph, edge.target, contextData, {});
+    } catch (err) {
+      await this.failExecution(execution.id, `Falha ao retomar depois da IA: ${String(err)}`);
     }
   }
 

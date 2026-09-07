@@ -426,3 +426,74 @@ describe("AiRuntime — turno de ponta a ponta", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe("AiRuntime — bloco 'Atendimento por IA' do construtor de fluxos (startSessionForFlow)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("cria a sessão marcada com automationExecutionId (nunca automationId) e manda a saudação", async () => {
+    const s = scenario();
+    const result = await s.runtime.startSessionForFlow({
+      conversationId: s.conversationId,
+      agentId: s.agentId,
+      automationExecutionId: "exec-1",
+    });
+    expect(result).not.toBeNull();
+    const session = s.db.rows("aiSession").find((row) => row.id === result?.id) as Record<string, unknown>;
+    expect(session.automationExecutionId).toBe("exec-1");
+    expect(session.automationId).toBeNull();
+    expect(s.sent.map((entry) => entry.text)).toEqual(["Olá! Sou a assistente virtual do escritório."]);
+  });
+
+  it("já com uma sessão ativa, reaproveita em vez de tentar abrir uma segunda", async () => {
+    const s = scenario();
+    const first = await s.runtime.startSessionForFlow({
+      conversationId: s.conversationId,
+      agentId: s.agentId,
+      automationExecutionId: "exec-1",
+    });
+    const second = await s.runtime.startSessionForFlow({
+      conversationId: s.conversationId,
+      agentId: s.agentId,
+      automationExecutionId: "exec-2",
+    });
+    expect(second?.id).toBe(first?.id);
+    expect(s.db.rows("aiSession")).toHaveLength(1);
+  });
+
+  it("agente inativo devolve null sem gravar sessão nenhuma", async () => {
+    const s = scenario();
+    const agentRow = s.db.rows("aiAgent")[0] as Record<string, unknown>;
+    agentRow.status = "inactive";
+    const result = await s.runtime.startSessionForFlow({
+      conversationId: s.conversationId,
+      agentId: s.agentId,
+      automationExecutionId: "exec-1",
+    });
+    expect(result).toBeNull();
+    expect(s.db.rows("aiSession")).toHaveLength(0);
+  });
+
+  it("orçamento estourado com bloqueio devolve null, sem chamar routeConversationForHandoff", async () => {
+    // Diferente do caminho da AiAutomation: quem decide para onde a conversa
+    // vai quando a IA não começa é o PRÓPRIO FLUXO (saída "Transferido"),
+    // então o departamento/responsável não deve mudar aqui.
+    const s = scenario({ budgetCents: 100, spentMicros: 2_000_000 });
+    const before = s.db.rows("conversation")[0] as Record<string, unknown>;
+    const result = await s.runtime.startSessionForFlow({
+      conversationId: s.conversationId,
+      agentId: s.agentId,
+      automationExecutionId: "exec-1",
+    });
+    expect(result).toBeNull();
+    expect(s.db.rows("aiSession")).toHaveLength(0);
+    const after = s.db.rows("conversation")[0] as Record<string, unknown>;
+    expect(after.departmentId).toBe(before.departmentId);
+    expect(after.assignedUserId).toBe(before.assignedUserId);
+  });
+});

@@ -1489,10 +1489,16 @@ model AutomationExecution {
   flowVersion  AutomationFlowVersion    @relation(fields: [flowVersionId], references: [id], onDelete: Cascade)
   conversation Conversation             @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   logs         AutomationExecutionLog[]
+  /// Sessão(ões) de IA que o bloco "Atendimento por IA" desta execução
+  /// abriu — na prática, no máximo uma por vez (a execução fica `waiting`
+  /// nela até terminar). `SetNull` do lado da sessão: apagar o histórico da
+  /// automação não pode apagar o registro do atendimento por IA.
+  aiSessions   AiSession[]
 
   @@index([organizationId, startedAt])
   @@index([conversationId, startedAt])
   @@index([status, waitingUntil])
+  @@index([status, waitingReason])
   @@index([flowId, conversationId, startedAt])
   @@map("automation_executions")
 }
@@ -1792,6 +1798,13 @@ model AiSession {
   agentId                String
   agentVersionId         String?
   automationId           String?
+  /// Preenchido quando esta sessão nasceu de um bloco "Atendimento por IA"
+  /// do construtor de fluxos, em vez do gatilho de `AiAutomation` — os dois
+  /// caminhos de início nunca coexistem na mesma sessão (um ou outro, nunca
+  /// os dois: `tryStartSession` grava `automationId`, `startSessionForFlow`
+  /// grava este campo). `SetNull`: excluir o histórico da execução não pode
+  /// apagar o atendimento por IA que ela abriu.
+  automationExecutionId  String?
   status                 AiSessionStatus @default(active)
   state                  Json?
   aiMessageCount         Int             @default(0)
@@ -1811,17 +1824,19 @@ model AiSession {
   lastActivityAt         DateTime        @default(now())
   endedAt                DateTime?
 
-  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  conversation Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  agent        AiAgent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  agentVersion AiAgentVersion? @relation(fields: [agentVersionId], references: [id], onDelete: SetNull)
-  automation   AiAutomation?   @relation(fields: [automationId], references: [id], onDelete: SetNull)
-  endedBy      User?           @relation("AiSessionEndedBy", fields: [endedByUserId], references: [id], onDelete: SetNull)
-  usageLogs    AiUsageLog[]
+  organization        Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation        Conversation         @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  agent               AiAgent              @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  agentVersion        AiAgentVersion?      @relation(fields: [agentVersionId], references: [id], onDelete: SetNull)
+  automation          AiAutomation?        @relation(fields: [automationId], references: [id], onDelete: SetNull)
+  automationExecution AutomationExecution? @relation(fields: [automationExecutionId], references: [id], onDelete: SetNull)
+  endedBy             User?                @relation("AiSessionEndedBy", fields: [endedByUserId], references: [id], onDelete: SetNull)
+  usageLogs           AiUsageLog[]
 
   @@index([conversationId, status])
   @@index([organizationId, status, startedAt])
   @@index([agentId, startedAt])
+  @@index([automationExecutionId])
   @@map("ai_sessions")
 }
 

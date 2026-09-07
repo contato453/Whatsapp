@@ -269,17 +269,105 @@ export class AiRuntime {
       return null;
     }
 
+    return this.createSessionForAgent(conversation, match.agent, credentials, {
+      automationId: match.id,
+      automationExecutionId: null,
+      originNote: `pela automação "${match.name}"`,
+    });
+  }
+
+  /**
+   * Entrega da conversa a um agente pelo bloco "Atendimento por IA" do
+   * construtor de fluxos — chamado de `AutomationEngine.runNode`, nunca
+   * daqui para lá (ver `AiRuntimeForFlow` em `services/automation/engine.ts`
+   * para o porquê do acoplamento ser só nesta direção). Reaproveita a MESMA
+   * checagem de orçamento/credenciais/reinício de `tryStartSession` — só
+   * pula a etapa de "qual automação casa", porque aqui o agente já veio
+   * escolhido no bloco.
+   */
+  async startSessionForFlow(input: {
+    conversationId: string;
+    agentId: string;
+    automationExecutionId: string;
+  }): Promise<{ id: string } | null> {
+    const { prisma } = this.deps;
+    const conversation = await prisma.conversation.findUnique({ where: { id: input.conversationId } });
+    if (!conversation || conversation.archivedAt) return null;
+
+    // Já existe sessão ativa (corrida entre o fluxo e um gatilho de
+    // AiAutomation, ou o próprio índice único de "uma por conversa")? Reusa
+    // em vez de tentar abrir uma segunda — o bloco não precisa saber quem
+    // chegou primeiro, só que a conversa já está com uma IA.
+    const existing = await this.loadActive(conversation.id);
+    if (existing) return { id: existing.id };
+
+    const agent = await prisma.aiAgent.findFirst({
+      where: { id: input.agentId, organizationId: conversation.organizationId },
+    });
+    if (!agent || agent.status !== "active") return null;
+    if (!(await this.canRestart(conversation))) return null;
+
+    const settings = await loadAiSettings(prisma, conversation.organizationId);
+    const budget = await loadBudgetState(prisma, conversation.organizationId, settings);
+    if (budget.blocked) {
+      await this.recordUsage({
+        organizationId: conversation.organizationId,
+        agent,
+        conversationId: conversation.id,
+        departmentId: conversation.departmentId,
+        provider: "openai",
+        model: agent.model ?? "-",
+        kind: "chat",
+        outcome: "blocked",
+        errorCode: "budget_exceeded",
+        usage: { inputTokens: 0, outputTokens: 0, costMicros: 0, requests: 0 },
+        durationMs: 0,
+      });
+      // Diferente de `tryStartSession`: não chama `routeConversationForHandoff`
+      // aqui. Quem decide para onde vai a conversa quando a IA não começa é
+      // o PRÓPRIO FLUXO — o bloco devolve `null`, o motor de automações
+      // segue pela saída "Transferido / encerrado", e é ela que já está
+      // conectada a alguma coisa (senão o publicar teria travado antes).
+      return null;
+    }
+
+    const credentials = await resolveCredentials(prisma, this.deps.cipher, this.deps.logger, conversation.organizationId);
+    if (!credentials) return null;
+
+    const session = await this.createSessionForAgent(conversation, agent, credentials, {
+      automationId: null,
+      automationExecutionId: input.automationExecutionId,
+      originNote: "por um bloco de fluxo",
+    });
+    return session ? { id: session.id } : null;
+  }
+
+  /**
+   * O que os dois caminhos de início (gatilho de `AiAutomation` e bloco de
+   * fluxo) têm em comum: criar a linha, registrar histórico/auditoria/tempo
+   * real, mandar a saudação. `origin.automationId` XOR
+   * `origin.automationExecutionId` — nunca os dois, é o que diferencia de
+   * onde a sessão nasceu (ver comentário no schema.prisma).
+   */
+  private async createSessionForAgent(
+    conversation: Conversation,
+    agent: AiAgent,
+    credentials: ResolvedCredentials,
+    origin: { automationId: string | null; automationExecutionId: string | null; originNote: string },
+  ): Promise<SessionRow | null> {
+    const { prisma } = this.deps;
     const version = await prisma.aiAgentVersion.findUnique({
-      where: { agentId_version: { agentId: match.agent.id, version: match.agent.currentVersion } },
+      where: { agentId_version: { agentId: agent.id, version: agent.currentVersion } },
     });
     try {
       const session = await prisma.aiSession.create({
         data: {
           organizationId: conversation.organizationId,
           conversationId: conversation.id,
-          agentId: match.agent.id,
+          agentId: agent.id,
           agentVersionId: version?.id ?? null,
-          automationId: match.id,
+          automationId: origin.automationId,
+          automationExecutionId: origin.automationExecutionId,
           state: { collected: {}, summary: null, subject: null, intent: null, actions: [] },
         },
         include: { agent: true, agentVersion: true },
@@ -289,7 +377,7 @@ export class AiRuntime {
           organizationId: conversation.organizationId,
           conversationId: conversation.id,
           action: "assigned",
-          note: `Atendimento por IA iniciado (${match.agent.name}, v${session.agentVersion?.version ?? match.agent.currentVersion}) pela automação "${match.name}".`,
+          note: `Atendimento por IA iniciado (${agent.name}, v${session.agentVersion?.version ?? agent.currentVersion}) ${origin.originNote}.`,
         },
       });
       this.deps.audit.record({
@@ -298,9 +386,14 @@ export class AiRuntime {
         action: "ai.session_started",
         entityType: "Conversation",
         entityId: conversation.id,
-        metadata: { sessionId: session.id, agentId: match.agent.id, automationId: match.id },
+        metadata: {
+          sessionId: session.id,
+          agentId: agent.id,
+          automationId: origin.automationId,
+          automationExecutionId: origin.automationExecutionId,
+        },
       });
-      this.deps.logger.info({ event: "ai_session_started", sessionId: session.id, conversationId: conversation.id, agentId: match.agent.id });
+      this.deps.logger.info({ event: "ai_session_started", sessionId: session.id, conversationId: conversation.id, agentId: agent.id });
       await emitAiSession(this.deps, conversation.organizationId, conversation.id);
 
       // Apresentação: sai antes da primeira resposta, sem passar pelo modelo
@@ -312,7 +405,8 @@ export class AiRuntime {
       return session;
     } catch (err) {
       // Perdeu a corrida do índice "uma ativa por conversa": a outra
-      // mensagem do mesmo lote já abriu a sessão. Usa a dela.
+      // mensagem (ou o outro caminho de início) do mesmo instante já abriu a
+      // sessão. Usa a dela.
       if (isUniqueViolation(err)) return this.loadActive(conversation.id);
       throw err;
     }

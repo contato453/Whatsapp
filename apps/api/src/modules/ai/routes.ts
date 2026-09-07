@@ -12,6 +12,7 @@ import {
   AI_USAGE_KINDS,
   AI_USAGE_OUTCOMES,
   AI_USAGE_PERIODS,
+  type AiAgentDirectoryDto,
   type AiModelDto,
   type AiSettingsDto,
   type AiStatsDto,
@@ -590,6 +591,24 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
       agents: agents.map((agent) => serializeAiAgentSummary(agent, { costMicros: costs.get(agent.id) ?? 0, defaultModel })),
     };
   });
+
+  // Recorte mínimo para quem só tem `automation.manage` (construtor de
+  // fluxos) escolher um agente no bloco "Atendimento por IA" — sem abrir
+  // custo, sessões nem config, que continuam exclusivos de `ai.agent.manage`/
+  // `ai.view_usage`. Mesmo escopo por departamento de `GET /ai/agents`.
+  app.get(
+    "/ai/agents/directory",
+    { preHandler: requireAnyPermission(deps, ["automation.manage", "ai.agent.manage", "ai.view_usage"]) },
+    async (request) => {
+      const accessible = await accessibleDepartmentIds(prisma, request.user);
+      const agents = await prisma.aiAgent.findMany({
+        where: { organizationId: request.user.organizationId, ...departmentResourceScope(accessible) },
+        select: { id: true, name: true, status: true },
+        orderBy: { name: "asc" },
+      });
+      return { agents: agents satisfies AiAgentDirectoryDto[] };
+    },
+  );
 
   app.get("/ai/agents/:id", { preHandler: requirePermission(deps, "ai.agent.manage") }, async (request) => {
     const { id } = idParams.parse(request.params);

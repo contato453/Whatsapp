@@ -56,7 +56,9 @@ function matches(row: Record<string, unknown>, where: Record<string, unknown> | 
   return true;
 }
 
-function buildFakeEnvironment() {
+function buildFakeEnvironment(opts?: {
+  aiRuntime?: { startSessionForFlow: (input: Record<string, unknown>) => Promise<{ id: string } | null> };
+}) {
   const conversations = new Map<string, Record<string, unknown>>();
   const messages = new Map<string, Record<string, unknown>>();
   const instances = new Map<string, Record<string, unknown>>();
@@ -67,6 +69,7 @@ function buildFakeEnvironment() {
   const flows = new Map<string, Record<string, unknown>>();
   const flowVersions = new Map<string, Record<string, unknown>>();
   const executions = new Map<string, Record<string, unknown>>();
+  const aiSessions = new Map<string, Record<string, unknown>>();
   const executionLogs: Record<string, unknown>[] = [];
   const assignmentHistory: Record<string, unknown>[] = [];
   const sentMessages: { instanceId: string; chatId: string; text: string }[] = [];
@@ -265,6 +268,22 @@ function buildFakeEnvironment() {
         return row;
       },
     },
+    aiSession: {
+      findUnique: async ({
+        where,
+        select,
+      }: {
+        where: { id: string };
+        select?: Record<string, boolean>;
+      }) => {
+        const row = aiSessions.get(where.id);
+        if (!row) return null;
+        if (!select) return { ...row };
+        const out: Record<string, unknown> = {};
+        for (const key of Object.keys(select)) out[key] = row[key];
+        return out;
+      },
+    },
     $transaction: async (ops: Promise<unknown>[]) => Promise.all(ops),
   };
 
@@ -286,6 +305,7 @@ function buildFakeEnvironment() {
     provider as never,
     io as never,
     logger as never,
+    opts?.aiRuntime as never,
   );
 
   const ORG = "org-1";
@@ -386,6 +406,7 @@ function buildFakeEnvironment() {
     INSTANCE_ID,
     conversations,
     executions,
+    aiSessions,
     conversationTags,
     sentMessages,
     logger,
@@ -654,5 +675,126 @@ describe("AutomationEngine", () => {
       expect(env.sentMessages).toHaveLength(1);
       expect(env.sentMessages[0]?.text).toBe("A");
       expect(env.executions.size).toBe(1);
+  });
+
+  describe("bloco 'Atendimento por IA'", () => {
+    function aiGraph(agentId: string): AutomationGraph {
+      return {
+        nodes: [
+          { id: "trigger", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+          { id: "ai", type: "ai_agent", position: { x: 100, y: 0 }, data: { agentId } },
+          { id: "resolved-msg", type: "send_message", position: { x: 200, y: 0 }, data: { messageType: "text", text: "Resolvido!" } },
+          { id: "resolved-finish", type: "finish", position: { x: 300, y: 0 }, data: {} },
+          { id: "transfer-msg", type: "send_message", position: { x: 200, y: 100 }, data: { messageType: "text", text: "Transferido!" } },
+          { id: "transfer-finish", type: "finish", position: { x: 300, y: 100 }, data: {} },
+        ],
+        edges: [
+          { id: "e1", source: "trigger", target: "ai" },
+          { id: "e2", source: "ai", sourceHandle: "resolvido", target: "resolved-msg" },
+          { id: "e3", source: "resolved-msg", target: "resolved-finish" },
+          { id: "e4", source: "ai", sourceHandle: "transferido", target: "transfer-msg" },
+          { id: "e5", source: "transfer-msg", target: "transfer-finish" },
+        ],
+      };
+    }
+
+    it("entrega a conversa à IA e a execução fica esperando a sessão terminar", async () => {
+      const startSessionForFlow = vi.fn(async (input: Record<string, unknown>) => ({ id: "ai-session-1" }));
+      const env = buildFakeEnvironment({ aiRuntime: { startSessionForFlow } });
+      vi.setSystemTime(new Date("2026-03-05T10:00:00-03:00"));
+      const conversation = env.createConversation();
+      env.createFlow({ name: "Com IA", triggerType: "first_message", graph: aiGraph("agent-1") });
+
+      await env.inbound(conversation.id as string, "Oi");
+
+      expect(startSessionForFlow).toHaveBeenCalledTimes(1);
+      const call = startSessionForFlow.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(call.agentId).toBe("agent-1");
+      expect(call.conversationId).toBe(conversation.id);
+      const execution = [...env.executions.values()][0] as Record<string, unknown>;
+      expect(execution.status).toBe("waiting");
+      expect(execution.waitingReason).toBe("ai_session");
+      expect((execution.context as Record<string, unknown>).aiSessionId).toBe("ai-session-1");
+      // Nenhuma das duas mensagens de saída do bloco de IA sai agora — só
+      // depois que a sessão terminar de verdade.
+      expect(env.sentMessages).toHaveLength(0);
+    });
+
+    it("sem motor de IA disponível, segue direto pela saída 'Transferido'", async () => {
+      const env = buildFakeEnvironment(); // sem aiRuntime — mesma situação dos testes que não usam IA
+      vi.setSystemTime(new Date("2026-03-05T10:00:00-03:00"));
+      const conversation = env.createConversation();
+      env.createFlow({ name: "Com IA", triggerType: "first_message", graph: aiGraph("agent-1") });
+
+      await env.inbound(conversation.id as string, "Oi");
+
+      expect(env.sentMessages).toHaveLength(1);
+      expect(env.sentMessages[0]?.text).toBe("Transferido!");
+      const execution = [...env.executions.values()][0] as Record<string, unknown>;
+      expect(execution.status).toBe("completed");
+    });
+
+    it("agente indisponível (orçamento, inativo, etc.) também segue por 'Transferido', sem travar", async () => {
+      const startSessionForFlow = vi.fn(async () => null);
+      const env = buildFakeEnvironment({ aiRuntime: { startSessionForFlow } });
+      vi.setSystemTime(new Date("2026-03-05T10:00:00-03:00"));
+      const conversation = env.createConversation();
+      env.createFlow({ name: "Com IA", triggerType: "first_message", graph: aiGraph("agent-1") });
+
+      await env.inbound(conversation.id as string, "Oi");
+
+      expect(env.sentMessages).toHaveLength(1);
+      expect(env.sentMessages[0]?.text).toBe("Transferido!");
+    });
+
+    it("tick() retoma pela saída 'Resolvido' quando a sessão de IA termina resolvida", async () => {
+      const startSessionForFlow = vi.fn(async () => ({ id: "ai-session-1" }));
+      const env = buildFakeEnvironment({ aiRuntime: { startSessionForFlow } });
+      vi.setSystemTime(new Date("2026-03-05T10:00:00-03:00"));
+      const conversation = env.createConversation();
+      env.createFlow({ name: "Com IA", triggerType: "first_message", graph: aiGraph("agent-1") });
+      await env.inbound(conversation.id as string, "Oi");
+
+      env.aiSessions.set("ai-session-1", { id: "ai-session-1", status: "resolved" });
+      await env.engine.tick();
+
+      expect(env.sentMessages).toHaveLength(1);
+      expect(env.sentMessages[0]?.text).toBe("Resolvido!");
+      const execution = [...env.executions.values()][0] as Record<string, unknown>;
+      expect(execution.status).toBe("completed");
+    });
+
+    it("tick() retoma pela saída 'Transferido' quando a sessão de IA termina de qualquer outro jeito", async () => {
+      const startSessionForFlow = vi.fn(async () => ({ id: "ai-session-1" }));
+      const env = buildFakeEnvironment({ aiRuntime: { startSessionForFlow } });
+      vi.setSystemTime(new Date("2026-03-05T10:00:00-03:00"));
+      const conversation = env.createConversation();
+      env.createFlow({ name: "Com IA", triggerType: "first_message", graph: aiGraph("agent-1") });
+      await env.inbound(conversation.id as string, "Oi");
+
+      // "stopped" (Encerrar IA), "transferred", "limit_reached", "error",
+      // "expired" — qualquer um que não seja "resolved" cai na mesma saída.
+      env.aiSessions.set("ai-session-1", { id: "ai-session-1", status: "stopped" });
+      await env.engine.tick();
+
+      expect(env.sentMessages).toHaveLength(1);
+      expect(env.sentMessages[0]?.text).toBe("Transferido!");
+    });
+
+    it("tick() não mexe na execução enquanto a sessão de IA continua ativa", async () => {
+      const startSessionForFlow = vi.fn(async () => ({ id: "ai-session-1" }));
+      const env = buildFakeEnvironment({ aiRuntime: { startSessionForFlow } });
+      vi.setSystemTime(new Date("2026-03-05T10:00:00-03:00"));
+      const conversation = env.createConversation();
+      env.createFlow({ name: "Com IA", triggerType: "first_message", graph: aiGraph("agent-1") });
+      await env.inbound(conversation.id as string, "Oi");
+
+      env.aiSessions.set("ai-session-1", { id: "ai-session-1", status: "active" });
+      await env.engine.tick();
+
+      expect(env.sentMessages).toHaveLength(0);
+      const execution = [...env.executions.values()][0] as Record<string, unknown>;
+      expect(execution.status).toBe("waiting");
+    });
   });
 });

@@ -27,11 +27,12 @@ import {
 import {
   AUTOMATION_TRIGGER_LABELS,
   AUTOMATION_TRIGGER_TYPES,
+  type AiAgentDirectoryDto,
   type AutomationGraph,
   type AutomationNodeType,
   type AutomationTriggerType,
 } from "@azvchat/shared";
-import { api, automationApi } from "@/lib/api";
+import { aiApi, api, automationApi } from "@/lib/api";
 import type {
   AutomationFlowDetailDto,
   AutomationFlowProblemDto,
@@ -67,6 +68,8 @@ function defaultConfigFor(type: AutomationNodeType): Record<string, unknown> {
       return { departmentId: "" };
     case "assign_user":
       return { userId: "" };
+    case "ai_agent":
+      return { agentId: "" };
     case "webhook":
       return { url: "", headers: {} };
     case "finish":
@@ -127,6 +130,7 @@ export default function AutomationFlowBuilderPage() {
   const [departments, setDepartments] = useState<DepartmentDto[]>([]);
   const [tags, setTags] = useState<TagDto[]>([]);
   const [users, setUsers] = useState<UserDirectoryDto[]>([]);
+  const [agents, setAgents] = useState<AiAgentDirectoryDto[]>([]);
   const [name, setName] = useState("");
   const [triggerType, setTriggerType] = useState<AutomationTriggerType>("new_message");
   const [triggerConfigText, setTriggerConfigText] = useState("");
@@ -147,8 +151,9 @@ export default function AutomationFlowBuilderPage() {
       api.get<{ departments: DepartmentDto[] }>("/departments"),
       api.get<{ tags: TagDto[] }>("/tags"),
       api.get<{ users: UserDirectoryDto[] }>("/users"),
+      aiApi.agentsDirectory(),
     ])
-      .then(([loadedFlow, instancesData, departmentsData, tagsData, usersData]) => {
+      .then(([loadedFlow, instancesData, departmentsData, tagsData, usersData, agentsData]) => {
         setFlow(loadedFlow);
         setName(loadedFlow.name);
         setTriggerType(loadedFlow.triggerType);
@@ -163,6 +168,7 @@ export default function AutomationFlowBuilderPage() {
         setDepartments(departmentsData.departments);
         setTags(tagsData.tags);
         setUsers(usersData.users);
+        setAgents(agentsData);
         // O autosave só liga DEPOIS da primeira carga — sem isso, montar o
         // estado inicial contaria como "mudou" e gravaria de volta o que
         // acabou de vir do servidor.
@@ -413,6 +419,7 @@ export default function AutomationFlowBuilderPage() {
             tags={tags}
             departments={departments}
             users={users}
+            agents={agents}
           />
         )}
       </div>

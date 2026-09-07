@@ -160,6 +160,40 @@ describe("validateAutomationGraph", () => {
     expect(problems.some((p) => p.message.includes("mesmo identificador"))).toBe(true);
   });
 
+  it("bloco de IA sem agente selecionado é recusado", () => {
+    const graph: AutomationGraph = {
+      nodes: [
+        { id: "trigger", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+        { id: "ai", type: "ai_agent", position: { x: 100, y: 0 }, data: { agentId: "" } },
+        { id: "finish", type: "finish", position: { x: 200, y: 0 }, data: {} },
+      ],
+      edges: [
+        { id: "e1", source: "trigger", target: "ai" },
+        { id: "e2", source: "ai", sourceHandle: "resolvido", target: "finish" },
+      ],
+    };
+    const problems = validateAutomationGraph(graph);
+    expect(problems.some((p) => p.message.includes("Selecione um agente de IA"))).toBe(true);
+  });
+
+  it("bloco de IA com agente escolhido e só UMA das duas saídas conectada é válido", () => {
+    // Diferente de condição/aguardar: as duas saídas do bloco de IA são
+    // opcionais individualmente — só precisa de PELO MENOS uma (a regra
+    // genérica de "todo bloco não-terminal tem para onde ir").
+    const graph: AutomationGraph = {
+      nodes: [
+        { id: "trigger", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+        { id: "ai", type: "ai_agent", position: { x: 100, y: 0 }, data: { agentId: "agent-1" } },
+        { id: "finish", type: "finish", position: { x: 200, y: 0 }, data: {} },
+      ],
+      edges: [
+        { id: "e1", source: "trigger", target: "ai" },
+        { id: "e2", source: "ai", sourceHandle: "resolvido", target: "finish" },
+      ],
+    };
+    expect(validateAutomationGraph(graph)).toEqual([]);
+  });
+
   it("aguardar com retomada por resposta exige as duas saídas", () => {
     const graph: AutomationGraph = {
       nodes: [

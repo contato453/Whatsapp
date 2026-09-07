@@ -44,6 +44,7 @@ export const AUTOMATION_NODE_TYPES = [
   "assign_user",
   "unassign",
   "forward_department",
+  "ai_agent",
   "webhook",
   "finish",
 ] as const;
@@ -180,6 +181,17 @@ export const AUTOMATION_NODE_TYPE_DEFINITIONS: Record<AutomationNodeType, Automa
     label: "Devolver para a fila",
     description: "Tira o responsável — a conversa some da caixa de quem tinha e some para quem está livre no setor.",
     color: "#be123c",
+  },
+  ai_agent: {
+    type: "ai_agent",
+    category: "atendimento",
+    label: "Atendimento por IA",
+    description: "Entrega a conversa a um agente de IA configurado em Configurações → Inteligência artificial.",
+    color: "#be123c",
+    outputs: [
+      { handle: "resolvido", label: "Resolvido pela IA" },
+      { handle: "transferido", label: "Transferido / encerrado" },
+    ],
   },
   webhook: {
     type: "webhook",
@@ -355,6 +367,11 @@ export interface ForwardDepartmentNodeData {
 
 export interface AssignUserNodeData {
   userId: string;
+}
+
+export interface AiAgentNodeData {
+  /** Agente cadastrado em Configurações → Inteligência artificial. */
+  agentId: string;
 }
 
 export interface WebhookNodeData {
@@ -559,6 +576,9 @@ export function validateAutomationGraph(graph: AutomationGraph): AutomationFlowP
           });
         }
       }
+    }
+    if (node.type === "ai_agent" && !(node.data as unknown as AiAgentNodeData).agentId) {
+      problems.push({ nodeId: node.id, message: "Selecione um agente de IA para este bloco." });
     }
     if (node.type === "wait" && (node.data as unknown as WaitNodeData).resumeOnReply) {
       const handles = new Set(outgoing.map((edge) => edge.sourceHandle));
