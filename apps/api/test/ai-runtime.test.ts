@@ -405,6 +405,50 @@ describe("AiRuntime — turno de ponta a ponta", () => {
     expect(session?.endReason).toBe("human_takeover");
   });
 
+  it("scheduleMode 'business_hours': a IA só inicia atendimento dentro do expediente", async () => {
+    const s = scenario({
+      config: (config) => {
+        config.identity.sendGreeting = false;
+        config.advanced.scheduleMode = "business_hours";
+      },
+    });
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", mockFetch([() => openAiResponse("Resposta dentro do expediente.")], calls));
+
+    vi.setSystemTime(new Date("2026-03-01T03:00:00-03:00")); // domingo de madrugada
+    const outside = inbound(s.db, s.conversationId, "Oi");
+    await settle(s.runtime, s, outside.id as string);
+    expect(s.sent).toHaveLength(0);
+    expect(s.db.rows("aiSession")).toHaveLength(0);
+
+    vi.setSystemTime(new Date("2026-03-05T10:00:00-03:00")); // quinta às 10h
+    const inside = inbound(s.db, s.conversationId, "Oi de novo");
+    await settle(s.runtime, s, inside.id as string);
+    expect(s.sent).toEqual([{ chatId: expect.any(String), text: "Resposta dentro do expediente." }]);
+  });
+
+  it("scheduleMode 'outside_business_hours': cobre o plantão, nunca o horário comercial", async () => {
+    const s = scenario({
+      config: (config) => {
+        config.identity.sendGreeting = false;
+        config.advanced.scheduleMode = "outside_business_hours";
+      },
+    });
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", mockFetch([() => openAiResponse("Resposta do plantão.")], calls));
+
+    vi.setSystemTime(new Date("2026-03-05T10:00:00-03:00")); // quinta às 10h — expediente
+    const inside = inbound(s.db, s.conversationId, "Oi");
+    await settle(s.runtime, s, inside.id as string);
+    expect(s.sent).toHaveLength(0);
+    expect(s.db.rows("aiSession")).toHaveLength(0);
+
+    vi.setSystemTime(new Date("2026-03-01T03:00:00-03:00")); // domingo de madrugada
+    const outside = inbound(s.db, s.conversationId, "Oi de novo");
+    await settle(s.runtime, s, outside.id as string);
+    expect(s.sent).toEqual([{ chatId: expect.any(String), text: "Resposta do plantão." }]);
+  });
+
   it("ferramenta não liberada é recusada e registrada, e o modelo é avisado", async () => {
     const s = scenario({
       config: (config) => {
@@ -544,5 +588,20 @@ describe("AiRuntime — bloco 'Atendimento por IA' do construtor de fluxos (star
     const after = s.db.rows("conversation")[0] as Record<string, unknown>;
     expect(after.departmentId).toBe(before.departmentId);
     expect(after.assignedUserId).toBe(before.assignedUserId);
+  });
+
+  it("scheduleMode fora da janela do agente: devolve null sem gravar sessão", async () => {
+    // Mesma régua de tryStartSession — decide o AGENTE, não a porta de
+    // entrada. O bloco de fluxo trata null como "IA não começou" e segue
+    // pela saída "Transferido / encerrado", sem travar a execução.
+    const s = scenario({ config: (config) => (config.advanced.scheduleMode = "business_hours") });
+    vi.setSystemTime(new Date("2026-03-01T03:00:00-03:00")); // domingo de madrugada
+    const result = await s.runtime.startSessionForFlow({
+      conversationId: s.conversationId,
+      agentId: s.agentId,
+      automationExecutionId: "exec-1",
+    });
+    expect(result).toBeNull();
+    expect(s.db.rows("aiSession")).toHaveLength(0);
   });
 });

@@ -1357,6 +1357,16 @@ enum AutomationTriggerType {
   tag_added
 }
 
+/// Quando o fluxo pode ser escolhido, em relação ao MESMO expediente de
+/// `AttendanceSettings` — nunca um horário paralelo. `outside_business_hours`
+/// cobre o caso real (não o intuitivo): um fluxo de plantão noturno/fim de
+/// semana, enquanto de dia quem responde é outro fluxo ou a equipe.
+enum AutomationScheduleMode {
+  always
+  business_hours
+  outside_business_hours
+}
+
 /// Estado de UMA execução do motor para UMA conversa.
 enum AutomationExecutionStatus {
   running
@@ -1401,6 +1411,13 @@ model AutomationFlow {
   /// (seção 26). Zero = sem trava própria (o motor ainda impede duas
   /// execuções ATIVAS simultâneas da mesma conversa, ver `AutomationExecution`).
   cooldownMinutes    Int                   @default(0)
+  /// A qualquer hora (padrão, o comportamento de sempre), só dentro ou só
+  /// fora do expediente cadastrado em Parâmetros — mesma régua do agente de
+  /// IA (`AiAgentConfig.advanced.scheduleMode`) e do mesmo `AttendanceSettings`
+  /// de sempre, nunca um cadastro paralelo. Fora da janela permitida, o
+  /// fluxo simplesmente não é candidato — outro fluxo de prioridade menor
+  /// (ou nenhum) responde por ele.
+  scheduleMode       AutomationScheduleMode @default(always)
   draftGraph         Json
   publishedVersionId String?               @unique
   createdById        String?

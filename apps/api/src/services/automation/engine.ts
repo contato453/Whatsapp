@@ -16,6 +16,7 @@ import {
   type ForwardDepartmentNodeData,
   type MenuNodeData,
   type MenuOption,
+  type ScheduleMode,
   type SendMessageNodeData,
   type TagNodeData,
   type WaitNodeData,
@@ -249,8 +250,10 @@ export class AutomationEngine {
       const candidates = await this.loadCandidateFlows(organizationId, conversation.whatsappInstanceId, [
         "tag_added",
       ]);
+      const withinHours = await this.isWithinBusinessHoursIfNeeded(organizationId, candidates);
       for (const flow of candidates) {
         if (readTagId(flow.triggerConfig) !== tagId) continue;
+        if (withinHours !== null && !this.matchesScheduleMode(flow.scheduleMode, withinHours)) continue;
         if (await this.isOnCooldown(flow, conversation.id)) continue;
         await this.startExecution(flow, conversation, "tag_added", {});
         return;
@@ -269,7 +272,9 @@ export class AutomationEngine {
       const candidates = await this.loadCandidateFlows(organizationId, conversation.whatsappInstanceId, [
         "conversation_resolved",
       ]);
+      const withinHours = await this.isWithinBusinessHoursIfNeeded(organizationId, candidates);
       for (const flow of candidates) {
+        if (withinHours !== null && !this.matchesScheduleMode(flow.scheduleMode, withinHours)) continue;
         if (await this.isOnCooldown(flow, conversation.id)) continue;
         await this.startExecution(flow, conversation, "conversation_resolved", {});
         return;
@@ -328,6 +333,7 @@ export class AutomationEngine {
       "keyword",
       "new_message",
     ]);
+    const withinHours = await this.isWithinBusinessHoursIfNeeded(input.organizationId, candidates);
     for (const flow of candidates) {
       if (flow.triggerType === "first_message" && !isFirstMessage) continue;
       if (flow.triggerType === "keyword") {
@@ -336,6 +342,7 @@ export class AutomationEngine {
         const text = (input.content ?? "").toLowerCase();
         if (!keywords.some((keyword) => text.includes(keyword.toLowerCase()))) continue;
       }
+      if (withinHours !== null && !this.matchesScheduleMode(flow.scheduleMode, withinHours)) continue;
       if (await this.isOnCooldown(flow, conversation.id)) continue;
       // Só UM fluxo começa por mensagem (seção 27) — a ordenação por
       // `priority` já veio da consulta, então o primeiro que passar vence.
@@ -467,6 +474,34 @@ export class AutomationEngine {
     });
     if (!last) return false;
     return last.startedAt.getTime() > Date.now() - flow.cooldownMinutes * 60_000;
+  }
+
+  /**
+   * "Dentro do expediente" vale para `business_hours`, "fora" vale para
+   * `outside_business_hours` — o mesmo booleano de `isWithinBusinessHours`
+   * decide as duas perguntas, invertida na segunda. Ausente/nulo (nunca
+   * acontece num fluxo de verdade — a coluna é `NOT NULL DEFAULT 'always'`
+   * — mas é o valor de fábrica de qualquer fake de teste que não o define)
+   * passa igual a `"always"`: campo que falta nunca pode virar restrição.
+   */
+  private matchesScheduleMode(mode: ScheduleMode | null | undefined, withinBusinessHours: boolean): boolean {
+    if (!mode || mode === "always") return true;
+    return mode === "business_hours" ? withinBusinessHours : !withinBusinessHours;
+  }
+
+  /**
+   * Carrega o expediente só quando algum candidato realmente pede — a
+   * maioria dos fluxos fica em `always` (padrão) e não deveria pagar uma
+   * consulta a mais por mensagem. `null` significa "ninguém aqui restringe
+   * horário", e quem chama trata como "todo `scheduleMode` passa".
+   */
+  private async isWithinBusinessHoursIfNeeded(
+    organizationId: string,
+    candidates: Array<{ scheduleMode: ScheduleMode | null | undefined }>,
+  ): Promise<boolean | null> {
+    if (!candidates.some((flow) => flow.scheduleMode && flow.scheduleMode !== "always")) return null;
+    const settings = await loadAttendanceSettings(this.prisma, organizationId);
+    return isWithinBusinessHours(settings, new Date());
   }
 
   /* ------------------------------------------------------------------ *
@@ -1259,6 +1294,10 @@ export class AutomationEngine {
     for (const flow of flows) {
       const minutes = readMinutes(flow.triggerConfig);
       if (!minutes || !flow.publishedVersionId || !flow.publishedVersion) continue;
+      if (flow.scheduleMode && flow.scheduleMode !== "always") {
+        const settings = await loadAttendanceSettings(this.prisma, flow.organizationId);
+        if (!this.matchesScheduleMode(flow.scheduleMode, isWithinBusinessHours(settings, new Date()))) continue;
+      }
       const threshold = new Date(Date.now() - minutes * 60_000);
       const conversations = await this.prisma.conversation.findMany({
         where: {

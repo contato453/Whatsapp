@@ -2373,6 +2373,26 @@ mensagem são avaliados em ordem de prioridade, e **só um** começa por
 mensagem — o primeiro que passar também no cooldown (`cooldownMinutes`,
 por fluxo+conversa, contra repetir "nova mensagem" a cada mensagem).
 
+**`AutomationFlow.scheduleMode`** — quando o fluxo pode ser ESCOLHIDO, em
+relação ao MESMO `AttendanceSettings` de sempre, nunca um cadastro paralelo:
+`always` (padrão, todo fluxo de hoje), `business_hours` (só dentro do
+expediente) ou `outside_business_hours`. **O caso de uso real é o inverso do
+intuitivo**: não é "trava o fluxo para não incomodar de madrugada", é "um
+fluxo de plantão noturno/fim de semana, enquanto de dia quem responde é
+outro fluxo (ou a equipe)". A régua é a MESMA de `AiAgentConfig.advanced.
+scheduleMode` (seção 20) — os dois tipos e rótulos vivem uma vez só, em
+`packages/shared/src/attendance.ts` (`SCHEDULE_MODES`), para as duas telas
+nunca divergirem no texto nem no valor. Fora da janela permitida, o fluxo
+simplesmente **não é candidato** — cai para o próximo fluxo de prioridade
+menor (se algum outro `always`/compatível existir) ou, sobrando nenhum, para
+a saudação/fora-do-expediente de zero configuração de sempre. `AutomationEngine`
+só consulta `AttendanceSettings` quando ALGUM candidato da rodada não está em
+`always` — a maioria dos fluxos continua sem pagar essa consulta a mais por
+mensagem. Campo ausente (nunca acontece numa linha real — a coluna é `NOT
+NULL DEFAULT 'always'` — mas é o estado de um fake de teste desatualizado)
+equivale a `always`, nunca a uma restrição: um `continue` por engano aqui
+descartaria fluxo publicado há meses sem ninguém pedir.
+
 **Saudação e fora do expediente (seções 4/5) moram em `AttendanceSettings`,
 não em `AutomationFlow`.** São o caminho de ZERO CONFIGURAÇÃO — quem não
 quer montar um fluxo ainda tem mensagem automática. `AutomationEngine.
@@ -2799,6 +2819,40 @@ conversa arquivada. **Humano assumiu = IA para na hora**: `interruptAiSessionFor
 (`afterOutboundPersist` em `messages/routes.ts`), e o turno RELÊ a sessão antes de enviar —
 resposta gerada para sessão interrompida é descartada. "Devolver para IA" é ação explícita
 (`POST /conversations/:id/ai/resume`, chave própria) que reaproveita a memória.
+
+**`AiAgentConfig.advanced.responseDelaySeconds`** — espera, em segundos (0–60,
+padrão 0 = imediato, o comportamento de sempre), entre o modelo decidir o
+texto e a mensagem sair de verdade pelo WhatsApp: simula o tempo de
+digitação de uma pessoa, para o atendimento não parecer instantâneo. Vive
+dentro de `sendAiText` — não em cada um dos 6 pontos que a chamam
+(apresentação, resposta, transferência, encerramento, aviso de fallback) —
+cobrindo toda mensagem da IA de uma vez, uniformemente. **Com a espera
+configurada, `sendAiText` RELÊ o status da sessão depois de esperar**, antes
+do `provider.sendText` de verdade, e descarta em silêncio se a sessão não
+está mais ativa — sem essa segunda checagem, um humano assumindo a conversa
+DURANTE a espera não impediria a mensagem da IA de sair depois, furando a
+invariante de "resposta gerada para sessão interrompida nunca sai" que já
+valia para "humano assume enquanto o modelo pensa". O testador
+(`POST /ai/agents/:id/test`) nunca passa por `sendAiText`, então a espera não
+afeta testar um agente.
+
+**`AiAgentConfig.advanced.scheduleMode`** — quando o agente pode INICIAR
+atendimento, em relação ao expediente de `AttendanceSettings`: `always`
+(padrão, todo agente de hoje), `business_hours` ou `outside_business_hours`.
+Mesma régua e mesmo enum de `AutomationFlow.scheduleMode` (seção 18),
+declarados uma vez em `packages/shared/src/attendance.ts` — **o caso de uso
+real é o inverso do intuitivo**: não é "trava a IA para não incomodar de
+madrugada", é "a IA cobre a noite e o fim de semana, quando não tem ninguém
+da equipe; de dia, quem atende é gente". Decide o AGENTE, não a porta de
+entrada: a mesma checagem (`isAgentScheduledNow`) guarda as DUAS formas de
+começar uma sessão — `tryStartSession` (gatilho de `AiAutomation`) e
+`startSessionForFlow` (bloco do construtor) — logo depois de saber qual
+agente respondeu, antes de gastar orçamento/credenciais com ele. Fora da
+janela, a IA simplesmente não começa: pelo gatilho de automação, a mensagem
+cai no aviso automático de "fora do expediente" (zero configuração) se
+nenhum fluxo a capturar antes; pelo bloco de fluxo, `startSessionForFlow`
+devolve `null` e o fluxo segue pela saída "Transferido / encerrado" de
+sempre — o mesmo caminho de quando não há agente configurado.
 
 **Ferramentas** (`AI_TOOL_NAMES`): `save_collected_data`, `update_contact_name`, `add_tag`,
 `remove_tag`, `add_internal_note`, `set_conversation_status`, `schedule_followup`,

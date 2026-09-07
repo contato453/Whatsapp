@@ -224,6 +224,36 @@ export const DEFAULT_ATTENDANCE_SETTINGS: AttendanceSettings = {
 };
 
 /**
+ * Quando um fluxo de automação ou um agente de IA está autorizado a agir,
+ * em relação ao MESMO expediente cadastrado acima — nunca um horário
+ * paralelo. Fonte única para as duas telas (fluxo e agente), porque a
+ * pergunta e as três respostas possíveis são idênticas nos dois lugares.
+ *
+ * `outside_business_hours` existe porque o caso de uso real é o inverso do
+ * que se imagina de cara: não é "trava a IA para não incomodar de
+ * madrugada", é "a IA cobre a noite e o fim de semana, quando não tem
+ * ninguém da equipe — de dia, quem atende é gente". Sem esse terceiro
+ * valor, dar cobertura fora do expediente exigiria desligar o expediente
+ * inteiro (e perder a régua de atraso do dashboard) só para a IA poder
+ * trabalhar à noite.
+ */
+export const SCHEDULE_MODES = ["always", "business_hours", "outside_business_hours"] as const;
+export type ScheduleMode = (typeof SCHEDULE_MODES)[number];
+export const SCHEDULE_MODE_LABELS: Record<ScheduleMode, string> = {
+  always: "A qualquer hora",
+  business_hours: "Só dentro do expediente",
+  outside_business_hours: "Só fora do expediente",
+};
+export const SCHEDULE_MODE_HINTS: Record<ScheduleMode, string> = {
+  always: "Funciona a qualquer momento, dentro ou fora do horário cadastrado em Parâmetros.",
+  business_hours:
+    "Só entra em ação durante o expediente cadastrado em Parâmetros — fora dele, fica em silêncio.",
+  outside_business_hours:
+    "Só entra em ação FORA do expediente cadastrado em Parâmetros — cobre a noite e o fim de semana enquanto a equipe não está; durante o expediente, quem atende é a equipe.",
+};
+export const DEFAULT_SCHEDULE_MODE: ScheduleMode = "always";
+
+/**
  * Atalhos de período do dashboard. São janelas contadas para trás a partir
  * de hoje, sempre no fuso do escritório.
  */

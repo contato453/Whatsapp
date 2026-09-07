@@ -18,6 +18,7 @@ import type { Server } from "socket.io";
 import type { Logger } from "pino";
 import type { SecretCipher } from "../../lib/ai-secrets.js";
 import { loadAttendanceSettings } from "../../lib/attendance-settings.js";
+import { isWithinBusinessHours } from "../../lib/automation/business-hours.js";
 import { assignToUserData } from "../../lib/conversation-assignment.js";
 import { conversationInclude } from "../../lib/conversation-events.js";
 import { eligibleAssigneeWhere } from "../../lib/default-assignee.js";
@@ -239,6 +240,12 @@ export class AiRuntime {
     );
     if (!match) return null;
 
+    const config = parseStoredAgentConfig(match.agent.config);
+    if (!(await this.isAgentScheduledNow(config, conversation.organizationId))) {
+      this.deps.logger.info({ event: "ai_session_outside_schedule", conversationId: conversation.id, automationId: match.id });
+      return null;
+    }
+
     if (!(await this.canRestart(conversation))) {
       this.deps.logger.info({ event: "ai_session_not_restarted", conversationId: conversation.id, automationId: match.id });
       return null;
@@ -261,7 +268,6 @@ export class AiRuntime {
         durationMs: 0,
       });
       if (budget.policy === "transfer_human") {
-        const config = parseStoredAgentConfig(match.agent.config);
         await this.routeConversationForHandoff(conversation, match.agent, config, null);
       }
       return null;
@@ -309,6 +315,8 @@ export class AiRuntime {
       where: { id: input.agentId, organizationId: conversation.organizationId },
     });
     if (!agent || agent.status !== "active") return null;
+    const config = parseStoredAgentConfig(agent.config);
+    if (!(await this.isAgentScheduledNow(config, conversation.organizationId))) return null;
     if (!(await this.canRestart(conversation))) return null;
 
     const settings = await loadAiSettings(prisma, conversation.organizationId);
@@ -436,6 +444,19 @@ export class AiRuntime {
       select: { id: true },
     });
     return resolvedAfter != null;
+  }
+
+  /**
+   * O agente pode começar AGORA, pelo `advanced.scheduleMode` dele? Vale
+   * para as duas portas de entrada (automação e bloco de fluxo) — quem
+   * decide é o AGENTE, não quem o chamou. `"always"` (padrão de todo agente
+   * hoje) nunca gasta a consulta ao expediente.
+   */
+  private async isAgentScheduledNow(config: AiAgentConfig, organizationId: string): Promise<boolean> {
+    if (config.advanced.scheduleMode === "always") return true;
+    const settings = await loadAttendanceSettings(this.deps.prisma, organizationId);
+    const withinHours = isWithinBusinessHours(settings, new Date());
+    return config.advanced.scheduleMode === "business_hours" ? withinHours : !withinHours;
   }
 
   // -------------------------------------------------------------------------

@@ -7,6 +7,7 @@ import {
   AUTOMATION_TEMPLATES,
   automationTemplate,
   emptyAutomationGraph,
+  SCHEDULE_MODES,
   type AutomationGraph,
 } from "@azvchat/shared";
 import { requirePermission } from "../../lib/permissions.js";
@@ -57,6 +58,7 @@ const flowUpdateSchema = z.object({
   whatsappInstanceId: z.string().uuid().nullable().optional(),
   priority: z.coerce.number().int().min(1).max(1000).optional(),
   cooldownMinutes: z.coerce.number().int().min(0).max(10_080).optional(),
+  scheduleMode: z.enum(SCHEDULE_MODES).optional(),
   draftGraph: graphSchema.optional(),
 });
 
@@ -206,6 +208,7 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
         ...(body.whatsappInstanceId !== undefined ? { whatsappInstanceId: body.whatsappInstanceId } : {}),
         ...(body.priority !== undefined ? { priority: body.priority } : {}),
         ...(body.cooldownMinutes !== undefined ? { cooldownMinutes: body.cooldownMinutes } : {}),
+        ...(body.scheduleMode !== undefined ? { scheduleMode: body.scheduleMode } : {}),
         ...(body.draftGraph !== undefined ? { draftGraph: body.draftGraph as unknown as Prisma.InputJsonValue } : {}),
         updatedById: request.user.sub,
       };
@@ -344,6 +347,7 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
           whatsappInstanceId: flow.whatsappInstanceId,
           priority: flow.priority,
           cooldownMinutes: flow.cooldownMinutes,
+          scheduleMode: flow.scheduleMode,
           // A cópia nasce RASCUNHO, sem versão publicada — mexer nela nunca
           // afeta o fluxo original que já pode estar em produção.
           draftGraph: flow.draftGraph as object,

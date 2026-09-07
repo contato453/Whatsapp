@@ -27,10 +27,14 @@ import {
 import {
   AUTOMATION_TRIGGER_LABELS,
   AUTOMATION_TRIGGER_TYPES,
+  SCHEDULE_MODES,
+  SCHEDULE_MODE_HINTS,
+  SCHEDULE_MODE_LABELS,
   type AiAgentDirectoryDto,
   type AutomationGraph,
   type AutomationNodeType,
   type AutomationTriggerType,
+  type ScheduleMode,
 } from "@azvchat/shared";
 import { aiApi, api, automationApi } from "@/lib/api";
 import type {
@@ -137,6 +141,7 @@ export default function AutomationFlowBuilderPage() {
   const [whatsappInstanceId, setWhatsappInstanceId] = useState<string>("");
   const [priority, setPriority] = useState(100);
   const [cooldownMinutes, setCooldownMinutes] = useState(0);
+  const [scheduleMode, setScheduleMode] = useState<ScheduleMode>("always");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [problems, setProblems] = useState<AutomationFlowProblemDto[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -161,6 +166,7 @@ export default function AutomationFlowBuilderPage() {
         setWhatsappInstanceId(loadedFlow.whatsappInstanceId ?? "");
         setPriority(loadedFlow.priority);
         setCooldownMinutes(loadedFlow.cooldownMinutes);
+        setScheduleMode(loadedFlow.scheduleMode);
         const { nodes: initialNodes, edges: initialEdges } = toReactFlow(loadedFlow.draftGraph);
         setNodes(initialNodes);
         setEdges(initialEdges);
@@ -188,6 +194,7 @@ export default function AutomationFlowBuilderPage() {
         whatsappInstanceId: whatsappInstanceId || null,
         priority,
         cooldownMinutes,
+        scheduleMode,
         draftGraph: fromReactFlow(nodes, edges),
       });
       setFlow(updated);
@@ -195,7 +202,7 @@ export default function AutomationFlowBuilderPage() {
     } catch {
       setSaveState("error");
     }
-  }, [flowId, name, triggerType, triggerConfigText, whatsappInstanceId, priority, cooldownMinutes, nodes, edges]);
+  }, [flowId, name, triggerType, triggerConfigText, whatsappInstanceId, priority, cooldownMinutes, scheduleMode, nodes, edges]);
 
   // Autosave: qualquer mudança agenda uma gravação daqui a 1s, cancelando a
   // anterior — mesmo espírito do rascunho do composer da Inbox, só que
@@ -208,7 +215,7 @@ export default function AutomationFlowBuilderPage() {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [name, triggerType, triggerConfigText, whatsappInstanceId, priority, cooldownMinutes, nodes, edges]);
+  }, [name, triggerType, triggerConfigText, whatsappInstanceId, priority, cooldownMinutes, scheduleMode, nodes, edges]);
 
   const onConnect = useCallback(
     (connection: Connection) => setEdges((eds) => addEdge(connection, eds)),
@@ -352,6 +359,20 @@ export default function AutomationFlowBuilderPage() {
             value={cooldownMinutes}
             onChange={(event) => setCooldownMinutes(Number(event.target.value) || 0)}
           />
+        </label>
+        <label className="flex items-center gap-1 text-xs text-slate-500" title={SCHEDULE_MODE_HINTS[scheduleMode]}>
+          Horário
+          <select
+            className={SELECT_CLASS}
+            value={scheduleMode}
+            onChange={(event) => setScheduleMode(event.target.value as ScheduleMode)}
+          >
+            {SCHEDULE_MODES.map((mode) => (
+              <option key={mode} value={mode}>
+                {SCHEDULE_MODE_LABELS[mode]}
+              </option>
+            ))}
+          </select>
         </label>
 
         <div className="ml-auto flex items-center gap-2">

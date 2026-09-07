@@ -33,6 +33,7 @@ import type {
   ConversationStatus,
   ParticipantClientRole,
   PermissionAction,
+  ScheduleMode,
 } from "@azvchat/shared";
 import type { DashboardFilters } from "./dashboard-filters";
 import type {
@@ -908,6 +909,7 @@ export interface AutomationFlowUpdateInput {
   whatsappInstanceId?: string | null;
   priority?: number;
   cooldownMinutes?: number;
+  scheduleMode?: ScheduleMode;
   draftGraph?: AutomationGraph;
 }
 

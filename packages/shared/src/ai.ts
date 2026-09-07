@@ -25,6 +25,7 @@
  * para a conversa), atribuição e transferência de departamento.
  */
 
+import { DEFAULT_SCHEDULE_MODE, type ScheduleMode } from "./attendance.js";
 import type { ConversationStatus, ConversationType } from "./enums.js";
 
 // ---------------------------------------------------------------------------
@@ -653,6 +654,16 @@ export interface AiAgentConfig {
      * fallback), porque a espera fica dentro do envio, não de um caminho só.
      */
     responseDelaySeconds: number;
+    /**
+     * Quando este agente pode iniciar atendimento, em relação ao expediente
+     * de `AttendanceSettings` — "a qualquer hora" (padrão, o comportamento
+     * de sempre), "só dentro" ou "só fora" do horário cadastrado. Vale para
+     * as duas portas de entrada (automação de IA e bloco de fluxo): quem
+     * decide é o AGENTE, não quem o chamou. Fora da janela permitida, a IA
+     * simplesmente não começa — a mensagem cai no aviso automático de "fora
+     * do expediente" (zero configuração) se nenhum fluxo a capturar antes.
+     */
+    scheduleMode: ScheduleMode;
   };
 }
 
@@ -723,6 +734,7 @@ export function defaultAiAgentConfig(): AiAgentConfig {
       temperature: null,
       contextMessageLimit: AI_CONFIG_LIMITS.contextMessageLimit.default,
       responseDelaySeconds: AI_CONFIG_LIMITS.responseDelaySeconds.default,
+      scheduleMode: DEFAULT_SCHEDULE_MODE,
     },
   };
 }
