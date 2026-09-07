@@ -33,6 +33,7 @@ import { serializeUserDirectory } from "../../lib/serialize.js";
 import { loadAiSettings, loadBudgetState, monthStart } from "../../services/ai/budget.js";
 import { aiAgentConfigSchema, parseStoredAgentConfig } from "../../services/ai/config-schema.js";
 import { createAiProvider, resolveCredentials } from "../../services/ai/credentials.js";
+import { extractDocumentText, extractUrlText } from "../../services/ai/knowledge-extract.js";
 import { AiProviderError } from "../../services/ai/provider.js";
 import { endAiSession, loadLatestSession, serializeAiSession } from "../../services/ai/session.js";
 import { periodRange } from "../dashboard/metrics.js";
@@ -873,10 +874,30 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
     return { sources: sources.map(serializeAiKnowledgeSource) };
   });
 
+  // Extração de LINK/DOCUMENTO: só devolve texto para a tela pré-preencher
+  // o formulário — nada é gravado aqui. Quem grava continua sendo o
+  // POST/PATCH de sempre, depois da equipe revisar o que saiu.
+  const extractUrlSchema = z.object({ url: z.string().url().max(2000) });
+
+  app.post("/ai/knowledge/extract-url", { preHandler: requirePermission(deps, "ai.agent.manage") }, async (request) => {
+    const { url } = extractUrlSchema.parse(request.body);
+    return extractUrlText(url);
+  });
+
+  app.post("/ai/knowledge/extract-document", { preHandler: requirePermission(deps, "ai.agent.manage") }, async (request) => {
+    const file = await request.file();
+    if (!file) throw new AppError("Selecione um arquivo.", 400, "file_required");
+    const buffer = await file.toBuffer();
+    return extractDocumentText(buffer, file.filename);
+  });
+
   const knowledgeSchema = z.object({
     title: z.string().min(2).max(120),
     kind: z.enum(AI_KNOWLEDGE_KINDS),
     content: z.string().min(1).max(AI_KNOWLEDGE_MAX_CHARS),
+    // Só exibição (o link ou o nome do arquivo que a extração devolveu);
+    // nunca validado contra `kind`, porque nada aqui depende dele.
+    sourceRef: z.string().max(500).nullable().optional(),
     active: z.boolean().default(true),
   });
 

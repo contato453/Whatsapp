@@ -52,4 +52,13 @@ describe("base de conhecimento — recuperação lexical", () => {
     const small = retrieveKnowledge([SERVICOS], "abertura empresa", { maxChars: 10 });
     expect(small).toEqual([]);
   });
+
+  it("fonte extraída de link/documento é quebrada exatamente como texto livre", () => {
+    // `url` e `document` só mudam COMO o campo `content` foi preenchido —
+    // depois de salva, a fonte não tem tratamento especial nenhum aqui.
+    const viaLink = { ...SERVICOS, id: "s3", kind: "url" as const };
+    const viaArquivo = { ...SERVICOS, id: "s4", kind: "document" as const };
+    expect(chunkSource(viaLink)).toEqual(chunkSource(SERVICOS).map((chunk) => ({ ...chunk, sourceId: "s3" })));
+    expect(chunkSource(viaArquivo)).toEqual(chunkSource(SERVICOS).map((chunk) => ({ ...chunk, sourceId: "s4" })));
+  });
 });

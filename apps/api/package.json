@@ -11,15 +11,18 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@azvchat/database": "workspace:*",
+    "@azvchat/shared": "workspace:*",
+    "@azvchat/whatsapp": "workspace:*",
     "@fastify/cors": "^10.0.1",
     "@fastify/jwt": "^9.0.1",
     "@fastify/multipart": "^9.0.1",
     "@fastify/rate-limit": "^10.1.1",
-    "@azvchat/database": "workspace:*",
-    "@azvchat/shared": "workspace:*",
-    "@azvchat/whatsapp": "workspace:*",
     "bcryptjs": "^3.0.2",
+    "cheerio": "^1.2.0",
     "fastify": "^5.1.0",
+    "mammoth": "^1.12.2",
+    "pdf-parse": "^2.4.5",
     "pino": "^9.5.0",
     "socket.io": "^4.8.1",
     "zod": "^3.23.8"

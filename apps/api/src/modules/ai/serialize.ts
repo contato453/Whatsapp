@@ -128,6 +128,7 @@ export function serializeAiKnowledgeSource(
     title: source.title,
     kind: source.kind,
     content: source.content,
+    sourceRef: source.sourceRef,
     active: source.active,
     agentsCount: source._count?.agents ?? 0,
     updatedAt: source.updatedAt.toISOString(),

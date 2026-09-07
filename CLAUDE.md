@@ -2845,18 +2845,50 @@ nunca raciocínio interno do modelo.
 (Assumir = `POST /assign` de sempre; Encerrar IA; Ver configuração; Devolver para IA). Bolha
 enviada pela IA mostra ícone + "· IA" (`isAiMessage(metadata)`, nunca deduzido do texto).
 
-**Testes**: `ai-secrets`, `ai-knowledge`, `ai-prompt` (prompt/ferramentas/config),
-`ai-actions` (as três portas + `automationMatches` + custo), `ai-runtime` (motor de ponta a
-ponta com Prisma em memória — `test/helpers/memory-prisma.ts` — e `fetch` da OpenAI simulado:
-sessão, debounce, transferência, humano no meio do turno, ferramenta bloqueada, fallback,
-orçamento), `ai-routes` (chave nunca vaza, papéis, versão).
+**Base de conhecimento: link e documento além de texto/FAQ.** `POST /ai/knowledge/extract-url`
+e `POST /ai/knowledge/extract-document` (`services/ai/knowledge-extract.ts`) só EXTRAEM texto
+— nada é gravado ali. As duas devolvem `{ title, content, truncated }` para a tela pré-preencher
+o formulário de "Nova fonte", que a equipe revisa e edita antes do `POST /ai/knowledge` de
+sempre — mesmo espírito da variável de resposta rápida ("a atendente LÊ antes do Enter"):
+resolver e gravar sem revisão transformaria um erro de extração (título errado, menu de
+navegação junto do texto, PDF digitalizado sem texto real) em conteúdo publicado sem ninguém
+perceber. Por isso não existe reextração automática nem endpoint de "atualizar" — trocar de
+link ou reenviar o arquivo é sempre uma extração nova. `AiKnowledgeKind` ganhou `url` e
+`document`, mas os dois só mudam COMO o campo `content` foi preenchido: depois de salva, a
+fonte não tem tratamento especial nenhum (mesmo `chunkSource`, mesma busca lexical, mesmo
+teto de `AI_KNOWLEDGE_MAX_CHARS`) — texto acima do teto é CORTADO na extração (`truncated:
+true`, avisado na tela), nunca rejeitado. **O arquivo e a página nunca são guardados**, só o
+texto que saiu deles — a mesma filosofia de "é texto, não anexo" que já valia para `text`/
+`faq`; o único traço que sobra é `sourceRef` (o link ou o nome do arquivo), gravado à parte só
+para EXIBIÇÃO na lista, nunca para decidir nada. Link é extraído com `cheerio` (HTML estático,
+sem headless browser — cobre o caso comum de página institucional/FAQ); documento decide o
+formato pela EXTENSÃO do nome (`pdf-parse`/`mammoth`/leitura direta para `.txt`), porque o
+mimetype que o navegador manda para `.docx` costuma vir genérico. **Link é a única chamada de
+rede que a API faz a pedido de texto livre digitado por quem administra, e por isso tem trava
+de SSRF**: o hostname é resolvido e o IP tem que ser público — loopback, rede privada
+(RFC1918), link-local e o endereço de metadados de nuvem (`169.254.169.254`) são recusados
+ANTES do `fetch`, o redirecionamento nunca é seguido sozinho (o destino precisaria passar pela
+mesma checagem, e reaplicá-la depois do fetch já ter começado é tarde demais) e só
+`text/html`/`text/plain` é aceito. Sem essa trava, "colar um link" na base de conhecimento
+seria porta para a API bater na própria rede interna a pedido de qualquer pessoa com a chave
+`ai.agent.manage`.
+
+**Testes**: `ai-secrets`, `ai-knowledge` (recuperação lexical, inclusive a equivalência entre
+`url`/`document` e `text` depois de salvos), `ai-knowledge-extract` (a trava de SSRF, redirect,
+Content-Type, corte pelo teto, roteamento de documento por extensão, erro de biblioteca
+traduzido em português), `ai-prompt` (prompt/ferramentas/config), `ai-actions` (as três portas
++ `automationMatches` + custo), `ai-runtime` (motor de ponta a ponta com Prisma em memória —
+`test/helpers/memory-prisma.ts` — e `fetch` da OpenAI simulado: sessão, debounce, transferência,
+humano no meio do turno, ferramenta bloqueada, fallback, orçamento), `ai-routes` (chave nunca
+vaza, papéis, versão).
 
 **Limitações desta entrega** (registradas, não escondidas): a IA responde só em texto (sem
-mídia); base de conhecimento é texto/FAQ com busca lexical (sem documentos/embeddings); a
-pesquisa de saldo da OpenAI depende de Admin key; a API roda em instância única (a fila por
-conversa é em memória, como o scheduler). O construtor visual de fluxos chegou depois desta
-entrega (seção 18) e ganhou um bloco que entrega a conversa a um agente — ver "Atualização"
-mais acima e o bloco dedicado na seção 18.
+mídia); a base de conhecimento usa busca lexical, sem embeddings (link e documento viram texto
+extraído, mas a recuperação continua por sobreposição de termos, não semântica); vídeo do
+YouTube e transcrição de áudio não entram como fonte; a pesquisa de saldo da OpenAI depende de
+Admin key; a API roda em instância única (a fila por conversa é em memória, como o scheduler).
+O construtor visual de fluxos chegou depois desta entrega (seção 18) e ganhou um bloco que
+entrega a conversa a um agente — ver "Atualização" mais acima e o bloco dedicado na seção 18.
 
 ---
 

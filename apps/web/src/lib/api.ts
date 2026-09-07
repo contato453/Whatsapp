@@ -7,6 +7,7 @@ import type {
   AiAgentSummaryDto,
   AiAgentVersionDto,
   AiAutomationDto,
+  AiKnowledgeExtractionResult,
   AiKnowledgeSourceDto,
   AiModelDto,
   AiProviderBillingDto,
@@ -484,6 +485,7 @@ export interface AiKnowledgeInput {
   title: string;
   kind: AiKnowledgeSourceDto["kind"];
   content: string;
+  sourceRef?: string | null;
   active: boolean;
 }
 
@@ -551,6 +553,13 @@ export const aiApi = {
   updateKnowledge: (id: string, input: Partial<AiKnowledgeInput>) =>
     api.patch<{ source: AiKnowledgeSourceDto }>(`/ai/knowledge/${id}`, input).then((data) => data.source),
   deleteKnowledge: (id: string) => api.delete<{ ok: true }>(`/ai/knowledge/${id}`),
+  // As duas só extraem texto — nada é gravado até o Salvar de sempre.
+  extractKnowledgeUrl: (url: string) => api.post<AiKnowledgeExtractionResult>("/ai/knowledge/extract-url", { url }),
+  extractKnowledgeDocument: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api.postForm<AiKnowledgeExtractionResult>("/ai/knowledge/extract-document", form);
+  },
 
   automations: () => api.get<{ automations: AiAutomationDto[] }>("/ai/automations").then((data) => data.automations),
   createAutomation: (input: AiAutomationInput) =>
