@@ -15,9 +15,9 @@ name: Deploy
 #
 # Este caminho é OPCIONAL: exige guardar a chave privada da VPS como segredo.
 # A alternativa, sem segredo nenhum, é a VPS se atualizar sozinha —
-# `deploy/instalar-atualizacao-automatica.sh`, descrito no DEPLOY.md (esse
-# script também aponta para a stack antiga; não foi adaptado para a
-# `azvchat2` porque a atualização automática não é o caminho em uso hoje).
+# `deploy/instalar-atualizacao-automatica.sh`, descrito no DEPLOY.md. Os dois
+# caminhos apontam para a MESMA stack e a MESMA branch — divergir de novo é
+# como um deles voltaria a subir a `prod` morta sem ninguém perceber.
 # Quando os segredos não estão configurados, o job avisa e sai sem falhar,
 # para não pintar de vermelho todo merge de quem usa a atualização automática.
 on:

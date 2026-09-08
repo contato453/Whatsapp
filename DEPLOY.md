@@ -2,6 +2,18 @@
 
 Passo a passo para colocar o sistema no ar num servidor Linux, com HTTPS automático. Tempo estimado: 30–45 minutos.
 
+> **A instalação que já existe hoje NÃO é a que este guia descreve.** Este documento
+> ensina a subir do zero com `docker-compose.prod.yml`, e é isso que ele continua
+> servindo. Mas a VPS em uso pelo escritório roda a stack **`azvchat2`**
+> (`docker-compose.azvchat2.yml` + `.env.azvchat2`, containers `azvapi`/`azvweb`/`azvpg`,
+> no clone `~/Whatsapp-ajustes`) — ver `CLAUDE.md` §11. Nela, **todo comando abaixo que
+> diz `-f docker-compose.prod.yml` está errado**: troque por
+> `-f docker-compose.azvchat2.yml --env-file .env.azvchat2` e use `azvapi`/`azvweb` no
+> lugar de `api`/`web`. Rodar a `prod` naquela máquina reinicia o Caddy a partir do
+> arquivo em disco e derruba `app.azvchat.com.br` e `api.azvchat.com.br`. As duas seções
+> de deploy contínuo mais abaixo (atualização automática e deploy por SSH) **já apontam
+> para a stack certa** — o resto do guia ainda não foi revisado comando a comando.
+
 ## O que você precisa
 
 1. **Uma VPS** (servidor virtual sempre ligado) com Ubuntu 24.04:
@@ -184,17 +196,25 @@ O jeito mais simples de nunca mais atualizar na mão: em vez de o GitHub entrar 
 **VPS busca o código novo sozinha**. Não existe chave privada guardada no GitHub, nem porta
 nova aberta — a VPS só faz uma saída HTTPS para o GitHub, como o `git pull` que você já faz.
 
-Rode **uma vez**, dentro do clone, como root:
+Rode **uma vez**, dentro do **clone de trabalho** (o que tem o
+`docker-compose.azvchat2.yml`, normalmente `~/Whatsapp-ajustes` — **não** o `~/Whatsapp`,
+que serve a stack morta), como root:
 
 ```bash
-cd ~/Whatsapp
+cd ~/Whatsapp-ajustes
 git pull
 sudo bash deploy/instalar-atualizacao-automatica.sh
 ```
 
 Pronto. A cada 2 minutos a VPS verifica se a branch padrão andou: se andou, atualiza e sobe
-os containers; se não, sai em silêncio e não mexe em nada. Como o CI roda antes do merge,
-só chega aqui o que já fechou verde.
+os containers da stack `azvchat2`; se não, sai em silêncio e não mexe em nada. Como o CI
+roda antes do merge, só chega aqui o que já fechou verde.
+
+Errou o clone? O script **recusa e sai com erro**, dizendo qual arquivo faltou. Os dois
+arquivos da stack (`docker-compose.azvchat2.yml` e `.env.azvchat2`) ficam fora do Git, só
+na VPS, então a ausência deles é o sinal de que você não está na pasta de onde a produção
+sobe. Falhar alto ali é de propósito: subir a stack errada reinicia o Caddy a partir do
+arquivo em disco e derruba `app.azvchat.com.br` e `api.azvchat.com.br`.
 
 | Para... | Comando |
 | --- | --- |
