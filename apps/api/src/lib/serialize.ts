@@ -28,6 +28,7 @@ import {
   type PermissionAction,
   type UserRole,
 } from "@azvchat/shared";
+import type { OrganizationFeatures } from "./organization-features.js";
 
 /**
  * Serializadores de entidades para a API — controlam exatamente o que
@@ -61,8 +62,18 @@ export function serializeUser(user: User) {
  * o que mostrar pelo papel, e toda configuração da tela de Permissões
  * viraria mentira visual — botão aparecendo para quem a API recusa.
  */
-export function serializeSessionUser(user: User, permissions: PermissionAction[]) {
-  return { ...serializeUser(user), permissions };
+export function serializeSessionUser(
+  user: User,
+  permissions: PermissionAction[],
+  /**
+   * Módulos ligados no escritório (hoje, o CRM). Vem junto pelo mesmo motivo
+   * das permissões: a tela precisa dos dois no mesmo instante. É estado da
+   * ORGANIZAÇÃO, não da pessoa — mas viaja aqui porque este é o payload que a
+   * tela já lê no login e no /auth/me.
+   */
+  features: OrganizationFeatures,
+) {
+  return { ...serializeUser(user), permissions, features };
 }
 
 /**

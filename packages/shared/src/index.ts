@@ -1,6 +1,7 @@
 export * from "./ai.js";
 export * from "./attachments.js";
 export * from "./attendance.js";
+export * from "./crm.js";
 export * from "./automation.js";
 export * from "./automation-variables.js";
 export * from "./azevedo-os.js";

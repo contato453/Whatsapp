@@ -22,6 +22,7 @@ import { UserAvatar } from "@/components/user-avatar";
 import { AvatarCropper } from "@/components/avatar-cropper";
 import { IntegrationTokensCard } from "@/components/settings/integration-tokens";
 import { AzevedoOsHealthCard } from "@/components/settings/azevedo-os-health";
+import { CrmModuleCard } from "@/components/settings/crm-module";
 
 export default function SettingsPage() {
   const { user, setSession, setUser, can } = useAuth();
@@ -57,6 +58,9 @@ export default function SettingsPage() {
         {user?.role === "admin" && <IntegrationTokensCard />}
         {/* Idem para a saúde da integração com o Azevedo-OS. */}
         {user?.role === "admin" && <AzevedoOsHealthCard />}
+        {/* Ligar e desligar o módulo do CRM é do sistema do escritório, não do
+            atendimento: fixo em admin, como excluir número ou departamento. */}
+        {user?.role === "admin" && <CrmModuleCard />}
         <Card className="p-6">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
             Sistema

@@ -12,7 +12,7 @@ import {
 import { useRouter } from "next/navigation";
 import type { PermissionAction } from "@azvchat/shared";
 import { api, getToken, setToken } from "./api";
-import type { UserDto } from "./types";
+import type { OrganizationFeaturesDto, UserDto } from "./types";
 
 interface AuthContextValue {
   user: UserDto | null;
@@ -32,6 +32,8 @@ interface AuthContextValue {
    * não está logado, a resposta é `false` — o lado seguro do erro.
    */
   can: (action: PermissionAction) => boolean;
+  /** Módulo ligado na organização (hoje, `crm`). Não é permissão — ver a API. */
+  hasFeature: (feature: keyof OrganizationFeaturesDto) => boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -85,9 +87,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [user],
   );
 
+  /**
+   * O módulo está ligado neste escritório?
+   *
+   * Fica ao lado do `can` de propósito, porque a tela quase sempre precisa dos
+   * dois juntos — o item do CRM no menu exige a chave E o módulo. Sem sessão
+   * carregada devolve `false`: esconder por um instante é melhor do que
+   * piscar um menu que vai sumir.
+   */
+  const hasFeature = useCallback(
+    (feature: keyof OrganizationFeaturesDto) => user?.features?.[feature] ?? false,
+    [user],
+  );
+
   const value = useMemo(
-    () => ({ user, loading, login, logout, setSession, setUser: updateUser, can }),
-    [user, loading, login, logout, setSession, updateUser, can],
+    () => ({ user, loading, login, logout, setSession, setUser: updateUser, can, hasFeature }),
+    [user, loading, login, logout, setSession, updateUser, can, hasFeature],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -5,6 +5,15 @@ import type {
   AutomationGraph,
   AutomationTriggerType,
   ConnectionStatus,
+  CrmAssignmentMode,
+  CrmActivityPriority,
+  CrmActivityStatus,
+  CrmActivityType,
+  CrmEventType,
+  CrmOpportunityStatus,
+  CrmStageActionTrigger,
+  CrmStageActionType,
+  CrmStageType,
   ConversationStatus,
   ConversationType,
   DashboardPeriod,
@@ -38,6 +47,15 @@ export interface UserDirectoryDto {
 }
 
 /** Cadastro completo: só chega para o próprio usuário (/auth/me) e para o administrador. */
+/**
+ * Os MÓDULOS ligados no escritório. Não é permissão: permissão diz o que cada
+ * perfil pode fazer com um recurso que existe, isto diz se o recurso existe.
+ */
+export interface OrganizationFeaturesDto {
+  /** CRM (Kanban) ligado — o interruptor de Configurações. */
+  crm: boolean;
+}
+
 export interface UserDto extends UserDirectoryDto {
   /**
    * O que ESTA pessoa pode fazer agora, resolvido pela API a partir do
@@ -48,6 +66,12 @@ export interface UserDto extends UserDirectoryDto {
    * aparecendo para quem a API recusa, ou escondido para quem ela aceita.
    */
   permissions: PermissionAction[];
+  /**
+   * Viaja junto com a sessão pelo mesmo motivo das permissões: a tela precisa
+   * das duas coisas no mesmo instante. Deduzir "o CRM existe" sem perguntar
+   * faria o menu aparecer para um escritório que o desligou.
+   */
+  features: OrganizationFeaturesDto;
   email: string;
   /** Prefixa as mensagens enviadas com o nome do atendente */
   signMessages: boolean;
@@ -74,7 +98,9 @@ export interface RolePermissionOverrideDto {
   updatedBy: UserDirectoryDto | null;
 }
 
-export interface UserWithAccessDto extends Omit<UserDto, "permissions"> {
+// `features` e `permissions` ficam de fora: são da SESSÃO de quem está
+// logado, e não do cadastro de terceiros que a tela de Usuários lista.
+export interface UserWithAccessDto extends Omit<UserDto, "permissions" | "features"> {
   whatsappInstanceIds: string[];
   departmentIds: string[];
 }
@@ -757,4 +783,216 @@ export interface AutomationExecutionDetailDto extends AutomationExecutionSummary
   context: Record<string, unknown>;
   currentNodeId: string | null;
   logs: AutomationExecutionLogDto[];
+}
+
+// ============================================================
+// CRM
+// ============================================================
+
+export interface CrmStageActionDto {
+  id: string;
+  stageId: string;
+  trigger: CrmStageActionTrigger;
+  type: CrmStageActionType;
+  tagId: string | null;
+  userId: string | null;
+  departmentId: string | null;
+  delayMinutes: number;
+  content: string | null;
+  /** Só de `auto_assign`: nulo = usa a regra de distribuição do funil. */
+  assignmentMode: CrmAssignmentMode | null;
+  position: number;
+}
+
+export interface CrmStageDto {
+  id: string;
+  pipelineId: string;
+  name: string;
+  position: number;
+  color: string;
+  probability: number;
+  type: CrmStageType;
+  /** Dias para o card ser considerado parado. Null = etapa sem prazo. */
+  slaDays: number | null;
+  actions: CrmStageActionDto[];
+}
+
+export interface CrmPipelineDto {
+  id: string;
+  name: string;
+  description: string | null;
+  color: string;
+  isActive: boolean;
+  isDefault: boolean;
+  position: number;
+  /** Mesmo contrato de etiqueta e resposta rápida: geral OU departamentos. */
+  isGeneral: boolean;
+  departments: DepartmentDto[];
+  /** Etiqueta que cria oportunidade sozinha. Null = criação automática desligada. */
+  autoCreateTagId: string | null;
+  /** Distribuição automática das oportunidades novas. */
+  assignmentMode: CrmAssignmentMode;
+  assignmentFixedUserId: string | null;
+  /** Pool do rodízio. VAZIO = todo mundo que enxerga a conversa. */
+  assigneeIds: string[];
+  stages: CrmStageDto[];
+}
+
+/**
+ * O card do Kanban e a linha da tabela — o mesmo DTO, porque é ele que viaja
+ * no evento `crm:opportunity` do socket.
+ *
+ * O contato NÃO é cadastro do CRM: `conversationId` aponta para a conversa do
+ * WhatsApp, e é dela que vêm nome, foto e empresa vinculada.
+ */
+export interface CrmOpportunityDto {
+  id: string;
+  title: string;
+  pipelineId: string;
+  stageId: string;
+  stageName: string;
+  stageType: CrmStageType;
+  stageColor: string;
+  stageSlaDays: number | null;
+  status: CrmOpportunityStatus;
+  conversationId: string | null;
+  conversationTitle: string | null;
+  conversationHasAvatar: boolean;
+  instanceName: string | null;
+  contactName: string | null;
+  contactPhone: string | null;
+  companyReference: string | null;
+  companySource: string | null;
+  assignedUser: UserDirectoryDto | null;
+  department: DepartmentDto | null;
+  product: { id: string; name: string } | null;
+  value: number;
+  discount: number | null;
+  /** Valor estimado menos desconto — calculado pela API, nunca na tela. */
+  finalValue: number;
+  probability: number;
+  weightedValue: number;
+  expectedCloseDate: string | null;
+  origin: string | null;
+  tags: TagDto[];
+  lossReason: { id: string; name: string } | null;
+  lossNote: string | null;
+  closedValue: number | null;
+  closedAt: string | null;
+  notes: string | null;
+  position: number;
+  stageEnteredAt: string;
+  lastInteractionAt: string | null;
+  nextActivity: {
+    id: string;
+    title: string;
+    type: CrmActivityType;
+    dueAt: string;
+    overdue: boolean;
+  } | null;
+  createdBy: UserDirectoryDto | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CrmActivityDto {
+  id: string;
+  opportunityId: string;
+  opportunityTitle: string | null;
+  conversationId: string | null;
+  type: CrmActivityType;
+  title: string;
+  description: string | null;
+  assignedUser: UserDirectoryDto | null;
+  dueAt: string;
+  priority: CrmActivityPriority;
+  status: CrmActivityStatus;
+  /** Derivado do relógio pela API — não existe status "atrasada" gravado. */
+  overdue: boolean;
+  completedAt: string | null;
+  completedBy: UserDirectoryDto | null;
+  createdAt: string;
+}
+
+export interface CrmEventDto {
+  id: string;
+  type: CrmEventType;
+  description: string | null;
+  /** Null = o sistema (automação de etapa, resposta do cliente). */
+  performedBy: UserDirectoryDto | null;
+  fromStageId: string | null;
+  toStageId: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface CrmTotalsDto {
+  count: number;
+  value: number;
+  weightedValue: number;
+}
+
+export interface CrmBoardColumnDto {
+  stage: CrmStageDto;
+  /** Totais da coluna INTEIRA, não só dos cards carregados. */
+  totals: CrmTotalsDto;
+  averageDaysInStage: number;
+  opportunities: CrmOpportunityDto[];
+}
+
+export interface CrmBoardDto {
+  pipeline: CrmPipelineDto;
+  columns: CrmBoardColumnDto[];
+  totals: CrmTotalsDto;
+}
+
+export interface CrmProductDto {
+  id: string;
+  name: string;
+  defaultValue: number | null;
+  active: boolean;
+}
+
+export interface CrmLossReasonDto {
+  id: string;
+  name: string;
+  active: boolean;
+  position: number;
+}
+
+export interface CrmOpportunityDetailDto {
+  opportunity: CrmOpportunityDto;
+  activities: CrmActivityDto[];
+  /** Follow-ups ainda por sair — a equipe precisa ver antes de repetir na mão. */
+  followUps: Array<{ id: string; scheduledFor: string; content: string }>;
+}
+
+export interface CrmBreakdownRowDto {
+  key: string;
+  label: string;
+  open: number;
+  pipelineValue: number;
+  won: number;
+  lost: number;
+  wonValue: number;
+  conversionRate: number;
+  user?: UserDirectoryDto | null;
+}
+
+export interface CrmReportDto {
+  period: { from: string; to: string };
+  summary: {
+    pipeline: CrmTotalsDto;
+    created: number;
+    won: number;
+    lost: number;
+    wonValue: number;
+    lostValue: number;
+    conversionRate: number;
+    averageTicket: number;
+    averageDaysToClose: number;
+  };
+  byUser: CrmBreakdownRowDto[];
+  byOrigin: CrmBreakdownRowDto[];
+  lossReasons: Array<{ id: string; name: string; count: number }>;
 }

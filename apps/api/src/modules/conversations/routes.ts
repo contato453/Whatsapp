@@ -15,6 +15,7 @@ import {
   RealtimeEvents,
 } from "@azvchat/shared";
 import { planReferenceUpdate } from "../../lib/azevedo-os-link.js";
+import { maybeCreateOpportunityFromTag } from "../../lib/crm-opportunity.js";
 import {
   companyReferenceWhere,
   resolveCompanyIds,
@@ -1656,6 +1657,20 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     });
     await emitConversationUpdated(id, request.user.organizationId);
     void deps.automation?.handleTagAdded(request.user.organizationId, id, tagId);
+    // CRM: se algum funil declarou ESTA etiqueta como gatilho, a oportunidade
+    // nasce sozinha aqui. Reusa a etiqueta que a equipe já usa para
+    // classificar em vez de inventar um segundo gatilho por palavra-chave, e
+    // não pode derrubar o etiquetar: a função engole a própria falha.
+    //
+    // Convive com o gatilho de etiqueta do MOTOR DE AUTOMAÇÕES logo acima: são
+    // coisas diferentes e podem valer ao mesmo tempo — lá o fluxo conversa com
+    // o cliente, aqui nasce o card comercial.
+    await maybeCreateOpportunityFromTag(deps, {
+      organizationId: request.user.organizationId,
+      conversationId: id,
+      tagId,
+      performedByUserId: request.user.sub,
+    });
     return { ok: true };
   });
 
