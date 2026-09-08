@@ -37,7 +37,7 @@ export function CrmConversationCard({
   conversationId: string;
   conversationTitle: string;
 }) {
-  const { can } = useAuth();
+  const { can, hasFeature } = useAuth();
   const socket = useSocket();
   const [oportunidades, setOportunidades] = useState<CrmOpportunityDto[]>([]);
   const [carregando, setCarregando] = useState(true);
@@ -48,7 +48,10 @@ export function CrmConversationCard({
   const [tags, setTags] = useState<TagDto[]>([]);
   const [aviso, setAviso] = useState<string | null>(null);
 
-  const podeVer = can("crm.view");
+  // Módulo desligado tira o card inteiro: sem isso a Inbox chamaria uma rota
+  // que responde 403 a cada conversa aberta, e o painel mostraria um bloco
+  // morto de um módulo que o escritório desligou.
+  const podeVer = can("crm.view") && hasFeature("crm");
   const podeCriar = can("crm.opportunity.manage");
 
   const carregar = useCallback(async () => {

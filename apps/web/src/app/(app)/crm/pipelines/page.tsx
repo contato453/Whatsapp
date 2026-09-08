@@ -3,6 +3,11 @@
 import { useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, Plus, Save, Trash2, Zap } from "lucide-react";
 import {
+  CRM_ASSIGNMENT_MODES,
+  CRM_ASSIGNMENT_MODE_DESCRIPTIONS,
+  CRM_ASSIGNMENT_MODE_LABELS,
+  crmAssignmentUsesPool,
+  type CrmAssignmentMode,
   CRM_STAGE_ACTION_TRIGGERS,
   CRM_STAGE_ACTION_TRIGGER_LABELS,
   CRM_STAGE_ACTION_TYPES,
@@ -118,6 +123,7 @@ export default function CrmPipelinesPage() {
               pipeline={funil}
               departments={departments}
               tags={tags}
+              users={users}
               onSaved={recarregar}
               onError={setErro}
             />
@@ -238,12 +244,14 @@ function PipelineSettings({
   pipeline,
   departments,
   tags,
+  users,
   onSaved,
   onError,
 }: {
   pipeline: CrmPipelineDto;
   departments: DepartmentDto[];
   tags: TagDto[];
+  users: UserDirectoryDto[];
   onSaved: () => Promise<void>;
   onError: (message: string) => void;
 }) {
@@ -255,6 +263,13 @@ function PipelineSettings({
   );
   const [autoCreateTagId, setAutoCreateTagId] = useState(pipeline.autoCreateTagId ?? "");
   const [isActive, setIsActive] = useState(pipeline.isActive);
+  const [assignmentMode, setAssignmentMode] = useState<CrmAssignmentMode>(
+    pipeline.assignmentMode,
+  );
+  const [assignmentFixedUserId, setAssignmentFixedUserId] = useState(
+    pipeline.assignmentFixedUserId ?? "",
+  );
+  const [assigneeIds, setAssigneeIds] = useState<string[]>(pipeline.assigneeIds);
   const [salvando, setSalvando] = useState(false);
 
   useEffect(() => {
@@ -264,6 +279,9 @@ function PipelineSettings({
     setDepartmentIds(pipeline.departments.map((item) => item.id));
     setAutoCreateTagId(pipeline.autoCreateTagId ?? "");
     setIsActive(pipeline.isActive);
+    setAssignmentMode(pipeline.assignmentMode);
+    setAssignmentFixedUserId(pipeline.assignmentFixedUserId ?? "");
+    setAssigneeIds(pipeline.assigneeIds);
   }, [pipeline]);
 
   return (
@@ -352,6 +370,87 @@ function PipelineSettings({
         funil. A mesma conversa nunca gera duas oportunidades abertas aqui.
       </p>
 
+      <div className="mt-4 border-t border-slate-100 pt-3">
+        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+          Distribuição automática das oportunidades novas
+        </p>
+        <p className="mt-0.5 text-[11px] text-slate-500">
+          Vale só quando ninguém escolhe o responsável na mão — escolha de gente sempre vence a
+          regra. Quem não enxerga a conversa nunca recebe: o card sumiria da tela de todos.
+        </p>
+        <div className="mt-2 grid gap-3 sm:grid-cols-2">
+          <Field label="Regra">
+            <select
+              value={assignmentMode}
+              onChange={(event) => setAssignmentMode(event.target.value as CrmAssignmentMode)}
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+            >
+              {CRM_ASSIGNMENT_MODES.map((modo) => (
+                <option key={modo} value={modo}>
+                  {CRM_ASSIGNMENT_MODE_LABELS[modo]}
+                </option>
+              ))}
+            </select>
+          </Field>
+          {assignmentMode === "fixed" && (
+            <Field label="Pessoa fixa">
+              <select
+                value={assignmentFixedUserId}
+                onChange={(event) => setAssignmentFixedUserId(event.target.value)}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+              >
+                <option value="">Escolha a pessoa</option>
+                {users
+                  .filter((item) => item.status === "active")
+                  .map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
+                    </option>
+                  ))}
+              </select>
+            </Field>
+          )}
+        </div>
+        <p className="mt-1 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+          {CRM_ASSIGNMENT_MODE_DESCRIPTIONS[assignmentMode]}
+        </p>
+
+        {crmAssignmentUsesPool(assignmentMode) && (
+          <div className="mt-2">
+            <p className="text-[11px] font-medium text-slate-600">
+              Quem entra no rodízio{" "}
+              <span className="font-normal text-slate-400">
+                (ninguém marcado = todo mundo que enxerga a conversa)
+              </span>
+            </p>
+            <div className="mt-1 flex flex-wrap gap-2">
+              {users
+                .filter((item) => item.status === "active")
+                .map((item) => (
+                  <label
+                    key={item.id}
+                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={assigneeIds.includes(item.id)}
+                      onChange={(event) =>
+                        setAssigneeIds((atual) =>
+                          event.target.checked
+                            ? [...atual, item.id]
+                            : atual.filter((id) => id !== item.id),
+                        )
+                      }
+                      className="h-3.5 w-3.5 accent-brand-600"
+                    />
+                    {item.name}
+                  </label>
+                ))}
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="mt-3 flex justify-end">
         <Button
           size="sm"
@@ -366,6 +465,9 @@ function PipelineSettings({
                 departmentIds,
                 autoCreateTagId: autoCreateTagId || null,
                 isActive,
+                assignmentMode,
+                assignmentFixedUserId: assignmentFixedUserId || null,
+                assigneeIds,
               });
               await onSaved();
             } catch (err) {

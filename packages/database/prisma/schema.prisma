@@ -14,6 +14,18 @@ datasource db {
 model Organization {
   id        String   @id @default(uuid())
   name      String
+  /// O CRM (Kanban) está ligado para este escritório?
+  ///
+  /// Interruptor do MÓDULO, e não permissão: permissão diz o que cada perfil
+  /// pode fazer com um recurso que existe; isto diz se o recurso existe para
+  /// a organização. Por isso não entra no catálogo de `PERMISSION_ACTIONS` —
+  /// uma chave "usar o CRM" por papel deixaria metade da equipe com o menu e
+  /// a outra metade sem, que é configuração e não desligamento.
+  ///
+  /// Nasce LIGADO: quem já tem funil montado não pode perder a tela num
+  /// deploy. Desligar NUNCA apaga dado — funis, oportunidades e histórico
+  /// continuam no banco esperando alguém religar.
+  crmEnabled Boolean @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -117,6 +129,8 @@ model User {
   pinnedItems           PinnedItem[]
   integrationTokens     IntegrationToken[]              @relation("IntegrationTokenCreatedBy")
   crmPipelinesCreated   CrmPipeline[]                   @relation("CrmPipelineCreatedBy")
+  crmPipelinesFixedFor  CrmPipeline[]                   @relation("CrmPipelineFixedAssignee")
+  crmPipelineAssignees  CrmPipelineAssignee[]           @relation("CrmPipelineAssignees")
   crmStageActions       CrmStageAction[]                @relation("CrmStageActionUser")
   crmAssignedOpportunities CrmOpportunity[]             @relation("CrmAssignedOpportunities")
   crmCreatedOpportunities  CrmOpportunity[]             @relation("CrmCreatedOpportunities")
@@ -1112,6 +1126,17 @@ model CrmPipeline {
   /// sem constraint: a leitura pega o primeiro, então dois marcados degradam
   /// para "abre o de menor posição", nunca para erro na cara do usuário.
   isDefault      Boolean  @default(false)
+  /// Como este funil distribui as oportunidades novas (ver `CrmAssignmentMode`).
+  assignmentMode  CrmAssignmentMode @default(inherit_conversation)
+  /// Alvo do modo `fixed`. Ignorado nos demais modos.
+  assignmentFixedUserId String?
+  /// Contador do rodízio. É INCREMENTADO ATOMICAMENTE no banco (`increment`) e
+  /// o índice sai do valor devolvido — duas oportunidades criadas no mesmo
+  /// instante recebem números diferentes e caem em pessoas diferentes. Guardar
+  /// "o último que recebeu" e calcular o próximo em memória perderia essa
+  /// corrida em silêncio, e o rodízio passaria a entregar dois leads seguidos
+  /// para a mesma pessoa sem ninguém entender por quê.
+  assignmentCursor Int              @default(0)
   /// Etiqueta que CRIA oportunidade sozinha: pendurada numa conversa, o
   /// sistema abre um card na primeira etapa deste funil. Nulo = criação
   /// automática desligada. Reusa a etiqueta que o escritório já tem — não
@@ -1124,7 +1149,12 @@ model CrmPipeline {
   organization  Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   autoCreateTag Tag?                    @relation("CrmPipelineAutoCreateTag", fields: [autoCreateTagId], references: [id], onDelete: SetNull)
   createdBy     User?                   @relation("CrmPipelineCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  assignmentFixedUser User?             @relation("CrmPipelineFixedAssignee", fields: [assignmentFixedUserId], references: [id], onDelete: SetNull)
   departments   CrmPipelineDepartment[]
+  /// Quem participa do rodízio deste funil. VAZIO significa "todo mundo que
+  /// enxerga a conversa" — e não "ninguém": lista vazia bloquearia a
+  /// distribuição inteira no dia em que alguém saísse do cadastro.
+  assignees     CrmPipelineAssignee[]
   stages        CrmStage[]
   opportunities CrmOpportunity[]
 
@@ -1145,6 +1175,44 @@ model CrmPipelineDepartment {
   @@id([pipelineId, departmentId])
   @@index([departmentId])
   @@map("crm_pipeline_departments")
+}
+
+/// Como o funil escolhe o responsável de uma oportunidade nova.
+///
+/// `inherit_conversation` é o padrão e o comportamento de sempre: quem já
+/// atende o cliente fica com a venda. Os outros modos existem para o funil
+/// comercial, em que o lead chega sem dono e parar na fila é perder a venda.
+enum CrmAssignmentMode {
+  /// Ninguém: a oportunidade nasce órfã e alguém puxa do quadro.
+  none
+  /// Quem já atende a conversa (padrão — é o que o sistema fazia antes).
+  inherit_conversation
+  /// Sempre a mesma pessoa (`assignmentFixedUserId`).
+  fixed
+  /// Rodízio: cada lead novo vai para o próximo da fila.
+  round_robin
+  /// Quem estiver com MENOS oportunidades abertas neste funil.
+  least_open
+}
+
+/// Quem entra no rodízio de um funil.
+///
+/// Existe porque "todo mundo do departamento" não é a mesma coisa que "quem
+/// vende": o Comercial tem estagiário, tem quem faz só suporte, e mandar lead
+/// para eles é perder a venda em silêncio. Sem nenhuma linha, o rodízio cai no
+/// derivado (quem enxerga a conversa), que é o comportamento seguro para quem
+/// nunca abrir esta tela.
+model CrmPipelineAssignee {
+  pipelineId String
+  userId     String
+  createdAt  DateTime @default(now())
+
+  pipeline CrmPipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  user     User        @relation("CrmPipelineAssignees", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([pipelineId, userId])
+  @@index([userId])
+  @@map("crm_pipeline_assignees")
 }
 
 /// O que a etapa significa para o funil, independente do nome dado a ela.

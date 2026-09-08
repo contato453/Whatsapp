@@ -26,6 +26,7 @@ import type {
   CrmProductDto,
   CrmReportDto,
   CrmStageDto,
+  OrganizationFeaturesDto,
   DashboardStatsDto,
   IntegrationTokenDto,
   MessageDto,
@@ -797,6 +798,24 @@ export interface CrmOpportunityInput {
   tagIds?: string[];
 }
 
+/**
+ * Módulos do escritório (hoje, o CRM). Leitura para qualquer sessão — é ela
+ * que decide o menu; gravação só para admin, e a API recusa de novo.
+ */
+export const organizationApi = {
+  features: () =>
+    api.get<{ features: OrganizationFeaturesDto }>("/organization/features").then((d) => d.features),
+  crmImpact: () =>
+    api.get<{ pendingFollowUps: number; openOpportunities: number }>(
+      "/organization/features/crm-impact",
+    ),
+  setCrm: (crm: boolean) =>
+    api.patch<{ features: OrganizationFeaturesDto; followUpsCancelados: number }>(
+      "/organization/features",
+      { crm },
+    ),
+};
+
 export const crmApi = {
   pipelines: () =>
     api.get<{ pipelines: CrmPipelineDto[] }>("/crm/pipelines").then((data) => data.pipelines),
@@ -807,6 +826,9 @@ export const crmApi = {
     isGeneral: boolean;
     departmentIds: string[];
     autoCreateTagId?: string | null;
+    assignmentMode?: string;
+    assignmentFixedUserId?: string | null;
+    assigneeIds?: string[];
   }) => api.post<{ pipeline: CrmPipelineDto }>("/crm/pipelines", input).then((d) => d.pipeline),
   updatePipeline: (
     id: string,
@@ -817,6 +839,9 @@ export const crmApi = {
       isActive: boolean;
       isDefault: boolean;
       autoCreateTagId: string | null;
+      assignmentMode: string;
+      assignmentFixedUserId: string | null;
+      assigneeIds: string[];
       isGeneral: boolean;
       departmentIds: string[];
     }>,

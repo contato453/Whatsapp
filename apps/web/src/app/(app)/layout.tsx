@@ -29,7 +29,7 @@ import {
   type UserRole,
 } from "@azvchat/shared";
 import { useAuth } from "@/lib/auth-context";
-import type { UserDto } from "@/lib/types";
+import type { OrganizationFeaturesDto, UserDto } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Spinner, Tooltip } from "@/components/ui";
 import { UserAvatar } from "@/components/user-avatar";
@@ -61,6 +61,12 @@ const NAV: Array<{
    * desligar a chave produziria um menu que só dá 403.
    */
   permission?: PermissionAction;
+  /**
+   * Módulo que a tela exige. Chave e módulo são coisas diferentes: a chave diz
+   * o que o PERFIL pode fazer, o módulo diz se o recurso existe no escritório.
+   * O item só aparece quando os dois concordam.
+   */
+  feature?: keyof OrganizationFeaturesDto;
   /**
    * Telas ABAIXO deste caminho continuam exclusivas do administrador, mesmo
    * que a lista esteja liberada por chave. É o caso de /users: quem tem
@@ -103,7 +109,16 @@ const NAV: Array<{
   // Atividades, Funis, Relatórios, Configurações) se dividem no topo da
   // própria área — a barra lateral não tem submenu, e criar um por causa de
   // uma área mudaria a navegação do sistema inteiro.
-  { href: "/crm", label: "CRM", icon: Target, minRole: "agent", permission: "crm.view" },
+  {
+    href: "/crm",
+    label: "CRM",
+    icon: Target,
+    minRole: "agent",
+    permission: "crm.view",
+    // Desligado em Configurações, o item some para todo mundo — inclusive
+    // para o admin, que é quem desligou.
+    feature: "crm",
+  },
   {
     href: "/reports",
     label: "Relatórios",
@@ -140,7 +155,11 @@ function navAllowed(
   item: (typeof NAV)[number],
   role: UserRole,
   can: (action: PermissionAction) => boolean,
+  hasFeature: (feature: keyof OrganizationFeaturesDto) => boolean,
 ): boolean {
+  // Módulo desligado fecha a tela para todo mundo, antes de olhar a chave:
+  // administrador também não vê o menu do que o escritório desligou.
+  if (item.feature && !hasFeature(item.feature)) return false;
   // Admin passa em qualquer chave, então `can` já o cobre nos dois ramos.
   return item.permission ? can(item.permission) : hasRole(role, item.minRole);
 }
@@ -155,8 +174,9 @@ function pathAllowed(
   pathname: string,
   role: UserRole,
   can: (action: PermissionAction) => boolean,
+  hasFeature: (feature: keyof OrganizationFeaturesDto) => boolean,
 ): boolean {
-  if (!navAllowed(item, role, can)) return false;
+  if (!navAllowed(item, role, can, hasFeature)) return false;
   if (item.adminOnlySubRoutes && pathname !== item.href) return hasRole(role, "admin");
   return true;
 }
@@ -203,10 +223,12 @@ function Sidebar({
   user,
   logout,
   can,
+  hasFeature,
 }: {
   user: UserDto;
   logout: () => void;
   can: (action: PermissionAction) => boolean;
+  hasFeature: (feature: keyof OrganizationFeaturesDto) => boolean;
 }) {
   const pathname = usePathname();
   // Começa expandida: é o estado de hoje e o que o servidor renderiza. A
@@ -263,7 +285,7 @@ function Sidebar({
     setHoverOpen(false);
   };
 
-  const items = NAV.filter((item) => navAllowed(item, user.role, can));
+  const items = NAV.filter((item) => navAllowed(item, user.role, can, hasFeature));
 
   return (
     <div
@@ -386,17 +408,27 @@ function Sidebar({
   );
 }
 
-function AccessDenied() {
+/**
+ * A tela fechada. O texto muda conforme o MOTIVO, porque os dois são
+ * diferentes para quem lê: "você não pode entrar aqui" manda falar com o
+ * administrador; "este módulo está desligado" é uma decisão do escritório que
+ * o administrador desfaz em Configurações. Um texto só faria a equipe pedir
+ * acesso a quem já tem acesso.
+ */
+function AccessDenied({ moduleOff }: { moduleOff?: boolean }) {
   return (
     <div className="flex h-full items-center justify-center p-8">
       <div className="max-w-sm text-center">
         <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-slate-100">
           <Lock className="h-5 w-5 text-slate-400" />
         </div>
-        <h1 className="text-base font-semibold text-slate-900">Acesso restrito</h1>
+        <h1 className="text-base font-semibold text-slate-900">
+          {moduleOff ? "Módulo desativado" : "Acesso restrito"}
+        </h1>
         <p className="mt-1 text-sm text-slate-500">
-          Esta área é de administração. Fale com um administrador do sistema se você precisa
-          acessá-la.
+          {moduleOff
+            ? "Este módulo está desligado para o escritório. Um administrador pode religá-lo em Configurações — nada foi apagado."
+            : "Esta área é de administração. Fale com um administrador do sistema se você precisa acessá-la."}
         </p>
       </div>
     </div>
@@ -404,7 +436,7 @@ function AccessDenied() {
 }
 
 export default function AppLayout({ children }: { children: ReactNode }) {
-  const { user, loading, logout, can } = useAuth();
+  const { user, loading, logout, can, hasFeature } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -427,14 +459,16 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const current = NAV.find(
     (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),
   );
-  const allowed = !current || pathAllowed(current, pathname, user.role, can);
+  const allowed = !current || pathAllowed(current, pathname, user.role, can, hasFeature);
+  // Bloqueio por módulo desligado tem texto próprio (ver AccessDenied).
+  const moduleOff = Boolean(current?.feature && !hasFeature(current.feature));
 
   return (
     <CallProvider>
     <div className="flex h-screen overflow-hidden bg-slate-50">
-      <Sidebar user={user} logout={logout} can={can} />
+      <Sidebar user={user} logout={logout} can={can} hasFeature={hasFeature} />
       <main className="min-w-0 flex-1 overflow-hidden">
-        {allowed ? children : <AccessDenied />}
+        {allowed ? children : <AccessDenied moduleOff={moduleOff} />}
       </main>
       {/* Chamada tocando: aviso em qualquer tela do sistema. */}
       <CallAlerts />

@@ -12,6 +12,7 @@ import { AppError, NotFoundError, UnauthorizedError } from "../../lib/errors.js"
 import { checkLoginSchedule } from "../../lib/login-schedule.js";
 import { extensionFromMime } from "../../lib/media-storage.js";
 import { loadPermissions } from "../../lib/permissions.js";
+import { loadOrganizationFeatures } from "../../lib/organization-features.js";
 import { serializeSessionUser } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
 
@@ -106,7 +107,18 @@ export async function authRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
         name: loggedIn.name,
         email: loggedIn.email,
       });
-      return { token, user: serializeSessionUser(loggedIn, permissions.allowed()) };
+      return {
+        token,
+        user: serializeSessionUser(
+          loggedIn,
+          permissions.allowed(),
+          // Os módulos ligados viajam JUNTO com a sessão, pelo mesmo motivo
+          // das permissões: a tela precisa dos dois no mesmo instante, e
+          // deduzir "o CRM existe" sem perguntar faria o menu aparecer para
+          // um escritório que o desligou.
+          await loadOrganizationFeatures(deps.prisma, loggedIn.organizationId),
+        ),
+      };
     },
   );
 
@@ -116,7 +128,13 @@ export async function authRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
       throw new UnauthorizedError();
     }
     const permissions = await loadPermissions(deps.prisma, request.user);
-    return { user: serializeSessionUser(user, permissions.allowed()) };
+    return {
+      user: serializeSessionUser(
+        user,
+        permissions.allowed(),
+        await loadOrganizationFeatures(deps.prisma, user.organizationId),
+      ),
+    };
   });
 
   /**
@@ -175,7 +193,14 @@ export async function authRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
       { expiresIn: deps.config.JWT_EXPIRES_IN },
     );
     const permissions = await loadPermissions(deps.prisma, request.user);
-    return { token, user: serializeSessionUser(user, permissions.allowed()) };
+    return {
+      token,
+      user: serializeSessionUser(
+        user,
+        permissions.allowed(),
+        await loadOrganizationFeatures(deps.prisma, user.organizationId),
+      ),
+    };
   });
 
   const changePasswordSchema = z.object({
@@ -268,7 +293,13 @@ export async function authRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
       entityId: user.id,
     });
     const permissions = await loadPermissions(deps.prisma, request.user);
-    return { user: serializeSessionUser(user, permissions.allowed()) };
+    return {
+      user: serializeSessionUser(
+        user,
+        permissions.allowed(),
+        await loadOrganizationFeatures(deps.prisma, user.organizationId),
+      ),
+    };
   });
 
   app.delete("/auth/me/avatar", { preHandler: authenticate }, async (request) => {
@@ -277,7 +308,13 @@ export async function authRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
       data: { avatarUrl: null },
     });
     const permissions = await loadPermissions(deps.prisma, request.user);
-    return { user: serializeSessionUser(user, permissions.allowed()) };
+    return {
+      user: serializeSessionUser(
+        user,
+        permissions.allowed(),
+        await loadOrganizationFeatures(deps.prisma, user.organizationId),
+      ),
+    };
   });
 
   /**

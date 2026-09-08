@@ -5,6 +5,7 @@ import type { PrismaClient } from "@azvchat/database";
 import { RealtimeEvents } from "@azvchat/shared";
 import type { AuthTokenPayload } from "../src/lib/auth.js";
 import { registerErrorHandler } from "../src/lib/errors.js";
+import { clearOrganizationFeaturesCache } from "../src/lib/organization-features.js";
 import { clearPermissionCache } from "../src/lib/permissions.js";
 import { crmRoutes } from "../src/modules/crm/routes.js";
 import type { AppDeps } from "../src/types.js";
@@ -51,7 +52,13 @@ interface Gravado {
 }
 let gravado: Gravado;
 /** Estado mutável da "tabela" de oportunidades entre chamadas de um caso. */
-let estado: { stageId: string; status: "open" | "won" | "lost"; falharCreate: boolean };
+let estado: {
+  stageId: string;
+  status: "open" | "won" | "lost";
+  falharCreate: boolean;
+  /** O módulo CRM ligado nesta organização (o interruptor de Configurações). */
+  crmLigado: boolean;
+};
 
 beforeEach(() => {
   gravado = {
@@ -64,8 +71,11 @@ beforeEach(() => {
     agendamentosCancelados: [],
     atividadesCanceladas: [],
   };
-  estado = { stageId: ETAPA_1, status: "open", falharCreate: false };
+  estado = { stageId: ETAPA_1, status: "open", falharCreate: false, crmLigado: true };
   clearPermissionCache();
+  // Os dois caches são de módulo: sem limpar, o estado de um caso vazaria
+  // para o seguinte e o teste passaria (ou falharia) pelo motivo errado.
+  clearOrganizationFeaturesCache();
 });
 
 function etapa(id: string, nome: string, tipo: string, posicao: number, probabilidade: number) {
@@ -108,6 +118,10 @@ const FUNIL_COMPLETO = {
   updatedAt: new Date(),
   departments: [],
   stages: ETAPAS,
+  assignees: [],
+  assignmentMode: "inherit_conversation",
+  assignmentFixedUserId: null,
+  assignmentCursor: 0,
 };
 
 function oportunidade(overrides: Record<string, unknown> = {}) {
@@ -170,6 +184,11 @@ function oportunidade(overrides: Record<string, unknown> = {}) {
 
 function fakePrisma(): PrismaClient {
   return {
+    // O interruptor do módulo (Configurações → CRM).
+    organization: {
+      findUnique: async () => ({ id: ORG, crmEnabled: estado.crmLigado }),
+      update: async () => ({ id: ORG, crmEnabled: estado.crmLigado }),
+    },
     // Acesso: supervisor com UM número e UM departamento.
     userWhatsAppInstance: { findMany: async () => [{ whatsappInstanceId: INSTANCIA }] },
     userDepartment: { findMany: async () => [{ departmentId: DEPTO }] },
@@ -179,6 +198,7 @@ function fakePrisma(): PrismaClient {
       count: async () => 1,
       findMany: async () => [FUNIL_COMPLETO],
       findFirst: async () => FUNIL_COMPLETO,
+      update: async () => ({ assignmentCursor: 1 }),
     },
     crmLossReason: {
       count: async () => 5,
@@ -639,5 +659,49 @@ describe("permissões das telas de configuração", () => {
     const app = await buildApp();
     const resposta = await chamar(app, "GET", `/crm/board?pipelineId=${FUNIL}`, undefined, "agent");
     expect(resposta.statusCode).toBe(200);
+  });
+});
+
+/**
+ * O INTERRUPTOR DO MÓDULO (Configurações → CRM).
+ *
+ * Desligar não pode ser "esconder o menu": com o CRM desligado, nem quem tem
+ * todas as chaves cria oportunidade ou agenda follow-up — senão o módulo
+ * continuaria mandando mensagem para o cliente pelas costas de quem desligou.
+ */
+describe("CRM desligado", () => {
+  it("o quadro responde 403 com código próprio, mesmo para supervisor", async () => {
+    const app = await buildApp();
+    estado.crmLigado = false;
+    const resposta = await chamar(app, "GET", `/crm/board?pipelineId=${FUNIL}`);
+    expect(resposta.statusCode).toBe(403);
+    expect(resposta.json()).toMatchObject({ error: "crm_disabled" });
+  });
+
+  it("criar oportunidade é recusado antes de qualquer gravação", async () => {
+    const app = await buildApp();
+    estado.crmLigado = false;
+    const resposta = await chamar(app, "POST", "/crm/opportunities", {
+      pipelineId: FUNIL,
+      conversationId: CONVERSA,
+    });
+    expect(resposta.statusCode).toBe(403);
+    expect(gravado.criadas).toHaveLength(0);
+  });
+
+  it("o painel do CRM na conversa também fecha — a Inbox não fica com um card morto", async () => {
+    const app = await buildApp();
+    estado.crmLigado = false;
+    const resposta = await chamar(app, "GET", `/conversations/${CONVERSA}/crm`);
+    expect(resposta.statusCode).toBe(403);
+  });
+
+  it("religado, tudo volta a responder — desligar nunca apagou nada", async () => {
+    const app = await buildApp();
+    estado.crmLigado = false;
+    expect((await chamar(app, "GET", `/crm/board?pipelineId=${FUNIL}`)).statusCode).toBe(403);
+    estado.crmLigado = true;
+    clearOrganizationFeaturesCache();
+    expect((await chamar(app, "GET", `/crm/board?pipelineId=${FUNIL}`)).statusCode).toBe(200);
   });
 });

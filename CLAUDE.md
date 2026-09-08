@@ -1523,6 +1523,19 @@ sempre juntos.
   (4) conversa que mudou de departamento depois de atribuída **não** é desatribuída sozinha
   — a regra vale para transferências novas, e tirar o atendimento de quem já está
   conversando com o cliente seria pior que a inconsistência.
+- **DISTRIBUIÇÃO DO CRM NÃO PODE FURAR O ALCANCE.** O rodízio (e os outros modos de
+  `CrmPipeline.assignmentMode`) escolhe entre quem passa por `conversationAssigneeWhere` —
+  a mesma régua da transferência manual. Distribuir para quem não tem o número grava um
+  responsável que nunca vai abrir o card, e no rodízio isso seria **intermitente**: a
+  oportunidade sumiria da tela de todo mundo só nas vezes em que a vez fosse daquela pessoa,
+  que é o defeito mais difícil de alguém relacionar à causa. O pool
+  (`CrmPipelineAssignee`) **estreita**, nunca amplia: lista vazia é "todo mundo que enxerga",
+  e ninguém entra no rodízio por estar na lista se não enxergar a conversa.
+- **DESLIGAR O CRM NÃO É SÓ ESCONDER O MENU.** A guarda de módulo roda ANTES da chave de
+  permissão em toda rota do CRM, e o desligamento cancela os follow-ups pendentes — senão o
+  `services/scheduler.ts` continuaria mandando mensagem de um módulo desligado, e a tela para
+  cancelar não existiria mais. O que nunca acontece é apagar dado: interruptor não é exclusão,
+  e religar precisa devolver tudo.
 - **Toda atribuição automática precisa respeitar o `@todos`.** São dois pontos, e os
   dois já checam: a ingestão (`message-ingest.ts`, junto do `archivedAt`) e o
   `POST /whatsapp-instances/:id/apply-default-assignee`. Sem isso o grupo coletivo
@@ -1925,8 +1938,11 @@ da conversa reusando o contato existente, arrastar cards com recusa de conflito 
 pessoas movem o mesmo card, atividades com atraso derivado do relógio, ganho com valor
 fechado e perda com motivo obrigatório, histórico completo, follow-up que reusa o agendador
 de mensagens e é interrompido quando o cliente responde, criação automática por etiqueta,
-indicadores de pipeline por responsável, origem e motivo de perda, e o card do CRM dentro do
-painel de contexto da conversa.
+indicadores de pipeline por responsável, origem e motivo de perda, distribuição automática
+das oportunidades novas (rodízio, menor carga, pessoa fixa ou herdar do atendimento, sempre
+respeitando quem enxerga a conversa), interruptor do módulo em Configurações (desligar esconde
+o menu, fecha as rotas e cancela os follow-ups pendentes sem apagar nada) e o card do CRM
+dentro do painel de contexto da conversa.
 
 **Falta** (ordem sugerida): validar o pareamento QR em rede aberta (o ambiente de
 desenvolvimento bloqueia `web.whatsapp.com`); votos de enquete agregados na Inbox;
@@ -2328,6 +2344,38 @@ numa conversa abre o card na primeira etapa do funil — reusa a classificação
 faz, em vez de um gatilho por palavra-chave. Roda no fim de `POST /conversations/:id/tags/:tagId`
 e engole a própria falha: etiquetar não pode quebrar porque o CRM tropeçou.
 
+**Distribuição automática das oportunidades novas** (`lib/crm-assignment.ts`), configurada
+por funil em `CrmPipeline.assignmentMode`: `inherit_conversation` (PADRÃO — quem já atende o
+cliente fica com a venda, e é o que o sistema fazia antes), `round_robin`, `least_open`
+(menos cards abertos neste funil), `fixed` e `none`. Três regras que não podem cair:
+(1) **só recebe quem ENXERGA a conversa** — a mesma `conversationAssigneeWhere` da
+transferência manual; aqui a falha seria pior do que lá porque intermitente, aparecendo só
+nas vezes em que a vez fosse da pessoa sem aquele número; (2) **o rodízio conta no BANCO** —
+`assignmentCursor` é incrementado atomicamente e o índice sai do valor devolvido, então duas
+criações simultâneas caem em pessoas diferentes (ler "o último que recebeu" e calcular o
+próximo em memória perde a corrida em silêncio); (3) **sem candidato elegível a oportunidade
+nasce ÓRFÃ, com log, e a criação não falha** — recusar faria o clique do atendente quebrar
+por causa de configuração. `CrmPipelineAssignee` é o pool do rodízio, e **lista vazia
+significa "todo mundo que enxerga a conversa"**, nunca "ninguém". Escolha explícita de gente
+sempre vence a regra, e a distribuição vira linha do histórico (`assignee_changed` com
+`metadata.modo`).
+
+**O CRM tem INTERRUPTOR** (`Organization.crmEnabled`, ligado por padrão), em Configurações →
+CRM (Kanban), fixo em `admin` como excluir número ou departamento. **Não é permissão**:
+permissão diz o que cada perfil pode fazer com um recurso que existe, o interruptor diz se o
+recurso existe para o escritório — uma chave "usar o CRM" por papel deixaria metade da equipe
+com o menu e a outra metade sem. Desligado, o item some do menu (`feature` no `NAV`, vindo de
+`user.features` na sessão), o card do CRM sai do painel da conversa e **toda rota do CRM
+responde 403 `crm_disabled`** — a guarda (`crmGuard`, em `modules/crm/routes.ts`) roda ANTES
+da chave, senão "desligar" seria só esconder o menu. **Desligar NUNCA apaga nada**: funis,
+oportunidades e histórico ficam no banco e religar devolve tudo. O que desligar FAZ é
+**cancelar os follow-ups pendentes do CRM** (auditado, com a contagem, e a tela avisa quantos
+antes de confirmar): sem isso o agendador continuaria mandando "conseguiu ver a proposta?"
+para o cliente nos dias seguintes, de um módulo que ninguém mais enxerga e que ninguém teria
+onde desmarcar. Agendamento marcado por uma PESSOA no composer não é tocado. O estado vive em
+`lib/organization-features.ts`, com o mesmo cache curto e invalidação explícita das
+permissões.
+
 **Duplicidade é decidida pelo BANCO**, pelo índice PARCIAL
 `crm_opportunities_open_per_conversation_pipeline`: a mesma conversa não tem duas
 oportunidades ABERTAS no mesmo funil (dois cliques, webhook repetido, automação disparando de
@@ -2394,6 +2442,11 @@ POST   /crm/opportunities/:id/activities      PATCH /crm/activities/:id
 GET    /conversations/:id/crm    (o card do painel de contexto da conversa)
 GET    /crm/settings   POST|PATCH /crm/products   POST|PATCH /crm/loss-reasons
 GET    /crm/reports?pipelineId=&from=&to=     (crm.reports.view)
+
+GET    /organization/features            (qualquer sessão — é ela que decide o menu)
+PATCH  /organization/features            (admin; { crm } — desligar cancela os follow-ups
+       pendentes do CRM e devolve quantos foram)
+GET    /organization/features/crm-impact (admin; o aviso antes de desligar traz número)
 ```
 
 **Funil inicial semeado sob demanda** (`lib/crm-bootstrap.ts`), na primeira carga de

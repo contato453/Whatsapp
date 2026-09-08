@@ -125,6 +125,89 @@ export function crmOriginLabel(value: string | null | undefined): string {
 export const CRM_ORIGIN_FROM_CONVERSATION: CrmOrigin = "whatsapp";
 
 // ============================================================
+// Distribuição automática de oportunidades
+// ============================================================
+
+/**
+ * Como o funil escolhe o responsável de uma oportunidade NOVA.
+ *
+ * O problema que isto resolve: no funil comercial o lead chega sem dono, e
+ * "quem pegar primeiro" na prática significa que ninguém pega — a conversa
+ * fica na fila até o cliente desistir. A distribuição dá dono na hora, e o
+ * dono sabe que é dele.
+ *
+ * `inherit_conversation` é o PADRÃO e é o que o sistema já fazia: quem atende
+ * o cliente fica com a venda. Qualquer outro valor como padrão mudaria, num
+ * deploy, quem recebe os leads de quem já usa o CRM.
+ */
+export const CRM_ASSIGNMENT_MODES = [
+  "inherit_conversation",
+  "round_robin",
+  "least_open",
+  "fixed",
+  "none",
+] as const;
+export type CrmAssignmentMode = (typeof CRM_ASSIGNMENT_MODES)[number];
+
+export const CRM_ASSIGNMENT_MODE_LABELS: Record<CrmAssignmentMode, string> = {
+  inherit_conversation: "Quem já atende a conversa",
+  round_robin: "Rodízio (round robin)",
+  least_open: "Quem tem menos oportunidades abertas",
+  fixed: "Sempre a mesma pessoa",
+  none: "Ninguém (fica na fila do quadro)",
+};
+
+export const CRM_ASSIGNMENT_MODE_DESCRIPTIONS: Record<CrmAssignmentMode, string> = {
+  inherit_conversation:
+    "O responsável da oportunidade é quem já está atendendo o cliente no WhatsApp. É o comportamento padrão do sistema.",
+  round_robin:
+    "Cada oportunidade nova vai para o próximo da fila, em rodízio. Distribui parelho ao longo do dia, sem olhar carga.",
+  least_open:
+    "A oportunidade vai para quem estiver com menos cards abertos neste funil. Equilibra a carga, e não a contagem.",
+  fixed: "Toda oportunidade nova deste funil vai para a mesma pessoa.",
+  none: "A oportunidade nasce sem responsável e aparece para todo mundo que enxerga o funil.",
+};
+
+/** Modos que precisam de uma lista de candidatos para escolher alguém. */
+export function crmAssignmentUsesPool(mode: CrmAssignmentMode): boolean {
+  return mode === "round_robin" || mode === "least_open";
+}
+
+/**
+ * O próximo da fila do rodízio.
+ *
+ * O `cursor` é o valor que o BANCO devolveu depois de incrementar — não um
+ * número calculado aqui. É essa diferença que faz duas oportunidades criadas
+ * no mesmo instante caírem em pessoas diferentes: o incremento é atômico, e
+ * cada chamada recebe o seu número.
+ *
+ * A lista precisa chegar em ordem ESTÁVEL (o chamador ordena por id), senão a
+ * "próxima pessoa" mudaria a cada consulta e o rodízio deixaria de ser rodízio.
+ */
+export function crmRoundRobinPick<T>(candidates: readonly T[], cursor: number): T | null {
+  if (candidates.length === 0) return null;
+  // `cursor` vem de um contador que só cresce; o resto positivo o traz de
+  // volta para dentro da lista, inclusive se um dia ele passar do inteiro.
+  const index = ((cursor % candidates.length) + candidates.length) % candidates.length;
+  return candidates[index] ?? null;
+}
+
+/**
+ * Quem está com menos oportunidades abertas. Empate é desfeito pelo cursor do
+ * rodízio, e não pelo primeiro da lista: sem isso, com todo mundo zerado (o
+ * começo do dia, o começo do funil) o primeiro nome receberia tudo.
+ */
+export function crmLeastOpenPick(
+  candidates: ReadonlyArray<{ userId: string; openCount: number }>,
+  cursor: number,
+): string | null {
+  if (candidates.length === 0) return null;
+  const menor = Math.min(...candidates.map((item) => item.openCount));
+  const empatados = candidates.filter((item) => item.openCount === menor);
+  return crmRoundRobinPick(empatados, cursor)?.userId ?? null;
+}
+
+// ============================================================
 // Dinheiro
 // ============================================================
 

@@ -44,6 +44,9 @@ function fakeUser(): User {
 function fakePrisma(): PrismaClient {
   return {
     rolePermission: rolePermissionStub,
+    // A sessão passou a carregar também os MÓDULOS ligados no escritório
+    // (o interruptor do CRM), e eles saem daqui.
+    organization: { findUnique: async () => ({ id: "org-1", crmEnabled: true }) },
     user: {
       findUnique: async () => stored,
       update: async ({ data }: { data: Partial<User> }) => {

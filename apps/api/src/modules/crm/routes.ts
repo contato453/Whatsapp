@@ -2,6 +2,7 @@ import type { Prisma } from "@azvchat/database";
 import {
   CRM_ACTIVITY_PRIORITIES,
   CRM_ACTIVITY_TYPES,
+  CRM_ASSIGNMENT_MODES,
   CRM_BOARD_PAGE_SIZE,
   CRM_LIST_PAGE_SIZE,
   CRM_ORIGINS,
@@ -13,7 +14,9 @@ import {
 } from "@azvchat/shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
+import type { PermissionAction } from "@azvchat/shared";
 import { accessibleDepartmentIds, conversationAssigneeWhere } from "../../lib/access.js";
+import { authenticate } from "../../lib/auth.js";
 import { findAccessibleConversation } from "../../lib/conversation-access.js";
 import {
   accessibleOpportunityWhere,
@@ -50,7 +53,11 @@ import {
   resolveDepartmentTarget,
 } from "../../lib/department-resource.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
-import { requirePermission } from "../../lib/permissions.js";
+import {
+  assertCrmEnabled,
+  loadOrganizationFeatures,
+} from "../../lib/organization-features.js";
+import { loadPermissions } from "../../lib/permissions.js";
 import { serializeUserDirectory } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
 
@@ -69,6 +76,28 @@ import type { AppDeps } from "../../types.js";
  * 3. **o follow-up é `ScheduledMessage`.** Não existe agendador do CRM.
  */
 
+/**
+ * A porta de toda rota do CRM: **módulo ligado** e **chave do catálogo**, nessa
+ * ordem, com UMA autenticação só.
+ *
+ * A ordem não é estética. Com o CRM desligado, nem quem tem todas as chaves
+ * pode criar oportunidade ou agendar follow-up — senão "desligar o Kanban"
+ * seria apenas esconder o menu, e o módulo continuaria mandando mensagem para
+ * o cliente pelas costas de quem o desligou.
+ *
+ * `requirePermission` não é usado aqui porque ele autentica por conta própria:
+ * empilhar os dois preHandlers custaria duas revalidações de sessão por
+ * requisição, na tela em que a equipe passa o dia arrastando card.
+ */
+function crmGuard(deps: AppDeps, action: PermissionAction) {
+  return async (request: FastifyRequest): Promise<void> => {
+    await authenticate(request);
+    assertCrmEnabled(await loadOrganizationFeatures(deps.prisma, request.user.organizationId));
+    const permissions = await loadPermissions(deps.prisma, request.user);
+    permissions.assert(action);
+  };
+}
+
 const idParam = z.object({ id: z.string().uuid() });
 
 /** Lista que chega como parâmetro repetido OU separada por vírgula. */
@@ -80,6 +109,19 @@ function listParam(value: unknown): string[] {
     .map((item) => item.trim())
     .filter((item) => item.length > 0);
 }
+
+/**
+ * Distribuição automática — os três campos andam juntos.
+ *
+ * `assigneeIds` VAZIO significa "todo mundo que enxerga a conversa", e não
+ * "ninguém": lista vazia bloqueando a distribuição faria o funil parar de
+ * distribuir no dia em que alguém saísse do cadastro, sem aviso.
+ */
+const assignmentFields = {
+  assignmentMode: z.enum(CRM_ASSIGNMENT_MODES).optional(),
+  assignmentFixedUserId: z.string().uuid().nullish(),
+  assigneeIds: z.array(z.string().uuid()).max(100).optional(),
+};
 
 const departmentTargetFields = {
   isGeneral: z.boolean().default(false),
@@ -146,7 +188,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
    * `ensureDefaultCrmSetup`): sem isso quem abrisse o CRM pela primeira vez
    * encontraria um quadro sem colunas e concluiria que o recurso não funciona.
    */
-  app.get("/crm/pipelines", { preHandler: requirePermission(deps, "crm.view") }, async (request) => {
+  app.get("/crm/pipelines", { preHandler: crmGuard(deps, "crm.view") }, async (request) => {
     await ensureDefaultCrmSetup(deps.prisma, request.user.organizationId);
     const departmentIds = await accessibleDepartmentIds(deps.prisma, request.user);
     const pipelines = await deps.prisma.crmPipeline.findMany({
@@ -157,6 +199,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
       include: {
         departments: { include: { department: true } },
         stages: { include: { actions: true }, orderBy: { position: "asc" } },
+        assignees: { select: { userId: true } },
       },
       orderBy: [{ isDefault: "desc" }, { position: "asc" }, { name: "asc" }],
     });
@@ -165,7 +208,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.post(
     "/crm/pipelines",
-    { preHandler: requirePermission(deps, "crm.pipeline.manage") },
+    { preHandler: crmGuard(deps, "crm.pipeline.manage") },
     async (request, reply) => {
       const body = z
         .object({
@@ -176,6 +219,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
             .regex(/^#[0-9a-fA-F]{6}$/)
             .default("#102a4c"),
           autoCreateTagId: z.string().uuid().nullish(),
+          ...assignmentFields,
           ...departmentTargetFields,
         })
         .parse(request.body);
@@ -214,13 +258,19 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
           color: body.color,
           isGeneral: target.isGeneral,
           autoCreateTagId: body.autoCreateTagId ?? null,
+          assignmentMode: body.assignmentMode ?? "inherit_conversation",
+          assignmentFixedUserId: body.assignmentFixedUserId ?? null,
           position: (ultimo?.position ?? 0) + 10,
           createdById: request.user.sub,
           departments: { create: target.departmentIds.map((departmentId) => ({ departmentId })) },
+          ...(body.assigneeIds && body.assigneeIds.length > 0
+            ? { assignees: { create: body.assigneeIds.map((userId) => ({ userId })) } }
+            : {}),
         },
         include: {
           departments: { include: { department: true } },
           stages: { include: { actions: true } },
+          assignees: { select: { userId: true } },
         },
       });
       deps.audit.record({
@@ -237,7 +287,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.patch(
     "/crm/pipelines/:id",
-    { preHandler: requirePermission(deps, "crm.pipeline.manage") },
+    { preHandler: crmGuard(deps, "crm.pipeline.manage") },
     async (request) => {
       const { id } = idParam.parse(request.params);
       const body = z
@@ -251,6 +301,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
           isActive: z.boolean().optional(),
           isDefault: z.boolean().optional(),
           autoCreateTagId: z.string().uuid().nullish(),
+          ...assignmentFields,
           isGeneral: z.boolean().optional(),
           departmentIds: z.array(z.string().uuid()).optional(),
         })
@@ -289,9 +340,35 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
             )
           : null;
 
+      // Quem entra no rodízio precisa ser gente ativa da organização: id solto
+      // no corpo viraria um candidato que nunca recebe nada, e a distribuição
+      // ficaria "pulando a vez" sem explicação.
+      if (body.assigneeIds && body.assigneeIds.length > 0) {
+        const encontrados = await deps.prisma.user.findMany({
+          where: {
+            id: { in: body.assigneeIds },
+            organizationId: request.user.organizationId,
+            status: "active",
+          },
+          select: { id: true },
+        });
+        if (encontrados.length !== body.assigneeIds.length) {
+          throw new AppError(
+            "Há alguém inválido ou inativo na lista de distribuição",
+            400,
+            "invalid_assignee",
+          );
+        }
+      }
+
       const pipeline = await deps.prisma.$transaction(async (tx) => {
         if (target) {
           await tx.crmPipelineDepartment.deleteMany({ where: { pipelineId: id } });
+        }
+        if (body.assigneeIds) {
+          // Substitui o conjunto inteiro, como o vínculo de departamento da
+          // etiqueta: somar deixaria gente no rodízio depois de ser tirada.
+          await tx.crmPipelineAssignee.deleteMany({ where: { pipelineId: id } });
         }
         if (body.isDefault) {
           // Um funil padrão por organização: marcar um desmarca o anterior,
@@ -312,6 +389,13 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
             ...(body.autoCreateTagId !== undefined
               ? { autoCreateTagId: body.autoCreateTagId }
               : {}),
+            ...(body.assignmentMode ? { assignmentMode: body.assignmentMode } : {}),
+            ...(body.assignmentFixedUserId !== undefined
+              ? { assignmentFixedUserId: body.assignmentFixedUserId }
+              : {}),
+            ...(body.assigneeIds
+              ? { assignees: { create: body.assigneeIds.map((userId) => ({ userId })) } }
+              : {}),
             ...(target
               ? {
                   isGeneral: target.isGeneral,
@@ -324,6 +408,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
           include: {
             departments: { include: { department: true } },
             stages: { include: { actions: true }, orderBy: { position: "asc" } },
+            assignees: { select: { userId: true } },
           },
         });
       });
@@ -341,7 +426,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.delete(
     "/crm/pipelines/:id",
-    { preHandler: requirePermission(deps, "crm.pipeline.manage") },
+    { preHandler: crmGuard(deps, "crm.pipeline.manage") },
     async (request) => {
       const { id } = idParam.parse(request.params);
       const pipeline = await deps.prisma.crmPipeline.findFirst({
@@ -386,7 +471,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.post(
     "/crm/pipelines/:id/stages",
-    { preHandler: requirePermission(deps, "crm.pipeline.manage") },
+    { preHandler: crmGuard(deps, "crm.pipeline.manage") },
     async (request, reply) => {
       const { id } = idParam.parse(request.params);
       const body = stageFieldsSchema.parse(request.body);
@@ -427,7 +512,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.patch(
     "/crm/stages/:id",
-    { preHandler: requirePermission(deps, "crm.pipeline.manage") },
+    { preHandler: crmGuard(deps, "crm.pipeline.manage") },
     async (request) => {
       const { id } = idParam.parse(request.params);
       const body = stageFieldsSchema.partial().parse(request.body);
@@ -471,7 +556,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
   /** Reordena as colunas do quadro em bloco — a tela manda a ordem inteira. */
   app.post(
     "/crm/pipelines/:id/stages/reorder",
-    { preHandler: requirePermission(deps, "crm.pipeline.manage") },
+    { preHandler: crmGuard(deps, "crm.pipeline.manage") },
     async (request) => {
       const { id } = idParam.parse(request.params);
       const { stageIds } = z
@@ -501,7 +586,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.delete(
     "/crm/stages/:id",
-    { preHandler: requirePermission(deps, "crm.pipeline.manage") },
+    { preHandler: crmGuard(deps, "crm.pipeline.manage") },
     async (request) => {
       const { id } = idParam.parse(request.params);
       const { moveToStageId } = z
@@ -560,7 +645,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
    * página trouxe faria o topo da coluna dizer R$ 48.000 com R$ 120.000 de
    * verdade lá embaixo — o defeito clássico de painel que ninguém confere.
    */
-  app.get("/crm/board", { preHandler: requirePermission(deps, "crm.view") }, async (request) => {
+  app.get("/crm/board", { preHandler: crmGuard(deps, "crm.view") }, async (request) => {
     const query = boardQuerySchema.parse(request.query ?? {});
     const escopo = await accessibleOpportunityWhere(deps.prisma, request.user);
     const filtros = buildOpportunityFilters(query);
@@ -621,7 +706,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
   /** A mesma coisa em tabela — para quem prefere ordenar e varrer. */
   app.get(
     "/crm/opportunities",
-    { preHandler: requirePermission(deps, "crm.view") },
+    { preHandler: crmGuard(deps, "crm.view") },
     async (request) => {
       const query = listQuerySchema.parse(request.query ?? {});
       const escopo = await accessibleOpportunityWhere(deps.prisma, request.user);
@@ -651,7 +736,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.get(
     "/crm/opportunities/:id",
-    { preHandler: requirePermission(deps, "crm.view") },
+    { preHandler: crmGuard(deps, "crm.view") },
     async (request) => {
       const { id } = idParam.parse(request.params);
       const opportunity = await findAccessibleOpportunity(deps.prisma, request.user, id);
@@ -684,7 +769,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.get(
     "/crm/opportunities/:id/history",
-    { preHandler: requirePermission(deps, "crm.view") },
+    { preHandler: crmGuard(deps, "crm.view") },
     async (request) => {
       const { id } = idParam.parse(request.params);
       await findAccessibleOpportunity(deps.prisma, request.user, id);
@@ -700,7 +785,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.post(
     "/crm/opportunities",
-    { preHandler: requirePermission(deps, "crm.opportunity.manage") },
+    { preHandler: crmGuard(deps, "crm.opportunity.manage") },
     async (request, reply) => {
       const body = opportunityFieldsSchema
         .extend({
@@ -757,7 +842,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.patch(
     "/crm/opportunities/:id",
-    { preHandler: requirePermission(deps, "crm.opportunity.manage") },
+    { preHandler: crmGuard(deps, "crm.opportunity.manage") },
     async (request) => {
       const { id } = idParam.parse(request.params);
       const body = opportunityFieldsSchema.parse(request.body);
@@ -844,7 +929,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
   /** Arrastar o card. Ver `lib/crm-move.ts` para a regra de concorrência. */
   app.post(
     "/crm/opportunities/:id/move",
-    { preHandler: requirePermission(deps, "crm.opportunity.manage") },
+    { preHandler: crmGuard(deps, "crm.opportunity.manage") },
     async (request) => {
       const { id } = idParam.parse(request.params);
       const body = z
@@ -894,7 +979,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
    */
   app.post(
     "/crm/opportunities/:id/win",
-    { preHandler: requirePermission(deps, "crm.opportunity.manage") },
+    { preHandler: crmGuard(deps, "crm.opportunity.manage") },
     async (request) => {
       const { id } = idParam.parse(request.params);
       const body = z
@@ -923,7 +1008,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.post(
     "/crm/opportunities/:id/lose",
-    { preHandler: requirePermission(deps, "crm.opportunity.manage") },
+    { preHandler: crmGuard(deps, "crm.opportunity.manage") },
     async (request) => {
       const { id } = idParam.parse(request.params);
       const body = z
@@ -961,7 +1046,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
    */
   app.post(
     "/crm/opportunities/:id/reopen",
-    { preHandler: requirePermission(deps, "crm.opportunity.reopen") },
+    { preHandler: crmGuard(deps, "crm.opportunity.reopen") },
     async (request) => {
       const { id } = idParam.parse(request.params);
       const body = z
@@ -1024,7 +1109,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.post(
     "/crm/opportunities/:id/tags/:tagId",
-    { preHandler: requirePermission(deps, "crm.opportunity.manage") },
+    { preHandler: crmGuard(deps, "crm.opportunity.manage") },
     async (request) => {
       const { id, tagId } = z
         .object({ id: z.string().uuid(), tagId: z.string().uuid() })
@@ -1053,7 +1138,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.delete(
     "/crm/opportunities/:id/tags/:tagId",
-    { preHandler: requirePermission(deps, "crm.opportunity.manage") },
+    { preHandler: crmGuard(deps, "crm.opportunity.manage") },
     async (request) => {
       const { id, tagId } = z
         .object({ id: z.string().uuid(), tagId: z.string().uuid() })
@@ -1077,7 +1162,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
    */
   app.get(
     "/crm/activities",
-    { preHandler: requirePermission(deps, "crm.view") },
+    { preHandler: crmGuard(deps, "crm.view") },
     async (request) => {
       const query = z
         .object({
@@ -1124,7 +1209,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.post(
     "/crm/opportunities/:id/activities",
-    { preHandler: requirePermission(deps, "crm.opportunity.manage") },
+    { preHandler: crmGuard(deps, "crm.opportunity.manage") },
     async (request, reply) => {
       const { id } = idParam.parse(request.params);
       const body = z
@@ -1171,7 +1256,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.patch(
     "/crm/activities/:id",
-    { preHandler: requirePermission(deps, "crm.opportunity.manage") },
+    { preHandler: crmGuard(deps, "crm.opportunity.manage") },
     async (request) => {
       const { id } = idParam.parse(request.params);
       const body = z
@@ -1234,7 +1319,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
    */
   app.get(
     "/conversations/:id/crm",
-    { preHandler: requirePermission(deps, "crm.view") },
+    { preHandler: crmGuard(deps, "crm.view") },
     async (request) => {
       const { id } = idParam.parse(request.params);
       await findAccessibleConversation(deps.prisma, request.user, id);
@@ -1255,7 +1340,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.get(
     "/crm/settings",
-    { preHandler: requirePermission(deps, "crm.view") },
+    { preHandler: crmGuard(deps, "crm.view") },
     async (request) => {
       await ensureDefaultCrmSetup(deps.prisma, request.user.organizationId);
       const [products, lossReasons] = await Promise.all([
@@ -1277,7 +1362,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.post(
     "/crm/products",
-    { preHandler: requirePermission(deps, "crm.pipeline.manage") },
+    { preHandler: crmGuard(deps, "crm.pipeline.manage") },
     async (request, reply) => {
       const body = z
         .object({
@@ -1298,7 +1383,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.patch(
     "/crm/products/:id",
-    { preHandler: requirePermission(deps, "crm.pipeline.manage") },
+    { preHandler: crmGuard(deps, "crm.pipeline.manage") },
     async (request) => {
       const { id } = idParam.parse(request.params);
       const body = z
@@ -1327,7 +1412,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.post(
     "/crm/loss-reasons",
-    { preHandler: requirePermission(deps, "crm.pipeline.manage") },
+    { preHandler: crmGuard(deps, "crm.pipeline.manage") },
     async (request, reply) => {
       const body = z.object({ name: z.string().min(1).max(120) }).parse(request.body);
       const ultimo = await deps.prisma.crmLossReason.findFirst({
@@ -1348,7 +1433,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
 
   app.patch(
     "/crm/loss-reasons/:id",
-    { preHandler: requirePermission(deps, "crm.pipeline.manage") },
+    { preHandler: crmGuard(deps, "crm.pipeline.manage") },
     async (request) => {
       const { id } = idParam.parse(request.params);
       const body = z
@@ -1384,7 +1469,7 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
    */
   app.get(
     "/crm/reports",
-    { preHandler: requirePermission(deps, "crm.reports.view") },
+    { preHandler: crmGuard(deps, "crm.reports.view") },
     async (request) => {
       const query = z
         .object({
@@ -1664,6 +1749,7 @@ async function loadReadablePipeline(
     include: {
       departments: { include: { department: true } },
       stages: { include: { actions: true }, orderBy: { position: "asc" } },
+      assignees: { select: { userId: true } },
     },
     orderBy: [{ isDefault: "desc" }, { position: "asc" }],
   });

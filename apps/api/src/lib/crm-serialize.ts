@@ -79,6 +79,7 @@ type PipelineWithRelations = Prisma.CrmPipelineGetPayload<{
   include: {
     departments: { include: { department: true } };
     stages: { include: { actions: true } };
+    assignees: { select: { userId: true } };
   };
 }>;
 
@@ -96,6 +97,12 @@ export function serializeCrmPipeline(pipeline: PipelineWithRelations) {
     isGeneral: pipeline.isGeneral,
     departments: pipeline.departments.map((link) => serializeDepartment(link.department)),
     autoCreateTagId: pipeline.autoCreateTagId,
+    // Distribuição automática das oportunidades novas. `assigneeIds` vazio
+    // significa "todo mundo que enxerga a conversa", e não "ninguém" — ver
+    // `CrmPipelineAssignee` no schema.
+    assignmentMode: pipeline.assignmentMode,
+    assignmentFixedUserId: pipeline.assignmentFixedUserId,
+    assigneeIds: pipeline.assignees?.map((link) => link.userId) ?? [],
     stages: [...pipeline.stages]
       .sort((a, b) => a.position - b.position)
       .map((stage) => serializeCrmStage(stage)),

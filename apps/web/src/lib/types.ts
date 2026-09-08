@@ -1,5 +1,6 @@
 import type {
   ConnectionStatus,
+  CrmAssignmentMode,
   CrmActivityPriority,
   CrmActivityStatus,
   CrmActivityType,
@@ -40,6 +41,15 @@ export interface UserDirectoryDto {
 }
 
 /** Cadastro completo: só chega para o próprio usuário (/auth/me) e para o administrador. */
+/**
+ * Os MÓDULOS ligados no escritório. Não é permissão: permissão diz o que cada
+ * perfil pode fazer com um recurso que existe, isto diz se o recurso existe.
+ */
+export interface OrganizationFeaturesDto {
+  /** CRM (Kanban) ligado — o interruptor de Configurações. */
+  crm: boolean;
+}
+
 export interface UserDto extends UserDirectoryDto {
   /**
    * O que ESTA pessoa pode fazer agora, resolvido pela API a partir do
@@ -50,6 +60,12 @@ export interface UserDto extends UserDirectoryDto {
    * aparecendo para quem a API recusa, ou escondido para quem ela aceita.
    */
   permissions: PermissionAction[];
+  /**
+   * Viaja junto com a sessão pelo mesmo motivo das permissões: a tela precisa
+   * das duas coisas no mesmo instante. Deduzir "o CRM existe" sem perguntar
+   * faria o menu aparecer para um escritório que o desligou.
+   */
+  features: OrganizationFeaturesDto;
   email: string;
   /** Prefixa as mensagens enviadas com o nome do atendente */
   signMessages: boolean;
@@ -76,7 +92,9 @@ export interface RolePermissionOverrideDto {
   updatedBy: UserDirectoryDto | null;
 }
 
-export interface UserWithAccessDto extends Omit<UserDto, "permissions"> {
+// `features` e `permissions` ficam de fora: são da SESSÃO de quem está
+// logado, e não do cadastro de terceiros que a tela de Usuários lista.
+export interface UserWithAccessDto extends Omit<UserDto, "permissions" | "features"> {
   whatsappInstanceIds: string[];
   departmentIds: string[];
 }
@@ -640,6 +658,11 @@ export interface CrmPipelineDto {
   departments: DepartmentDto[];
   /** Etiqueta que cria oportunidade sozinha. Null = criação automática desligada. */
   autoCreateTagId: string | null;
+  /** Distribuição automática das oportunidades novas. */
+  assignmentMode: CrmAssignmentMode;
+  assignmentFixedUserId: string | null;
+  /** Pool do rodízio. VAZIO = todo mundo que enxerga a conversa. */
+  assigneeIds: string[];
   stages: CrmStageDto[];
 }
 

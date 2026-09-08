@@ -11,6 +11,7 @@ import {
   opportunityInclude,
   type OpportunityWithRelations,
 } from "./crm-access.js";
+import { resolveCrmAssignee } from "./crm-assignment.js";
 import { emitCrmOpportunity } from "./crm-events.js";
 import { recordCrmEvent } from "./crm-history.js";
 import { runStageActions } from "./crm-stage-actions.js";
@@ -79,7 +80,12 @@ export async function createCrmOpportunity(
 ): Promise<CreateOpportunityResult> {
   const pipeline = await deps.prisma.crmPipeline.findFirst({
     where: { id: input.pipelineId, organizationId: input.organizationId },
-    include: { stages: { orderBy: { position: "asc" }, include: { actions: true } } },
+    include: {
+      stages: { orderBy: { position: "asc" }, include: { actions: true } },
+      // O pool do rodízio vem junto: a distribuição roda no mesmo caminho da
+      // criação e não pode custar uma consulta a mais por lead.
+      assignees: { select: { userId: true } },
+    },
   });
   if (!pipeline) throw new NotFoundError("Funil");
   if (pipeline.stages.length === 0) {
@@ -99,6 +105,7 @@ export async function createCrmOpportunity(
           title: true,
           customTitle: true,
           externalChatId: true,
+          whatsappInstanceId: true,
           departmentId: true,
           assignedUserId: true,
           lastMessageAt: true,
@@ -106,6 +113,7 @@ export async function createCrmOpportunity(
       })
     : null;
   if (input.conversationId && !conversation) throw new NotFoundError("Conversa");
+  const conversationInstanceId = conversation?.whatsappInstanceId ?? null;
 
   const contactPhone = input.contactPhone ?? phoneFromChatId(conversation?.externalChatId ?? null);
   const title =
@@ -124,6 +132,23 @@ export async function createCrmOpportunity(
   });
   const position = primeiro ? primeiro.position - CRM_POSITION_STEP : CRM_POSITION_STEP;
 
+  // DISTRIBUIÇÃO AUTOMÁTICA. Só entra quando ninguém escolheu o responsável na
+  // mão: escolha explícita de gente sempre vence regra de sistema — quem
+  // digitou o nome sabe algo que a regra não sabe.
+  const distribuicao = input.assignedUserId
+    ? null
+    : await resolveCrmAssignee(deps, {
+        organizationId: input.organizationId,
+        pipeline,
+        conversation: conversation
+          ? {
+              whatsappInstanceId: conversationInstanceId ?? "",
+              departmentId: conversation.departmentId,
+            }
+          : null,
+        conversationAssigneeId: conversation?.assignedUserId ?? null,
+      });
+
   const data: Prisma.CrmOpportunityUncheckedCreateInput = {
     organizationId: input.organizationId,
     pipelineId: pipeline.id,
@@ -132,9 +157,9 @@ export async function createCrmOpportunity(
     conversationId: conversation?.id ?? null,
     contactName: input.contactName ?? null,
     contactPhone,
-    // Herda da conversa quando ninguém escolheu: o atendimento já decidiu de
-    // quem é o cliente, e repetir a escolha só cria divergência.
-    assignedUserId: input.assignedUserId ?? conversation?.assignedUserId ?? null,
+    // A escolha explícita vence; na falta dela vale o que o funil decidiu
+    // (por padrão, herdar de quem já atende a conversa).
+    assignedUserId: input.assignedUserId ?? distribuicao?.userId ?? null,
     departmentId: input.departmentId ?? conversation?.departmentId ?? null,
     productId: input.productId ?? null,
     value: input.value ?? 0,
@@ -185,6 +210,23 @@ export async function createCrmOpportunity(
       : `Oportunidade criada automaticamente em ${stage.name}`,
     metadata: { pipelineId: pipeline.id, automatica: input.performedByUserId === null },
   });
+
+  // A distribuição vira linha do histórico: a equipe precisa saber que foi o
+  // rodízio (e não uma pessoa) que deu dono ao card, senão a primeira
+  // pergunta na segunda-feira é "quem me passou isso?".
+  if (distribuicao?.userId) {
+    await recordCrmEvent(deps.prisma, {
+      organizationId: input.organizationId,
+      opportunityId: created.id,
+      type: "assignee_changed",
+      toUserId: distribuicao.userId,
+      description:
+        distribuicao.mode === "inherit_conversation"
+          ? "Responsável herdado do atendimento"
+          : `Responsável definido pela distribuição automática (${distribuicao.mode})`,
+      metadata: { modo: distribuicao.mode, automatica: distribuicao.mode !== "inherit_conversation" },
+    });
+  }
 
   // Regra 3: automação de ENTRADA da primeira etapa vale na criação.
   const outcome = await runStageActions(
