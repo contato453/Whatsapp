@@ -7,6 +7,7 @@ import {
 import type { Logger } from "pino";
 import type { Server } from "socket.io";
 import { conversationAssigneeWhere } from "./access.js";
+import { resolveCrmAssignee } from "./crm-assignment.js";
 import { recordCrmEvent } from "./crm-history.js";
 import { emitScheduledPending } from "./scheduled-pending.js";
 import { serializeUserDirectory } from "./serialize.js";
@@ -50,6 +51,14 @@ export interface StageActionContext {
   organizationId: string;
   opportunityId: string;
   conversationId: string | null;
+  /** Funil do card — a ação `auto_assign` lê dele a regra e o pool. */
+  pipelineId: string;
+  /**
+   * Responsável ATUAL da oportunidade. A distribuição por etapa só age quando
+   * este campo é nulo: tirar o cliente de quem já está negociando por causa de
+   * um arrasto seria pior do que não distribuir.
+   */
+  currentAssigneeId: string | null;
   /** Quem disparou a movimentação; nulo quando foi o sistema. */
   performedByUserId: string | null;
 }
@@ -177,6 +186,79 @@ async function runOne(
         toUserId: candidate.id,
         description: `Responsável definido pela automação da etapa: ${candidate.name}`,
         metadata: { automatica: true },
+      });
+      return;
+    }
+
+    case "auto_assign": {
+      /**
+       * DISTRIBUIR AO ENTRAR NA ETAPA.
+       *
+       * É o fluxo que o escritório descreve: o lead entra sem dono, alguém
+       * qualifica, e é ao chegar em "Qualificado" que ele cai na fila dos
+       * vendedores. Distribuir na entrada do funil encheria a fila de todo
+       * mundo com o que ainda nem é oportunidade.
+       *
+       * SÓ AGE COM O CARD SEM DONO. Redistribuir quem já está negociando
+       * tiraria o cliente da mão de quem o está atendendo, no meio da conversa
+       * — e por causa de um arrasto. Trocar de responsável de propósito
+       * continua sendo `assign_user`, ou a mão da supervisão.
+       */
+      if (context.currentAssigneeId || outcome.assignedUserId) {
+        deps.logger.info({
+          event: "crm_auto_assign_skipped",
+          opportunityId: context.opportunityId,
+          motivo: "ja_tem_responsavel",
+        });
+        return;
+      }
+
+      const pipeline = await prisma.crmPipeline.findFirst({
+        where: { id: context.pipelineId, organizationId: context.organizationId },
+        select: {
+          id: true,
+          assignmentMode: true,
+          assignmentFixedUserId: true,
+          assignees: { select: { userId: true } },
+        },
+      });
+      if (!pipeline) return;
+
+      const conversation = conversationId
+        ? await prisma.conversation.findUnique({
+            where: { id: conversationId },
+            select: { whatsappInstanceId: true, departmentId: true, assignedUserId: true },
+          })
+        : null;
+
+      const resultado = await resolveCrmAssignee(deps, {
+        organizationId: context.organizationId,
+        pipeline: {
+          ...pipeline,
+          // A regra da AÇÃO vence a do funil quando ela existe: a mesma etapa
+          // pode distribuir por rodízio num funil que, na criação, herda o
+          // atendimento. Nulo aqui significa "usa a regra do funil".
+          assignmentMode: action.assignmentMode ?? pipeline.assignmentMode,
+        },
+        conversation,
+        conversationAssigneeId: conversation?.assignedUserId ?? null,
+      });
+      if (!resultado.userId) return;
+
+      outcome.assignedUserId = resultado.userId;
+      const pessoa = await prisma.user.findFirst({
+        where: { id: resultado.userId },
+        select: { name: true },
+      });
+      await recordCrmEvent(prisma, {
+        organizationId: context.organizationId,
+        opportunityId: context.opportunityId,
+        type: "assignee_changed",
+        toUserId: resultado.userId,
+        description: `Distribuído ao entrar na etapa (${resultado.mode})${
+          pessoa ? `: ${pessoa.name}` : ""
+        }`,
+        metadata: { modo: resultado.mode, automatica: true, gatilho: "etapa" },
       });
       return;
     }

@@ -141,6 +141,8 @@ const PIPELINE_MANAGE_LABELS = {
 const stageActionSchema = z.object({
   trigger: z.enum(CRM_STAGE_ACTION_TRIGGERS).default("enter"),
   type: z.enum(CRM_STAGE_ACTION_TYPES),
+  /** Só de `auto_assign`: nulo = usa a regra de distribuição do funil. */
+  assignmentMode: z.enum(CRM_ASSIGNMENT_MODES).nullish(),
   tagId: z.string().uuid().nullish(),
   userId: z.string().uuid().nullish(),
   departmentId: z.string().uuid().nullish(),
@@ -1728,6 +1730,7 @@ function actionCreateData(action: z.infer<typeof stageActionSchema>, index: numb
     departmentId: action.departmentId ?? null,
     delayMinutes: action.delayMinutes,
     content: action.content ?? null,
+    assignmentMode: action.assignmentMode ?? null,
     position: index * 10,
   };
 }

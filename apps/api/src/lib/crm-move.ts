@@ -124,6 +124,8 @@ export async function moveCrmOpportunity(
     organizationId: input.organizationId,
     opportunityId: atual.id,
     conversationId: atual.conversationId,
+    pipelineId: atual.pipelineId,
+    currentAssigneeId: atual.assignedUserId,
     performedByUserId: input.performedByUserId,
   };
 

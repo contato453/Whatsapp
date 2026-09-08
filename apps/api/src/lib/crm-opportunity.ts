@@ -236,6 +236,11 @@ export async function createCrmOpportunity(
       organizationId: input.organizationId,
       opportunityId: created.id,
       conversationId: conversation?.id ?? null,
+      pipelineId: pipeline.id,
+      // Quem a distribuição da CRIAÇÃO já escolheu. Sem isso, a ação
+      // `auto_assign` da primeira etapa acharia o card órfão e distribuiria de
+      // novo, queimando dois números do rodízio de uma vez.
+      currentAssigneeId: input.assignedUserId ?? distribuicao?.userId ?? null,
       performedByUserId: input.performedByUserId,
     },
     "enter",

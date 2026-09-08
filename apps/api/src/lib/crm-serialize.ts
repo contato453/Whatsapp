@@ -71,6 +71,8 @@ export function serializeCrmStageAction(action: CrmStageAction) {
     departmentId: action.departmentId,
     delayMinutes: action.delayMinutes,
     content: action.content,
+    // Regra de distribuição desta ação (`auto_assign`); nulo = a do funil.
+    assignmentMode: action.assignmentMode,
     position: action.position,
   };
 }

@@ -2333,8 +2333,8 @@ vezes. O cancelamento (`lib/crm-follow-up.ts`) tem dois gatilhos: **o cliente re
 `crmOpportunityId`, então **agendamento que uma PESSOA marcou nunca é cancelado pelo CRM**.
 
 **Automações de etapa** (`lib/crm-stage-actions.ts`) são ações de ENTRADA e SAÍDA, e cada uma
-chama o caminho que a equipe já usa na mão: etiqueta, responsável, departamento, atividade,
-nota interna, mensagem agendada. Regras: ação que falha **não derruba a movimentação** do
+chama o caminho que a equipe já usa na mão: etiqueta, responsável, distribuição automática
+(`auto_assign`), departamento, atividade, nota interna, mensagem agendada. Regras: ação que falha **não derruba a movimentação** do
 card (vira log `crm_stage_action_failed`); ação que precisa de conversa é **pulada** na
 oportunidade avulsa; atribuição automática passa por `conversationAssigneeWhere`, a mesma
 régua da transferência manual; toda ação executada vira linha no histórico com autor nulo.
@@ -2343,6 +2343,16 @@ régua da transferência manual; toda ação executada vira linha no histórico 
 numa conversa abre o card na primeira etapa do funil — reusa a classificação que a equipe já
 faz, em vez de um gatilho por palavra-chave. Roda no fim de `POST /conversations/:id/tags/:tagId`
 e engole a própria falha: etiquetar não pode quebrar porque o CRM tropeçou.
+
+**A distribuição roda em DOIS momentos**, com a mesma tabela de modos: na CRIAÇÃO da
+oportunidade (regra do funil) e **ao ENTRAR numa etapa** (ação `auto_assign` daquela etapa,
+com `CrmStageAction.assignmentMode` — nulo usa a regra do funil). O segundo existe porque o
+momento certo de dar dono a um lead raramente é o primeiro contato: o escritório qualifica
+primeiro e distribui depois, quando já sabe que ali tem negócio; distribuir cedo demais enche
+a fila de todo mundo com o que ainda nem é oportunidade. **A distribuição por etapa só age
+com o card SEM responsável** — redistribuir tiraria o cliente da mão de quem já está
+negociando, no meio da conversa e por causa de um arrasto (trocar de propósito continua sendo
+`assign_user` ou a mão da supervisão), e o caso pulado vira log `crm_auto_assign_skipped`.
 
 **Distribuição automática das oportunidades novas** (`lib/crm-assignment.ts`), configurada
 por funil em `CrmPipeline.assignmentMode`: `inherit_conversation` (PADRÃO — quem já atende o

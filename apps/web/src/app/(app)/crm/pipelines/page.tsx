@@ -631,6 +631,7 @@ function StageModal({
           departmentId: acao.departmentId,
           delayMinutes: acao.delayMinutes,
           content: acao.content,
+          assignmentMode: acao.assignmentMode,
         })),
       );
       return;
@@ -713,6 +714,7 @@ function StageModal({
                     departmentId: null,
                     delayMinutes: 0,
                     content: null,
+                    assignmentMode: null,
                   },
                 ])
               }
@@ -824,6 +826,36 @@ function StageModal({
                             {item.name}
                           </option>
                         ))}
+                    </select>
+                  )}
+                  {acao.type === "auto_assign" && (
+                    <select
+                      value={acao.assignmentMode ?? ""}
+                      onChange={(event) =>
+                        setAcoes((atual) =>
+                          atual.map((item, i) =>
+                            i === indice
+                              ? {
+                                  ...item,
+                                  assignmentMode:
+                                    (event.target.value as CrmAssignmentMode) || null,
+                                }
+                              : item,
+                          ),
+                        )
+                      }
+                      className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs"
+                    >
+                      {/* Nulo = a regra que o funil já usa, que é o caso comum:
+                          uma regra só, aplicada onde o escritório mandar. */}
+                      <option value="">Usar a regra do funil</option>
+                      {CRM_ASSIGNMENT_MODES.filter(
+                        (modo) => modo !== "inherit_conversation" && modo !== "none",
+                      ).map((modo) => (
+                        <option key={modo} value={modo}>
+                          {CRM_ASSIGNMENT_MODE_LABELS[modo]}
+                        </option>
+                      ))}
                     </select>
                   )}
                   {acao.type === "change_department" && (

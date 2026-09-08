@@ -108,7 +108,17 @@ function fakePrisma(options: { usuarioAlcanca?: boolean; pendentes?: Array<{ id:
       },
       updateMany: async () => ({ count: 0 }),
     },
+    crmPipeline: {
+      findFirst: async () => ({
+        id: "funil-1",
+        assignmentMode: "round_robin",
+        assignmentFixedUserId: null,
+        assignees: [],
+      }),
+      update: async () => ({ assignmentCursor: 1 }),
+    },
     crmOpportunity: {
+      groupBy: async () => [],
       findMany: async () => [{ id: OPORTUNIDADE }],
       updateMany: async (args: Record<string, unknown>) => {
         gravado.opportunityUpdates.push(args);
@@ -153,6 +163,8 @@ function fakePrisma(options: { usuarioAlcanca?: boolean; pendentes?: Array<{ id:
         options.usuarioAlcanca === false
           ? null
           : { id: "user-2", name: "Marina", role: "agent", status: "active", avatarUrl: null },
+      // A distribuição (`auto_assign`) monta a fila de candidatos por aqui.
+      findMany: async () => (options.usuarioAlcanca === false ? [] : [{ id: "user-2" }]),
     },
     department: {
       findFirst: async () => ({ id: "dep-2", name: "Comercial" }),
@@ -181,6 +193,8 @@ const contexto = {
   organizationId: ORG,
   opportunityId: OPORTUNIDADE,
   conversationId: CONVERSA,
+  pipelineId: "funil-1",
+  currentAssigneeId: null,
   performedByUserId: "user-1",
 };
 
@@ -477,5 +491,90 @@ describe("mover o card: cancelar o follow-up ANTES de agendar o novo", () => {
     // movimentação, sem erro nenhum na tela.
     expect(ordem).toContain("agenda-novo");
     expect(ordem.indexOf("procura-pendentes")).toBeLessThan(ordem.indexOf("agenda-novo"));
+  });
+});
+
+
+/**
+ * DISTRIBUIR AO ENTRAR NA ETAPA — o gatilho que o escritório pediu.
+ *
+ * O momento certo de dar dono a um lead raramente é o primeiro contato: a
+ * equipe qualifica primeiro e distribui depois, quando já sabe que ali tem
+ * negócio. Estes casos trancam o comportamento e, principalmente, o limite
+ * dele: distribuição por etapa NUNCA tira o cliente de quem já está
+ * negociando.
+ */
+describe("auto_assign: distribuir ao entrar na etapa", () => {
+  it("card SEM dono entrando na etapa cai na fila de distribuição", async () => {
+    const outcome = await runStageActions(
+      fakeDeps(fakePrisma()),
+      [acao({ type: "auto_assign" })],
+      { ...contexto, currentAssigneeId: null },
+      "enter",
+    );
+    expect(outcome.assignedUserId).toBe("user-2");
+    const evento = gravado.events.find((item) => item.type === "assignee_changed");
+    expect(String(evento?.description)).toContain("Distribuído ao entrar na etapa");
+    expect(evento?.metadata).toMatchObject({ gatilho: "etapa", automatica: true });
+  });
+
+  it("CARD QUE JÁ TEM DONO NÃO É REDISTRIBUÍDO", async () => {
+    // Redistribuir tiraria o cliente da mão de quem está negociando, no meio da
+    // conversa e por causa de um arrasto. Trocar de responsável de propósito
+    // continua sendo `assign_user` ou a mão da supervisão.
+    const outcome = await runStageActions(
+      fakeDeps(fakePrisma()),
+      [acao({ type: "auto_assign" })],
+      { ...contexto, currentAssigneeId: "u-quem-ja-atende" },
+      "enter",
+    );
+    expect(outcome.assignedUserId).toBeUndefined();
+    expect(gravado.events.some((item) => item.type === "assignee_changed")).toBe(false);
+    expect(gravado.logs.some((log) => log.event === "crm_auto_assign_skipped")).toBe(true);
+  });
+
+  it("a regra da AÇÃO vence a do funil quando ela existe", async () => {
+    // A mesma etapa pode distribuir por menor carga num funil que, na criação,
+    // herda o atendimento.
+    const prisma = fakePrisma();
+    const consultadas: Array<Record<string, unknown>> = [];
+    (prisma as unknown as {
+      crmOpportunity: { groupBy: (args: Record<string, unknown>) => Promise<unknown[]> };
+    }).crmOpportunity.groupBy = async (args) => {
+      consultadas.push(args);
+      return [];
+    };
+    await runStageActions(
+      fakeDeps(prisma),
+      [acao({ type: "auto_assign", assignmentMode: "least_open" })],
+      { ...contexto, currentAssigneeId: null },
+      "enter",
+    );
+    // `least_open` é o único modo que consulta a carga por pessoa.
+    expect(consultadas).toHaveLength(1);
+  });
+
+  it("sem candidato elegível não atribui ninguém e não derruba a movimentação", async () => {
+    const prisma = fakePrisma({ usuarioAlcanca: false });
+    (prisma as unknown as { user: { findMany: () => Promise<unknown[]> } }).user.findMany =
+      async () => [];
+    const outcome = await runStageActions(
+      fakeDeps(prisma),
+      [acao({ type: "auto_assign" })],
+      { ...contexto, currentAssigneeId: null },
+      "enter",
+    );
+    expect(outcome.assignedUserId).toBeUndefined();
+    expect(gravado.logs.some((log) => log.event === "crm_stage_action_failed")).toBe(false);
+  });
+
+  it("vale também para o lead avulso: a ação NÃO exige conversa vinculada", async () => {
+    const outcome = await runStageActions(
+      fakeDeps(fakePrisma()),
+      [acao({ type: "auto_assign" })],
+      { ...contexto, conversationId: null, currentAssigneeId: null },
+      "enter",
+    );
+    expect(outcome.assignedUserId).toBe("user-2");
   });
 });

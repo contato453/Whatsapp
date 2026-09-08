@@ -1267,6 +1267,10 @@ enum CrmStageActionType {
   add_tag
   remove_tag
   assign_user
+  /// Distribui a oportunidade pela regra do funil (rodízio, menor carga...)
+  /// no momento em que ela ENTRA na etapa. Diferente de `assign_user`, que
+  /// manda para uma pessoa escolhida.
+  auto_assign
   change_department
   create_activity
   schedule_message
@@ -1296,6 +1300,10 @@ model CrmStageAction {
   delayMinutes Int                   @default(0)
   /// Texto da mensagem agendada, da nota interna ou título da atividade.
   content      String?
+  /// Regra de distribuição de `auto_assign`. Nulo = usa a regra configurada no
+  /// funil. Campo próprio (e não o `content`) porque é enum de verdade: a
+  /// gravação recusa valor inventado, e a tela monta o seletor do catálogo.
+  assignmentMode CrmAssignmentMode?
   position     Int                   @default(0)
   createdAt    DateTime              @default(now())
 

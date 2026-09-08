@@ -168,6 +168,19 @@ export const CRM_ASSIGNMENT_MODE_DESCRIPTIONS: Record<CrmAssignmentMode, string>
   none: "A oportunidade nasce sem responsável e aparece para todo mundo que enxerga o funil.",
 };
 
+/**
+ * A distribuição roda em DOIS momentos, e os dois usam esta mesma tabela de
+ * modos:
+ *
+ *   1. na CRIAÇÃO da oportunidade, pela regra do funil (`assignmentMode`);
+ *   2. ao ENTRAR numa etapa, pela ação `auto_assign` daquela etapa.
+ *
+ * O segundo existe porque o momento certo de dar dono a um lead raramente é o
+ * primeiro contato: o escritório qualifica primeiro e distribui depois, quando
+ * já sabe que ali tem negócio. Distribuir cedo demais enche a fila de todo
+ * mundo com o que ainda nem é oportunidade.
+ */
+
 /** Modos que precisam de uma lista de candidatos para escolher alguém. */
 export function crmAssignmentUsesPool(mode: CrmAssignmentMode): boolean {
   return mode === "round_robin" || mode === "least_open";
@@ -380,6 +393,7 @@ export const CRM_STAGE_ACTION_TYPES = [
   "add_tag",
   "remove_tag",
   "assign_user",
+  "auto_assign",
   "change_department",
   "create_activity",
   "schedule_message",
@@ -391,6 +405,7 @@ export const CRM_STAGE_ACTION_TYPE_LABELS: Record<CrmStageActionType, string> = 
   add_tag: "Adicionar etiqueta na conversa",
   remove_tag: "Remover etiqueta da conversa",
   assign_user: "Definir responsável da oportunidade",
+  auto_assign: "Distribuir automaticamente (rodízio, menor carga...)",
   change_department: "Mudar o departamento da oportunidade",
   create_activity: "Criar atividade",
   schedule_message: "Agendar mensagem de follow-up",
@@ -401,6 +416,8 @@ export const CRM_STAGE_ACTION_TYPE_HINTS: Record<CrmStageActionType, string> = {
   add_tag: "Usa as etiquetas que já existem no escritório — nada de lista paralela.",
   remove_tag: "Tira a etiqueta da conversa vinculada, se ela estiver lá.",
   assign_user: "Só vale para quem enxerga a conversa; quem não enxerga é recusado.",
+  auto_assign:
+    "Ao ENTRAR nesta etapa, o card cai na fila de distribuição do funil (rodízio, menor carga...). Só distribui quando a oportunidade ainda está SEM responsável — quem já está negociando não perde o cliente por causa de um arrasto.",
   change_department: "Muda o departamento da oportunidade, não o da conversa.",
   create_activity: "Abre uma tarefa com prazo contado a partir da entrada na etapa.",
   schedule_message:

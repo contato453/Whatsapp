@@ -629,6 +629,8 @@ export interface CrmStageActionDto {
   departmentId: string | null;
   delayMinutes: number;
   content: string | null;
+  /** Só de `auto_assign`: nulo = usa a regra de distribuição do funil. */
+  assignmentMode: CrmAssignmentMode | null;
   position: number;
 }
 
