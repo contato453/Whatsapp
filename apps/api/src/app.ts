@@ -14,6 +14,7 @@ import { conversationRoutes } from "./modules/conversations/routes.js";
 import { messageRoutes } from "./modules/messages/routes.js";
 import { callRoutes } from "./modules/calls/routes.js";
 import { quickReplyRoutes } from "./modules/quick-replies/routes.js";
+import { followUpRoutes } from "./modules/follow-up/routes.js";
 import { scheduledMessageRoutes } from "./modules/scheduled-messages/routes.js";
 import { attendanceSettingsRoutes } from "./modules/attendance-settings/routes.js";
 import { dashboardRoutes } from "./modules/dashboard/routes.js";
@@ -25,6 +26,8 @@ import { financeiroLembreteRoutes } from "./modules/integrations/financeiro-lemb
 import { integrationMessageApiRoutes } from "./modules/integrations/message-api.js";
 import { astracallsWebhookRoutes } from "./modules/integrations/astracalls-webhook.js";
 import { permissionRoutes } from "./modules/permissions/routes.js";
+import { automationRoutes } from "./modules/automation/routes.js";
+import { aiRoutes } from "./modules/ai/routes.js";
 import { crmRoutes } from "./modules/crm/routes.js";
 import { organizationRoutes } from "./modules/organization/routes.js";
 import type { AppDeps } from "./types.js";
@@ -76,6 +79,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     await messageRoutes(instance, deps);
     await callRoutes(instance, deps);
     await quickReplyRoutes(instance, deps);
+    await followUpRoutes(instance, deps);
     await scheduledMessageRoutes(instance, deps);
     await attendanceSettingsRoutes(instance, deps);
     await dashboardRoutes(instance, deps);
@@ -87,6 +91,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     await integrationMessageApiRoutes(instance, deps);
     await astracallsWebhookRoutes(instance, deps);
     await permissionRoutes(instance, deps);
+    await automationRoutes(instance, deps);
+    await aiRoutes(instance, deps);
     await crmRoutes(instance, deps);
     await organizationRoutes(instance, deps);
   });

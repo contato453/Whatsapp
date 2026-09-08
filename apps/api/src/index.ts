@@ -11,8 +11,13 @@ import { AuditService } from "./modules/audit/service.js";
 import { MessageIngestService } from "./services/message-ingest.js";
 import { InstanceManager } from "./services/instance-manager.js";
 import { ScheduledMessageWorker } from "./services/scheduler.js";
+import { AutomationEngine } from "./services/automation/engine.js";
+import { AutomationWorker } from "./services/automation/worker.js";
+import { FollowUpScheduler } from "./services/follow-up-scheduler.js";
 import { SessionScheduleWatcher } from "./services/session-schedule-watcher.js";
 import { createAzevedoOsClient } from "./services/azevedo-os-client.js";
+import { createSecretCipher } from "./lib/ai-secrets.js";
+import { AiRuntime } from "./services/ai/runtime.js";
 import { loadConversationAccess } from "./lib/access.js";
 import type { AuthTokenPayload } from "./lib/auth.js";
 import type { AppDeps } from "./types.js";
@@ -48,6 +53,17 @@ async function main(): Promise<void> {
     logger.warn(
       { event: "azevedo_os_integration_disabled", missingVars: azevedoOs.missingVars },
       "Integração com o Azevedo-OS desligada: defina as variáveis que faltam no .env da VPS (ou nos segredos do GitHub, se o deploy por SSH estiver ligado)",
+    );
+  }
+
+  // Cifra da chave de API dos provedores de IA. Sem AI_SECRETS_KEY ela cai
+  // na derivação do JWT_SECRET — funciona, mas avisa: trocar o JWT_SECRET
+  // nesse modo invalida a chave gravada.
+  const aiCipher = createSecretCipher({ aiSecretsKey: config.AI_SECRETS_KEY, jwtSecret: config.JWT_SECRET });
+  if (!aiCipher.dedicatedKey) {
+    logger.warn(
+      { event: "ai_secrets_key_missing" },
+      "AI_SECRETS_KEY não definida: a chave do provedor de IA está cifrada com derivação do JWT_SECRET (gere uma com `openssl rand -hex 32`)",
     );
   }
 
@@ -88,7 +104,8 @@ async function main(): Promise<void> {
     audit,
     ingest,
     azevedoOs,
-    // io e instanceManager são atribuídos logo abaixo, antes de listen().
+    aiCipher,
+    // io, instanceManager e aiRuntime são atribuídos logo abaixo, antes de listen().
   } as unknown as AppDeps;
 
   const app = await buildApp(deps);
@@ -106,6 +123,22 @@ async function main(): Promise<void> {
   });
   deps.io = io;
 
+  // Motor do atendimento por IA — nasce ANTES do de automações porque o
+  // bloco "Atendimento por IA" do construtor de fluxos entrega a conversa a
+  // ele (`startSessionForFlow`); a volta (sessão terminou, retomar o fluxo)
+  // não usa chamada direta, é varredura no `tick()`, então esta é a ÚNICA
+  // direção de acoplamento entre os dois motores.
+  const aiRuntime = new AiRuntime({ prisma, io, logger: logger.child({ module: "ai" }), provider, audit, azevedoOs, cipher: aiCipher });
+  deps.aiRuntime = aiRuntime;
+
+  // Motor de automações (construtor visual de fluxos) — precisa do `io`
+  // (eventos de tempo real) e do `provider` (envio das mensagens do fluxo),
+  // então nasce aqui, depois do socket. `InstanceManager` o recebe para
+  // acionar os gatilhos de mensagem logo depois que `ingest` grava a
+  // mensagem recebida.
+  const automation = new AutomationEngine(prisma, provider, io, logger, aiRuntime);
+  deps.automation = automation;
+
   const instanceManager = new InstanceManager(
     prisma,
     provider,
@@ -114,12 +147,22 @@ async function main(): Promise<void> {
     audit,
     storage,
     logger,
+    automation,
+    azevedoOs,
+    aiRuntime,
   );
   instanceManager.wireProviderEvents();
   deps.instanceManager = instanceManager;
+  aiRuntime.start();
 
   const scheduler = new ScheduledMessageWorker(prisma, provider, io, logger);
   scheduler.start();
+
+  const automationWorker = new AutomationWorker(automation, logger);
+  automationWorker.start();
+
+  const followUpScheduler = new FollowUpScheduler(prisma, provider, io, logger, azevedoOs);
+  followUpScheduler.start();
 
   // Avisa e encerra as abas quando o horário de uso fecha. A API já recusa
   // requisição fora do horário; sem este vigia, a aba parada continuaria
@@ -141,7 +184,10 @@ async function main(): Promise<void> {
     logger.info({ event: "shutdown", signal });
     try {
       scheduler.stop();
+      automationWorker.stop();
+      followUpScheduler.stop();
       sessionScheduleWatcher.stop();
+      aiRuntime.stop();
       await provider.shutdownAll();
       io.close();
       await app.close();

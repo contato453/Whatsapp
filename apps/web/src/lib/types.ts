@@ -1,4 +1,9 @@
 import type {
+  AiSessionDto,
+  AutomationExecutionStatus,
+  AutomationFlowStatus,
+  AutomationGraph,
+  AutomationTriggerType,
   ConnectionStatus,
   CrmAssignmentMode,
   CrmActivityPriority,
@@ -21,6 +26,7 @@ import type {
   ParticipantClientRole,
   PermissionAction,
   QuickReplyMediaType,
+  ScheduleMode,
   UserRole,
 } from "@azvchat/shared";
 
@@ -406,6 +412,11 @@ export interface ConversationDetailDto {
   group: GroupDetailDto | null;
   assignmentHistory: AssignmentHistoryDto[];
   notes: NoteDto[];
+  /**
+   * Atendimento por IA mais recente da conversa (ativo ou encerrado); nulo
+   * quando nunca houve. Depois da carga, o evento `ai:session` mantém em dia.
+   */
+  aiSession: AiSessionDto | null;
 }
 
 export interface ScheduledMessageDto {
@@ -439,6 +450,93 @@ export interface QuickReplyDto {
   /** Último ENVIO pelo composer; null = nunca usada desde que existe o registro. */
   lastUsedAt: string | null;
   createdAt: string;
+}
+
+/* ------------------------------------------------------------------ *
+ * Follow-up automático
+ * ------------------------------------------------------------------ */
+
+export type FollowUpRuleStatus = "active" | "inactive";
+export type FollowUpTimeUnit = "minutes" | "hours" | "days";
+export type FollowUpStepAction = "send_message" | "add_tag" | "remove_tag" | "change_status";
+export type FollowUpTrigger = "waiting_client";
+export type FollowUpExecutionStatus = "active" | "paused" | "canceled" | "completed" | "failed";
+export type FollowUpLogEventType =
+  | "started"
+  | "step_executed"
+  | "step_failed"
+  | "restarted"
+  | "canceled"
+  | "paused"
+  | "resumed"
+  | "postponed"
+  | "completed";
+
+export interface FollowUpRuleStepDto {
+  id: string;
+  order: number;
+  waitAmount: number;
+  waitUnit: FollowUpTimeUnit;
+  action: FollowUpStepAction;
+  messageContent: string | null;
+  tagId: string | null;
+  newStatus: ConversationStatus | null;
+}
+
+export interface FollowUpRuleDto {
+  id: string;
+  name: string;
+  description: string | null;
+  status: FollowUpRuleStatus;
+  isGeneral: boolean;
+  departments: ResourceDepartmentDto[];
+  trigger: FollowUpTrigger;
+  respectBusinessHours: boolean;
+  whatsappInstance: { id: string; name: string } | null;
+  finalizeOnComplete: boolean;
+  finalizeReason: string;
+  finalizeTag: { id: string; name: string; color: string } | null;
+  steps: FollowUpRuleStepDto[];
+  createdAt: string;
+  updatedAt: string;
+  /** Só na listagem — ver `lib/serialize.ts` (`serializeFollowUpRule` + estatísticas na rota). */
+  activeExecutions?: number;
+  messagesSent?: number;
+}
+
+export interface FollowUpExecutionLogDto {
+  id: string;
+  eventType: FollowUpLogEventType;
+  stepOrder: number | null;
+  actorUserId: string | null;
+  messageId: string | null;
+  detail: string | null;
+  createdAt: string;
+}
+
+export interface FollowUpExecutionDto {
+  id: string;
+  ruleId: string;
+  ruleName: string | null;
+  conversationId: string;
+  conversation?: {
+    id: string;
+    title: string;
+    departmentId: string | null;
+    departmentName: string | null;
+    instanceId: string | null;
+    instanceName: string | null;
+  } | null;
+  status: FollowUpExecutionStatus;
+  currentStepOrder: number;
+  totalSteps?: number;
+  nextRunAt: string | null;
+  pauseUntil: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  finishReason: string | null;
+  messagesSentCount: number;
+  logs?: FollowUpExecutionLogDto[];
 }
 
 export interface AgentReportRowDto {
@@ -613,6 +711,78 @@ export interface CompanyFilterStateDto {
   truncated: boolean;
   /** Conversas do recorte atual que ficaram de fora por não terem empresa. */
   unlinkedExcluded: number;
+}
+
+/* ------------------------------------------------------------------ *
+ * Automações
+ * ------------------------------------------------------------------ */
+
+export interface AutomationFlowSummaryDto {
+  id: string;
+  name: string;
+  description: string | null;
+  status: AutomationFlowStatus;
+  triggerType: AutomationTriggerType;
+  whatsappInstanceId: string | null;
+  instanceName: string | null;
+  priority: number;
+  cooldownMinutes: number;
+  scheduleMode: ScheduleMode;
+  hasPublishedVersion: boolean;
+  executionsCount: number;
+  updatedAt: string;
+}
+
+export interface AutomationFlowDetailDto extends AutomationFlowSummaryDto {
+  triggerConfig: Record<string, unknown> | null;
+  draftGraph: AutomationGraph;
+  publishedGraph: AutomationGraph | null;
+  publishedVersion: number | null;
+}
+
+export interface AutomationTemplateSummaryDto {
+  key: string;
+  name: string;
+  description: string;
+  category: string;
+  triggerType: AutomationTriggerType;
+}
+
+export interface AutomationFlowProblemDto {
+  nodeId?: string;
+  message: string;
+}
+
+export interface AutomationExecutionLogDto {
+  id: string;
+  at: string;
+  nodeId: string | null;
+  nodeType: string | null;
+  level: string;
+  event: string;
+  message: string | null;
+  data: Record<string, unknown> | null;
+}
+
+export interface AutomationExecutionSummaryDto {
+  id: string;
+  flowId: string;
+  flowName: string;
+  conversationId: string;
+  conversationTitle: string;
+  whatsappInstanceId: string;
+  status: AutomationExecutionStatus;
+  triggerType: AutomationTriggerType;
+  resultSummary: string | null;
+  error: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export interface AutomationExecutionDetailDto extends AutomationExecutionSummaryDto {
+  context: Record<string, unknown>;
+  currentNodeId: string | null;
+  logs: AutomationExecutionLogDto[];
 }
 
 // ============================================================

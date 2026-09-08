@@ -13,6 +13,7 @@ import {
   minutesOfDay,
 } from "../../lib/attendance-settings.js";
 import { authenticate } from "../../lib/auth.js";
+import { AppError } from "../../lib/errors.js";
 import { requirePermission } from "../../lib/permissions.js";
 import { serializeAttendanceSettings } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
@@ -75,6 +76,21 @@ function weekScheduleSchema() {
  * servidor sem ninguém perceber. Ele vale para as duas faixas: o horário de
  * login é lido no relógio do escritório, nunca no UTC do container.
  */
+const greetingSchema = z.object({
+  enabled: z.boolean(),
+  message: z.string().max(2000),
+  firstContactOnly: z.boolean(),
+  cooldownMinutes: z.number().int().min(0).max(10_080),
+  whatsappInstanceId: z.string().uuid().nullable(),
+});
+
+const outOfHoursSchema = z.object({
+  enabled: z.boolean(),
+  message: z.string().max(2000),
+  cooldownMinutes: z.number().int().min(0).max(10_080),
+  whatsappInstanceId: z.string().uuid().nullable(),
+});
+
 export const attendanceSettingsSchema = z.object({
   responseLimitMinutes: z
     .number()
@@ -87,6 +103,8 @@ export const attendanceSettingsSchema = z.object({
   businessHours: weekScheduleSchema(),
   loginRestrictionEnabled: z.boolean(),
   loginHours: weekScheduleSchema(),
+  greeting: greetingSchema,
+  outOfHours: outOfHoursSchema,
 });
 
 export type AttendanceSettingsInput = z.infer<typeof attendanceSettingsSchema>;
@@ -124,6 +142,17 @@ export async function attendanceSettingsRoutes(
       const organizationId = request.user.organizationId;
       const before = await loadAttendanceSettings(deps.prisma, organizationId);
 
+      // Número específico da saudação/fora-do-expediente precisa ser desta
+      // organização — senão a mensagem automática apontaria para um número
+      // de outro tenant (ou id inventado) e nunca dispararia.
+      for (const instanceId of [input.greeting.whatsappInstanceId, input.outOfHours.whatsappInstanceId]) {
+        if (!instanceId) continue;
+        const instance = await deps.prisma.whatsAppInstance.findFirst({ where: { id: instanceId, organizationId } });
+        if (!instance) {
+          throw new AppError("Número de WhatsApp inválido para a mensagem automática.", 404, "not_found");
+        }
+      }
+
       const saved = await deps.prisma.$transaction(async (tx) => {
         const settings = await tx.attendanceSettings.upsert({
           where: { organizationId },
@@ -134,11 +163,29 @@ export async function attendanceSettingsRoutes(
             responseLimitMinutes: input.responseLimitMinutes,
             timezone: input.timezone,
             loginRestrictionEnabled: input.loginRestrictionEnabled,
+            greetingEnabled: input.greeting.enabled,
+            greetingMessage: input.greeting.message,
+            greetingFirstContactOnly: input.greeting.firstContactOnly,
+            greetingCooldownMinutes: input.greeting.cooldownMinutes,
+            greetingInstanceId: input.greeting.whatsappInstanceId,
+            outOfHoursEnabled: input.outOfHours.enabled,
+            outOfHoursMessage: input.outOfHours.message,
+            outOfHoursCooldownMinutes: input.outOfHours.cooldownMinutes,
+            outOfHoursInstanceId: input.outOfHours.whatsappInstanceId,
           },
           update: {
             responseLimitMinutes: input.responseLimitMinutes,
             timezone: input.timezone,
             loginRestrictionEnabled: input.loginRestrictionEnabled,
+            greetingEnabled: input.greeting.enabled,
+            greetingMessage: input.greeting.message,
+            greetingFirstContactOnly: input.greeting.firstContactOnly,
+            greetingCooldownMinutes: input.greeting.cooldownMinutes,
+            greetingInstanceId: input.greeting.whatsappInstanceId,
+            outOfHoursEnabled: input.outOfHours.enabled,
+            outOfHoursMessage: input.outOfHours.message,
+            outOfHoursCooldownMinutes: input.outOfHours.cooldownMinutes,
+            outOfHoursInstanceId: input.outOfHours.whatsappInstanceId,
           },
         });
         // A semana chega inteira e substitui a inteira: é mais simples de
@@ -188,6 +235,8 @@ export async function attendanceSettingsRoutes(
             after: after.loginRestrictionEnabled,
           },
           loginHours: { before: before.loginHours, after: after.loginHours },
+          greeting: { before: before.greeting, after: after.greeting },
+          outOfHours: { before: before.outOfHours, after: after.outOfHours },
         },
         ip: request.ip,
       });

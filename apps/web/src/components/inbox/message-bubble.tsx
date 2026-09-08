@@ -28,9 +28,11 @@ import {
   User,
   Video,
   XCircle,
+  Bot,
 } from "lucide-react";
 import {
   EDIT_CONTENT_UNAVAILABLE_HINT,
+  isAiMessage,
   EDIT_CONTENT_UNAVAILABLE_LABEL,
   isEditContentUnavailable,
   isEditableMessageType,
@@ -570,7 +572,14 @@ export function MessageBubble({
           </p>
         )}
         {outbound && message.senderName && showSender && (
-          <p className="mb-0.5 text-xs font-semibold text-chat-sent-meta">{message.senderName}</p>
+          <p className="mb-0.5 flex items-center gap-1 text-xs font-semibold text-chat-sent-meta">
+            {/* Mensagem gerada pela IA: o ícone diz de onde saiu, e o nome é o
+                do agente. A origem mora em `metadata.origem` (nunca deduzida
+                do texto), para a auditoria e a tela concordarem. */}
+            {isAiMessage(message.metadata) && <Bot className="h-3 w-3" aria-label="Enviada pela IA" />}
+            {message.senderName}
+            {isAiMessage(message.metadata) && <span className="font-normal opacity-60">· IA</span>}
+          </p>
         )}
 
         {/* Pré-visualização da mensagem citada. Vira botão quando a original

@@ -120,6 +120,14 @@ const envSchema = z.object({
    * escritório apertar sem mexer no código. O 429 sai por token, não por IP.
    */
   INTEGRATION_TOKEN_RATE_LIMIT_PER_MINUTE: z.coerce.number().min(1).max(100_000).default(60),
+
+  /**
+   * Chave de cifra (32 bytes em hex, `openssl rand -hex 32`) da chave de API
+   * dos provedores de IA, que fica cifrada no banco (ver `lib/ai-secrets.ts`).
+   * Opcional: sem ela a cifra deriva do JWT_SECRET, e o boot avisa — trocar
+   * o JWT_SECRET nesse modo invalida a chave gravada (a tela pede de novo).
+   */
+  AI_SECRETS_KEY: optionalEnv(z.string().regex(/^[0-9a-fA-F]{64}$/, "AI_SECRETS_KEY deve ter 64 caracteres hexadecimais")),
 });
 
 export type AppConfig = ReturnType<typeof loadConfig>;

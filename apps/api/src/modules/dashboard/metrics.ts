@@ -27,7 +27,7 @@ import {
  */
 const MAX_BUSINESS_DAYS_SCANNED = 400;
 
-interface CivilDate {
+export interface CivilDate {
   year: number;
   month: number;
   day: number;
@@ -109,7 +109,7 @@ export function weekdayOf(date: CivilDate): Weekday {
   return new Date(Date.UTC(date.year, date.month - 1, date.day)).getUTCDay() as Weekday;
 }
 
-function addCivilDays(date: CivilDate, days: number): CivilDate {
+export function addCivilDays(date: CivilDate, days: number): CivilDate {
   const moved = new Date(Date.UTC(date.year, date.month - 1, date.day + days));
   return {
     year: moved.getUTCFullYear(),

@@ -142,6 +142,50 @@ export function loginScheduleWarning(minutesLeft: number): string {
 export const SESSION_CLOSED_MESSAGE =
   "O horário de uso do sistema terminou. Peça autorização ao supervisor para continuar.";
 
+/**
+ * Mensagem automática de saudação — dispara na primeira mensagem que uma
+ * conversa recebe (seção 4). Mora junto de `AttendanceSettings`, e não em
+ * tabela própria: é parâmetro de atendimento do escritório inteiro, como o
+ * SLA e o expediente.
+ */
+export interface GreetingSettings {
+  enabled: boolean;
+  message: string;
+  /** true = só na primeira mensagem da conversa. false = repete respeitando `cooldownMinutes`. */
+  firstContactOnly: boolean;
+  cooldownMinutes: number;
+  /** Número específico, ou null = todos os números conectados. */
+  whatsappInstanceId: string | null;
+}
+
+/** Mensagem automática de fora do expediente (seção 5). Mesma casa da saudação. */
+export interface OutOfHoursSettings {
+  enabled: boolean;
+  message: string;
+  cooldownMinutes: number;
+  whatsappInstanceId: string | null;
+}
+
+export const DEFAULT_GREETING_MESSAGE = "Olá, {{primeiro_nome}}! Seja bem-vindo. Como podemos ajudar?";
+
+export const DEFAULT_OUT_OF_HOURS_MESSAGE =
+  "Olá! Nosso atendimento está encerrado neste momento. Sua mensagem foi recebida e retornaremos no próximo período de atendimento.";
+
+export const DEFAULT_GREETING_SETTINGS: GreetingSettings = {
+  enabled: false,
+  message: DEFAULT_GREETING_MESSAGE,
+  firstContactOnly: true,
+  cooldownMinutes: 360,
+  whatsappInstanceId: null,
+};
+
+export const DEFAULT_OUT_OF_HOURS_SETTINGS: OutOfHoursSettings = {
+  enabled: false,
+  message: DEFAULT_OUT_OF_HOURS_MESSAGE,
+  cooldownMinutes: 180,
+  whatsappInstanceId: null,
+};
+
 export interface AttendanceSettings {
   responseLimitMinutes: number;
   timezone: string;
@@ -151,6 +195,8 @@ export interface AttendanceSettings {
   loginRestrictionEnabled: boolean;
   /** Sempre os sete dias, do domingo ao sábado, em ordem. */
   loginHours: LoginHours[];
+  greeting: GreetingSettings;
+  outOfHours: OutOfHoursSettings;
 }
 
 /** Segunda a sexta das 08:00 às 18:00; sábado e domingo desligados. */
@@ -173,7 +219,39 @@ export const DEFAULT_ATTENDANCE_SETTINGS: AttendanceSettings = {
   businessHours: DEFAULT_BUSINESS_HOURS,
   loginRestrictionEnabled: DEFAULT_LOGIN_RESTRICTION_ENABLED,
   loginHours: DEFAULT_LOGIN_HOURS,
+  greeting: DEFAULT_GREETING_SETTINGS,
+  outOfHours: DEFAULT_OUT_OF_HOURS_SETTINGS,
 };
+
+/**
+ * Quando um fluxo de automação ou um agente de IA está autorizado a agir,
+ * em relação ao MESMO expediente cadastrado acima — nunca um horário
+ * paralelo. Fonte única para as duas telas (fluxo e agente), porque a
+ * pergunta e as três respostas possíveis são idênticas nos dois lugares.
+ *
+ * `outside_business_hours` existe porque o caso de uso real é o inverso do
+ * que se imagina de cara: não é "trava a IA para não incomodar de
+ * madrugada", é "a IA cobre a noite e o fim de semana, quando não tem
+ * ninguém da equipe — de dia, quem atende é gente". Sem esse terceiro
+ * valor, dar cobertura fora do expediente exigiria desligar o expediente
+ * inteiro (e perder a régua de atraso do dashboard) só para a IA poder
+ * trabalhar à noite.
+ */
+export const SCHEDULE_MODES = ["always", "business_hours", "outside_business_hours"] as const;
+export type ScheduleMode = (typeof SCHEDULE_MODES)[number];
+export const SCHEDULE_MODE_LABELS: Record<ScheduleMode, string> = {
+  always: "A qualquer hora",
+  business_hours: "Só dentro do expediente",
+  outside_business_hours: "Só fora do expediente",
+};
+export const SCHEDULE_MODE_HINTS: Record<ScheduleMode, string> = {
+  always: "Funciona a qualquer momento, dentro ou fora do horário cadastrado em Parâmetros.",
+  business_hours:
+    "Só entra em ação durante o expediente cadastrado em Parâmetros — fora dele, fica em silêncio.",
+  outside_business_hours:
+    "Só entra em ação FORA do expediente cadastrado em Parâmetros — cobre a noite e o fim de semana enquanto a equipe não está; durante o expediente, quem atende é a equipe.",
+};
+export const DEFAULT_SCHEDULE_MODE: ScheduleMode = "always";
 
 /**
  * Atalhos de período do dashboard. São janelas contadas para trás a partir

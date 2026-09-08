@@ -36,6 +36,19 @@ export async function loadAttendanceSettings(
     businessHours: normalizeBusinessHours(row.businessHours),
     loginRestrictionEnabled: row.loginRestrictionEnabled,
     loginHours: normalizeLoginHours(row.loginHours),
+    greeting: {
+      enabled: row.greetingEnabled,
+      message: row.greetingMessage ?? DEFAULT_ATTENDANCE_SETTINGS.greeting.message,
+      firstContactOnly: row.greetingFirstContactOnly,
+      cooldownMinutes: row.greetingCooldownMinutes,
+      whatsappInstanceId: row.greetingInstanceId,
+    },
+    outOfHours: {
+      enabled: row.outOfHoursEnabled,
+      message: row.outOfHoursMessage ?? DEFAULT_ATTENDANCE_SETTINGS.outOfHours.message,
+      cooldownMinutes: row.outOfHoursCooldownMinutes,
+      whatsappInstanceId: row.outOfHoursInstanceId,
+    },
   };
 }
 

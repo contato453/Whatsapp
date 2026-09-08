@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Clock, LogIn, Save, SlidersHorizontal, TriangleAlert } from "lucide-react";
+import { BellRing, Clock, LogIn, MoonStar, Save, SlidersHorizontal, TriangleAlert } from "lucide-react";
 import {
   DEFAULT_ATTENDANCE_SETTINGS,
   LOGIN_SCHEDULE_WARNING_MINUTES,
@@ -13,11 +13,14 @@ import {
   WEEKDAY_LABELS,
   type AttendanceSettings,
   type BusinessHours,
+  type GreetingSettings,
   type LoginHours,
+  type OutOfHoursSettings,
   type Weekday,
 } from "@azvchat/shared";
-import { ApiError, attendanceSettingsApi } from "@/lib/api";
-import { Button, Card, Field, Input, Spinner } from "@/components/ui";
+import { api, ApiError, attendanceSettingsApi } from "@/lib/api";
+import { Button, Card, Field, Input, Spinner, Textarea } from "@/components/ui";
+import type { InstanceDto } from "@/lib/types";
 
 /**
  * Fusos oferecidos quando o navegador não sabe listar os dele. Cobrem o
@@ -193,6 +196,32 @@ function WeekSchedule({
   );
 }
 
+/** Seletor "todos os números ou um específico" — usado nas duas mensagens automáticas. */
+function InstanceSelect({
+  instances,
+  value,
+  onChange,
+}: {
+  instances: InstanceDto[];
+  value: string | null;
+  onChange: (value: string | null) => void;
+}) {
+  return (
+    <select
+      value={value ?? ""}
+      onChange={(event) => onChange(event.target.value || null)}
+      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+    >
+      <option value="">Todos os números</option>
+      {instances.map((instance) => (
+        <option key={instance.id} value={instance.id}>
+          {instance.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 export default function AttendanceSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -216,6 +245,9 @@ export default function AttendanceSettingsPage() {
   const [loginHours, setLoginHours] = useState<LoginHours[]>(
     DEFAULT_ATTENDANCE_SETTINGS.loginHours,
   );
+  const [greeting, setGreeting] = useState<GreetingSettings>(DEFAULT_ATTENDANCE_SETTINGS.greeting);
+  const [outOfHours, setOutOfHours] = useState<OutOfHoursSettings>(DEFAULT_ATTENDANCE_SETTINGS.outOfHours);
+  const [instances, setInstances] = useState<InstanceDto[]>([]);
 
   const timezones = useMemo(listTimezones, []);
 
@@ -228,11 +260,19 @@ export default function AttendanceSettingsPage() {
         setBusinessHours(settings.businessHours);
         setLoginRestrictionEnabled(settings.loginRestrictionEnabled);
         setLoginHours(settings.loginHours);
+        setGreeting(settings.greeting);
+        setOutOfHours(settings.outOfHours);
       })
       .catch((err) =>
         setLoadError(err instanceof Error ? err.message : "Falha ao carregar os parâmetros"),
       )
       .finally(() => setLoading(false));
+    // Só para o seletor "número específico" das mensagens automáticas —
+    // conexões existentes ou não não bloqueia a tela de parâmetros.
+    api
+      .get<{ instances: InstanceDto[] }>("/whatsapp-instances")
+      .then((data) => setInstances(data.instances))
+      .catch(() => setInstances([]));
   }, []);
 
   const limit = Number(limitInput);
@@ -271,6 +311,8 @@ export default function AttendanceSettingsPage() {
       businessHours,
       loginRestrictionEnabled,
       loginHours,
+      greeting,
+      outOfHours,
     };
     setSaving(true);
     try {
@@ -280,6 +322,8 @@ export default function AttendanceSettingsPage() {
       setBusinessHours(settings.businessHours);
       setLoginRestrictionEnabled(settings.loginRestrictionEnabled);
       setLoginHours(settings.loginHours);
+      setGreeting(settings.greeting);
+      setOutOfHours(settings.outOfHours);
       setSaved(true);
     } catch (err) {
       setSaveError(
@@ -443,6 +487,156 @@ export default function AttendanceSettingsPage() {
             fieldPrefix="Login"
             onChange={updateLoginDay}
           />
+        </Card>
+
+        <Card className="p-6">
+          <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
+            <BellRing className="h-4 w-4 text-slate-400" />
+            Mensagem automática de saudação
+          </h2>
+          <p className="mb-4 text-sm text-slate-500">
+            Dispara sozinha quando chega mensagem numa conversa nova. Aceita variáveis, como{" "}
+            <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">{"{{primeiro_nome}}"}</code>.
+          </p>
+          <label className="mb-4 flex items-start gap-2.5 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={greeting.enabled}
+              onChange={(event) => {
+                setGreeting((current) => ({ ...current, enabled: event.target.checked }));
+                setSaved(false);
+              }}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500/30"
+            />
+            <span className="font-medium text-slate-900">Ativar saudação automática</span>
+          </label>
+          {greeting.enabled && (
+            <div className="space-y-4">
+              <Field label="Mensagem">
+                <Textarea
+                  rows={2}
+                  value={greeting.message}
+                  onChange={(event) => {
+                    setGreeting((current) => ({ ...current, message: event.target.value }));
+                    setSaved(false);
+                  }}
+                />
+              </Field>
+              <label className="flex items-start gap-2.5 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={greeting.firstContactOnly}
+                  onChange={(event) => {
+                    setGreeting((current) => ({ ...current, firstContactOnly: event.target.checked }));
+                    setSaved(false);
+                  }}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500/30"
+                />
+                <span>
+                  <span className="font-medium text-slate-900">Só no primeiro contato</span>
+                  <span className="block text-xs text-slate-500">
+                    Desligado, repete sempre que passar o intervalo mínimo abaixo.
+                  </span>
+                </span>
+              </label>
+              <div className="flex flex-wrap gap-4">
+                <div className="w-40">
+                  <Field label="Intervalo mínimo (min)">
+                    <Input
+                      type="number"
+                      min={0}
+                      value={greeting.cooldownMinutes}
+                      onChange={(event) => {
+                        setGreeting((current) => ({
+                          ...current,
+                          cooldownMinutes: Number(event.target.value) || 0,
+                        }));
+                        setSaved(false);
+                      }}
+                    />
+                  </Field>
+                </div>
+                <div className="min-w-[14rem] flex-1">
+                  <Field label="Número">
+                    <InstanceSelect
+                      instances={instances}
+                      value={greeting.whatsappInstanceId}
+                      onChange={(value) => {
+                        setGreeting((current) => ({ ...current, whatsappInstanceId: value }));
+                        setSaved(false);
+                      }}
+                    />
+                  </Field>
+                </div>
+              </div>
+            </div>
+          )}
+        </Card>
+
+        <Card className="p-6">
+          <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
+            <MoonStar className="h-4 w-4 text-slate-400" />
+            Mensagem automática de fora do expediente
+          </h2>
+          <p className="mb-4 text-sm text-slate-500">
+            Dispara quando chega mensagem do cliente fora do expediente configurado acima.
+          </p>
+          <label className="mb-4 flex items-start gap-2.5 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={outOfHours.enabled}
+              onChange={(event) => {
+                setOutOfHours((current) => ({ ...current, enabled: event.target.checked }));
+                setSaved(false);
+              }}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500/30"
+            />
+            <span className="font-medium text-slate-900">Ativar aviso de fora do expediente</span>
+          </label>
+          {outOfHours.enabled && (
+            <div className="space-y-4">
+              <Field label="Mensagem">
+                <Textarea
+                  rows={2}
+                  value={outOfHours.message}
+                  onChange={(event) => {
+                    setOutOfHours((current) => ({ ...current, message: event.target.value }));
+                    setSaved(false);
+                  }}
+                />
+              </Field>
+              <div className="flex flex-wrap gap-4">
+                <div className="w-40">
+                  <Field label="Intervalo mínimo (min)">
+                    <Input
+                      type="number"
+                      min={0}
+                      value={outOfHours.cooldownMinutes}
+                      onChange={(event) => {
+                        setOutOfHours((current) => ({
+                          ...current,
+                          cooldownMinutes: Number(event.target.value) || 0,
+                        }));
+                        setSaved(false);
+                      }}
+                    />
+                  </Field>
+                </div>
+                <div className="min-w-[14rem] flex-1">
+                  <Field label="Número">
+                    <InstanceSelect
+                      instances={instances}
+                      value={outOfHours.whatsappInstanceId}
+                      onChange={(value) => {
+                        setOutOfHours((current) => ({ ...current, whatsappInstanceId: value }));
+                        setSaved(false);
+                      }}
+                    />
+                  </Field>
+                </div>
+              </div>
+            </div>
+          )}
         </Card>
 
         <div className="flex items-center gap-3 pb-4">

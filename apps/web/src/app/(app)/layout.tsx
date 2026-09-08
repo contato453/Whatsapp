@@ -19,8 +19,11 @@ import {
   Users,
   Building2,
   BarChart3,
+  Bot,
+  Workflow,
   Zap,
   Lock,
+  ChevronDown,
 } from "lucide-react";
 import {
   USER_ROLE_LABELS,
@@ -38,6 +41,7 @@ import { CallProvider } from "@/lib/call-context";
 import { MessageSound } from "@/components/message-sound";
 import { SessionSchedule } from "@/components/session-schedule";
 import { UnreadTitle } from "@/components/unread-title";
+import { AiBudgetAlert } from "@/components/ai/budget-alert";
 import { Logo, LogoMark } from "@/components/logo";
 
 /**
@@ -49,18 +53,21 @@ import { Logo, LogoMark } from "@/components/logo";
  * cai na tela de acesso restrito abaixo, e a API barra de novo por conta
  * própria — a autorização de verdade é sempre a do servidor.
  */
-const NAV: Array<{
+interface NavLeaf {
   href: string;
   label: string;
   icon: typeof Inbox;
   /** Papel mínimo — usado só onde a tela é fixa no código (admin). */
   minRole: UserRole;
   /**
-   * Chave do catálogo que a tela exige. Quando existe, é ELA que decide, e
-   * não o papel: o item precisa sumir exatamente quando a API recusa, senão
-   * desligar a chave produziria um menu que só dá 403.
+   * Chave (ou chaves) do catálogo que a tela exige. Quando existe, é ELA que
+   * decide, e não o papel: o item precisa sumir exatamente quando a API
+   * recusa, senão desligar a chave produziria um menu que só dá 403. Uma
+   * lista é OU entre as chaves — o caso de Inteligência artificial, cuja
+   * tela abre com `ai.agent.manage` OU `ai.view_usage` (o mesmo `showAi` do
+   * card em Configurações).
    */
-  permission?: PermissionAction;
+  permission?: PermissionAction | PermissionAction[];
   /**
    * Módulo que a tela exige. Chave e módulo são coisas diferentes: a chave diz
    * o que o PERFIL pode fazer, o módulo diz se o recurso existe no escritório.
@@ -74,7 +81,38 @@ const NAV: Array<{
    * /users/:id são o cadastro inteiro, que segue fixo em admin.
    */
   adminOnlySubRoutes?: boolean;
-}> = [
+}
+
+/**
+ * Uma ÁREA com mais de uma tela — hoje só "Automações": o construtor de
+ * fluxos e o Follow-up Automático nasceram em PRs separados e cada um
+ * chegou com o próprio item solto na barra, os dois com o mesmo ícone.
+ * "Inteligência artificial" entrou depois como ATALHO — a tela continua
+ * sendo `/settings/ai`, a mesma que o card de Configurações já abre (mesmo
+ * padrão de "Configurações de Atendimento" dentro do construtor de fluxos,
+ * seção 18 do CLAUDE.md: link para uma tela que já existe, não uma cópia
+ * dela). O grupo não tem `href` nem `permission` próprios — não é uma tela,
+ * é só o rótulo que abre/fecha os filhos; quem decide o que aparece
+ * continua sendo a permissão de CADA filho.
+ */
+interface NavGroup {
+  label: string;
+  icon: typeof Inbox;
+  children: NavLeaf[];
+}
+
+type NavEntry = NavLeaf | NavGroup;
+
+function isNavGroup(item: NavEntry): item is NavGroup {
+  return "children" in item;
+}
+
+/** Todas as telas navegáveis, grupo ou não — o que `pathAllowed`/`current` precisam. */
+function flattenNav(nav: NavEntry[]): NavLeaf[] {
+  return nav.flatMap((item) => (isNavGroup(item) ? item.children : [item]));
+}
+
+const NAV: NavEntry[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, minRole: "agent" },
   // Os rótulos falam a língua da equipe; as rotas continuam /inbox e
   // /whatsapp — mudá-las quebraria favoritos e os links dos cards do
@@ -127,6 +165,33 @@ const NAV: Array<{
     permission: "reports.view",
   },
   {
+    label: "Automações",
+    icon: Workflow,
+    children: [
+      {
+        href: "/automations",
+        label: "Fluxos",
+        icon: Workflow,
+        minRole: "supervisor",
+        permission: "automation.manage",
+      },
+      {
+        href: "/automations/follow-up",
+        label: "Follow-up Automático",
+        icon: Workflow,
+        minRole: "supervisor",
+        permission: "follow_up.manage",
+      },
+      {
+        href: "/settings/ai",
+        label: "Inteligência artificial",
+        icon: Bot,
+        minRole: "supervisor",
+        permission: ["ai.agent.manage", "ai.view_usage"],
+      },
+    ],
+  },
+  {
     href: "/tags",
     label: "Etiquetas",
     icon: Tags,
@@ -152,7 +217,7 @@ const NAV: Array<{
 
 /** Uma tela do menu está liberada para esta sessão? */
 function navAllowed(
-  item: (typeof NAV)[number],
+  item: NavLeaf,
   role: UserRole,
   can: (action: PermissionAction) => boolean,
   hasFeature: (feature: keyof OrganizationFeaturesDto) => boolean,
@@ -161,7 +226,9 @@ function navAllowed(
   // administrador também não vê o menu do que o escritório desligou.
   if (item.feature && !hasFeature(item.feature)) return false;
   // Admin passa em qualquer chave, então `can` já o cobre nos dois ramos.
-  return item.permission ? can(item.permission) : hasRole(role, item.minRole);
+  if (!item.permission) return hasRole(role, item.minRole);
+  const permissions = Array.isArray(item.permission) ? item.permission : [item.permission];
+  return permissions.some((permission) => can(permission));
 }
 
 /**
@@ -170,7 +237,7 @@ function navAllowed(
  * `requireRole("admin")` que a API aplica lá.
  */
 function pathAllowed(
-  item: (typeof NAV)[number],
+  item: NavLeaf,
   pathname: string,
   role: UserRole,
   can: (action: PermissionAction) => boolean,
@@ -238,6 +305,11 @@ function Sidebar({
   const [hydrated, setHydrated] = useState(false);
   const [hoverOpen, setHoverOpen] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Grupo aberto/fechado (ex.: "Automações"), por rótulo. Não é preferência
+  // de navegador como o recolher da barra inteira — reabrir sozinho quando
+  // a página atual é de um filho já cobre o caso comum, e persistir uma
+  // escolha de UM grupo hoje seria infraestrutura para uma área só.
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     setCollapsed(readCollapsedPreference());
@@ -285,7 +357,17 @@ function Sidebar({
     setHoverOpen(false);
   };
 
-  const items = NAV.filter((item) => navAllowed(item, user.role, can, hasFeature));
+  // Grupo sobrevive ao filtro só com os filhos que a sessão enxerga — grupo
+  // sem nenhum filho liberado simplesmente some, como qualquer item solto.
+  const items = NAV.map((item): NavEntry | null => {
+    if (isNavGroup(item)) {
+      const children = item.children.filter((child) =>
+        navAllowed(child, user.role, can, hasFeature),
+      );
+      return children.length > 0 ? { ...item, children } : null;
+    }
+    return navAllowed(item, user.role, can, hasFeature) ? item : null;
+  }).filter((item): item is NavEntry => item !== null);
 
   return (
     <div
@@ -337,6 +419,86 @@ function Sidebar({
         </div>
         <nav className="flex-1 space-y-0.5 px-2">
           {items.map((item) => {
+            if (isNavGroup(item)) {
+              const hasActiveChild = item.children.some(
+                (child) => pathname === child.href || pathname.startsWith(`${child.href}/`),
+              );
+              // Sem escolha manual nesta sessão, abre sozinho quando a
+              // página atual é de um filho — senão quem chega em
+              // /automations/follow-up pela URL veria o grupo fechado
+              // escondendo a própria tela ativa.
+              const open = openGroups[item.label] ?? hasActiveChild;
+              return (
+                <div key={item.label}>
+                  {expanded ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setOpenGroups((prev) => ({ ...prev, [item.label]: !open }))
+                      }
+                      aria-expanded={open}
+                      className={cn(
+                        "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                        "text-slate-400 hover:bg-slate-800/60 hover:text-slate-200",
+                      )}
+                    >
+                      <item.icon className="h-4 w-4 shrink-0" />
+                      <span className="flex-1 truncate text-left">{item.label}</span>
+                      <ChevronDown
+                        className={cn(
+                          "h-3.5 w-3.5 shrink-0 transition-transform",
+                          open && "rotate-180",
+                        )}
+                      />
+                    </button>
+                  ) : (
+                    // Recolhida, o grupo vira um ícone só, como qualquer
+                    // item — o hover já expande a barra inteira e revela
+                    // os filhos; o clique direto (antes do hover abrir) vai
+                    // para o primeiro filho, para o ícone nunca ser um
+                    // beco sem saída.
+                    <Tooltip label={item.label}>
+                      <Link
+                        href={item.children[0].href}
+                        aria-label={item.label}
+                        className={cn(
+                          "flex w-full items-center justify-center rounded-lg px-0 py-2 text-sm font-medium transition-colors",
+                          hasActiveChild
+                            ? "bg-slate-800 text-white"
+                            : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-200",
+                        )}
+                      >
+                        <item.icon className="h-4 w-4 shrink-0" />
+                      </Link>
+                    </Tooltip>
+                  )}
+                  {expanded && open && (
+                    <div className="ml-4 mt-0.5 space-y-0.5 border-l border-slate-800 pl-2.5">
+                      {item.children.map((child) => {
+                        const active =
+                          pathname === child.href || pathname.startsWith(`${child.href}/`);
+                        return (
+                          <Link
+                            key={child.href}
+                            href={child.href}
+                            aria-current={active ? "page" : undefined}
+                            className={cn(
+                              "block truncate rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+                              active
+                                ? "bg-slate-800 text-white"
+                                : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-200",
+                            )}
+                          >
+                            {child.label}
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
             const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
             const link = (
               <Link
@@ -456,7 +618,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   // A tela atual pode não estar no menu (ex.: /users/new): a permissão é a
   // do item cujo caminho a URL começa, e caminho desconhecido fica liberado.
-  const current = NAV.find(
+  // `flattenNav` acha tanto os itens soltos quanto os de dentro de um grupo.
+  const current = flattenNav(NAV).find(
     (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),
   );
   const allowed = !current || pathAllowed(current, pathname, user.role, can, hasFeature);
@@ -478,6 +641,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       <UnreadTitle />
       {/* Aviso de fechamento do horário de uso, e saída quando ele chega. */}
       <SessionSchedule />
+      {/* Orçamento de IA cruzou um degrau: só o admin recebe. */}
+      <AiBudgetAlert />
     </div>
     </CallProvider>
   );

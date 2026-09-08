@@ -2,7 +2,30 @@
 
 import { AZEVEDO_OS_SOURCE } from "@azvchat/shared";
 import type {
+  AiAgentDirectoryDto,
+  AiAgentDto,
+  AiAgentSummaryDto,
+  AiAgentVersionDto,
+  AiAutomationDto,
+  AiKnowledgeExtractionResult,
+  AiKnowledgeSourceDto,
+  AiModelDto,
+  AiProviderBillingDto,
+  AiProviderDto,
+  AiProviderKind,
+  AiSessionDto,
+  AiSettingsDto,
+  AiStatsDto,
+  AiTestRequestDto,
+  AiTestResultDto,
+  AiUsageDto,
+  AiUsageKind,
+  AiUsageLogDto,
+  AiUsageOutcome,
+  AiUsagePeriod,
   AttendanceSettings,
+  AutomationGraph,
+  AutomationTriggerType,
   AzevedoOsCompanyDto,
   AzevedoOsFacetsDto,
   AzevedoOsHealthDto,
@@ -10,10 +33,17 @@ import type {
   ConversationStatus,
   ParticipantClientRole,
   PermissionAction,
+  ScheduleMode,
 } from "@azvchat/shared";
 import type { DashboardFilters } from "./dashboard-filters";
 import type {
   AgentReportDto,
+  AutomationExecutionDetailDto,
+  AutomationExecutionSummaryDto,
+  AutomationFlowDetailDto,
+  AutomationFlowProblemDto,
+  AutomationFlowSummaryDto,
+  AutomationTemplateSummaryDto,
   CallLogResponse,
   ConversationDto,
   CrmActivityDto,
@@ -28,6 +58,11 @@ import type {
   CrmStageDto,
   OrganizationFeaturesDto,
   DashboardStatsDto,
+  FollowUpExecutionDto,
+  FollowUpRuleDto,
+  FollowUpStepAction,
+  FollowUpTimeUnit,
+  FollowUpTrigger,
   IntegrationTokenDto,
   MessageDto,
   PinnedItemDto,
@@ -276,6 +311,97 @@ export const quickRepliesApi = {
     api.post<{ ok: boolean }>(`/quick-replies/${id}/used`).catch(() => undefined),
 };
 
+/**
+ * Follow-up automático. O vínculo com departamento é o MESMO contrato da
+ * resposta rápida (`DepartmentTargetInput`) — uma regra vale para um, vários
+ * ou todos os departamentos, nunca duplicada.
+ */
+export interface FollowUpStepInput {
+  waitAmount: number;
+  waitUnit: FollowUpTimeUnit;
+  action: FollowUpStepAction;
+  messageContent?: string;
+  tagId?: string;
+  newStatus?: ConversationStatus;
+}
+
+export interface FollowUpRuleInput extends DepartmentTargetInput {
+  name: string;
+  description?: string;
+  status?: "active" | "inactive";
+  trigger?: FollowUpTrigger;
+  respectBusinessHours?: boolean;
+  whatsappInstanceId?: string | null;
+  finalizeOnComplete?: boolean;
+  finalizeReason?: string;
+  finalizeTagId?: string | null;
+  steps: FollowUpStepInput[];
+}
+
+export const followUpRulesApi = {
+  list: () =>
+    api.get<{ rules: FollowUpRuleDto[] }>("/follow-up-rules").then((data) => data.rules),
+  create: (input: FollowUpRuleInput) =>
+    api.post<{ rule: FollowUpRuleDto }>("/follow-up-rules", input).then((data) => data.rule),
+  update: (id: string, input: FollowUpRuleInput) =>
+    api
+      .patch<{ rule: FollowUpRuleDto }>(`/follow-up-rules/${id}`, input)
+      .then((data) => data.rule),
+  duplicate: (id: string) =>
+    api
+      .post<{ rule: FollowUpRuleDto }>(`/follow-up-rules/${id}/duplicate`)
+      .then((data) => data.rule),
+  activate: (id: string) =>
+    api
+      .post<{ rule: FollowUpRuleDto }>(`/follow-up-rules/${id}/activate`)
+      .then((data) => data.rule),
+  deactivate: (id: string) =>
+    api
+      .post<{ rule: FollowUpRuleDto }>(`/follow-up-rules/${id}/deactivate`)
+      .then((data) => data.rule),
+  remove: (id: string) => api.delete<{ ok: boolean }>(`/follow-up-rules/${id}`),
+  history: (id: string) =>
+    api.get<{
+      stats: {
+        totalExecutions: number;
+        departmentsUsed: number;
+        clientsReplied: number;
+        resolvedByRule: number;
+        canceledCount: number;
+      };
+      executions: FollowUpExecutionDto[];
+    }>(`/follow-up-rules/${id}/history`),
+};
+
+export const followUpExecutionsApi = {
+  list: (filters: { ruleId?: string; departmentId?: string; status?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (filters.ruleId) params.set("ruleId", filters.ruleId);
+    if (filters.departmentId) params.set("departmentId", filters.departmentId);
+    if (filters.status) params.set("status", filters.status);
+    const qs = params.toString();
+    return api
+      .get<{ executions: FollowUpExecutionDto[] }>(`/follow-up-executions${qs ? `?${qs}` : ""}`)
+      .then((data) => data.executions);
+  },
+};
+
+/** Ações do atendente dentro da conversa (seções 26-29 do pedido). */
+export const conversationFollowUpApi = {
+  current: (conversationId: string) =>
+    api
+      .get<{ execution: FollowUpExecutionDto | null }>(`/conversations/${conversationId}/follow-up`)
+      .then((data) => data.execution),
+  cancel: (conversationId: string) =>
+    api.post<{ ok: boolean }>(`/conversations/${conversationId}/follow-up/cancel`),
+  pause: (conversationId: string, untilAt?: string) =>
+    api.post<{ ok: boolean }>(`/conversations/${conversationId}/follow-up/pause`, { untilAt }),
+  resume: (conversationId: string) =>
+    api.post<{ ok: boolean }>(`/conversations/${conversationId}/follow-up/resume`),
+  postpone: (conversationId: string, until: string) =>
+    api.post<{ ok: boolean }>(`/conversations/${conversationId}/follow-up/postpone`, { until }),
+};
+
 
 /**
  * Envio de arquivo para a conversa — o MESMO caminho do clipe do composer,
@@ -339,6 +465,127 @@ export const integrationTokensApi = {
     api
       .post<{ integrationToken: IntegrationTokenDto }>(`/integration-tokens/${id}/revoke`)
       .then((data) => data.integrationToken),
+};
+
+/** Corpo de criação/edição de agente — o mesmo Zod da API. */
+export interface AiAgentInput {
+  name: string;
+  description: string;
+  status?: AiAgentDto["status"];
+  isGeneral: boolean;
+  departmentIds: string[];
+  model: string | null;
+  knowledgeSourceIds: string[];
+  config: AiAgentDto["config"];
+}
+
+export interface AiAutomationInput {
+  name: string;
+  active: boolean;
+  agentId: string;
+  whatsappInstanceId: string | null;
+  departmentId: string | null;
+  onlyWithoutDepartment: boolean;
+  conversationType: AiAutomationDto["conversationType"];
+  onlyUnassigned: boolean;
+  onlyNewConversations: boolean;
+  resolvedTagId: string | null;
+  priority: number;
+}
+
+export interface AiKnowledgeInput {
+  title: string;
+  kind: AiKnowledgeSourceDto["kind"];
+  content: string;
+  sourceRef?: string | null;
+  active: boolean;
+}
+
+export interface AiLogsQuery {
+  limit?: number;
+  before?: string;
+  agentId?: string;
+  kind?: AiUsageKind;
+  outcome?: AiUsageOutcome;
+}
+
+/**
+ * Inteligência artificial. A chave do provedor sobe UMA vez, no PUT, e
+ * nunca volta — todo DTO daqui traz no máximo o `apiKeyHint`.
+ */
+export const aiApi = {
+  providers: () => api.get<{ providers: AiProviderDto[]; dedicatedSecretsKey: boolean }>("/ai/providers"),
+  saveProvider: (provider: AiProviderKind, input: { apiKey?: string; defaultModel?: string }) =>
+    api.put<{ provider: AiProviderDto; test: { ok: boolean; message: string } | null }>(`/ai/providers/${provider}`, input),
+  testProvider: (provider: AiProviderKind) =>
+    api.post<{ provider: AiProviderDto; test: { ok: boolean; message: string } }>(`/ai/providers/${provider}/test`),
+  disconnectProvider: (provider: AiProviderKind) =>
+    api.post<{ provider: AiProviderDto }>(`/ai/providers/${provider}/disconnect`).then((data) => data.provider),
+  models: (provider: AiProviderKind, refresh = false) =>
+    api.get<{ models: AiModelDto[]; source: "provider" | "catalog"; fetchedAt: string | null }>(
+      `/ai/providers/${provider}/models${refresh ? "?refresh=1" : ""}`,
+    ),
+  billing: (provider: AiProviderKind) => api.get<AiProviderBillingDto>(`/ai/providers/${provider}/billing`),
+
+  settings: () => api.get<{ settings: AiSettingsDto }>("/ai/settings").then((data) => data.settings),
+  saveSettings: (input: Omit<AiSettingsDto, "updatedAt">) =>
+    api.put<{ settings: AiSettingsDto }>("/ai/settings", input).then((data) => data.settings),
+
+  usage: (period: AiUsagePeriod) => api.get<{ usage: AiUsageDto }>(`/ai/usage?period=${period}`).then((data) => data.usage),
+  stats: (period: AiUsagePeriod) => api.get<{ stats: AiStatsDto }>(`/ai/stats?period=${period}`).then((data) => data.stats),
+  logs: (query: AiLogsQuery = {}) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== "") params.set(key, String(value));
+    const suffix = params.toString();
+    return api.get<{ logs: AiUsageLogDto[]; hasMore: boolean }>(`/ai/logs${suffix ? `?${suffix}` : ""}`);
+  },
+
+  agents: () => api.get<{ agents: AiAgentSummaryDto[] }>("/ai/agents").then((data) => data.agents),
+  // Recorte mínimo (id/nome/status) para o construtor de fluxos escolher um
+  // agente sem precisar de `ai.agent.manage`/`ai.view_usage`.
+  agentsDirectory: () =>
+    api.get<{ agents: AiAgentDirectoryDto[] }>("/ai/agents/directory").then((data) => data.agents),
+  agent: (id: string) => api.get<{ agent: AiAgentDto }>(`/ai/agents/${id}`).then((data) => data.agent),
+  createAgent: (input: AiAgentInput) => api.post<{ agent: AiAgentDto }>("/ai/agents", input).then((data) => data.agent),
+  updateAgent: (id: string, input: AiAgentInput) =>
+    api.patch<{ agent: AiAgentDto }>(`/ai/agents/${id}`, input).then((data) => data.agent),
+  setAgentStatus: (id: string, status: AiAgentDto["status"]) =>
+    api.post<{ agent: AiAgentDto }>(`/ai/agents/${id}/status`, { status }).then((data) => data.agent),
+  duplicateAgent: (id: string) => api.post<{ agent: AiAgentDto }>(`/ai/agents/${id}/duplicate`).then((data) => data.agent),
+  deleteAgent: (id: string) => api.delete<{ ok: true }>(`/ai/agents/${id}`),
+  agentVersions: (id: string) =>
+    api.get<{ versions: AiAgentVersionDto[] }>(`/ai/agents/${id}/versions`).then((data) => data.versions),
+  testAgent: (id: string, input: AiTestRequestDto) =>
+    api.post<{ result: AiTestResultDto }>(`/ai/agents/${id}/test`, input).then((data) => data.result),
+  options: () => api.get<{ users: UserDirectoryDto[] }>("/ai/options"),
+
+  knowledge: () => api.get<{ sources: AiKnowledgeSourceDto[] }>("/ai/knowledge").then((data) => data.sources),
+  createKnowledge: (input: AiKnowledgeInput) =>
+    api.post<{ source: AiKnowledgeSourceDto }>("/ai/knowledge", input).then((data) => data.source),
+  updateKnowledge: (id: string, input: Partial<AiKnowledgeInput>) =>
+    api.patch<{ source: AiKnowledgeSourceDto }>(`/ai/knowledge/${id}`, input).then((data) => data.source),
+  deleteKnowledge: (id: string) => api.delete<{ ok: true }>(`/ai/knowledge/${id}`),
+  // As duas só extraem texto — nada é gravado até o Salvar de sempre.
+  extractKnowledgeUrl: (url: string) => api.post<AiKnowledgeExtractionResult>("/ai/knowledge/extract-url", { url }),
+  extractKnowledgeDocument: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api.postForm<AiKnowledgeExtractionResult>("/ai/knowledge/extract-document", form);
+  },
+
+  automations: () => api.get<{ automations: AiAutomationDto[] }>("/ai/automations").then((data) => data.automations),
+  createAutomation: (input: AiAutomationInput) =>
+    api.post<{ automation: AiAutomationDto }>("/ai/automations", input).then((data) => data.automation),
+  updateAutomation: (id: string, input: AiAutomationInput) =>
+    api.patch<{ automation: AiAutomationDto }>(`/ai/automations/${id}`, input).then((data) => data.automation),
+  deleteAutomation: (id: string) => api.delete<{ ok: true }>(`/ai/automations/${id}`),
+
+  conversationSession: (conversationId: string) =>
+    api.get<{ session: AiSessionDto | null }>(`/conversations/${conversationId}/ai`).then((data) => data.session),
+  stopSession: (conversationId: string) =>
+    api.post<{ session: AiSessionDto | null }>(`/conversations/${conversationId}/ai/stop`).then((data) => data.session),
+  resumeSession: (conversationId: string) =>
+    api.post<{ session: AiSessionDto | null }>(`/conversations/${conversationId}/ai/resume`).then((data) => data.session),
 };
 
 export const messagesApi = {
@@ -663,6 +910,57 @@ export const attendanceSettingsApi = {
     api
       .put<{ settings: AttendanceSettings }>("/attendance-settings", input)
       .then((data) => data.settings),
+};
+
+export interface AutomationFlowUpdateInput {
+  name?: string;
+  description?: string | null;
+  triggerType?: AutomationTriggerType;
+  triggerConfig?: Record<string, unknown> | null;
+  whatsappInstanceId?: string | null;
+  priority?: number;
+  cooldownMinutes?: number;
+  scheduleMode?: ScheduleMode;
+  draftGraph?: AutomationGraph;
+}
+
+/** Construtor de fluxos, templates e histórico de execução — ver `modules/automation`. */
+export const automationApi = {
+  listFlows: () =>
+    api.get<{ flows: AutomationFlowSummaryDto[] }>("/automation-flows").then((data) => data.flows),
+  createFlow: (input: { name: string; description?: string; triggerType?: AutomationTriggerType; whatsappInstanceId?: string; templateKey?: string }) =>
+    api.post<{ flow: AutomationFlowDetailDto }>("/automation-flows", input).then((data) => data.flow),
+  getFlow: (id: string) =>
+    api.get<{ flow: AutomationFlowDetailDto }>(`/automation-flows/${id}`).then((data) => data.flow),
+  updateFlow: (id: string, input: AutomationFlowUpdateInput) =>
+    api.patch<{ flow: AutomationFlowDetailDto }>(`/automation-flows/${id}`, input).then((data) => data.flow),
+  validateFlow: (id: string) =>
+    api.get<{ problems: AutomationFlowProblemDto[] }>(`/automation-flows/${id}/validate`).then((data) => data.problems),
+  publishFlow: (id: string) =>
+    api.post<{ flow: AutomationFlowDetailDto }>(`/automation-flows/${id}/publish`).then((data) => data.flow),
+  activateFlow: (id: string) =>
+    api.post<{ flow: AutomationFlowDetailDto }>(`/automation-flows/${id}/activate`).then((data) => data.flow),
+  deactivateFlow: (id: string) =>
+    api.post<{ flow: AutomationFlowDetailDto }>(`/automation-flows/${id}/deactivate`).then((data) => data.flow),
+  duplicateFlow: (id: string) =>
+    api.post<{ flow: AutomationFlowDetailDto }>(`/automation-flows/${id}/duplicate`).then((data) => data.flow),
+  deleteFlow: (id: string) => api.delete<{ ok: boolean }>(`/automation-flows/${id}`),
+  listTemplates: () =>
+    api.get<{ templates: AutomationTemplateSummaryDto[] }>("/automation-templates").then((data) => data.templates),
+  useTemplate: (key: string) =>
+    api.post<{ flow: AutomationFlowDetailDto }>(`/automation-templates/${key}/use`).then((data) => data.flow),
+  listExecutions: (filters: { flowId?: string; conversationId?: string; status?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (filters.flowId) params.set("flowId", filters.flowId);
+    if (filters.conversationId) params.set("conversationId", filters.conversationId);
+    if (filters.status) params.set("status", filters.status);
+    const query = params.toString();
+    return api
+      .get<{ executions: AutomationExecutionSummaryDto[] }>(`/automation-executions${query ? `?${query}` : ""}`)
+      .then((data) => data.executions);
+  },
+  getExecution: (id: string) =>
+    api.get<{ execution: AutomationExecutionDetailDto }>(`/automation-executions/${id}`).then((data) => data.execution),
 };
 
 /**

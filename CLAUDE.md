@@ -54,6 +54,7 @@ apps/
   api/                      # Fastify
     src/modules/<dominio>/routes.ts   # rotas HTTP por domínio
     src/services/           # instance-manager, message-ingest, scheduler
+    src/services/ai/        # motor de atendimento por IA (provider, prompt, ferramentas, runtime)
     src/realtime/socket.ts  # Socket.IO, salas e audiência
     src/lib/                # auth, access, errors, serialize, media-storage, signature...
     test/                   # vitest
@@ -221,6 +222,10 @@ snake_case e id `uuid`.
   (`pending|sent|failed|canceled`, com `attempts`), `ConversationAssignmentHistory`
   (`assigned|transferred_user|transferred_department|unassigned|resolved|reopened`),
   `AuditLog`.
+
+**Inteligência artificial** — `AiProviderConfig`, `AiSettings`, `AiAgent` (+ `AiAgentDepartment`,
+`AiAgentVersion`, `AiAgentKnowledgeSource`), `AiKnowledgeSource`, `AiAutomation`, `AiSession`,
+`AiUsageLog`. Ver a seção 20.
 
 **Permissões**
 - `RolePermission` — o que cada perfil PODE FAZER nesta organização, por par
@@ -514,6 +519,21 @@ POST   /integrations/messages           (token de máquina, NÃO sessão; ver a 
         desconectada/excluída 409, idempotência de 24h, rate limit por token 429.
         Reaproveita o caminho do envio manual — não expõe leitura nenhuma)
 
+GET    /ai/providers                 PUT /ai/providers/:provider   (admin; a chave sobe UMA vez,
+POST   /ai/providers/:provider/test  POST /ai/providers/:provider/disconnect   volta só o hint)
+GET    /ai/providers/:provider/models[?refresh=1]   GET /ai/providers/:provider/billing
+GET    /ai/settings (ai.view_usage|ai.agent.manage)  PUT /ai/settings (admin; orçamento, política,
+       timeout, contexto, tabela de preço)
+GET    /ai/usage?period=   GET /ai/stats?period=   GET /ai/logs   (ai.view_usage)
+GET    /ai/agents (manage|view_usage)  GET|POST /ai/agents  PATCH|DELETE /ai/agents/:id
+POST   /ai/agents/:id/status  POST /ai/agents/:id/duplicate  GET /ai/agents/:id/versions
+POST   /ai/agents/:id/test   (testador: nada sai pelo WhatsApp; consumo entra como `test`)
+GET|POST /ai/knowledge  PATCH|DELETE /ai/knowledge/:id     GET /ai/options
+GET|POST /ai/automations  PATCH|DELETE /ai/automations/:id  (tudo isso: ai.agent.manage)
+GET    /conversations/:id/ai           (sessão de IA mais recente da conversa)
+POST   /conversations/:id/ai/stop      (ai.session.stop)   POST /conversations/:id/ai/resume (ai.session.resume)
+       (ver a seção 20)
+
 GET    /permissions          (admin; o que a organização gravou por cima do catálogo —
        o catálogo em si NÃO vem por aqui, a tela o importa de @azvchat/shared)
 PUT    /permissions          (admin; grava em bloco, apaga a linha quando o valor volta ao
@@ -566,7 +586,12 @@ sempre `RealtimeEvents.X`:
 `message:new`, `message:status`, `message:reaction`, `message:updated`, `call:incoming`,
 `conversation:updated`, `conversation:read`, `group:participants`, `note:new`,
 `conversation:pinned-items`, `instance:status`, `instance:qr`, `scheduled:pending`,
-`session:closing`, `session:closed`.
+`session:closing`, `session:closed`, `ai:session`, `ai:budget-alert`.
+
+`ai:session` (`{ conversationId, session }`) sai para a `conversationAudience()` sempre que o
+atendimento por IA da conversa muda (começou, respondeu, transferiu, foi assumido/encerrado)
+e carrega a sessão inteira, nunca um patch — é a faixa "Atendimento por IA" da Inbox.
+`ai:budget-alert` vai só para a sala da organização (admin), uma vez por degrau por mês.
 
 `conversation:pinned-items` (`{ conversationId, items }`) sai sempre que a fixação (pin) de
 uma conversa muda — fixar, desafixar, substituir a mais antiga, ou a mensagem fixada ser
@@ -828,7 +853,7 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
 
 Rotas em `apps/web/src/app/(app)/`: `dashboard`, `inbox` (+ `inbox/[conversationId]`),
 `whatsapp`, `users` (+ `new`, `[id]`), `departments`, `reports`, `tags`, `quick-replies`,
-`settings`. Fora do grupo: `login`. **Os rótulos do menu não seguem os nomes das rotas**:
+`settings`, `settings/ai` (+ `settings/ai/agents/[id]`, com `new`). Fora do grupo: `login`. **Os rótulos do menu não seguem os nomes das rotas**:
 `/inbox` aparece como "Conversas" e `/whatsapp` como "Conexões" — as rotas ficaram como
 estão para não quebrar favoritos nem os links dos cards do dashboard. Nos textos da
 interface, a tela se chama "Conversas" (ou "lista de conversas"); "Inbox" segue sendo o
@@ -1930,7 +1955,22 @@ por conversa, sem prazo de validade, navegação entre elas e atualização em t
 todo mundo com a conversa aberta; API de integração para sistema externo disparar mensagem
 por token de máquina (amarrado a um número, com idempotência de 24h, rate limit por token e
 tela de administração de tokens para admin), reaproveitando o caminho do envio manual — a
-mensagem aparece na Inbox como qualquer outra.
+mensagem aparece na Inbox como qualquer outra; **automações — construtor visual de fluxos**
+(seção 18): gatilho, enviar mensagem, fazer pergunta com validação por tipo, menu, condição,
+aguardar com retomada por resposta, etiqueta, status, encaminhar setor/atendente, devolver
+para a fila, webhook, finalizar com protocolo, motor de execução no backend (não depende de
+aba aberta), rascunho/publicação sem quebrar execução em andamento, prioridade e cooldown
+entre fluxos, handoff automático quando um atendente assume, templates prontos (o de
+Atendimento Geral funcional de ponta a ponta), histórico de execução e saudação/fora do
+expediente de zero configuração; **follow-up automático** (seção 19): regra reutilizável por
+um, vários ou todos os departamentos, com etapas de aguardar e agir (mandar mensagem com
+variáveis, etiquetar, mudar status), disparada quando a conversa entra em "aguardando
+cliente", cancelada na hora se o cliente responde ou se o atendimento sai desse status,
+reiniciada quando a equipe manda mensagem nova, respeitando expediente e rodando inteiramente
+no backend (sobrevive a reinício e a fechar o navegador); **atendimento por IA** (seção 20):
+agente configurável por objetivo/limites/conhecimento, disparado por automação própria de
+zero configuração OU por um bloco "Atendimento por IA" dentro do construtor de fluxos (as
+duas portas abrem a mesma sessão), com transferência para humano e resumo em nota interna.
 
 CRM em Kanban integrado ao atendimento: funis por departamento com etapas configuráveis
 (probabilidade, prazo de parada e automações de entrada/saída), oportunidade criada de dentro
@@ -1948,7 +1988,9 @@ dentro do painel de contexto da conversa.
 desenvolvimento bloqueia `web.whatsapp.com`); votos de enquete agregados na Inbox;
 biblioteca de figurinhas; read receipts de saída; fila (BullMQ/Redis) para mídia em
 volume; tela de auditoria no frontend (API pronta); storage S3/Supabase (interface pronta);
-testes de integração com banco; multi-organização real (cadastro e billing).
+testes de integração com banco; multi-organização real (cadastro e billing); envio de mídia
+pelo bloco "Enviar mensagem" das automações; distribuição automática por round-robin nas
+automações (ver as lacunas detalhadas ao fim da seção 18).
 
 ---
 
@@ -2284,7 +2326,652 @@ conteúdo nem token em claro).
 
 ---
 
-## 18. CRM — funil de oportunidades sobre o atendimento
+## 18. Automações — construtor visual de fluxos e motor de execução
+
+Módulo de automação de atendimento: mensagens automáticas, menus, perguntas,
+condições, esperas, encaminhamentos e finalização, montados visualmente e
+executados pelo backend, sem depender de aba de navegador aberta.
+
+**Camadas.** `packages/shared/src/automation.ts` (catálogo de tipos de nó,
+gatilhos, validação de grafo, templates) e `automation-variables.ts`
+(`{{variáveis}}` da mensagem do fluxo — catálogo PRÓPRIO, diferente do da
+resposta rápida: contexto de execução, não de conversa aberta com empresa em
+mãos). `apps/api/src/services/automation/engine.ts` é o motor
+(`AutomationEngine`); `worker.ts` é quem o chama periodicamente
+(`AutomationWorker`, mesmo padrão do `ScheduledMessageWorker`).
+`apps/api/src/modules/automation/routes.ts` é a API do construtor e do
+histórico. `apps/web/src/app/(app)/automations/` são as telas (Fluxos,
+Templates, Histórico — todas com abas em `components/automations/
+automation-tabs.tsx`), e `automations/[id]/page.tsx` é o construtor visual
+(React Flow / `@xyflow/react`), com paleta de blocos
+(`node-palette.tsx`), nó customizado (`flow-node.tsx`) e o painel de
+configuração por tipo (`node-inspector.tsx`).
+
+**O GRAFO (nós + arestas) é um valor JSON, não tabelas `automation_nodes`/
+`automation_edges`.** Ver o comentário do bloco "Automações" em
+`schema.prisma`: React Flow já trabalha nativamente com array de nós e de
+arestas serializáveis, e duplicar ou versionar um fluxo inteiro vira copiar
+um valor em vez de recriar dezenas de linhas mantendo IDs coerentes entre
+três tabelas. `AutomationFlow.draftGraph` é o que o construtor edita a cada
+autosave; `AutomationFlow.publishedVersionId` aponta para uma
+`AutomationFlowVersion` CONGELADA — publicar cria uma versão nova a partir
+do rascunho, e cada `AutomationExecution` referencia a versão que estava
+valendo quando ela começou, nunca o rascunho. **É assim que editar um fluxo
+ATIVO nunca quebra uma execução já em andamento** (seção 24 do pedido
+original): o rascunho pode seguir mudando por cima sem afetar quem já
+publicou.
+
+**Não existe tabela "waiting jobs" separada.** `AutomationExecution` carrega
+o próprio estado de espera (`status: waiting`, `waitingReason:
+"timer"|"reply"`, `waitingUntil`) — duas tabelas para a mesma coisa
+divergiriam sobre "está esperando o quê". O worker varre `status = waiting
+AND waitingReason = "timer" AND waitingUntil <= now()`.
+
+**Templates são catálogo no código (`AUTOMATION_TEMPLATES`), não linhas no
+banco.** São conteúdo do sistema, iguais para toda organização — o mesmo
+raciocínio de `PERMISSION_ACTIONS` e `QUICK_REPLY_VARIABLES`. "Usar
+template" cria um `AutomationFlow` novo (rascunho) copiando o grafo do
+template; a cópia nunca referencia o template de volta, então editar a cópia
+nunca toca no catálogo.
+
+**Só uma execução ATIVA (`running`/`waiting`) por conversa ao mesmo tempo.**
+Reforçado por um índice único PARCIAL criado à mão na migration (Prisma não
+declara índice parcial no schema — mesmo caso de
+`conversations_assigned_to_all_without_user`): o motor confere antes de
+criar, e o banco nunca deixa passar duas sob concorrência (duas mensagens
+quase simultâneas colidem no P2002, e quem perde simplesmente não inicia um
+segundo fluxo por cima do primeiro — mesmo padrão de corrida do
+`message-ingest.ts`).
+
+**Gatilhos implementados**: `new_message`, `first_message`, `keyword`,
+`no_reply_timeout` (varrido pelo worker: conversa não resolvida, cuja
+ÚLTIMA mensagem é NOSSA e mais velha que o configurado), `conversation_resolved`
+(hook em `POST /conversations/:id/resolve` e em `.../status` quando o
+destino é `resolved`) e `tag_added` (hook em `POST /conversations/:id/tags/:tagId`).
+Cada `handleXxx` do `AutomationEngine` NUNCA lança — mesma regra do
+`MessageIngestService.ingest()` — e todos são chamados com `void` a partir
+da rota/serviço, nunca bloqueando o caminho principal.
+
+**Prioridade entre fluxos** (seção 27 do pedido): `AutomationFlow.priority`,
+MENOR NÚMERO VENCE. Vários fluxos ativos cujo gatilho combina com a mesma
+mensagem são avaliados em ordem de prioridade, e **só um** começa por
+mensagem — o primeiro que passar também no cooldown (`cooldownMinutes`,
+por fluxo+conversa, contra repetir "nova mensagem" a cada mensagem).
+
+**`AutomationFlow.scheduleMode`** — quando o fluxo pode ser ESCOLHIDO, em
+relação ao MESMO `AttendanceSettings` de sempre, nunca um cadastro paralelo:
+`always` (padrão, todo fluxo de hoje), `business_hours` (só dentro do
+expediente) ou `outside_business_hours`. **O caso de uso real é o inverso do
+intuitivo**: não é "trava o fluxo para não incomodar de madrugada", é "um
+fluxo de plantão noturno/fim de semana, enquanto de dia quem responde é
+outro fluxo (ou a equipe)". A régua é a MESMA de `AiAgentConfig.advanced.
+scheduleMode` (seção 20) — os dois tipos e rótulos vivem uma vez só, em
+`packages/shared/src/attendance.ts` (`SCHEDULE_MODES`), para as duas telas
+nunca divergirem no texto nem no valor. Fora da janela permitida, o fluxo
+simplesmente **não é candidato** — cai para o próximo fluxo de prioridade
+menor (se algum outro `always`/compatível existir) ou, sobrando nenhum, para
+a saudação/fora-do-expediente de zero configuração de sempre. `AutomationEngine`
+só consulta `AttendanceSettings` quando ALGUM candidato da rodada não está em
+`always` — a maioria dos fluxos continua sem pagar essa consulta a mais por
+mensagem. Campo ausente (nunca acontece numa linha real — a coluna é `NOT
+NULL DEFAULT 'always'` — mas é o estado de um fake de teste desatualizado)
+equivale a `always`, nunca a uma restrição: um `continue` por engano aqui
+descartaria fluxo publicado há meses sem ninguém pedir.
+
+**Saudação e fora do expediente (seções 4/5) moram em `AttendanceSettings`,
+não em `AutomationFlow`.** São o caminho de ZERO CONFIGURAÇÃO — quem não
+quer montar um fluxo ainda tem mensagem automática. `AutomationEngine.
+maybeSendAttendanceAutoMessages` só roda quando NENHUM fluxo do construtor
+capturou a mensagem (um fluxo de verdade, como o template "Atendimento
+Geral", já inclui a própria saudação e nunca deixa cair aqui para a mesma
+conversa). Fora do expediente tem prioridade sobre saudação — nunca os dois
+juntos na mesma mensagem. A tela fica em `/attendance-settings` (reaproveitada,
+não duplicada) — é por isso que "Configurações de Atendimento", no menu de
+Automações, é um LINK para lá, e não uma tela própria.
+
+**Handoff para humano.** `POST /conversations/:id/assign` (a ação EXPLÍCITA
+de uma pessoa assumindo) chama `AutomationEngine.handleHumanTakeover`, que
+marca a execução ativa (se houver) como `handed_off` — status que não é
+`running` nem `waiting`, então a automação simplesmente para de processar
+aquela execução (o worker não a retoma, e uma resposta do cliente não é mais
+capturada por ela). **A atribuição automática de responsável padrão
+(`message-ingest.ts`) NÃO passa por esta rota**, então nunca aciona o
+handoff — do contrário, todo departamento com responsável padrão configurado
+jamais veria um fluxo de automação rodar. Limitação conhecida: o motor não
+guarda "humano no controle" como estado permanente da conversa, só da
+execução — um gatilho `first_message` nunca refire (deixou de ser a primeira
+mensagem), mas um `keyword`/`new_message` mal desenhado poderia, em tese,
+recomeçar depois que um humano já resolveu tudo. Fluxo de saudação deve
+preferir `first_message`, não `new_message`, por este motivo.
+
+**Bloco "Atendimento por IA" — onde este motor encosta no da seção 20.**
+Antes desta entrega, a IA só entrava numa conversa pelo próprio gatilho
+(`AiAutomation`, seção 20), sem passar pelo construtor visual — era a
+lacuna que a documentação da IA registrava como "não há construtor visual
+de fluxos". O bloco `ai_agent` fecha essa lacuna **sem fundir os dois
+motores**: continuam duas peças separadas, com UM ÚNICO fio de mão dupla
+entre elas.
+
+- **A direção do acoplamento é só uma**: `AutomationEngine → AiRuntime`.
+  O motor de fluxos conhece uma interface ESTREITA
+  (`AiRuntimeForFlow.startSessionForFlow`, em `services/automation/engine.ts`)
+  — não a classe `AiRuntime` inteira —, injetada como último parâmetro
+  (opcional, para os testes que sobem o motor sem IA) do construtor. Em
+  `index.ts`, por causa disso, o `AiRuntime` nasce **antes** do
+  `AutomationEngine`, ordem invertida da intuitiva. O `AiRuntime`, por sua
+  vez, **não conhece a existência do motor de automações** — nunca chama
+  nada dele.
+- **A volta (sessão terminou → retomar o fluxo) é VARREDURA, não chamada
+  direta.** `AutomationEngine.tick()` (o mesmo worker de 30s que já retoma
+  timer e "sem resposta") ganhou `resumeDueAiSessions`: lê as execuções
+  `waiting`/`ai_session`, olha o `status` da `AiSession` que cada uma
+  guardou em `context.aiSessionId`, e só age quando ela não está mais
+  `active`. Decisão deliberada — encerrar a sessão já é bastante coisa
+  (nota interna, roteamento, histórico); fazer isso TAMBÉM acionar
+  sincronamente um motor que nem precisa saber que existe seria a mesma
+  aposta de acoplamento que a seção 15 evita entre AZVCHAT e Azevedo-OS.
+  Custo aceito: até 30s de atraso entre a IA terminar e o fluxo continuar —
+  imperceptível num atendimento que já é conversacional.
+- **As duas saídas do bloco** (`resolvido` / `transferido`) são a
+  tradução dos sete `AiSessionStatus` em dois caminhos: só `resolved` cai em
+  "Resolvido pela IA"; QUALQUER outro fim (`transferred`, `stopped`,
+  `limit_reached`, `error`, `expired` — inclusive "Encerrar IA" pela tela,
+  que nem passa pela rota de assumir) cai em "Transferido / encerrado". As
+  duas são opcionais individualmente (a regra genérica de "todo bloco tem
+  que ter para onde ir" já basta) — um fluxo pode deixar só uma conectada.
+- **`AiSession` ganhou `automationExecutionId`** (migration
+  `20260907030000_ai_session_flow_link`), ao lado do `automationId` que já
+  existia para o gatilho de `AiAutomation`. **Nunca os dois juntos** — é o
+  que diz de onde a sessão nasceu. `AiRuntime.createSessionForAgent` é o
+  código ÚNICO que grava a linha nos dois casos (o que muda é só qual dos
+  dois campos vem preenchido); `startSessionForFlow` é a entrada nova, que
+  pula a etapa de "qual automação casa" porque aqui o agente já veio
+  escolhido dentro do bloco.
+- **Sem agente configurado, sem `AiRuntime` injetado (testes) ou agente
+  indisponível** (inativo, sem crédito no orçamento, provedor
+  desconectado) **o bloco nunca trava a execução**: segue direto por
+  "Transferido / encerrado", como se a IA já tivesse desistido. Diferente
+  do caminho do gatilho de `AiAutomation` (que roteia pelo destino de
+  handoff configurado no AGENTE), aqui quem decide para onde vai a
+  conversa quando a IA não começa é o PRÓPRIO FLUXO — por isso
+  `startSessionForFlow`, ao contrário de `tryStartSession`, não chama
+  `routeConversationForHandoff` no caminho de orçamento estourado.
+- **Escolher o agente no bloco não exige `ai.agent.manage`/`ai.view_usage`.**
+  `GET /ai/agents/directory` é um recorte mínimo (id/nome/status, mesmo
+  espírito de `serializeUserDirectory`) liberado também por
+  `automation.manage` — quem monta fluxos referencia um agente já
+  cadastrado, exatamente como já referencia etiqueta/departamento/pessoa
+  sem precisar da chave de quem cadastra aquilo. Custo, sessões e
+  configuração do agente continuam exclusivos da tela de IA.
+
+**Tipos de nó** (`AUTOMATION_NODE_TYPES`, em `shared/automation.ts`):
+`trigger`, `send_message` (só TEXTO enviado pelo motor nesta entrega — os
+demais tipos de mídia existem no catálogo/UI para o dia em que o envio for
+implementado, mas hoje só logam `automation_media_not_supported` e seguem em
+frente), `ask_question` (valida a resposta por tipo — texto, número, CPF,
+CNPJ, e-mail, data, opção — e RESSENTA a pergunta com uma mensagem de erro
+quando inválida, sem avançar o fluxo), `menu` (uma saída por opção,
+selecionada por número ou por texto aproximado da resposta), `condition`
+(campo + valor, combinados por E/OU; ver `AUTOMATION_CONDITION_FIELDS`),
+`wait` (por tempo, ou até o próximo expediente; opcionalmente interrompido
+por uma resposta do cliente — `resumeOnReply`), `tag_add`/`tag_remove`,
+`change_status`, `forward_department` (reaproveita a mesma mecânica de
+"transferir departamento": zera o responsável), `assign_user` (confere
+elegibilidade com a MESMA `conversationAssigneeWhere` de `lib/access.ts` — um
+fluxo não pode atribuir a quem não enxergaria a conversa), `unassign`,
+`ai_agent` (**"Atendimento por IA" dentro do fluxo** — ver o bloco próprio
+mais abaixo, é o ponto onde este motor encosta no da seção 20),
+`webhook` (POST simples, 5s de timeout, falha vira log e o fluxo segue —
+nunca trava a automação por um sistema externo fora do ar), `finish`
+(mensagem final opcional, concluir atendimento, adicionar etiqueta, gerar
+protocolo — `AZV-<timestamp36>-<random4>`, disponível como
+`{{protocolo}}`). Não existe "fila" como entidade própria — o pedido original
+pede "encaminhar para fila/setor/atendente"; aqui isso é
+`forward_department` (setor) + `unassign` (devolver para a fila do setor) +
+`assign_user` (atendente específico), porque o AZVCHAT não tem conceito de
+fila separado de departamento (ver seção 5) — inventar um seria duplicar
+estrutura que já existe.
+
+**Variáveis de mensagem do fluxo** (`resolveAutomationTemplate`, em
+`automation-variables.ts`): `{{nome}}`, `{{primeiro_nome}}`, `{{telefone}}`,
+`{{atendente}}`, `{{departamento}}`, `{{protocolo}}`, `{{data}}`, `{{hora}}`,
+mais `{{campo.<saveKey>}}` para respostas coletadas por um bloco "Fazer
+pergunta" anterior na mesma execução. Variável sem valor vira **string
+vazia** (nunca `{{chave}}` literal nem trava o envio) — diferente da
+resposta rápida, a mensagem do fluxo sai sozinha, sem ninguém para revisar
+antes.
+
+**Validação antes de publicar** (seção 25): `validateAutomationGraph`
+(shared — forma do grafo: gatilho presente e único, bloco desconectado,
+condição sem os dois caminhos, menu com opção sem destino, "aguardar com
+retomada" sem as duas saídas) mais `validateAutomationFlowForPublish`
+(`lib/automation/validate.ts` — departamento/etiqueta/usuário referenciados
+existem NESTA organização). `POST /automation-flows/:id/publish` recusa com
+422 e a lista de pendências quando alguma coisa falha; o motor em si também
+confere de novo em runtime (nó sem aresta de saída completa a execução como
+concluída em vez de travar; laço entre blocos é cortado no passo 60 e a
+execução falha com `automation_execution_failed`, nunca derruba o processo).
+
+**Permissões**: `automation.manage` (construir, publicar, ativar/desativar,
+templates — padrão supervisor+) e `automation.view_history` (padrão
+supervisor+), catálogo `packages/shared/src/permissions.ts`, área
+"Automações". Nada aqui toca `lib/access.ts`: o histórico de execução é
+recortado por `conversationScope`, a mesma régua de sempre — quem não
+enxerga a conversa não vê a execução dela.
+
+**Histórico** (`AutomationExecutionLog`, seção 28): nunca guarda o texto que
+o cliente escreveu — só o que o NÓ decidiu (qual opção do menu, qual
+etiqueta, o resultado). `GET /automation-executions` e `.../\:id` (com os
+logs) alimentam a tela de Histórico.
+
+**O que ficou de fora desta entrega** (documentado para não ser
+redescoberto): distribuição automática por round-robin/menor fila (hoje só
+`assign_user` para uma pessoa específica, decidida na hora de montar o
+fluxo); envio de mídia (imagem/áudio/vídeo/documento) pelo bloco "Enviar
+mensagem" — o tipo existe no catálogo, o motor ainda não sobe pelo storage;
+gatilho de webhook RECEBIDO (só existe o de webhook SAÍDA); "campo
+personalizado" do contato como destino de resposta — só existe variável de
+execução (`{{campo.*}}`), porque o AZVCHAT não tem um `Contact`/`PersonProfile`
+com campos livres, e criar um só para isto duplicaria estrutura; condição em
+árvore booleana (hoje é uma lista plana combinada por um único E/OU, não
+grupos aninhados).
+
+---
+
+## 19. Follow-up Automático
+
+Automação por **tempo sem resposta do cliente**: uma regra com uma ou mais etapas
+("aguardar N, depois fazer X") que dispara quando a conversa entra em
+`waiting_client` ("Aguardando cliente"), cancela sozinha se o cliente responde ou se o
+atendimento sai desse status, e reinicia a contagem se a equipe manda mensagem nova
+enquanto ainda espera. Roda inteiramente no backend — sobrevive a fechar o navegador,
+a deploy e a reiniciar o processo, porque todo o estado (a próxima ação de cada
+conversa) mora no banco, nunca em `setTimeout` do frontend.
+
+**Vínculo com departamento — o MESMO desenho da resposta rápida e da etiqueta.**
+`FollowUpRule.isGeneral` vale para a organização inteira; desligada, a regra tem uma ou
+mais linhas em `FollowUpRuleDepartment` (N:N). Nunca as duas coisas juntas, mesma
+validação de `lib/department-resource.ts` — que é reaproveitado sem mudança nenhuma
+(`resolveDepartmentTarget`, `assertCanManageResource`, `canApplyToConversation`,
+`auditDepartmentSnapshot`). É o que permite **uma** regra valer para Comercial e
+Financeiro ao mesmo tempo, sem duplicar cadastro: editar a regra (adicionar/remover
+departamento, marcar "todos", limpar seleção) reflete para todo mundo que a usa, porque
+não existe cópia por departamento — existe UM registro com vários vínculos.
+
+### Modelo de dados
+
+`FollowUpRule` (cadastro) → `FollowUpRuleDepartment` (N:N, igual a `QuickReplyDepartment`)
+e `FollowUpRuleStep` (etapas, em ordem) → `FollowUpExecution` (o "timer" rodando sobre
+UMA conversa) → `FollowUpExecutionLog` (uma linha por evento: iniciado, etapa executada,
+etapa falhou, reiniciado, cancelado, pausado, retomado, adiado, concluído — é o
+Histórico da seção seguinte).
+
+Uma regra tem no máximo **uma execução ativa ou pausada por conversa**: além da checagem
+de aplicação (`reconcileConversation` nunca inicia uma segunda se já existe uma para a
+mesma regra), o banco garante com um índice **parcial** que o Prisma Client não
+representa em `schema.prisma` —
+`follow_up_executions_one_active_per_conversation`, `UNIQUE (conversationId) WHERE
+status IN ('active', 'paused')`, na migration `20260906120000_follow_up_automation`.
+Mesmo padrão do índice parcial de `tags`/`quick_replies` (`isGeneral = true`): existe
+só no banco, e por isso este comentário existe — quem gerar uma migration nova por cima
+do schema precisa saber que ele está lá antes de deixar o Prisma "corrigir" o diff.
+
+Gatilho (`FollowUpTrigger`) é enum com **um valor só hoje**, `waiting_client` — o pedido
+original cita outros ("tag adicionada", "entrou em departamento") como aceitáveis "se
+compatíveis com a arquitetura atual"; nenhum tem um evento único e barato o bastante
+para justificar a entrada agora, e o enum (em vez de um booleano fixo) deixa a porta
+aberta para entrarem depois sem migration de schema, só de dado.
+
+**"Fila" não existe como entidade no AZVCHAT** (não há tabela de fila — o pedido original
+cita "regra específica da fila" na prioridade). A prioridade real, em
+`lib/follow-up-engine.ts` (`pickApplicableRule`): regra restrita a departamento(s) que
+inclui o da conversa vence a regra geral (`isGeneral`); empate dentro do mesmo degrau,
+regra com filtro de **número** explícito (mais específica) vence a sem filtro; sobrando
+empate, a mais recentemente atualizada. Conversa **sem departamento** aceita qualquer
+regra ativa que bata com o número — mesma regra de `canApplyToConversation` que a
+etiqueta e a resposta rápida já seguem ("sem departamento aceita qualquer item
+visível").
+
+### O motor — `apps/api/src/lib/follow-up-engine.ts`
+
+Fonte única de decisão, chamada de dois lugares:
+
+- **Rotas HTTP**, depois de qualquer mudança que possa afetar um follow-up:
+  `reconcileConversation` em `POST /conversations/:id/status`, `/resolve`, `/reopen`,
+  `/archive`, `/unarchive` e `/transfer-department` (entra, sai, ou reavalia a regra
+  aplicável); `handleInboundMessage` na ingestão de mensagem recebida (`services/
+  instance-manager.ts`, no handler do evento `message` do provider — cobre mensagem ao
+  vivo e a do backfill de histórico, que passam pelo mesmo caminho); `handleOutboundMessage`
+  em todo ponto que cria mensagem de SAÍDA pela equipe (`afterOutboundPersist`, em
+  `modules/messages/routes.ts` — composer, forward, enquete, resposta rápida com mídia —
+  e também o disparo de mensagem agendada em `services/scheduler.ts`).
+- **O worker** (`services/follow-up-scheduler.ts`), a cada 30s, só chama
+  `processDueExecutions`: acha as execuções `active` com `nextRunAt` vencido (mais as
+  `paused` com prazo vencido, que voltam a `active` sozinhas) e roda a etapa de cada uma.
+
+**Revalidação antes de cada etapa, nunca só no início** (o pedido pede isso
+explicitamente): antes de agir, o worker relê a conversa e a regra do banco e confere,
+NESTA ordem — conversa existe e não está arquivada; status ainda é `waiting_client`;
+regra ainda está ativa e ainda vale para o departamento (e o número) da conversa. Falhar
+qualquer uma cancela a execução com o motivo certo
+(`conversation_archived`/`conversation_resolved`/`canceled_status_change`/
+`canceled_department_change`/`rule_deactivated`) em vez de mandar a mensagem de qualquer
+jeito. É o que resolve a seção 15 do pedido ("cancelamento mesmo com job agendado") sem
+precisar de fila de verdade: o "job" é só uma linha com `nextRunAt`, e quem confere se
+ainda faz sentido é sempre a leitura de agora, nunca o que foi decidido na hora de
+agendar.
+
+**Ação de cada etapa** (`FollowUpStepAction`): `send_message` (texto reaproveitando o
+MESMO motor de variáveis da resposta rápida — `resolveQuickReplyTemplate`, de
+`@azvchat/shared`, com `{{empresa.*}}` resolvido contra o Azevedo-OS quando a conversa
+está vinculada), `add_tag`/`remove_tag` (`ConversationTag`) e `change_status`. **Ficaram
+de fora desta entrega** "encaminhar" e "webhook/API" (citados como possíveis no pedido
+original): encaminhar precisaria da mesma régua de `conversationAssigneeWhere` que a
+transferência manual usa, e webhook para URL arbitrária é superfície de ataque que
+merece desenho próprio (allowlist, assinatura, timeout) — nenhum dos dois tem o mesmo
+"reaproveita o que já existe" das outras quatro ações.
+
+**Encerramento automático** (`FollowUpRule.finalizeOnComplete`, ligado por padrão):
+depois da última etapa, se ninguém respondeu, a conversa vai para `resolved`, ganha uma
+linha em `ConversationAssignmentHistory` com o motivo (`finalizeReason`, padrão "Sem
+retorno do cliente") e, se configurada, uma etiqueta (`finalizeTagId` — o pedido sugere
+"ENCERRADO POR INATIVIDADE", mas o nome é livre, reaproveitando `Tag` que já existe).
+
+**Expediente** (`FollowUpRule.respectBusinessHours`, ligado por padrão):
+`lib/business-schedule.ts` (`nextBusinessMoment`) empurra o horário calculado da
+próxima etapa para a abertura do próximo dia útil quando ele cai fora do expediente
+configurado em `AttendanceSettings`/`AttendanceBusinessHours` — **a MESMA fonte que o
+dashboard usa para expediente**, nunca uma segunda definição. Feriado não é tratado,
+pelo mesmo motivo do card de atraso: não existe tabela de feriados no AZVCHAT.
+
+**Cancelamento e reinício da contagem** (seções 14/16 do pedido): mensagem recebida
+cancela sempre (`client_replied`); mensagem enviada pela equipe **enquanto a etapa
+atual ainda não venceu** reinicia o prazo dela a partir de agora
+(`handleOutboundMessage`) — nunca cria uma segunda execução, só reagenda a que já
+existe. Mudar de departamento reavalia: se a nova regra aplicável é outra, a execução
+antiga é cancelada (`canceled_department_change`) e uma nova começa do zero na regra do
+departamento novo; se ninguém aplica mais, só cancela.
+
+### Ações do atendente na conversa
+
+`GET/POST /conversations/:id/follow-up*` (mesmo recorte de acesso de qualquer rota de
+conversa — `findAccessibleConversation`): `cancel`, `pause` (com ou sem `untilAt`;
+pausa com prazo volta a `active` sozinha quando o worker perceber que o prazo venceu),
+`resume`, `postpone` (`until` obrigatório, no futuro). Papel mínimo é a chave
+`follow_up.control` do catálogo de permissões (`packages/shared/src/permissions.ts`),
+padrão liberado para usuário e supervisor — controlar o que já está rodando numa
+conversa é atendimento, não cadastro. **Criar, editar, duplicar, ativar/desativar e
+excluir a REGRA** é a chave separada `follow_up.manage` (cadastros, padrão só
+supervisor+), a mesma que trava `GET/POST/PATCH/DELETE /follow-up-rules*` e
+`GET /follow-up-executions` (Histórico geral). Regra **geral** ("todos os
+departamentos") continua sendo só do admin, sem chave própria — mesma exceção que a
+etiqueta geral já tinha (`resolveDepartmentTarget` sem `canWriteGeneral` cai em
+`canWriteGeneralResource`, que só o admin passa).
+
+Na tela do chat, `components/inbox/follow-up-banner.tsx` (fora do `inbox-shell.tsx` de
+propósito, como o hook de não lidas) desenha a faixa discreta — regra, etapa atual,
+próxima ação, departamento — e os botões de ação; some sozinha quando não há execução
+ativa/pausada. Evento próprio de tempo real, `RealtimeEvents.FollowUpUpdated`
+(`followup:updated`, payload `FollowUpUpdatedPayload`), carregando o estado INTEIRO da
+execução (ou `null`) para a `conversationAudience` de sempre — mesma ideia de
+`PinnedItems`: reenviar tudo é mais simples que sincronizar patch, e o payload é
+pequeno por construção.
+
+### Tela — Automações → Follow-up Automático
+
+`apps/web/src/app/(app)/automations/follow-up/page.tsx`: lista (nome, status,
+departamentos — `DepartmentBadges` reaproveitado sem mudança —, número, gatilho, prazo
+do primeiro follow-up, quantidade de etapas, execuções ativas, mensagens enviadas,
+última alteração), Nova regra/Editar/Duplicar/Ativar-Desativar/Excluir/Histórico. O
+formulário reaproveita `DepartmentCheckboxes`/`useMyDepartments`/`canManageScopedItem`
+de `components/department-picker.tsx` — o mesmo componente que Etiquetas e Respostas
+Rápidas usam, sem duplicar lógica de seleção. Histórico (regra ou geral) mostra os
+contadores da seção 34 do pedido (execuções, departamentos usados, clientes que
+responderam, encerradas por inatividade, canceladas) e a lista de execuções com o log
+expandível de cada uma.
+
+### O que ficou de fora desta entrega (limitações conhecidas)
+
+- Gatilhos além de `waiting_client` ("tag adicionada", "entrou em departamento/fila") —
+  o enum já suporta adicionar sem migration de schema, só falta o disparo.
+- Ações `encaminhar` e `webhook/API` nas etapas (ver acima, por quê).
+- Reordenar etapas na tela é por botões (subir/descer), não arrastar — mesmo efeito,
+  interação mais simples.
+- Indicadores agregados da seção 35 do pedido (taxa de recuperação, mensagens enviadas
+  HOJE) não têm card próprio na tela principal — os números por regra (execuções
+  ativas, mensagens enviadas, e os contadores do Histórico) já existem e cobrem a
+  auditoria, mas o painel consolidado do dia é trabalho futuro, no mesmo molde do
+  dashboard.
+- A tela principal (seção 6 do pedido) ainda não tem barra de filtro por departamento/
+  status/regra/período — a API de histórico (`GET /follow-up-executions`) já aceita
+  `departmentId`/`ruleId`/`status`/`from`/`to`, então plugar os controles é trabalho de
+  tela, não de rota nova. Filtro por fila/atendente/tipo de atendimento (seção 22) não
+  entrou: "fila" não existe no AZVCHAT, e atendente/tipo de atendimento não são
+  atributos de `FollowUpRule` nesta entrega.
+
+## 20. Inteligência artificial (atendimento por IA)
+
+Módulo nativo: uma IA atende conversas do WhatsApp dentro da Inbox, com regras, limites,
+conhecimento e custo sob controle. Tela em **Configurações → Inteligência artificial**
+(`/settings/ai`, abas Visão geral, Provedores, Agentes, Automações, Base de conhecimento,
+Consumo e limites, Logs, Configurações gerais). Fonte única do domínio:
+`packages/shared/src/ai.ts`.
+
+**O que este repositório NÃO tinha, e como foi resolvido.** O pedido original falava em
+construtor visual de fluxos, CRM, follow-up automático, filas e campos personalizados de
+contato. Nada disso existe aqui (é o Azevedo-OS que tem CRM; a "fila" da casa é a conversa
+sem responsável). Em vez de inventar um sistema paralelo para cada um:
+- o "bloco Atendimento por IA" é a **automação** (`AiAutomation`): gatilho por número,
+  departamento, tipo de conversa e "só sem responsável"/"só conversa nova" → agente. As
+  saídas do bloco são: **resolvido** (conclui a conversa + etiqueta da automação),
+  **transferido** (destino de transferência do agente) e **erro/limite** (mensagem de
+  fallback do agente + fila humana);
+- "CRM" é o que a casa já usa para classificar: **etiquetas**, **nota interna** (o registro
+  de oportunidade/atividade) e **status** do atendimento;
+- "follow-up" é o **Follow-up Automático** da seção 19 — a ferramenta `schedule_followup`
+  põe a conversa em "Aguardando cliente" e chama `reconcileConversation`, que inicia a
+  REGRA de follow-up que valer para a conversa (nenhuma regra nova é criada pela IA), e a
+  participação da IA termina; quando o cliente responde, a automação pode abrir um ciclo
+  novo. Toda mensagem que a IA envia passa por `handleOutboundMessage`, e concluir/
+  transferir passa por `reconcileConversation`, como as rotas da equipe;
+- "campos a coletar" vivem na **memória do atendimento** (`AiSession.state.collected`) e vão
+  no resumo ao atendente; o nome coletado pode virar `customTitle` da conversa, quando a
+  capacidade está ligada. Não há tabela de campos personalizados de contato.
+
+**Atualização:** o parágrafo acima descreve como a entrega original resolveu "sem
+construtor visual de fluxos" — na época, verdade: não existia um. O construtor da seção 18
+chegou depois, e ganhou um bloco `ai_agent` que entrega a conversa a um agente **dentro** de
+um fluxo desenhado visualmente. As duas portas de entrada continuam existindo, para casos
+diferentes: `AiAutomation` (este item) é o gatilho de ZERO CONFIGURAÇÃO, direto por número/
+departamento/tipo de conversa, sem montar nada visual; o bloco `ai_agent` é para quando a IA
+é UMA ETAPA dentro de algo maior (ex.: menu → "Comercial" → IA → se não resolver, humano). Os
+dois criam a MESMA `AiSession`, só com origem diferente (`automationId` vs.
+`automationExecutionId` — nunca os dois). Ver o bloco dedicado na seção 18 para como as duas
+peças se encaixam sem se fundir.
+
+**As três peças, separadas de propósito** (é a decisão mais importante do desenho):
+- `AiAgent` — a configuração REUTILIZÁVEL: identidade, objetivo, "pode/não pode" (texto +
+  **capacidades estruturadas**), limites, gatilhos de transferência e destino, comunicação,
+  condutas, dados a coletar, fontes de conhecimento, avançado. `config` é JSON validado por
+  Zod (`services/ai/config-schema.ts`, mesma forma de `AiAgentConfig` do shared) — dezenas de
+  campos que só a IA lê; o que é consultado por SQL (status, modelo, departamentos N:N em
+  `AiAgentDepartment` com `isGeneral`, destino de transferência com FK) tem coluna;
+- `AiAgentVersion` — foto da config a cada gravação que muda config/modelo. **A sessão
+  aponta para a versão com que começou**: alterar a IA Comercial não troca as regras no meio
+  de uma conversa. Renomear ou trocar departamento não é versão;
+- `AiSession` — um atendimento (conversa + agente numa versão), com `state` (memória:
+  dados coletados, assunto, resumo, ações), contadores, tokens, custo, `lastProcessedMessageId`
+  e `endReason`. **Índice parcial garante uma sessão ativa por conversa.**
+Mais `AiProviderConfig` (chave cifrada + hint + modelo padrão + cache de modelos),
+`AiSettings` (orçamento, política, timeout, contexto, tabela de preço, degraus já avisados),
+`AiKnowledgeSource` + `AiAgentKnowledgeSource`, `AiAutomation`, `AiUsageLog` (uma linha por
+chamada ao provedor: tokens, custo estimado, duração, ferramentas pedidas/executadas/bloqueadas,
+erro — **nunca conteúdo nem chave**). Migration `20260906120000_ai_module`.
+
+**A chave da OpenAI é segredo.** Sobe UMA vez (`PUT /ai/providers/openai`), é cifrada com
+AES-256-GCM (`lib/ai-secrets.ts`, chave em `AI_SECRETS_KEY`; sem ela deriva do `JWT_SECRET`
+e o boot avisa — trocar o `JWT_SECRET` nesse modo invalida a chave gravada), e decifrada só
+no processo da API, na hora da chamada. Para a tela vai apenas `apiKeyHint`
+("sk-••••8F2A"); não há `NEXT_PUBLIC_` e nunca haverá; o erro do provedor nunca é
+repassado (ele ecoa o cabeçalho, que leva a chave); auditoria grava só o hint.
+`apps/api/test/ai-routes.test.ts` fixa que a chave não aparece em resposta nenhuma.
+
+**Provedor é abstração** (`services/ai/provider.ts`: `testConnection`, `listModels`, `chat`
+com function calling, `fetchBilling`). `OpenAiProvider` fala por `fetch` puro; provedor novo
+entra em `createAiProvider` (`credentials.ts`) e em `AI_PROVIDERS`. **Modelos**: a lista vem
+de `GET /v1/models` (filtrada para chat) com cache de 6h; sem chave/provedor mudo, sai o
+catálogo local (`AI_MODEL_CATALOG`, com finalidade e preço), marcado como tal. Modelo global
+(padrão do sistema) e por agente (`advanced.model`). **Saldo**: a OpenAI não expõe saldo
+pré-pago por API e só informa custo faturado a Admin key — a tela tenta, e sem acesso diz
+"Saldo não disponibilizado pelo provedor" em vez de inventar número.
+
+**O motor** (`services/ai/runtime.ts`). Ingestão grava a mensagem como sempre → o
+instance-manager avisa `aiRuntime.onInboundMessage` (só `inbound`, só não arquivada) →
+debounce de 2,5s por conversa (duas mensagens rápidas viram um turno) → fila por conversa em
+memória (nunca dois turnos da mesma conversa; mensagem que chega durante o turno agenda o
+próximo) → sem sessão ativa, alguma automação casa? (`automationMatches`, puro e testado) →
+turno: prompt de sistema montado dos campos (`prompt-builder.ts`, puro) + histórico recente
+(mensagens NOVAS por último) + trechos da base (`knowledge.ts`, busca **lexical** por trecho,
+sem embeddings, nunca a base inteira) → provedor com ferramentas filtradas pela capacidade
+(`tools.ts`) → cada ferramenta pedida passa por `actions.ts` (capacidade ligada? argumentos
+válidos? alvo permitido para ESTA conversa?) → resposta pelo **mesmo** `provider.sendText`
+com `Message.metadata.origem = "ai"` (+ agente, sessão, provedor, modelo) → consumo em
+`AiUsageLog` → `ai:session`. **`lastProcessedMessageId` avança só depois de o provedor
+responder**: falha antes disso reprocessa as mesmas mensagens; a varredura de 1 min
+(`sweep`) retoma turno pendente após reinício, encerra sessão além do tempo máximo e a de
+conversa arquivada. **Humano assumiu = IA para na hora**: `interruptAiSessionForHuman`
+(`session.ts`) é chamado por atribuir, transferir departamento e por TODO envio da equipe
+(`afterOutboundPersist` em `messages/routes.ts`), e o turno RELÊ a sessão antes de enviar —
+resposta gerada para sessão interrompida é descartada. "Devolver para IA" é ação explícita
+(`POST /conversations/:id/ai/resume`, chave própria) que reaproveita a memória.
+
+**`AiAgentConfig.advanced.responseDelaySeconds`** — espera, em segundos (0–60,
+padrão 0 = imediato, o comportamento de sempre), entre o modelo decidir o
+texto e a mensagem sair de verdade pelo WhatsApp: simula o tempo de
+digitação de uma pessoa, para o atendimento não parecer instantâneo. Vive
+dentro de `sendAiText` — não em cada um dos 6 pontos que a chamam
+(apresentação, resposta, transferência, encerramento, aviso de fallback) —
+cobrindo toda mensagem da IA de uma vez, uniformemente. **Com a espera
+configurada, `sendAiText` RELÊ o status da sessão depois de esperar**, antes
+do `provider.sendText` de verdade, e descarta em silêncio se a sessão não
+está mais ativa — sem essa segunda checagem, um humano assumindo a conversa
+DURANTE a espera não impediria a mensagem da IA de sair depois, furando a
+invariante de "resposta gerada para sessão interrompida nunca sai" que já
+valia para "humano assume enquanto o modelo pensa". O testador
+(`POST /ai/agents/:id/test`) nunca passa por `sendAiText`, então a espera não
+afeta testar um agente.
+
+**`AiAgentConfig.advanced.scheduleMode`** — quando o agente pode INICIAR
+atendimento, em relação ao expediente de `AttendanceSettings`: `always`
+(padrão, todo agente de hoje), `business_hours` ou `outside_business_hours`.
+Mesma régua e mesmo enum de `AutomationFlow.scheduleMode` (seção 18),
+declarados uma vez em `packages/shared/src/attendance.ts` — **o caso de uso
+real é o inverso do intuitivo**: não é "trava a IA para não incomodar de
+madrugada", é "a IA cobre a noite e o fim de semana, quando não tem ninguém
+da equipe; de dia, quem atende é gente". Decide o AGENTE, não a porta de
+entrada: a mesma checagem (`isAgentScheduledNow`) guarda as DUAS formas de
+começar uma sessão — `tryStartSession` (gatilho de `AiAutomation`) e
+`startSessionForFlow` (bloco do construtor) — logo depois de saber qual
+agente respondeu, antes de gastar orçamento/credenciais com ele. Fora da
+janela, a IA simplesmente não começa: pelo gatilho de automação, a mensagem
+cai no aviso automático de "fora do expediente" (zero configuração) se
+nenhum fluxo a capturar antes; pelo bloco de fluxo, `startSessionForFlow`
+devolve `null` e o fluxo segue pela saída "Transferido / encerrado" de
+sempre — o mesmo caminho de quando não há agente configurado.
+
+**Ferramentas** (`AI_TOOL_NAMES`): `save_collected_data`, `update_contact_name`, `add_tag`,
+`remove_tag`, `add_internal_note`, `set_conversation_status`, `schedule_followup`,
+`search_knowledge_base`, `lookup_company` (Azevedo-OS, só cadastro — nada financeiro),
+`transfer_to_human`, `finish_conversation`. Cada uma é liberada por UMA capacidade
+(`AI_CAPABILITIES`); desligada, nem é oferecida ao modelo, e se ele pedir pelo nome o backend
+recusa e registra em `toolsBlocked`. **O modelo pede; o backend decide. O prompt nunca é
+controle de acesso.** As terminais (`transfer_to_human`, `finish_conversation`,
+`schedule_followup`) encerram o laço: não há nova volta ao modelo.
+
+**Transferência**: resumo determinístico (`buildHandoffSummary`: cliente, assunto,
+necessidade, dados coletados, motivo, contagens) vira **nota interna** ANTES de a conversa
+mudar de sala; a conversa é roteada ao departamento do agente e ao responsável conforme o
+modo (`rules` = responsável padrão do departamento/número via `eligibleAssigneeWhere`;
+`specific` só se a pessoa enxerga a conversa; `unassigned` = fila); histórico de atribuição
+com a nota; sessão `transferred`. Erro permanente do provedor (chave, modelo, cota), tentativas
+esgotadas, limite de mensagens/tempo, orçamento e agente desativado passam por
+`finishWithFallback`: mensagem de fallback ao cliente + a mesma transferência.
+**Nunca silêncio.**
+
+**Orçamento** (`budget.ts`): gasto do mês = soma de `AiUsageLog.costMicros` (custo
+estimado por `estimateCostMicros`, tabela em `AI_MODEL_CATALOG` + sobreposição da
+organização; modelo sem preço → `costMicros` nulo e a tela avisa, **nunca zero**). Degraus
+50/80/90/100 avisam o admin uma vez por mês por degrau (`ai:budget-alert`). Ao estourar:
+`alert_only` segue; `block_new` não abre sessão nova; `transfer_human` idem e ainda roteia a
+conversa ao destino do agente. Sessão em andamento com bloqueio é encerrada com fallback no
+turno seguinte.
+
+**Permissões**: chave da OpenAI, orçamento e configurações gerais são `requireRole("admin")`
+(credencial e dinheiro). Catálogo: `ai.agent.manage` (agentes, base, automações, testador),
+`ai.view_usage` (consumo, indicadores, logs), `ai.session.stop` (assumir/encerrar na
+conversa; padrão também para Usuário), `ai.session.resume` (devolver). Agente segue o recorte
+de departamento de etiqueta/resposta rápida (`departmentResourceScope`, geral só admin).
+**Nada encosta em `access.ts`**: quem enxerga a conversa enxerga a faixa de IA dela.
+
+**Testador** (`POST /ai/agents/:id/test`): mesmo prompt, mesmas ferramentas, mesmas recusas,
+em modo `dryRun` — nada gravado, nada pelo WhatsApp; o consumo entra como `kind = test`. O
+estado (dados coletados) viaja de ida e volta no corpo. Modo debug mostra conhecimento
+usado, ferramentas pedidas/bloqueadas/executadas, tokens, custo e motivo de transferência —
+nunca raciocínio interno do modelo.
+
+**Inbox**: `GET /conversations/:id` traz `aiSession` (a mais recente); a faixa
+`components/ai/ai-session-banner.tsx` mostra agente, mensagens, tempo e os botões
+(Assumir = `POST /assign` de sempre; Encerrar IA; Ver configuração; Devolver para IA). Bolha
+enviada pela IA mostra ícone + "· IA" (`isAiMessage(metadata)`, nunca deduzido do texto).
+
+**Base de conhecimento: link e documento além de texto/FAQ.** `POST /ai/knowledge/extract-url`
+e `POST /ai/knowledge/extract-document` (`services/ai/knowledge-extract.ts`) só EXTRAEM texto
+— nada é gravado ali. As duas devolvem `{ title, content, truncated }` para a tela pré-preencher
+o formulário de "Nova fonte", que a equipe revisa e edita antes do `POST /ai/knowledge` de
+sempre — mesmo espírito da variável de resposta rápida ("a atendente LÊ antes do Enter"):
+resolver e gravar sem revisão transformaria um erro de extração (título errado, menu de
+navegação junto do texto, PDF digitalizado sem texto real) em conteúdo publicado sem ninguém
+perceber. Por isso não existe reextração automática nem endpoint de "atualizar" — trocar de
+link ou reenviar o arquivo é sempre uma extração nova. `AiKnowledgeKind` ganhou `url` e
+`document`, mas os dois só mudam COMO o campo `content` foi preenchido: depois de salva, a
+fonte não tem tratamento especial nenhum (mesmo `chunkSource`, mesma busca lexical, mesmo
+teto de `AI_KNOWLEDGE_MAX_CHARS`) — texto acima do teto é CORTADO na extração (`truncated:
+true`, avisado na tela), nunca rejeitado. **O arquivo e a página nunca são guardados**, só o
+texto que saiu deles — a mesma filosofia de "é texto, não anexo" que já valia para `text`/
+`faq`; o único traço que sobra é `sourceRef` (o link ou o nome do arquivo), gravado à parte só
+para EXIBIÇÃO na lista, nunca para decidir nada. Link é extraído com `cheerio` (HTML estático,
+sem headless browser — cobre o caso comum de página institucional/FAQ); documento decide o
+formato pela EXTENSÃO do nome (`pdf-parse`/`mammoth`/leitura direta para `.txt`), porque o
+mimetype que o navegador manda para `.docx` costuma vir genérico. **Link é a única chamada de
+rede que a API faz a pedido de texto livre digitado por quem administra, e por isso tem trava
+de SSRF**: o hostname é resolvido e o IP tem que ser público — loopback, rede privada
+(RFC1918), link-local e o endereço de metadados de nuvem (`169.254.169.254`) são recusados
+ANTES do `fetch`, o redirecionamento nunca é seguido sozinho (o destino precisaria passar pela
+mesma checagem, e reaplicá-la depois do fetch já ter começado é tarde demais) e só
+`text/html`/`text/plain` é aceito. Sem essa trava, "colar um link" na base de conhecimento
+seria porta para a API bater na própria rede interna a pedido de qualquer pessoa com a chave
+`ai.agent.manage`.
+
+**Testes**: `ai-secrets`, `ai-knowledge` (recuperação lexical, inclusive a equivalência entre
+`url`/`document` e `text` depois de salvos), `ai-knowledge-extract` (a trava de SSRF, redirect,
+Content-Type, corte pelo teto, roteamento de documento por extensão, erro de biblioteca
+traduzido em português), `ai-prompt` (prompt/ferramentas/config), `ai-actions` (as três portas
++ `automationMatches` + custo), `ai-runtime` (motor de ponta a ponta com Prisma em memória —
+`test/helpers/memory-prisma.ts` — e `fetch` da OpenAI simulado: sessão, debounce, transferência,
+humano no meio do turno, ferramenta bloqueada, fallback, orçamento), `ai-routes` (chave nunca
+vaza, papéis, versão).
+
+**Limitações desta entrega** (registradas, não escondidas): a IA responde só em texto (sem
+mídia); a base de conhecimento usa busca lexical, sem embeddings (link e documento viram texto
+extraído, mas a recuperação continua por sobreposição de termos, não semântica); vídeo do
+YouTube e transcrição de áudio não entram como fonte; a pesquisa de saldo da OpenAI depende de
+Admin key; a API roda em instância única (a fila por conversa é em memória, como o scheduler).
+O construtor visual de fluxos chegou depois desta entrega (seção 18) e ganhou um bloco que
+entrega a conversa a um agente — ver "Atualização" mais acima e o bloco dedicado na seção 18.
+
+---
+
+## 21. CRM — funil de oportunidades sobre o atendimento
 
 O CRM **não é um sistema à parte**: é uma camada de INTENÇÃO COMERCIAL por cima do
 atendimento que já existe. A regra que decidiu todo o desenho é a mesma do resto da casa —
@@ -2473,7 +3160,7 @@ oportunidades abertas do cliente e traz o "+ Criar oportunidade" que aproveita a
 
 ---
 
-## 19. Como escrever um bom prompt para este sistema
+## 22. Como escrever um bom prompt para este sistema
 
 Um prompt fica bom aqui quando responde, nesta ordem:
 

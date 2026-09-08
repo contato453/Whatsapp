@@ -27,7 +27,7 @@ import {
   normalizeAzevedoOsStatus,
   type AzevedoOsCompany,
 } from "./azevedo-os.js";
-import { formatPhone } from "./phone.js";
+import { formatPhone, phoneFromChatId } from "./phone.js";
 
 /* ------------------------------------------------------------------ *
  * Sintaxe
@@ -103,25 +103,6 @@ export interface QuickReplyVariableContext {
   agent: QuickReplyAgentContext | null;
   /** Data de referência das variáveis calculadas. Entra por parâmetro para o teste fixá-la. */
   now: Date;
-}
-
-/**
- * Telefone a partir do endereço do WhatsApp.
- *
- * O domínio entra por LISTA DE PERMISSÃO, e não excluindo o "@lid": o
- * endereço de grupo ("1203630001@g.us") também é só dígitos, e recusar
- * apenas o LID faria o identificador do grupo sair como telefone dentro da
- * mensagem — número que não é de ninguém, e para o qual alguém tentaria
- * ligar de volta. LID fica de fora pelo mesmo motivo: é identificador
- * interno, não telefone.
- */
-const PHONE_DOMAINS = new Set(["s.whatsapp.net", "c.us"]);
-
-function phoneFromChatId(externalChatId: string): string | null {
-  const [numero, dominio] = externalChatId.split("@");
-  if (!numero || !dominio || !PHONE_DOMAINS.has(dominio)) return null;
-  if (!/^\d{8,15}$/.test(numero)) return null;
-  return numero;
 }
 
 /**

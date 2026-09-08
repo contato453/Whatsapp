@@ -20,6 +20,30 @@ export function formatPhone(phone: string | null): string {
   return `+${phone}`;
 }
 
+/**
+ * Domínios de endereçamento que carregam telefone de verdade. `@lid` fica de
+ * fora de propósito: é identificador interno do WhatsApp, não telefone —
+ * exibi-lo como se fosse levaria alguém a tentar ligar de volta para um
+ * número que não existe.
+ */
+const REAL_PHONE_JID_DOMAINS = new Set(["s.whatsapp.net", "c.us"]);
+
+/**
+ * Telefone a partir de um endereço de chat individual (`"5511999@s.whatsapp.net"`),
+ * ou `null` quando o endereço é de grupo, `@lid`, ou não é dígitos puros.
+ *
+ * Fonte única: a resposta rápida e as variáveis de automação precisam da
+ * MESMA régua para decidir se `{{conversa.telefone}}`/`{{telefone}}` tem
+ * valor — duas versões da mesma checagem divergiriam no primeiro `@lid` novo
+ * que o WhatsApp inventasse.
+ */
+export function phoneFromChatId(externalChatId: string): string | null {
+  const [numero, dominio] = externalChatId.split("@");
+  if (!numero || !dominio || !REAL_PHONE_JID_DOMAINS.has(dominio)) return null;
+  if (!/^\d{8,15}$/.test(numero)) return null;
+  return numero;
+}
+
 /** Resultado da normalização de um telefone para envio. */
 export type NormalizedPhone =
   | { ok: true; phone: string; jid: string }

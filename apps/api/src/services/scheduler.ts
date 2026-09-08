@@ -8,6 +8,7 @@ import { emitScheduledPending } from "../lib/scheduled-pending.js";
 import { serializeConversation, serializeMessage } from "../lib/serialize.js";
 import { resolveConversationPersonName } from "../lib/person-profile.js";
 import { applySignature } from "../lib/signature.js";
+import { handleOutboundMessage } from "../lib/follow-up-engine.js";
 import { buildPreview } from "./message-ingest.js";
 
 /** Intervalo de verificação da fila de agendamentos. */
@@ -160,6 +161,21 @@ export class ScheduledMessageWorker {
       }
       // Saiu da fila: o badge do composer cai um (ou some, se era o último).
       await this.emitPending(scheduled.organizationId, scheduled.conversationId);
+      // Follow-up automático: mensagem agendada que sai enquanto a conversa
+      // aguarda o cliente reinicia a contagem, do mesmo jeito que reiniciaria
+      // se a equipe tivesse mandado na hora.
+      try {
+        await handleOutboundMessage(
+          { prisma: this.prisma, io: this.io, logger: this.logger },
+          scheduled.conversationId,
+        );
+      } catch (err) {
+        this.logger.warn({
+          conversationId: scheduled.conversationId,
+          event: "follow_up_outbound_hook_failed",
+          error: String(err),
+        });
+      }
       this.logger.info({
         event: "scheduled_message_sent",
         scheduledId: scheduled.id,
