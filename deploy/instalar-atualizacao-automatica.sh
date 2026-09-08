@@ -2,8 +2,15 @@
 # ==============================================================
 # Instala o timer do systemd que mantém a VPS atualizada sozinha.
 #
-# Rode UMA vez, como root, dentro do clone:
+# Rode UMA vez, como root, dentro do CLONE DE TRABALHO — o que tem o
+# `docker-compose.azvchat2.yml` (normalmente ~/Whatsapp-ajustes), e não o
+# ~/Whatsapp, que serve a stack morta (ver CLAUDE.md §11):
 #     bash deploy/instalar-atualizacao-automatica.sh
+#
+# O timer aponta para esta pasta (WorkingDirectory), então instalar do
+# clone errado deixaria a atualização automática presa nele para sempre.
+# O `atualizar.sh` recusa rodar lá, mas aí o timer só falha em silêncio a
+# cada 2 minutos — melhor acertar a pasta agora.
 #
 # A partir daí, a cada 2 minutos a VPS verifica se a branch padrão
 # andou. Se andou, atualiza e sobe os containers; se não, sai em

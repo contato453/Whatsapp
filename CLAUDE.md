@@ -1118,9 +1118,13 @@ conhecê-la sozinhos. **Dado financeiro nunca entra**: ver a seção 13.
   migrations rodam no start da API. Passo a passo completo em `DEPLOY.md`.
 - **CI** (`.github/workflows/ci.yml`): typecheck → lint → testes → build, em PR e push.
 - **Deploy — caminho principal**: a VPS se atualiza sozinha. `deploy/atualizar.sh` faz
-  `fetch` + `merge --ff-only` da branch padrão e `docker compose up -d --build` só quando há
-  commit novo; `deploy/instalar-atualizacao-automatica.sh` instala o timer do systemd que o
-  chama a cada 2 minutos. Nenhum segredo no GitHub, nenhuma porta a mais na VPS.
+  `fetch` + `merge --ff-only` da branch padrão e sobe a **stack `azvchat2`**
+  (`docker compose -f docker-compose.azvchat2.yml --env-file .env.azvchat2 up -d --build`)
+  só quando há commit novo; `deploy/instalar-atualizacao-automatica.sh` instala o timer do
+  systemd que o chama a cada 2 minutos. Nenhum segredo no GitHub, nenhuma porta a mais na
+  VPS. Como os dois arquivos da stack ficam **fora do Git**, o script **recusa e sai com
+  erro** quando não os encontra: rodá-lo do clone errado (o `/root/Whatsapp`, que serve a
+  stack morta) precisa falhar alto, e não subir a stack errada em silêncio.
 - **Deploy por SSH** (`.github/workflows/deploy.yml`, opcional): dispara quando o CI da
   branch padrão fecha verde; um deploy por vez, nunca cancelado no meio. O job roda no
   environment `production` — `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY` (e os opcionais
@@ -1135,8 +1139,11 @@ conhecê-la sozinhos. **Dado financeiro nunca entra**: ver a seção 13.
 >    trabalho). Só o Postgres e o Caddy dela seguem de pé; API e Web nunca sobem — os
 >    domínios que ela serve (`app.lincolnazevedo.com.br`, `api.lincolnazevedo.com.br`)
 >    apontam para containers `web`/`api` que não existem mais (DNS interno do Docker
->    devolve `127.0.53.53`, o "não existe" do resolvedor). **Rodar `deploy/atualizar.sh`
->    ou `docker compose up` nessa pasta não atualiza a produção — atualiza um cadáver.**
+>    devolve `127.0.53.53`, o "não existe" do resolvedor). **`docker compose up` nessa
+>    pasta não atualiza a produção — atualiza um cadáver, e ainda reinicia o Caddy a
+>    partir do arquivo em disco.** (`deploy/atualizar.sh` deixou de ser um caminho para
+>    esse acidente: desde 08/09/2026 ele aponta para a `azvchat2` e recusa rodar onde os
+>    arquivos dela não existem, que é exatamente o caso desta pasta.)
 > 2. `azvchat2` → `docker-compose.azvchat2.yml` **dentro do clone de trabalho da VPS**,
 >    mas **fora do Git** (não versionado, `.gitignore` nunca o viu). Containers
 >    `azvchat2-azvapi-1`/`azvchat2-azvweb-1`/`azvchat2-azvpg-1`. **Este é o sistema que o
@@ -1157,7 +1164,9 @@ conhecê-la sozinhos. **Dado financeiro nunca entra**: ver a seção 13.
 > **Nunca faça isso.** Deploy de código novo na VPS, a partir de agora, é:
 > `git checkout <branch>` no clone de `/root/Whatsapp-ajustes/`, depois
 > `docker compose -f docker-compose.azvchat2.yml --env-file .env.azvchat2 up -d --build`
-> — nunca `docker-compose.prod.yml`, nunca a pasta `/root/Whatsapp`. Antes de confiar em
+> — nunca `docker-compose.prod.yml`, nunca a pasta `/root/Whatsapp`. É exatamente isso
+> que `deploy/atualizar.sh` e o `deploy.yml` fazem hoje, e os dois precisam continuar
+> concordando: divergir de novo é como um deles voltaria a subir a `prod` sozinho. Antes de confiar em
 > qualquer deploy futuro, valide de verdade (como no incidente da seção 15: resultado do
 > comando é evidência, código de saída não é) — `docker compose ps` com os três
 > containers `healthy`/`Up`, log da API sem erro de migration, e
