@@ -1,0 +1,109 @@
+# ==============================================================
+# MODELO para uma instância NOVA e isolada do AZVCHAT.
+#
+# NÃO use este arquivo direto. Ele tem o marcador __SUF__ em todo lugar que
+# precisa ser único, e existe para virar um arquivo de verdade com UM comando:
+#
+#   cd /root/Whatsapp-ajustes
+#   sed 's/__SUF__/3/g' deploy/instancia/docker-compose.instancia.yml \
+#     > docker-compose.azvchat3.yml
+#
+# O sufixo entra em NOME DE CONTAINER, que vira nome de máquina na rede: use
+# só letras e números, curto, sem traço nem sublinhado (3, 4, abc). Cada cópia
+# precisa do seu, e trocar o sufixo é o que mantém as cópias separadas.
+#
+# O passo a passo completo está em deploy/instancia/DUPLICAR.md — leia antes,
+# porque só este arquivo não sobe uma instância: falta o bloco do Caddy e a
+# conexão de rede, e as duas coisas são feitas na mão.
+# ==============================================================
+
+# O `name` é o que separa uma cópia da outra no Docker. Ele também prefixa os
+# volumes (`azvchat__SUF___pgdata`), então banco, sessões de WhatsApp e mídias
+# nascem vazios e próprios sem ninguém precisar declarar nada.
+name: azvchat__SUF__
+
+services:
+  # Os nomes de serviço levam o sufixo por um motivo que não é estético: o
+  # Caddy da produção é conectado à rede de CADA instância, e dentro de uma
+  # rede o nome do serviço é o endereço. Duas instâncias com um serviço
+  # `azvapi` deixariam esse endereço ambíguo, e o Caddy passaria a entregar o
+  # cliente de um escritório na tela do outro, de forma intermitente.
+  azvpg__SUF__:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: azvchat
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no arquivo de variáveis}
+      POSTGRES_DB: azvchat
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U azvchat"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  azvapi__SUF__:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://azvchat:${POSTGRES_PASSWORD}@azvpg__SUF__:5432/azvchat?schema=public
+      JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET no arquivo de variáveis}
+      WEB_ORIGIN: https://${APP_DOMAIN:?defina APP_DOMAIN no arquivo de variáveis}
+      API_PORT: 4000
+      WHATSAPP_SESSION_DIR: /app/data/sessions
+      MEDIA_DIR: /app/data/media
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Este bloco é uma allowlist: variável que não estiver declarada aqui
+      # NÃO chega ao container, mesmo estando no arquivo de variáveis. Ao
+      # acrescentar configuração nova ao sistema, lembre-se de somá-la aqui.
+      WHATSAPP_PROVIDER: ${WHATSAPP_PROVIDER:-qrcode}
+      ASTRACALLS_API_URL: ${ASTRACALLS_API_URL:-}
+      ASTRACALLS_API_KEY: ${ASTRACALLS_API_KEY:-}
+      ASTRACALLS_WEBHOOK_URL: ${ASTRACALLS_WEBHOOK_URL:-}
+      ASTRACALLS_WEBHOOK_SECRET: ${ASTRACALLS_WEBHOOK_SECRET:-}
+      AZEVEDO_OS_API_URL: ${AZEVEDO_OS_API_URL:-}
+      AZEVEDO_OS_API_TOKEN: ${AZEVEDO_OS_API_TOKEN:-}
+      AZEVEDO_OS_WEB_URL: ${AZEVEDO_OS_WEB_URL:-}
+      AZEVEDO_OS_TIMEOUT_MS: ${AZEVEDO_OS_TIMEOUT_MS:-5000}
+      CALL_RECORDINGS_DIR: ${CALL_RECORDINGS_DIR:-/recordings}
+    volumes:
+      - whatsapp_sessions:/app/data/sessions
+      - media_store:/app/data/media
+      # Gravações de chamada. Descomente as DUAS linhas (esta e a do bloco
+      # `volumes` no fim) só se esta instância for do MESMO escritório que já
+      # usa o AstraCalls: o volume é compartilhado, então uma cópia de outro
+      # cliente enxergaria gravação que não é dela.
+      # - wacalls_recordings:/recordings
+    depends_on:
+      azvpg__SUF__:
+        condition: service_healthy
+    restart: unless-stopped
+
+  azvweb__SUF__:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        # ATENÇÃO: este endereço é GRAVADO DENTRO do site na hora de construir,
+        # não lido quando ele roda (ver CLAUDE.md §13). Domínio errado aqui só
+        # aparece como "o sistema não conecta" depois de tudo no ar, e a única
+        # correção é construir de novo. Confira antes de rodar o build.
+        NEXT_PUBLIC_API_URL: https://${API_DOMAIN:?defina API_DOMAIN no arquivo de variáveis}
+    depends_on:
+      - azvapi__SUF__
+    restart: unless-stopped
+
+# SEM serviço Caddy de propósito: as portas 80 e 443 já são do Caddy da
+# produção, que é quem entrega estes domínios. Declarar um Caddy aqui faria a
+# subida falhar com "port is already allocated" — e, se a porta estivesse
+# livre, derrubaria as rotas de todo mundo.
+volumes:
+  pgdata:
+  whatsapp_sessions:
+  media_store:
+  # Par da linha comentada lá em cima. O volume é criado uma vez, fora daqui,
+  # com `docker volume create wacalls_recordings`.
+  # wacalls_recordings:
+  #   external: true
