@@ -1176,6 +1176,16 @@ conhecê-la sozinhos. **Dado financeiro nunca entra**: ver a seção 13.
 > comando é evidência, código de saída não é) — `docker compose ps` com os três
 > containers `healthy`/`Up`, log da API sem erro de migration, e
 > `curl .../health` devolvendo 200 nos domínios reais.
+>
+> **`deploy/verificar.sh` faz essa validação inteira, e é SOMENTE LEITURA** (roda com o
+> escritório trabalhando). Ele existe porque nenhum dos dois sinais que alguém olharia
+> primeiro serve: o run do `Deploy` fecha verde com tudo `skipped`, e o `/health` responde
+> só `{"status":"ok"}`, sem commit nem versão. Além do `ps` e do `health`, ele compara o
+> commit do clone com o do GitHub e a **data de criação de cada container com a data do
+> commit** — container mais velho que o commit é o caso que os outros sinais não pegam: o
+> código está no disco, o `git` diz que está atualizado, e a imagem em execução não tem a
+> mudança. A guarda de pasta é a mesma do `atualizar.sh`, pelo mesmo motivo: rodado do
+> clone errado ele descreveria a máquina errada com ar de autoridade.
 
 ---
 
