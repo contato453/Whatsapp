@@ -25,7 +25,9 @@ import { requirePermission } from "../../lib/permissions.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import { extensionFromMime } from "../../lib/media-storage.js";
 import { mentionsSchema, resolveMentionTargets } from "../../lib/mentions.js";
+import { MP3_MIME_TYPE } from "@azvchat/whatsapp";
 import { prepareOutboundAudio } from "../../lib/outbound-audio.js";
+import { resolveAudioMp3 } from "../../lib/audio-download.js";
 import {
   pinItem,
   pinnedItemsIfMessagePinned,
@@ -1240,9 +1242,21 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
     },
   );
 
-  /** Download/exibição da mídia de uma mensagem (autenticado, escopado por organização). */
+  /**
+   * Download/exibição da mídia de uma mensagem (autenticado, escopado por
+   * organização).
+   *
+   * `format=mp3` devolve o ÁUDIO convertido, e é o padrão do botão de baixar da
+   * bolha de áudio (ver `lib/audio-download.ts`). É a MESMA rota, com o mesmo
+   * `conversationScope`, de propósito: um segundo caminho de acesso à mídia
+   * significaria duas checagens de alcance para manter iguais, e a que quase
+   * ninguém olha seria a que passaria a mostrar demais.
+   */
   app.get("/messages/:id/media", { preHandler: authenticate }, async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { format } = z
+      .object({ format: z.enum(["original", "mp3"]).default("original") })
+      .parse(request.query);
     const access = await loadConversationAccess(deps.prisma, request.user);
     const message = await deps.prisma.message.findFirst({
       where: {
@@ -1250,8 +1264,30 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
         organizationId: request.user.organizationId,
         conversation: conversationScope(access),
       },
+      include: { conversation: { select: { whatsappInstanceId: true } } },
     });
     if (!message?.mediaUrl) throw new NotFoundError("Mídia");
+
+    if (format === "mp3") {
+      // Só áudio converte. Pedir MP3 de um PDF é erro de quem chamou, e
+      // devolver o arquivo original em silêncio entregaria um `.mp3` que não é
+      // áudio nenhum.
+      if (message.type !== "audio") {
+        throw new AppError("Conversão para MP3 vale só para áudio", 422, "not_audio_message");
+      }
+      // Mensagem apagada não tem download: a bolha nem mostra o player, e
+      // recusar aqui fecha o caminho para quem chamar a rota direto.
+      if (message.deletedAt) throw new NotFoundError("Mídia");
+      const mp3 = await resolveAudioMp3(
+        deps,
+        { id: message.id, mediaUrl: message.mediaUrl, metadata: message.metadata },
+        message.conversation.whatsappInstanceId,
+      );
+      reply.header("Content-Type", MP3_MIME_TYPE);
+      reply.header("Cache-Control", "private, max-age=31536000, immutable");
+      return reply.send(mp3);
+    }
+
     const data = await deps.storage.read(message.mediaUrl);
     reply.header("Content-Type", message.mimeType ?? "application/octet-stream");
     if (message.filename) {

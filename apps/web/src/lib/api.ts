@@ -975,6 +975,15 @@ export async function fetchMediaBlobUrl(messageId: string): Promise<string> {
 }
 
 /**
+ * Áudio da mensagem já convertido para MP3 pela API — o formato padrão do
+ * download da bolha de áudio. Mesma rota e mesmo caminho autenticado da mídia
+ * original: o que muda é só o `format`.
+ */
+export async function fetchAudioMp3BlobUrl(messageId: string): Promise<string> {
+  return fetchAuthedBlobUrl(`/messages/${messageId}/media?format=mp3`);
+}
+
+/**
  * Baixa um binário AUTENTICADO (com o Bearer) e devolve um blob URL temporário.
  * Base do `fetchMediaBlobUrl` e usado também pela gravação de chamada — a rota
  * exige o header, então nada de apontar `src` direto para a API.
