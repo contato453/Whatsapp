@@ -488,7 +488,12 @@ POST   /conversations/:id/polls           POST /messages/:id/reactions
 PATCH  /messages/:id                      DELETE /messages/:id
        (editar: só o que saiu daqui, tipo com texto e dentro da janela de 15 min do
         WhatsApp; em mídia o que muda é a legenda e o arquivo é remandado do storage)
-POST   /messages/:id/forward              GET  /messages/:id/media
+POST   /messages/:id/forward              GET  /messages/:id/media[?format=mp3]
+       (`format=mp3` devolve o ÁUDIO convertido — é o padrão do botão de baixar
+        da bolha de áudio. MESMA rota e MESMO `conversationScope` do original, de
+        propósito: segundo caminho de acesso à mídia seria segunda checagem de
+        alcance para manter igual. Só tipo `audio` (422 em qualquer outro),
+        mensagem apagada responde 404, e a conversão é guardada — ver a seção 13)
 POST   /messages/:id/pin                  POST /messages/:id/unpin
        (fixação (pin) INTERNA ao AZVCHAT — nunca chama o provider nem usa o pin do
         WhatsApp. Papel mínimo agent (`message.pin`, padrão liberado). Teto de 3 por
@@ -1764,6 +1769,36 @@ sempre juntos.
   sabe tocar o que veio (WAV, WebM, FLAC): mp3, m4a, AMR e OGG/Opus seguem byte a byte,
   porque recodificar o que já funciona só perde qualidade. Mesma regra na mídia da
   resposta rápida, normalizada **uma vez no cadastro** em vez de a cada envio.
+- **O DOWNLOAD DE ÁUDIO SAI EM MP3 POR PADRÃO, E O ORIGINAL FICA NO MENU
+  SECUNDÁRIO.** O WhatsApp entrega áudio em OGG com Opus, e no Windows o duplo
+  clique nesse arquivo costuma não tocar: o player padrão não traz o codec. Quem
+  baixa o áudio está anexando em e-mail ou em processo, e arquivo que o
+  destinatário não abre não serve de comprovante nenhum — foi por isso que o
+  áudio, deixado de fora quando o download de arquivo nasceu (ele tem player
+  próprio), voltou com conversão. Consequências para qualquer mexida aqui: (1) a
+  conversão é do SERVIDOR, pelo ffmpeg que já está na imagem da API, e a régua é
+  a mesma do áudio que SAI — quem prova o formato são os BYTES
+  (`detectAudioContainer`), nunca o código de saída do processo; (2) o convertido
+  é GUARDADO, com a chave do storage em `Message.metadata`
+  (`AUDIO_MP3_METADATA_KEY`, no shared, que preserva o resto do objeto): baixar o
+  mesmo áudio de novo é o caso comum, e converter a cada clique gastaria um
+  ffmpeg por download. Chave cujo arquivo sumiu do storage vale como "não há
+  cópia" e converte de novo, em vez de deixar o áudio sem download para sempre;
+  (3) o plumbing do ffmpeg é fonte única em `packages/whatsapp/src/audio/
+  ffmpeg.ts` — duplicá-lo entre a conversão de envio e a de download traria o
+  defeito clássico daqui, um dos lados esquecendo de drenar o stderr ou de matar
+  o processo no timeout; (4) falha na conversão **não** esconde o áudio: a bolha
+  avisa em português e o original continua no menu. Nada disso encosta em
+  `lib/access.ts` nem em `media-storage.ts`, e a mídia continua servida só
+  autenticada — `fetchAudioMp3BlobUrl` é a mesma rota com outro `format`.
+- **MÍDIA NUNCA É APONTADA POR `href`, E ISSO VALE PARA O DOWNLOAD DE ÁUDIO
+  TAMBÉM.** O nome do arquivo salvo é montado na tela
+  (`audioDownloadName`, em `lib/media-download.ts`): `audio-` + nome exibido da
+  conversa (onde `customTitle` já venceu `title`, porque o DTO entrega o efetivo)
+  + data e hora + extensão. Higienizado sem acento, sem barra e sem dois pontos:
+  barra no meio do nome vira diretório, e o salvamento falharia. O clique é
+  travado enquanto o arquivo não chega — sem isso o clique duplo baixa duas vezes
+  e, no MP3, dispara duas conversões no servidor.
 - Ingestão é idempotente por `(conversationId, externalMessageId)` — não crie caminho
   paralelo de inserção de mensagem. E **conteúdo que não dá para exibir não vira linha**:
   `isDisplayableContent` (`qrcode/normalize.ts`) barra o que cai no fallback `other` sem
@@ -1948,7 +1983,7 @@ individual, com aviso da contagem antes de salvar);
 respostas rápidas com `/`, inclusive com mídia anexada (imagem, áudio ou vídeo) que sai
 junto com o texto e com variáveis de empresa, conversa, atendente e data preenchidas na
 inserção (o que não resolve fica destacado no composer, e avisa antes de enviar); mídia ampliada em tela cheia com navegação por teclado e download;
-botão de baixar em documento recebido; arrastar arquivo para a conversa e colar com Ctrl+V,
+botão de baixar em documento recebido; download do áudio da conversa (recebido e enviado) em MP3 por padrão, com o original no menu secundário, nome de arquivo legível e conversão guardada para não repetir; arrastar arquivo para a conversa e colar com Ctrl+V,
 os dois com prévia (miniatura, legenda, remover, adicionar, progresso por arquivo e
 retentativa do que falhou); link clicável no texto da mensagem (nova aba,
 com `noopener noreferrer`); dashboard; relatório por atendente com células coloridas e clicáveis, linha de conversas sem responsável e de @todos, e painel lateral listando as conversas de cada recorte; auditoria consultável;

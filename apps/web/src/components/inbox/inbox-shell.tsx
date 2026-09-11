@@ -1917,6 +1917,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                       onQuotedClick={(quotedId) => void jumpToQuotedMessage(quotedId)}
                       senderAvatar={senderAvatarFor(item.message)}
                       mentionNames={mentionNames}
+                      conversationTitle={conversation?.title ?? null}
                     />
                     </div>
                   ) : (

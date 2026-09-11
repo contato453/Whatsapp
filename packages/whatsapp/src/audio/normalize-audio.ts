@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
 import type { Logger } from "pino";
+import { AudioConversionError, runFfmpeg } from "./ffmpeg.js";
 import {
   VOICE_NOTE_MIME_TYPE,
   audioMimeTypeFromBytes,
@@ -26,6 +26,12 @@ import {
  * requisições enquanto um áudio longo é convertido.
  */
 
+/**
+ * O erro vem de `ffmpeg.ts`, onde o processo é tratado, e é reexportado aqui
+ * porque é daqui que a API e os testes já o importavam.
+ */
+export { AudioConversionError } from "./ffmpeg.js";
+
 /** Perfil de conversão: o microfone vira voz, o arquivo continua arquivo. */
 export type AudioNormalizationProfile = "voice" | "file";
 
@@ -39,77 +45,6 @@ export interface NormalizedAudio {
   /** Container de origem, só para log. */
   sourceContainer: string;
   converted: boolean;
-}
-
-/**
- * Conversão que não deu certo. O chamador NÃO envia a mensagem: é melhor o
- * atendente ver um erro do que o cliente receber um áudio que não toca.
- */
-export class AudioConversionError extends Error {
-  constructor(
-    message: string,
-    readonly reason: string,
-  ) {
-    super(message);
-    this.name = "AudioConversionError";
-  }
-}
-
-/** Teto de tempo do ffmpeg. Um arquivo dentro do limite de upload converte em
- *  poucos segundos; o teto existe para entrada corrompida não segurar a
- *  requisição para sempre. */
-const FFMPEG_TIMEOUT_MS = 60_000;
-
-/** Taxa da decodificação usada para medir duração e desenhar a waveform. */
-const PCM_SAMPLE_RATE = 8_000;
-const WAVEFORM_SAMPLES = 64;
-
-function runFfmpeg(args: string[], input: Buffer): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (fn: () => void) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      fn();
-    };
-
-    const ffmpeg = spawn("ffmpeg", args);
-    const out: Buffer[] = [];
-    let stderr = "";
-
-    const timer = setTimeout(() => {
-      ffmpeg.kill("SIGKILL");
-      finish(() => reject(new AudioConversionError("Conversão de áudio demorou demais", "timeout")));
-    }, FFMPEG_TIMEOUT_MS);
-
-    ffmpeg.stdout.on("data", (chunk: Buffer) => out.push(chunk));
-    // Sem drenar o stderr o buffer do sistema enche e o ffmpeg trava.
-    ffmpeg.stderr.on("data", (chunk: Buffer) => {
-      stderr = (stderr + chunk.toString("utf8")).slice(-500);
-    });
-    ffmpeg.on("error", (err) => {
-      finish(() =>
-        reject(new AudioConversionError(`ffmpeg indisponível: ${String(err)}`, "ffmpeg_unavailable")),
-      );
-    });
-    ffmpeg.on("close", (code) => {
-      if (code === 0 && out.length > 0) finish(() => resolve(Buffer.concat(out)));
-      else
-        finish(() =>
-          reject(
-            new AudioConversionError(
-              `ffmpeg terminou com ${String(code)}: ${stderr}`,
-              "ffmpeg_failed",
-            ),
-          ),
-        );
-    });
-    // EPIPE acontece quando o ffmpeg desiste antes de ler tudo; o motivo real
-    // vem no 'close', então aqui basta não derrubar o processo.
-    ffmpeg.stdin.on("error", () => undefined);
-    ffmpeg.stdin.end(input);
-  });
 }
 
 /**
@@ -140,6 +75,10 @@ function encodeArgs(profile: AudioNormalizationProfile, bitrate?: string): strin
       ]
     : [...TIMELINE_LIMPA, "-c:a", "libopus", "-b:a", bitrate ?? "96k", "-ar", "48000"];
 }
+
+/** Taxa da decodificação usada para medir duração e desenhar a waveform. */
+const PCM_SAMPLE_RATE = 8_000;
+const WAVEFORM_SAMPLES = 64;
 
 /** Duração e waveform saem da MESMA decodificação: um passe de PCM. */
 async function describeAudio(

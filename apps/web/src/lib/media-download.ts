@@ -1,6 +1,6 @@
 "use client";
 
-import { callsApi, fetchAuthedBlobUrl, fetchMediaBlobUrl } from "./api";
+import { callsApi, fetchAudioMp3BlobUrl, fetchAuthedBlobUrl, fetchMediaBlobUrl } from "./api";
 import type { CallLogDto, MessageDto } from "./types";
 
 /**
@@ -106,6 +106,93 @@ export function triggerBlobDownload(blobUrl: string, filename: string): void {
 }
 
 /**
+ * Higieniza um texto para virar parte de nome de arquivo: sem acento, sem
+ * barra, sem dois pontos e sem espaço. Windows recusa vários desses
+ * caracteres, e barra no meio do nome vira diretório no Mac e no Linux — o
+ * salvamento falharia, ou salvaria em lugar nenhum.
+ */
+function nomeSeguroDeArquivo(valor: string | null | undefined, padrao: string): string {
+  const limpo = (valor ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // remove acentos
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase()
+    // Nome de grupo é longo e o resto (data, hora, extensão) precisa caber.
+    .slice(0, 60)
+    .replace(/-+$/g, "");
+  return limpo || padrao;
+}
+
+/** `2026-09-02-14-32` — data e hora locais, já prontas para nome de arquivo. */
+function estampaDeDataHora(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "sem-data";
+  const p = (valor: number) => String(valor).padStart(2, "0");
+  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}-${p(date.getHours())}-${p(date.getMinutes())}`;
+}
+
+/** Formatos em que o áudio da conversa pode ser baixado. */
+export type AudioDownloadFormat = "mp3" | "original";
+
+/**
+ * Extensão do arquivo original do áudio, pelo mime type da mensagem. O áudio do
+ * WhatsApp chega como "audio/ogg; codecs=opus", então o parâmetro do mime
+ * precisa sair antes da busca. Sem mime conhecido sobra `ogg`, que é o que o
+ * WhatsApp entrega na esmagadora maioria dos casos.
+ */
+export function audioOriginalExtension(mimeType: string | null): string {
+  const limpo = mimeType?.split(";")[0]?.trim() ?? "";
+  const conhecida = EXTENSION_BY_MIME[limpo];
+  if (conhecida) return conhecida;
+  const subtipo = limpo.split("/")[1];
+  return subtipo && subtipo.length <= 4 && !subtipo.includes(".") ? subtipo : "ogg";
+}
+
+/**
+ * Nome do arquivo de áudio baixado: `audio-nome-da-conversa-2026-09-02-14-32.mp3`.
+ *
+ * O nome da conversa entra porque a equipe baixa o áudio para anexar em e-mail
+ * ou em processo, e um arquivo chamado pelo id da mensagem obrigaria a renomear
+ * tudo à mão depois. A data e a hora separam os vários áudios do mesmo cliente.
+ */
+export function audioDownloadName(
+  message: Pick<MessageDto, "timestamp" | "mimeType">,
+  conversationTitle: string | null,
+  format: AudioDownloadFormat,
+): string {
+  const extensao = format === "mp3" ? "mp3" : audioOriginalExtension(message.mimeType);
+  return `audio-${nomeSeguroDeArquivo(conversationTitle, "conversa")}-${estampaDeDataHora(message.timestamp)}.${extensao}`;
+}
+
+/**
+ * Baixa o áudio de uma mensagem e dispara o salvamento no navegador.
+ *
+ * MP3 É O PADRÃO porque o WhatsApp entrega áudio em OGG com Opus, e no Windows
+ * o duplo clique nesse arquivo costuma não tocar: quem baixa está anexando o
+ * áudio num e-mail ou num processo, e arquivo que o destinatário não abre não
+ * serve de comprovante. A conversão é da API (e é guardada lá, para o segundo
+ * download não convertê-lo de novo); o original fica no menu secundário, para
+ * quem precisa exatamente do arquivo que o cliente mandou.
+ *
+ * A mídia NUNCA pode ser apontada direto por `href`: a rota exige o header
+ * Authorization, que link comum não envia, e expor o arquivo sem autenticação
+ * para facilitar entregaria áudio de cliente a quem tivesse a URL.
+ */
+export async function downloadMessageAudio(
+  message: MessageDto,
+  conversationTitle: string | null,
+  format: AudioDownloadFormat,
+): Promise<void> {
+  const blobUrl =
+    format === "mp3" ? await fetchAudioMp3BlobUrl(message.id) : await fetchMediaBlobUrl(message.id);
+  triggerBlobDownload(blobUrl, audioDownloadName(message, conversationTitle, format));
+  // Mesma folga dos outros downloads: o navegador precisa ler o blob antes da
+  // revogação, e sem revogar a memória da aba cresce a cada áudio baixado.
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
+}
+
+/**
  * Nome do arquivo da gravação de ligação: quem ligou (ou o telefone, sem
  * nome conhecido) + a data, sempre `.mp3` — a rota do AstraCalls é fixa em
  * `/recordings/{id}.mp3`, não há outro formato a considerar.
@@ -117,13 +204,7 @@ export function callRecordingDownloadName(
   const stamp = Number.isNaN(date.getTime())
     ? "sem-data"
     : `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-  const who = (call.contactName ?? call.contactPhone ?? "contato")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "") // remove acentos
-    .replace(/[^a-zA-Z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .toLowerCase();
-  return `ligacao-${who || "contato"}-${stamp}.mp3`;
+  return `ligacao-${nomeSeguroDeArquivo(call.contactName ?? call.contactPhone, "contato")}-${stamp}.mp3`;
 }
 
 /**

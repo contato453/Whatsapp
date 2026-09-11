@@ -43,7 +43,13 @@ import {
 import { api, fetchMediaBlobUrl } from "@/lib/api";
 import { tallyPollVotes } from "@azvchat/shared";
 import { useAuth } from "@/lib/auth-context";
-import { documentKindLabel, downloadMessageMedia } from "@/lib/media-download";
+import {
+  audioOriginalExtension,
+  documentKindLabel,
+  downloadMessageAudio,
+  downloadMessageMedia,
+  type AudioDownloadFormat,
+} from "@/lib/media-download";
 import { cn, formatPhone } from "@/lib/utils";
 import type { MessageDto } from "@/lib/types";
 import { Spinner } from "@/components/ui";
@@ -279,11 +285,17 @@ function MediaContent({
   message,
   outbound,
   onOpenMedia,
+  conversationTitle,
 }: {
   message: MessageDto;
   outbound: boolean;
   /** Abre a lightbox de tela cheia — quem gerencia é a Inbox. */
   onOpenMedia?: (message: MessageDto) => void;
+  /**
+   * Nome exibido da conversa — entra no nome do arquivo de áudio baixado. Vem
+   * do DTO, onde `customTitle` já venceu `title`.
+   */
+  conversationTitle?: string | null;
 }) {
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
@@ -363,7 +375,15 @@ function MediaContent({
     if (failed) return <p className="text-xs italic opacity-70">Falha ao carregar áudio</p>;
     if (!url) return <div className="h-10 w-56 animate-pulse rounded-lg bg-slate-200/60" />;
     return (
-      <AudioPlayer src={url} outbound={outbound} durationSeconds={message.metadata?.durationSeconds} />
+      <AudioPlayer
+        src={url}
+        outbound={outbound}
+        durationSeconds={message.metadata?.durationSeconds}
+        onDownload={(format: AudioDownloadFormat) =>
+          downloadMessageAudio(message, conversationTitle ?? null, format)
+        }
+        originalExtension={audioOriginalExtension(message.mimeType)}
+      />
     );
   }
   if (isVideo) {
@@ -457,6 +477,7 @@ export function MessageBubble({
   onQuotedClick,
   senderAvatar,
   mentionNames,
+  conversationTitle,
 }: {
   message: MessageDto;
   isGroup: boolean;
@@ -490,6 +511,12 @@ export function MessageBubble({
    * exibida como veio — nunca como JID cru.
    */
   mentionNames?: Map<string, string>;
+  /**
+   * Nome exibido da conversa, usado para nomear o arquivo no download de áudio
+   * (a equipe anexa esse arquivo em e-mail e em processo, e o id da mensagem
+   * obrigaria a renomear à mão).
+   */
+  conversationTitle?: string | null;
 }) {
   const outbound = message.direction === "outbound";
   // A lista de marcados é da mensagem; o cadastro de nomes é do grupo. Só a
@@ -659,7 +686,12 @@ export function MessageBubble({
           />
         ) : (
           <div className="space-y-1.5">
-            <MediaContent message={message} outbound={outbound} onOpenMedia={onOpenMedia} />
+            <MediaContent
+              message={message}
+              outbound={outbound}
+              onOpenMedia={onOpenMedia}
+              conversationTitle={conversationTitle}
+            />
             {message.content && (
               <FormattedText
                 text={message.content}

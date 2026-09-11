@@ -1,7 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, Loader2, Pause, Play } from "lucide-react";
+import {
+  AlertCircle,
+  ChevronDown,
+  Download,
+  Loader2,
+  Pause,
+  Play,
+} from "lucide-react";
+import type { AudioDownloadFormat } from "@/lib/media-download";
 import { cn } from "@/lib/utils";
 
 const SPEEDS = [1, 1.5, 2] as const;
@@ -22,6 +30,8 @@ export function AudioPlayer({
   load,
   outbound,
   durationSeconds,
+  onDownload,
+  originalExtension,
 }: {
   /** URL pronta do áudio. Use `load` quando o binário só deve ser baixado ao tocar. */
   src?: string;
@@ -38,6 +48,14 @@ export function AudioPlayer({
    * nota de voz, que chegava com a barra e o tempo zerados sem isto.
    */
   durationSeconds?: number;
+  /**
+   * Baixa o áudio no formato pedido. Ausente, o player não desenha botão de
+   * baixar — é o caso da gravação de ligação, que tem download próprio na tela
+   * de Ligações.
+   */
+  onDownload?: (format: AudioDownloadFormat) => Promise<void>;
+  /** Extensão do arquivo original (".ogg"), para o item do menu secundário. */
+  originalExtension?: string;
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -53,6 +71,10 @@ export function AudioPlayer({
   // URL que ESTE player criou (via load): revoga ao desmontar. `src` vindo de
   // fora é do chamador, e revogá-lo cortaria o áudio de quem o passou.
   const ownedUrl = useRef<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadFailed, setDownloadFailed] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const downloadBox = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (srcProp) setSrc(srcProp);
@@ -63,6 +85,45 @@ export function AudioPlayer({
       if (ownedUrl.current) URL.revokeObjectURL(ownedUrl.current);
     };
   }, []);
+
+  // Clique fora e Esc fecham o menu — nunca `blur`, que fecharia a lista no
+  // primeiro clique em cima do próprio item (a mesma regra do MultiSelect).
+  useEffect(() => {
+    if (!menuOpen) return;
+    const aoClicar = (event: MouseEvent) => {
+      if (!downloadBox.current?.contains(event.target as Node))
+        setMenuOpen(false);
+    };
+    const aoTeclar = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", aoClicar);
+    document.addEventListener("keydown", aoTeclar);
+    return () => {
+      document.removeEventListener("mousedown", aoClicar);
+      document.removeEventListener("keydown", aoTeclar);
+    };
+  }, [menuOpen]);
+
+  /**
+   * Baixa e trava o botão até terminar: sem isso o clique duplo baixa duas
+   * vezes, e no MP3 ainda dispara duas conversões no servidor.
+   */
+  async function baixar(format: AudioDownloadFormat): Promise<void> {
+    if (!onDownload || downloading) return;
+    setMenuOpen(false);
+    setDownloadFailed(false);
+    setDownloading(true);
+    try {
+      await onDownload(format);
+    } catch {
+      // O 401 já limpou o token e mandou para o login dentro do client; o que
+      // sobra aqui é arquivo fora do storage, conversão recusada ou rede.
+      setDownloadFailed(true);
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   async function ensureSrc(): Promise<void> {
     if (src || !load || loading) return;
@@ -129,80 +190,178 @@ export function AudioPlayer({
   }
 
   return (
-    <div className="flex min-w-[220px] items-center gap-2">
-      {src && (
-        <audio
-          ref={audioRef}
-          src={src}
-          preload="metadata"
-          onPlay={() => setPlaying(true)}
-          onPause={() => setPlaying(false)}
-          onEnded={() => setPlaying(false)}
-          onTimeUpdate={(event) => setProgress(event.currentTarget.currentTime)}
-          onLoadedMetadata={(event) => setDuration(event.currentTarget.duration)}
-          className="hidden"
-        />
-      )}
-      <button
-        onClick={toggle}
-        disabled={loading}
-        className={cn(
-          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors",
-          loadError
-            ? "bg-rose-100 text-rose-600 hover:bg-rose-200"
-            : outbound
-              ? "bg-white/60 hover:bg-white/90"
-              : "bg-slate-100 hover:bg-slate-200",
+    <div className="min-w-[220px]">
+      <div className="flex items-center gap-2">
+        {src && (
+          <audio
+            ref={audioRef}
+            src={src}
+            preload="metadata"
+            onPlay={() => setPlaying(true)}
+            onPause={() => setPlaying(false)}
+            onEnded={() => setPlaying(false)}
+            onTimeUpdate={(event) =>
+              setProgress(event.currentTarget.currentTime)
+            }
+            onLoadedMetadata={(event) =>
+              setDuration(event.currentTarget.duration)
+            }
+            className="hidden"
+          />
         )}
-        aria-label={loadError ? "Tentar de novo" : playing ? "Pausar" : "Reproduzir"}
-        title={loadError ? "Falha ao carregar — tocar de novo" : undefined}
-      >
-        {loading ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
-        ) : loadError ? (
-          <AlertCircle className="h-4 w-4" />
-        ) : playing ? (
-          <Pause className="h-4 w-4" />
-        ) : (
-          <Play className="h-4 w-4" />
-        )}
-      </button>
-
-      <input
-        type="range"
-        min={0}
-        max={effectiveDuration || 0}
-        step={0.1}
-        value={progress}
-        onChange={(event) => {
-          const audio = audioRef.current;
-          if (audio) {
-            audio.currentTime = Number(event.target.value);
-            setProgress(Number(event.target.value));
+        <button
+          onClick={toggle}
+          disabled={loading}
+          className={cn(
+            "flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors",
+            loadError
+              ? "bg-rose-100 text-rose-600 hover:bg-rose-200"
+              : outbound
+                ? "bg-white/60 hover:bg-white/90"
+                : "bg-slate-100 hover:bg-slate-200",
+          )}
+          aria-label={
+            loadError ? "Tentar de novo" : playing ? "Pausar" : "Reproduzir"
           }
-        }}
-        className={cn(
-          "h-1 flex-1 cursor-pointer appearance-none rounded-full",
-          outbound ? "bg-black/10 accent-brand-600" : "bg-slate-200 accent-brand-600",
-        )}
-      />
+          title={loadError ? "Falha ao carregar — tocar de novo" : undefined}
+        >
+          {loading ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : loadError ? (
+            <AlertCircle className="h-4 w-4" />
+          ) : playing ? (
+            <Pause className="h-4 w-4" />
+          ) : (
+            <Play className="h-4 w-4" />
+          )}
+        </button>
 
-      <span className={cn("shrink-0 text-[10px] tabular-nums", outbound ? "text-chat-sent-meta" : "text-slate-400")}>
-        {formatSeconds(displayed)}
-      </span>
+        <input
+          type="range"
+          min={0}
+          max={effectiveDuration || 0}
+          step={0.1}
+          value={progress}
+          onChange={(event) => {
+            const audio = audioRef.current;
+            if (audio) {
+              audio.currentTime = Number(event.target.value);
+              setProgress(Number(event.target.value));
+            }
+          }}
+          className={cn(
+            "h-1 flex-1 cursor-pointer appearance-none rounded-full",
+            outbound
+              ? "bg-black/10 accent-brand-600"
+              : "bg-slate-200 accent-brand-600",
+          )}
+        />
 
-      <button
-        onClick={cycleSpeed}
-        title="Velocidade de reprodução"
-        className={cn(
-          "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold transition-colors",
-          outbound
-            ? "bg-white/60 text-slate-700 hover:bg-white/90"
-            : "bg-slate-100 text-slate-600 hover:bg-slate-200",
+        <span
+          className={cn(
+            "shrink-0 text-[10px] tabular-nums",
+            outbound ? "text-chat-sent-meta" : "text-slate-400",
+          )}
+        >
+          {formatSeconds(displayed)}
+        </span>
+
+        <button
+          onClick={cycleSpeed}
+          title="Velocidade de reprodução"
+          className={cn(
+            "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold transition-colors",
+            outbound
+              ? "bg-white/60 text-slate-700 hover:bg-white/90"
+              : "bg-slate-100 text-slate-600 hover:bg-slate-200",
+          )}
+        >
+          {speed}x
+        </button>
+
+        {onDownload && (
+          <div ref={downloadBox} className="relative shrink-0">
+            {/* O par "baixar" + "escolher formato" fica num grupo só, discreto ao
+              lado da velocidade: o play e a barra de progresso continuam sendo
+              os controles principais da bolha. */}
+            <div className="flex items-center">
+              <button
+                type="button"
+                onClick={() => void baixar("mp3")}
+                disabled={downloading}
+                title="Baixar em MP3"
+                aria-label="Baixar em MP3"
+                className={cn(
+                  "rounded-l-full py-0.5 pl-1.5 pr-1 transition-colors disabled:opacity-60",
+                  outbound
+                    ? "bg-white/60 text-slate-700 hover:bg-white/90"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200",
+                )}
+              >
+                {downloading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Download className="h-3.5 w-3.5" />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setMenuOpen(!menuOpen)}
+                disabled={downloading}
+                title="Outros formatos"
+                aria-label="Outros formatos de download"
+                aria-expanded={menuOpen}
+                className={cn(
+                  "ml-px rounded-r-full py-0.5 pl-0.5 pr-1.5 transition-colors disabled:opacity-60",
+                  outbound
+                    ? "bg-white/60 text-slate-700 hover:bg-white/90"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200",
+                )}
+              >
+                <ChevronDown className="h-3 w-3" />
+              </button>
+            </div>
+
+            {menuOpen && (
+              <div className="absolute bottom-full right-0 z-20 mb-1 w-48 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 text-left shadow-lg">
+                <button
+                  type="button"
+                  onClick={() => void baixar("mp3")}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50"
+                >
+                  <Download className="h-3.5 w-3.5" /> Baixar em MP3
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void baixar("original")}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50"
+                >
+                  <Download className="h-3.5 w-3.5" /> Baixar original
+                  {originalExtension ? ` (.${originalExtension})` : ""}
+                </button>
+              </div>
+            )}
+          </div>
         )}
-      >
-        {speed}x
-      </button>
+      </div>
+      {downloadFailed && (
+        <p
+          className={cn(
+            "mt-1 flex items-center gap-1 text-[11px]",
+            outbound ? "text-chat-sent-meta" : "text-slate-500",
+          )}
+        >
+          <AlertCircle className="h-3 w-3 shrink-0" />
+          Falha ao baixar o áudio.
+          <button
+            type="button"
+            onClick={() => void baixar("mp3")}
+            className="font-medium underline underline-offset-2"
+          >
+            Tentar de novo
+          </button>
+        </p>
+      )}
     </div>
   );
 }

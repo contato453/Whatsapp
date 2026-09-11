@@ -17,6 +17,7 @@ export {
   resolveAudioDeclaration,
   type AudioContainer,
 } from "./audio/container.js";
+export { MP3_MIME_TYPE, convertAudioToMp3 } from "./audio/mp3.js";
 export {
   AudioConversionError,
   normalizeAudioForWhatsApp,
