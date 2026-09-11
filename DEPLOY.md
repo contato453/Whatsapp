@@ -232,6 +232,25 @@ Se alguém editar um arquivo versionado direto na VPS, a atualização **para e 
 de sobrescrever em silêncio (é um `git merge --ff-only`). Arquivos não versionados (`.env`,
 `data/`) nunca são tocados.
 
+### Conferir se a produção está no código novo
+
+```bash
+cd ~/Whatsapp-ajustes            # o clone de TRABALHO, nunca o ~/Whatsapp
+bash deploy/verificar.sh
+```
+
+É **somente leitura**: pode rodar com o escritório trabalhando, a qualquer hora. Ele compara
+o commit do clone com o do GitHub, mostra quando cada container foi criado (container mais
+velho que o commit significa que o código está no disco e não na imagem que está rodando),
+procura `api_started` e erro de migration no log, e bate nos dois domínios reais. Termina com
+um veredito: sem pendência, ou a lista do que falta com o comando para resolver.
+
+Ele existe porque aqui o deploy **não tem sinal visível de fora**. O workflow `Deploy` do
+GitHub fecha verde com todos os passos `skipped` (não há segredo de SSH cadastrado, ver a
+Opção B e o aviso do CLAUDE.md §15), e o `/health` da API responde só `{"status":"ok"}`, sem
+commit nem versão. Sem este script, "o deploy foi?" se respondia abrindo a tela e procurando
+o recurso novo no olho.
+
 ### Deploy por SSH pelo GitHub Actions (opcional)
 
 Alternativa à seção acima, para quem prefere que o disparo saia do GitHub: todo merge na
