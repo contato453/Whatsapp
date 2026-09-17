@@ -73,8 +73,19 @@ compose ps 2>/dev/null || falta "docker compose ps não respondeu"
 # "o código está no clone" de "o código está rodando": `up -d --build`
 # recria o container, então container mais VELHO que o commit significa
 # que a imagem em execução não tem a mudança.
-commit_em="$(git log -1 --format=%cI 2>/dev/null)"
-[ -n "$commit_em" ] && printf '\n  commit datado de: %s\n' "$commit_em"
+#
+# MAS A COMPARAÇÃO É COM O ÚLTIMO COMMIT QUE AFETA AQUELE SERVIÇO, não com
+# o último commit do repositório. Entrega só de frontend é a maioria aqui:
+# a imagem da API sai idêntica, o Docker NÃO recria o container (e está
+# certo em não recriar), e comparar com o HEAD acusava um atraso que não
+# existia. Alarme falso recorrente é como um verificador deixa de ser lido,
+# e aí ele não serve nem quando o atraso é de verdade.
+CAMINHOS_COMUNS=(package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json)
+# O que entra em cada imagem: a API leva os três pacotes (o web importa só
+# o shared). Documentação e script de deploy ficam de fora dos dois de
+# propósito — mudar o CLAUDE.md não muda byte nenhum do que roda.
+CAMINHOS_API=(apps/api packages/shared packages/database packages/whatsapp "${CAMINHOS_COMUNS[@]}")
+CAMINHOS_WEB=(apps/web packages/shared "${CAMINHOS_COMUNS[@]}")
 for servico in "$SERVICO_API" azvweb; do
   cid="$(compose ps -q "$servico" 2>/dev/null | head -1)"
   if [ -z "$cid" ]; then
@@ -84,14 +95,38 @@ for servico in "$SERVICO_API" azvweb; do
   criado="$(docker inspect -f '{{.Created}}' "$cid" 2>/dev/null)"
   estado="$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null)"
   printf '  %-8s criado em %s  (%s)\n' "$servico" "$criado" "$estado"
+
+  if [ "$servico" = "$SERVICO_API" ]; then
+    caminhos=("${CAMINHOS_API[@]}")
+  else
+    caminhos=("${CAMINHOS_WEB[@]}")
+  fi
+  commit_em="$(git log -1 --format=%cI -- "${caminhos[@]}" 2>/dev/null)"
+  commit_sha="$(git log -1 --format=%h -- "${caminhos[@]}" 2>/dev/null)"
+  if [ -z "$commit_em" ]; then
+    # Nenhum commit tocou esses caminhos (clone raso, por exemplo): volta
+    # para o HEAD. Pior errar para o lado de acusar do que o de calar.
+    commit_em="$(git log -1 --format=%cI 2>/dev/null)"
+    commit_sha="$(git log -1 --format=%h 2>/dev/null)"
+    [ -n "$commit_em" ] && aviso "não achei commit nos caminhos de $servico; comparando com o HEAD"
+  fi
+  [ -n "$commit_em" ] && printf '           última mudança que afeta %s: %s  %s\n' \
+    "$servico" "${commit_sha:-?}" "$commit_em"
+
   if [ -n "$commit_em" ] && [ -n "$criado" ]; then
     # Compara em segundos desde a época: string de data não se compara.
     c_commit="$(date -d "$commit_em" +%s 2>/dev/null)"
     c_cont="$(date -d "$criado" +%s 2>/dev/null)"
     if [ -n "$c_commit" ] && [ -n "$c_cont" ] && [ "$c_cont" -lt "$c_commit" ]; then
-      falta "$servico é mais VELHO que o commit: a imagem no ar não tem a mudança"
+      falta "$servico é mais VELHO que a última mudança que o afeta: a imagem no ar não tem essa mudança"
     else
-      ok "$servico foi recriado depois do commit"
+      ok "$servico está com a última mudança que o afeta"
+      # O HEAD ser mais novo aqui é NORMAL, e dizer isso evita a dúvida de
+      # quem compara o commit do topo com a data do container na mão.
+      if [ -n "$local_sha" ] && [ -n "$commit_sha" ] && \
+         [ "${local_sha:0:${#commit_sha}}" != "$commit_sha" ]; then
+        aviso "o HEAD é mais novo, mas não toca no que entra na imagem de $servico"
+      fi
     fi
   fi
 done
