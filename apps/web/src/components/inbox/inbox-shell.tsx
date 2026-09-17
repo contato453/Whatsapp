@@ -98,6 +98,7 @@ import { FilterBar } from "./filter-bar";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
 import { MentionPicker, mentionOptions, type MentionOption } from "./mention-picker";
 import { FormatToolbar, applyFormatToField } from "./format-toolbar";
+import { useComposerAutosize } from "./use-composer-autosize";
 import { AudioRecorder } from "./audio-recorder";
 import {
   ATTACHMENT_PASTE_FIELD,
@@ -917,6 +918,10 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   function updateComposerMode(mode: DraftMode): void {
     updateDraft(draft, mode);
   }
+
+  // O campo cresce com o texto e ainda aceita a alça; a regra de quem manda
+  // quando os dois se encontram mora no hook, fora deste arquivo.
+  useComposerAutosize(composerRef, draft, conversationId);
 
   /**
    * Formatação do composer (barra flutuante e atalhos de teclado).
@@ -2174,8 +2179,9 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                     if (file) void sendFile(file);
                   }}
                 />
-                {/* O campo ocupa a linha inteira: duas linhas de texto ficam
-                    visíveis sem precisar rolar. As ações vão para baixo. */}
+                {/* O campo ocupa a linha inteira e cresce com o texto, para
+                    a mensagem longa ficar visível inteira enquanto é escrita.
+                    As ações vão para baixo. */}
                 <Textarea
                   ref={composerRef}
                   rows={2}
@@ -2286,7 +2292,11 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                       ? "Anotação interna sobre este atendimento..."
                       : `Mensagem para ${conversation.title}...`
                   }
-                  className="max-h-40 min-h-[60px] w-full resize-none"
+                  // `resize-y` devolve a alça do canto; o teto do arrasto é
+                  // generoso mas existe, senão dava para esticar o campo até
+                  // sobrar zero da conversa. O crescimento automático tem teto
+                  // próprio, menor, dentro do hook.
+                  className="max-h-[60vh] min-h-[60px] w-full resize-y"
                 />
                 {/*
                   A barra vale nas DUAS abas: a nota interna também é lida por
