@@ -988,6 +988,23 @@ nome técnico no código e neste documento.
   `attachment-drop.tsx` (arrastar arquivo para a conversa e colar com Ctrl+V),
   `mention-picker.tsx` (o seletor do "@"), `format-toolbar.tsx` (a barra de formatação
   flutuante do composer) e `internal-note.tsx` (a nota interna).
+- **O campo de mensagem cresce com o texto E aceita a alça** (`components/inbox/
+  use-composer-autosize.ts`, fora do `inbox-shell`). Antes ele ficava travado em 60px
+  (`resize-none` + `max-h-40` sem nenhuma lógica de crescer), então a mensagem longa
+  rolava por dentro e sumia da vista de quem estava escrevendo. A regra que faz as duas
+  coisas conviverem é **arrastou, manda quem arrastou**: no instante em que a pessoa
+  estica o campo pela alça, o crescimento automático DESLIGA para aquele campo — sem
+  isso a altura escolhida na mão sumiria na tecla seguinte, e o campo "voltaria sozinho"
+  sem ninguém saber explicar. Quem detecta o arrasto é um `ResizeObserver` comparando a
+  altura atual com a ÚLTIMA QUE NÓS ESCREVEMOS (o arrasto não dispara evento de React:
+  ele escreve direto no `style` do elemento); mudança de LARGURA é tratada à parte e
+  recalcula em vez de virar falso positivo. O automático volta quando o rascunho é
+  enviado (o campo esvazia) ou ao trocar de conversa. **Nada disso é preferência
+  gravada** — é estado de um campo em uma aba, como a posição do cursor; guardar em
+  `User` ou no `localStorage` seria transformar um arrasto de meio segundo em cadastro.
+  Dois tetos, de propósito: o automático para em 240px (cerca de 10 linhas, senão uma
+  mensagem longa comeria a conversa inteira) e o arrasto em `60vh` (dá para esticar, não
+  dá para zerar a conversa).
 - **Barra de formatação do composer** em `components/inbox/format-toolbar.tsx`, fora do
   `inbox-shell` — que só a monta e liga o `aplicarFormatacao`. Ao selecionar texto no
   campo (nas DUAS abas, "Responder ao cliente" e "Nota interna") ela aparece flutuando
