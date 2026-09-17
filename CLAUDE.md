@@ -1232,9 +1232,18 @@ conhecê-la sozinhos. **Dado financeiro nunca entra**: ver a seção 13.
 > primeiro serve: o run do `Deploy` fecha verde com tudo `skipped`, e o `/health` responde
 > só `{"status":"ok"}`, sem commit nem versão. Além do `ps` e do `health`, ele compara o
 > commit do clone com o do GitHub e a **data de criação de cada container com a data do
-> commit** — container mais velho que o commit é o caso que os outros sinais não pegam: o
-> código está no disco, o `git` diz que está atualizado, e a imagem em execução não tem a
-> mudança. A guarda de pasta é a mesma do `atualizar.sh`, pelo mesmo motivo: rodado do
+> último commit QUE AFETA AQUELE SERVIÇO** — container mais velho que essa data é o caso
+> que os outros sinais não pegam: o código está no disco, o `git` diz que está atualizado,
+> e a imagem em execução não tem a mudança. **Por serviço, e não contra o HEAD**, porque
+> entrega só de frontend é a maioria aqui: a imagem da API sai idêntica, o Docker não
+> recria o container (e está certo em não recriar), e comparar com o HEAD acusava um
+> atraso que não existia. Alarme falso recorrente é como um verificador deixa de ser
+> lido, e aí ele não serve nem quando o atraso é de verdade. Os caminhos de cada imagem
+> estão no próprio script (`CAMINHOS_API`/`CAMINHOS_WEB`): a API leva os três pacotes, o
+> web leva só o `shared`, e documentação fica fora dos dois — mudar o `CLAUDE.md` não muda
+> byte nenhum do que roda. Quando o HEAD é mais novo mas não toca na imagem, ele diz isso
+> em vez de calar: é a linha que responde a dúvida de quem compara o commit do topo com a
+> data do container na mão. A guarda de pasta é a mesma do `atualizar.sh`, pelo mesmo motivo: rodado do
 > clone errado ele descreveria a máquina errada com ar de autoridade.
 
 ---
