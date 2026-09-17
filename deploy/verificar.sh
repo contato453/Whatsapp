@@ -29,6 +29,12 @@ RAIZ="${DEPLOY_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 COMPOSE="${DEPLOY_COMPOSE:-docker-compose.azvchat2.yml}"
 ENV_FILE="${DEPLOY_ENV_FILE:-.env.azvchat2}"
 SERVICO_API="${DEPLOY_API_SERVICE:-azvapi}"
+# O nome do serviço do site também é variável, e não fixo: numa cópia
+# duplicada (deploy/instancia/DUPLICAR.md) os serviços levam o sufixo da
+# instância (`azvweb3`), e um `azvweb` fixo aqui acusaria "o container não
+# está de pé" numa instância perfeitamente saudável. Alarme falso é como um
+# verificador deixa de ser lido, e aí não serve nem quando a falta é real.
+SERVICO_WEB="${DEPLOY_WEB_SERVICE:-azvweb}"
 API_URL="${DEPLOY_API_URL:-https://api.azvchat.com.br}"
 APP_URL="${DEPLOY_APP_URL:-https://app.azvchat.com.br}"
 
@@ -86,7 +92,7 @@ CAMINHOS_COMUNS=(package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.j
 # propósito — mudar o CLAUDE.md não muda byte nenhum do que roda.
 CAMINHOS_API=(apps/api packages/shared packages/database packages/whatsapp "${CAMINHOS_COMUNS[@]}")
 CAMINHOS_WEB=(apps/web packages/shared "${CAMINHOS_COMUNS[@]}")
-for servico in "$SERVICO_API" azvweb; do
+for servico in "$SERVICO_API" "$SERVICO_WEB"; do
   cid="$(compose ps -q "$servico" 2>/dev/null | head -1)"
   if [ -z "$cid" ]; then
     falta "o container de $servico não está de pé"

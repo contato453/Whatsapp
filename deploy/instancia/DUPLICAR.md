@@ -244,6 +244,32 @@ O `deploy/atualizar.sh` cuida só da `azvchat2`. Para as demais, o comando é
 manual, ou o script recebe as variáveis `DEPLOY_COMPOSE`, `DEPLOY_ENV_FILE` e
 `DEPLOY_API_SERVICE`.
 
+**Todo recurso novo do sistema chega às cópias por este caminho, e só por
+ele.** O código é o mesmo em todas — uma melhoria da tela de conversas, por
+exemplo, já está dentro da imagem assim que a cópia é construída de novo a
+partir do clone atualizado. Não existe "portar" nada de uma instância para
+outra: o que separa as cópias é a configuração, nunca o código. Cópia que
+ficou para trás é cópia que ninguém reconstruiu.
+
+Depois de subir, confira cada uma com o verificador de sempre, apontando as
+mesmas variáveis mais os domínios daquela cópia:
+
+```bash
+DEPLOY_COMPOSE=docker-compose.azvchat3.yml \
+DEPLOY_ENV_FILE=.env.azvchat3 \
+DEPLOY_API_SERVICE=azvapi3 \
+DEPLOY_WEB_SERVICE=azvweb3 \
+DEPLOY_API_URL=https://api2.seudominio.com.br \
+DEPLOY_APP_URL=https://app2.seudominio.com.br \
+bash deploy/verificar.sh
+```
+
+Os nomes de serviço levam o sufixo da instância, e por isso os dois
+`DEPLOY_*_SERVICE` não são opcionais aqui: sem eles o script procura
+`azvapi`/`azvweb`, não acha, e acusa container fora do ar numa instância
+perfeitamente saudável. O script é somente leitura — pode rodar com o
+escritório trabalhando.
+
 ---
 
 ## Backup, por instância
