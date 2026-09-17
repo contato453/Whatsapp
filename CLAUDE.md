@@ -986,7 +986,31 @@ nome técnico no código e neste documento.
   `audio-player.tsx`, `status-select.tsx`, `formatted-text.tsx`, `media-lightbox.tsx`
   (mídia ampliada em tela cheia, navegando só entre as mídias já carregadas na janela),
   `attachment-drop.tsx` (arrastar arquivo para a conversa e colar com Ctrl+V),
-  `mention-picker.tsx` (o seletor do "@") e `internal-note.tsx` (a nota interna).
+  `mention-picker.tsx` (o seletor do "@"), `format-toolbar.tsx` (a barra de formatação
+  flutuante do composer) e `internal-note.tsx` (a nota interna).
+- **Barra de formatação do composer** em `components/inbox/format-toolbar.tsx`, fora do
+  `inbox-shell` — que só a monta e liga o `aplicarFormatacao`. Ao selecionar texto no
+  campo (nas DUAS abas, "Responder ao cliente" e "Nota interna") ela aparece flutuando
+  sobre a seleção com negrito, itálico, tachado, monoespaçado, lista numerada, lista com
+  marcadores e citação. Três decisões que não são opcionais: (1) **o campo continua sendo
+  um `textarea` e a mensagem continua sendo TEXTO PURO com os símbolos do WhatsApp** —
+  editor rico exigiria biblioteca nova e uma conversão de ida e volta entre HTML e a
+  marcação, e é nessa conversão que a menção do "@" e as variáveis já resolvidas da
+  resposta rápida se perderiam em silêncio; (2) **envolver e prefixar são comportamentos
+  DIFERENTES** — negrito e companhia põem um marcador de cada lado da seleção, lista e
+  citação prefixam CADA LINHA (tratar lista como envolver produz lista quebrada, com um
+  item só), e o botão **alterna**: em cima do que já está formatado ele REMOVE, porque
+  "**texto**" não é negrito duplo no WhatsApp, é asterisco sobrando na tela do cliente;
+  (3) a escrita no campo passa por `document.execCommand("insertText")` quando o navegador
+  aceita, que é o que mantém o **Ctrl+Z nativo** funcionando — trocar o valor só pelo
+  estado do React apagaria a pilha de desfazer do campo. A regra pura (o que cada botão
+  faz com a seleção) mora em `packages/shared/src/whatsapp-format.ts`
+  (`applyComposerFormat` / `isComposerFormatActive`), porque é conhecimento sobre a
+  marcação do WhatsApp e não sobre esta tela, e é coberta por
+  `apps/web/test/composer-format.test.ts`. A barra **não aparece** com o seletor de "/" ou
+  de "@" aberto (`suppressed`): os dois já ocupam o espaço acima do composer e disputam as
+  mesmas teclas. Ctrl/Cmd+B e Ctrl/Cmd+I valem com ou sem a barra à vista; nada além
+  desses dois, para não sequestrar atalho que o navegador já usa.
 - **A nota interna se desenha em `components/inbox/internal-note.tsx`**, e não em cada
   tela: ela aparece em DOIS lugares — o cartão amarelo intercalado no chat
   (`InternalNoteBubble`) e o item do bloco "Notas internas" do painel lateral
@@ -1051,6 +1075,15 @@ nome técnico no código e neste documento.
   autenticado + blob temporário, revogado por quem consome. O download (bolha de
   documento e lightbox) usa `lib/media-download.ts`, mesmo caminho autenticado; o nome
   salvo é o original ou um legível por tipo e data, nunca o id da mensagem.
+- **`formatted-text.tsx` renderiza DOIS níveis de formatação, e eles não se misturam.**
+  Negrito, itálico, tachado e monoespaçado são de TRECHO (um par de marcadores em volta do
+  texto) e saem de `parseWhatsAppText`; lista numerada, lista com marcadores e citação são
+  de LINHA (um prefixo por linha) e saem de `parseWhatsAppBlocks` — os dois em
+  `@azvchat/shared`. O segundo nasceu junto com a barra de formatação: botão que produz
+  símbolo que ninguém interpreta é pior do que não ter botão, e sem ele a bolha mostraria
+  "> " e "1. " crus. Mensagem sem lista nem citação continua saindo como UM `<p>`, igual
+  a antes. **A nota interna passa pelo mesmo componente** (`internal-note.tsx`, no cartão
+  do chat e no item do painel), senão a barra seria inútil na aba "Nota interna".
 - **Linkificação em `formatted-text.tsx`**: URL http/https (ou `www.` com domínio) vira
   `<a target="_blank" rel="noopener noreferrer">` — os dois atributos sempre, senão a
   página aberta ganha `window.opener` e pode redirecionar a aba para um login falso. A
@@ -1996,7 +2029,10 @@ inserção (o que não resolve fica destacado no composer, e avisa antes de envi
 botão de baixar em documento recebido; download do áudio da conversa (recebido e enviado) em MP3 por padrão, com o original no menu secundário, nome de arquivo legível e conversão guardada para não repetir; arrastar arquivo para a conversa e colar com Ctrl+V,
 os dois com prévia (miniatura, legenda, remover, adicionar, progresso por arquivo e
 retentativa do que falhou); link clicável no texto da mensagem (nova aba,
-com `noopener noreferrer`); dashboard; relatório por atendente com células coloridas e clicáveis, linha de conversas sem responsável e de @todos, e painel lateral listando as conversas de cada recorte; auditoria consultável;
+com `noopener noreferrer`); barra de formatação flutuante no composer (negrito, itálico,
+tachado, monoespaçado, lista numerada, lista com marcadores e citação, com atalho de
+teclado para negrito e itálico), valendo nas duas abas e renderizada na bolha e na nota
+interna; dashboard; relatório por atendente com células coloridas e clicáveis, linha de conversas sem responsável e de @todos, e painel lateral listando as conversas de cada recorte; auditoria consultável;
 perfil e troca de senha pelo próprio usuário; aviso de chamada recebida; som de
 notificação de mensagem recebida, com som e volume escolhidos por cada usuário; título da
 aba piscando com as conversas que receberam mensagem, até alguém abrir a Inbox; horário

@@ -3,13 +3,22 @@ import {
   MENTION_ALL_LABEL,
   formatPhone,
   mentionDigits,
+  parseWhatsAppBlocks,
   parseWhatsAppText,
   type FormattedSegment,
 } from "@azvchat/shared";
 
 /**
  * Renderiza o texto com a formatação do WhatsApp (*negrito*, _itálico_,
- * ~tachado~, ```mono```) e transforma URLs em links clicáveis.
+ * ~tachado~, ```mono```, lista numerada, lista com marcadores e citação) e
+ * transforma URLs em links clicáveis.
+ *
+ * São DOIS níveis, e eles não se misturam: negrito e companhia são de TRECHO
+ * (um par de marcadores em volta do texto) e saem de `parseWhatsAppText`;
+ * lista e citação são de LINHA (um prefixo por linha) e saem de
+ * `parseWhatsAppBlocks`. Sem o segundo, a barra de formatação do composer
+ * produziria "> " e "1. " que ninguém interpreta — e a bolha mostraria o
+ * símbolo cru no lugar da lista.
  *
  * Sem a formatação os marcadores apareceriam crus na conversa — tanto na
  * assinatura do atendente quanto no que o cliente escreve. Sem os links, o
@@ -234,6 +243,10 @@ function renderSegments(
 /** Sem resolvedor (nota, prévia, mensagem sem marcação) nada vira marcação. */
 const NO_MENTIONS: MentionResolver = () => null;
 
+function renderInline(value: string, resolveMention: MentionResolver): React.ReactNode {
+  return renderSegments(parseWhatsAppText(value), true, resolveMention);
+}
+
 export function FormattedText({
   text,
   className,
@@ -244,7 +257,52 @@ export function FormattedText({
   /** Decide quais "@" desta mensagem são marcação de verdade. */
   resolveMention?: MentionResolver;
 }) {
+  const blocos = parseWhatsAppBlocks(text);
+  // Caso comum (mensagem sem lista nem citação): continua sendo UM parágrafo,
+  // exatamente como antes. Trocar para <div> aqui mudaria a caixa de toda
+  // bolha do sistema por causa de um recurso que a maioria das mensagens não
+  // usa.
+  const unico = blocos.length === 1 ? blocos[0] : undefined;
+  if (!unico || unico.type === "paragraph") {
+    return <p className={className}>{renderInline(unico?.value ?? text, resolveMention)}</p>;
+  }
   return (
-    <p className={className}>{renderSegments(parseWhatsAppText(text), true, resolveMention)}</p>
+    <div className={className}>
+      {blocos.map((bloco, index) => {
+        if (bloco.type === "paragraph") {
+          return <p key={index}>{renderInline(bloco.value, resolveMention)}</p>;
+        }
+        if (bloco.type === "quote") {
+          return (
+            <blockquote
+              key={index}
+              // Preto translúcido em vez de cor fixa: as duas bolhas têm fundo
+              // claro (branca na entrada, verde do WhatsApp na saída), e um
+              // cinza fechado sumiria numa delas.
+              className="my-0.5 border-l-2 border-black/20 pl-2 opacity-90"
+            >
+              {renderInline(bloco.value, resolveMention)}
+            </blockquote>
+          );
+        }
+        const Lista = bloco.ordered ? "ol" : "ul";
+        return (
+          <Lista key={index} className="my-0.5 space-y-0.5">
+            {bloco.items.map((item, posicao) => (
+              <li key={posicao} className="flex gap-1.5">
+                {/* O marcador vai num <span> próprio, e não no `list-style`:
+                    assim a numeração é a que a pessoa escreveu (e que o
+                    cliente vai ver no celular dela), não a que o navegador
+                    inventa. */}
+                <span className="shrink-0 tabular-nums opacity-70">{item.marker}</span>
+                <span className="min-w-0 flex-1">
+                  {renderInline(item.value, resolveMention)}
+                </span>
+              </li>
+            ))}
+          </Lista>
+        );
+      })}
+    </div>
   );
 }

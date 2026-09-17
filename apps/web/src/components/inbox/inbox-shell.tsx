@@ -40,6 +40,7 @@ import {
   FILTER_NONE,
   type AzevedoOsFacetsDto,
   type ConversationStatus,
+  type ComposerFormat,
 } from "@azvchat/shared";
 import {
   api,
@@ -96,6 +97,7 @@ import { useUnreadCounts } from "./use-unread-counts";
 import { FilterBar } from "./filter-bar";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
 import { MentionPicker, mentionOptions, type MentionOption } from "./mention-picker";
+import { FormatToolbar, applyFormatToField } from "./format-toolbar";
 import { AudioRecorder } from "./audio-recorder";
 import {
   ATTACHMENT_PASTE_FIELD,
@@ -914,6 +916,24 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   /** Troca de modo sem mexer no texto — o modo faz parte do rascunho. */
   function updateComposerMode(mode: DraftMode): void {
     updateDraft(draft, mode);
+  }
+
+  /**
+   * Formatação do composer (barra flutuante e atalhos de teclado).
+   *
+   * A regra de COMO cada formatação age mora em `@azvchat/shared`
+   * (`applyComposerFormat`), porque é conhecimento sobre a marcação do
+   * WhatsApp, não sobre esta tela. Daqui sai só a escrita no campo e a
+   * gravação do rascunho — a mesma `updateDraft` de qualquer tecla, para as
+   * menções continuarem sendo recalculadas junto com o texto.
+   */
+  function aplicarFormatacao(format: ComposerFormat): void {
+    const field = composerRef.current;
+    if (!field || sending) return;
+    const texto = applyFormatToField(field, format);
+    if (texto === null) return;
+    updateDraft(texto);
+    setCaret(field.selectionStart ?? texto.length);
   }
 
   // ---------- Marcação de participantes (atalho "@") ----------
@@ -2180,6 +2200,18 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                     if (value === "") setAppliedQuickReplyId(null);
                   }}
                   onKeyDown={(event) => {
+                    // Negrito e itálico pelos atalhos de sempre, com ou sem a
+                    // barra à vista. Só esses dois: Ctrl+U é "ver código-fonte"
+                    // no navegador e Ctrl+K é a barra de endereços — sequestrar
+                    // um deles tiraria da pessoa algo que ela já usa.
+                    if ((event.metaKey || event.ctrlKey) && !event.altKey) {
+                      const tecla = event.key.toLowerCase();
+                      if (tecla === "b" || tecla === "i") {
+                        event.preventDefault();
+                        aplicarFormatacao(tecla === "b" ? "bold" : "italic");
+                        return;
+                      }
+                    }
                     if (mentionOpen) {
                       // Mesma mecânica do "/": seta navega, Enter ou Tab
                       // escolhe, Esc fecha e deixa o "@" como texto.
@@ -2255,6 +2287,18 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                       : `Mensagem para ${conversation.title}...`
                   }
                   className="max-h-40 min-h-[60px] w-full resize-none"
+                />
+                {/*
+                  A barra vale nas DUAS abas: a nota interna também é lida por
+                  gente, e desde que ela passou pelo `formatted-text` a
+                  marcação aparece formatada ali igualzinho.
+                */}
+                <FormatToolbar
+                  fieldRef={composerRef}
+                  value={draft}
+                  disabled={sending}
+                  suppressed={mentionOpen || quickReplyOpen}
+                  onFormat={aplicarFormatacao}
                 />
 
                 <div className="flex items-center gap-1">
