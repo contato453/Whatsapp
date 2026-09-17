@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { cn, formatDateTime } from "@/lib/utils";
 import type { NoteDto } from "@/lib/types";
 import { useAuth } from "@/lib/auth-context";
+import { FormattedText } from "./formatted-text";
 
 /**
  * Nota interna — nunca vai para o WhatsApp.
@@ -145,7 +146,14 @@ export function InternalNoteBubble({
           <StickyNote className="h-3 w-3" /> Nota interna
           {pinned && <Pin className="h-3 w-3" aria-label="Nota fixada" />}
         </p>
-        <p className="whitespace-pre-wrap break-words text-sm text-slate-700">{note.content}</p>
+        {/* A nota passa pelo MESMO renderizador da mensagem: desde que o
+            composer ganhou a barra de formatação, escrever a nota em lista ou
+            em negrito e ver os símbolos crus aqui seria o botão não servir
+            para nada nesta aba. */}
+        <FormattedText
+          text={note.content}
+          className="whitespace-pre-wrap break-words text-sm text-slate-700"
+        />
         <p className="mt-1 text-[10px] text-amber-600/80">
           {note.user?.name ?? "—"} ·{" "}
           {new Date(note.createdAt).toLocaleString("pt-BR", {
@@ -203,10 +211,15 @@ export function InternalNotePanelItem({
         (canManage || canPin) && "pr-12",
       )}
     >
-      <p className="flex items-center gap-1 whitespace-pre-wrap break-words text-xs text-slate-700">
-        {note.content}
-        {pinned && <Pin className="h-3 w-3 shrink-0 text-amber-600" aria-label="Nota fixada" />}
-      </p>
+      <div className="flex items-start gap-1">
+        <FormattedText
+          text={note.content}
+          className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs text-slate-700"
+        />
+        {pinned && (
+          <Pin className="mt-0.5 h-3 w-3 shrink-0 text-amber-600" aria-label="Nota fixada" />
+        )}
+      </div>
       <p className="mt-1 text-[10px] text-slate-400">
         {note.user?.name ?? "—"} · {formatDateTime(note.createdAt)}
       </p>
