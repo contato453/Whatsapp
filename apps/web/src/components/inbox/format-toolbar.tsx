@@ -65,8 +65,6 @@ const MARGIN = 8;
 interface Posicao {
   top: number;
   left: number;
-  /** Quando não coube acima, a barra desce e a seta vira para cima. */
-  abaixo: boolean;
 }
 
 /**
@@ -224,13 +222,9 @@ export function FormatToolbar({
     const largura = barra.offsetWidth;
     const altura = barra.offsetHeight;
     let top = alvo.top - altura - GAP;
-    let abaixo = false;
     // Seleção colada no topo da janela: a barra desce, em vez de sair da
     // área visível (onde ninguém a alcançaria).
-    if (top < MARGIN) {
-      top = alvo.bottom + GAP;
-      abaixo = true;
-    }
+    if (top < MARGIN) top = alvo.bottom + GAP;
     const maximo = window.innerHeight - altura - MARGIN;
     if (top > maximo) top = Math.max(MARGIN, maximo);
     const centro = alvo.left + alvo.width / 2 - largura / 2;
@@ -238,7 +232,7 @@ export function FormatToolbar({
       Math.max(centro, MARGIN),
       Math.max(MARGIN, window.innerWidth - largura - MARGIN),
     );
-    setPosicao({ top, left, abaixo });
+    setPosicao({ top, left });
   }, [fieldRef]);
 
   // Enquanto a posição não foi medida a barra fica invisível (`opacity-0`),
