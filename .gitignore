@@ -27,6 +27,9 @@ logs/
 coverage/
 .env.*
 !.env.example
+# Modelo da instância duplicada: é exemplo versionado, como o .env.example
+# da raiz, e sem ele o passo 2 do deploy/instancia/DUPLICAR.md não roda.
+!deploy/instancia/.env.instancia.example
 backup-*.sql.gz
 deploy/sid.txt
 deploy/test-sid.txt

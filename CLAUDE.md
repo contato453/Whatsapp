@@ -1245,6 +1245,26 @@ conhecê-la sozinhos. **Dado financeiro nunca entra**: ver a seção 13.
 > em vez de calar: é a linha que responde a dúvida de quem compara o commit do topo com a
 > data do container na mão. A guarda de pasta é a mesma do `atualizar.sh`, pelo mesmo motivo: rodado do
 > clone errado ele descreveria a máquina errada com ar de autoridade.
+>
+> **Ele serve qualquer INSTÂNCIA, não só a `azvchat2`**: compose, arquivo de variáveis,
+> nomes de serviço e os dois domínios saem de `DEPLOY_COMPOSE`, `DEPLOY_ENV_FILE`,
+> `DEPLOY_API_SERVICE`, `DEPLOY_WEB_SERVICE`, `DEPLOY_API_URL` e `DEPLOY_APP_URL`, com o
+> padrão sendo a instância viva. O nome do serviço do WEB precisou virar variável junto
+> com o da API: numa cópia duplicada os serviços levam o sufixo (`azvweb3`), e o `azvweb`
+> que estava fixo acusaria container fora do ar numa instância saudável — o mesmo alarme
+> falso que o parágrafo acima veio consertar, só que na outra ponta.
+
+**Mais de uma instância na mesma VPS** (o kit de duplicação): `deploy/instancia/`
+guarda o modelo do compose (`docker-compose.instancia.yml`, com o marcador `__SUF__`),
+o modelo das variáveis (`.env.instancia.example` — é exemplo versionado, com exceção
+explícita no `.gitignore`, que só ignora `.env.*` de verdade) e o passo a passo
+(`DUPLICAR.md`). **O código é o mesmo em todas as cópias**: o que separa uma da outra é
+a configuração — sufixo dos containers, domínios, segredos e volumes. Consequência que
+não é detalhe: recurso novo do sistema chega a uma cópia RECONSTRUINDO-A a partir do
+clone atualizado, nunca "portando" código de uma para outra, e cópia que ninguém
+reconstruiu é cópia parada numa versão antiga. `atualizar.sh` (e o timer do systemd)
+cuida só da `azvchat2`; as demais são comando manual, ou o mesmo script com as
+variáveis `DEPLOY_*`.
 
 ---
 
