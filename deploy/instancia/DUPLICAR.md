@@ -244,6 +244,26 @@ O `deploy/atualizar.sh` cuida só da `azvchat2`. Para as demais, o comando é
 manual, ou o script recebe as variáveis `DEPLOY_COMPOSE`, `DEPLOY_ENV_FILE` e
 `DEPLOY_API_SERVICE`.
 
+> **Chamando o `atualizar.sh` para uma cópia, passe `--force`.** O clone é UM
+> só para todas as instâncias, e o script pergunta "há commit novo NO CLONE?"
+> antes de construir. O timer do systemd roda a cada 2 minutos para a
+> `azvchat2` e já traz o commit novo para esse clone — então, quando você
+> chama o script para a cópia logo depois, ele responde "Já está na versão
+> mais recente. Nada a fazer" e **sai sem reconstruir os containers dela**,
+> que continuam na imagem antiga. Não é erro nem fica nada vermelho: o
+> script está certo sobre o clone e errado sobre a instância. `--force`
+> pula essa pergunta e constrói do mesmo jeito:
+>
+> ```bash
+> DEPLOY_COMPOSE=docker-compose.azvchat3.yml \
+> DEPLOY_ENV_FILE=.env.azvchat3 \
+> DEPLOY_API_SERVICE=azvapi3 \
+> bash deploy/atualizar.sh --force
+> ```
+>
+> A vantagem sobre o `docker compose up` cru é ele esperar o `api_started`
+> no log e falhar alto se a API não subir em 100s.
+
 **Todo recurso novo do sistema chega às cópias por este caminho, e só por
 ele.** O código é o mesmo em todas — uma melhoria da tela de conversas, por
 exemplo, já está dentro da imagem assim que a cópia é construída de novo a

@@ -1264,7 +1264,11 @@ não é detalhe: recurso novo do sistema chega a uma cópia RECONSTRUINDO-A a pa
 clone atualizado, nunca "portando" código de uma para outra, e cópia que ninguém
 reconstruiu é cópia parada numa versão antiga. `atualizar.sh` (e o timer do systemd)
 cuida só da `azvchat2`; as demais são comando manual, ou o mesmo script com as
-variáveis `DEPLOY_*`.
+variáveis `DEPLOY_*` **mais `--force`** — o clone é UM só para todas, então o
+"há commit novo?" que o script pergunta é sobre o CLONE, e o timer da `azvchat2`
+já o adiantou: sem `--force` ele responde "nada a fazer" e sai sem reconstruir os
+containers da cópia, que seguem na imagem antiga. Certo sobre o clone, errado
+sobre a instância, e nada fica vermelho.
 
 ---
 
