@@ -26,10 +26,12 @@ export interface AiSettingsView {
   timeoutMs: number;
   contextMessageLimit: number;
   pricingOverrides: AiPricingOverrides;
-  /** A IA pode ouvir áudio do cliente (ver `services/ai/transcription.ts`). */
+  /** A IA pode ouvir áudio do cliente (ver `services/ai/attachments.ts`). */
   transcribeAudio: boolean;
   /** Modelo que transcreve; nulo = o padrão do sistema. */
   transcriptionModel: string | null;
+  /** A IA pode descrever imagem recebida (custa token de visão). */
+  describeImages: boolean;
 }
 
 export const DEFAULT_AI_SETTINGS: AiSettingsView = {
@@ -43,6 +45,7 @@ export const DEFAULT_AI_SETTINGS: AiSettingsView = {
   // de configurações: é o comportamento útil, e o mesmo default da coluna.
   transcribeAudio: true,
   transcriptionModel: null,
+  describeImages: true,
 };
 
 export function settingsView(row: AiSettings | null): AiSettingsView {
@@ -56,6 +59,7 @@ export function settingsView(row: AiSettings | null): AiSettingsView {
     pricingOverrides: readPricingOverrides(row.pricingOverrides),
     transcribeAudio: row.transcribeAudio,
     transcriptionModel: row.transcriptionModel,
+    describeImages: row.describeImages,
   };
 }
 

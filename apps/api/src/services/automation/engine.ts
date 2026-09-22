@@ -33,6 +33,7 @@ import { resolveConversationPersonName } from "../../lib/person-profile.js";
 import { loadAttendanceSettings } from "../../lib/attendance-settings.js";
 import { isWithinBusinessHours, nextBusinessWindowStart } from "../../lib/automation/business-hours.js";
 import { conversationAudience } from "../../realtime/socket.js";
+import { emitConversationAutomation } from "../../lib/conversation-automation.js";
 import { buildPreview, isUniqueViolation } from "../message-ingest.js";
 import { buildAutomationVariableContext, type AutomationExecutionContextData } from "./context.js";
 
@@ -236,6 +237,7 @@ export class AutomationEngine {
         },
       });
       await this.log(active.id, "info", "automation_handed_off", {});
+      await this.publishAutomationState(active.organizationId, active.conversationId);
     } catch (err) {
       this.logger.error({ event: "automation_handover_failed", conversationId, error: String(err) });
     }
@@ -544,6 +546,10 @@ export class AutomationEngine {
     await this.log(execution.id, "info", "automation_execution_started", {
       data: { flowId: flow.id, triggerType },
     });
+    // O chip "Fluxo" acende antes do primeiro bloco rodar: a partir daqui a
+    // conversa está no automático, e quem responder por cima derruba a
+    // execução (`handleHumanTakeover`) sem ter tido como saber disso.
+    await this.publishAutomationState(flow.organizationId, conversation.id);
     const graph = flow.publishedVersion.graph as unknown as AutomationGraph;
     const trigger = graph.nodes.find((node) => node.type === "trigger");
     await this.advanceFrom(execution, conversation, graph, trigger?.id ?? null, {}, seed);
@@ -1126,6 +1132,7 @@ export class AutomationEngine {
       },
     });
     await this.log(executionId, "info", "automation_execution_completed", summary ? { message: summary } : undefined);
+    await this.publishAutomationStateFor(executionId);
   }
 
   private async failExecution(
@@ -1145,6 +1152,45 @@ export class AutomationEngine {
       },
     });
     await this.log(executionId, "error", "automation_execution_failed", { message: error });
+    await this.publishAutomationStateFor(executionId);
+  }
+
+  /**
+   * Publica o chip "Fluxo" dos cards da lista (ver
+   * `lib/conversation-automation.ts`). São QUATRO os pontos em que uma
+   * execução entra ou sai do controle da conversa — começar, concluir,
+   * falhar e ser assumida por um atendente —, e todos passam por aqui. A
+   * conversa é relida pela publicação em vez de reaproveitada: entre o
+   * início e o fim de uma execução ela pode ter trocado de departamento ou
+   * de responsável, e a audiência do evento sairia para as salas antigas.
+   *
+   * Nunca lança: avisar a tela é acessório, e a execução em si não pode cair
+   * por causa disso — mesma regra do `log` logo abaixo.
+   */
+  private async publishAutomationState(organizationId: string, conversationId: string): Promise<void> {
+    try {
+      await emitConversationAutomation(
+        { prisma: this.prisma, io: this.io },
+        organizationId,
+        conversationId,
+      );
+    } catch (err) {
+      this.logger.warn({ event: "automation_state_publish_failed", conversationId, error: String(err) });
+    }
+  }
+
+  /** O mesmo, quando só o id da execução está em mãos (concluir/falhar). */
+  private async publishAutomationStateFor(executionId: string): Promise<void> {
+    try {
+      const execution = await this.prisma.automationExecution.findUnique({
+        where: { id: executionId },
+        select: { organizationId: true, conversationId: true },
+      });
+      if (!execution) return;
+      await this.publishAutomationState(execution.organizationId, execution.conversationId);
+    } catch (err) {
+      this.logger.warn({ event: "automation_state_publish_failed", executionId, error: String(err) });
+    }
   }
 
   private async log(

@@ -1,13 +1,18 @@
 "use client";
 
-import { Archive, Users2, User, UserRound } from "lucide-react";
+import { Archive, Bot, Users2, User, UserRound, Workflow } from "lucide-react";
 import {
   ALL_USERS_ASSIGNEE_LABEL,
   AZEVEDO_OS_SOURCE,
   CONNECTION_STATUS_COLORS,
   CONNECTION_STATUS_LABELS,
+  CONVERSATION_AI_BADGE_COLOR,
+  CONVERSATION_AI_BADGE_LABEL,
+  CONVERSATION_FLOW_BADGE_COLOR,
+  CONVERSATION_FLOW_BADGE_LABEL,
   CONVERSATION_STATUS_COLORS,
   CONVERSATION_STATUS_LABELS,
+  type ConversationAutomationDto,
 } from "@azvchat/shared";
 import { cn, formatDateTime, formatTime } from "@/lib/utils";
 import { formatUnreadBadge } from "@/lib/unread";
@@ -18,6 +23,7 @@ import { ConversationAvatar } from "./conversation-avatar";
 export function ConversationListItem({
   conversation,
   unreadCount,
+  automation,
   active,
   onClick,
 }: {
@@ -28,6 +34,14 @@ export function ConversationListItem({
    * enxerga a conversa.
    */
   unreadCount: number;
+  /**
+   * Atendimento automático em andamento (IA e/ou fluxo). Também vem de fora,
+   * mas por outro motivo: saber disso custa duas consultas, e pagá-las por
+   * card seria a lista inteira em cima do banco a cada carga — o mesmo
+   * motivo que mantém as fixações e os agendamentos fora deste DTO. Nulo (ou
+   * ausente) = ninguém automático aqui.
+   */
+  automation?: ConversationAutomationDto | null;
   active: boolean;
   onClick: () => void;
 }) {
@@ -75,6 +89,29 @@ export function ConversationListItem({
             )}
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-1">
+            {/* Antes do status, de propósito: "quem está atendendo isto é uma
+                máquina" muda o que a pessoa faz em seguida mais do que o
+                status muda. Só o rótulo curto no chip — o nome do agente e o
+                do fluxo ficam no title, porque nome comprido empurraria os
+                outros chips para uma linha nova em todo card. */}
+            {automation?.ai && (
+              <Badge
+                color={CONVERSATION_AI_BADGE_COLOR}
+                title={`Atendimento por IA em andamento — agente ${automation.ai.agentName}`}
+              >
+                <Bot className="h-3 w-3 shrink-0" />
+                {CONVERSATION_AI_BADGE_LABEL}
+              </Badge>
+            )}
+            {automation?.flow && (
+              <Badge
+                color={CONVERSATION_FLOW_BADGE_COLOR}
+                title={`Fluxo de automação em andamento: ${automation.flow.flowName}`}
+              >
+                <Workflow className="h-3 w-3 shrink-0" />
+                {CONVERSATION_FLOW_BADGE_LABEL}
+              </Badge>
+            )}
             <Badge color={CONVERSATION_STATUS_COLORS[conversation.status]}>
               {CONVERSATION_STATUS_LABELS[conversation.status]}
             </Badge>

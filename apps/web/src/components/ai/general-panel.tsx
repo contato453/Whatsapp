@@ -6,6 +6,7 @@ import {
   AI_MODEL_CATALOG,
   AI_TRANSCRIPTION_LIMITS,
   AI_TRANSCRIPTION_MODELS,
+  AI_VISION_LIMITS,
   type AiSettingsDto,
 } from "@azvchat/shared";
 import { ApiError, aiApi } from "@/lib/api";
@@ -24,6 +25,7 @@ export function GeneralPanel() {
   const [contextLimit, setContextLimit] = useState("20");
   const [transcribeAudio, setTranscribeAudio] = useState(true);
   const [transcriptionModel, setTranscriptionModel] = useState(AI_TRANSCRIPTION_MODELS[0]?.id ?? "");
+  const [describeImages, setDescribeImages] = useState(true);
   const [pricing, setPricing] = useState<Array<{ model: string; input: string; output: string }>>([]);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ ok: boolean; message: string } | null>(null);
@@ -35,6 +37,7 @@ export function GeneralPanel() {
       setContextLimit(String(data.contextMessageLimit));
       setTranscribeAudio(data.transcribeAudio);
       setTranscriptionModel(data.transcriptionModel);
+      setDescribeImages(data.describeImages);
       setPricing(
         Object.entries(data.pricingOverrides).map(([model, price]) => ({
           model,
@@ -68,6 +71,7 @@ export function GeneralPanel() {
         pricingOverrides: overrides,
         transcribeAudio,
         transcriptionModel: transcriptionModel.trim() || (AI_TRANSCRIPTION_MODELS[0]?.id ?? ""),
+        describeImages,
       });
       setSettings(saved);
       setFeedback({ ok: true, message: "Configurações salvas." });
@@ -97,8 +101,8 @@ export function GeneralPanel() {
       </Section>
 
       <Section
-        title="Áudios do cliente"
-        description="Com a transcrição ligada, o áudio que o cliente grava chega à IA como texto — é o caso mais comum do WhatsApp. Desligada, a IA avisa que não ouviu e pede que o cliente escreva."
+        title="Anexos do cliente"
+        description="Com a leitura ligada, o áudio, a foto e o documento que o cliente manda chegam à IA como texto. Desligada, a IA avisa que não conseguiu abrir e pede que o cliente escreva."
       >
         <label className="flex items-start gap-2 text-sm text-slate-700">
           <input
@@ -132,11 +136,29 @@ export function GeneralPanel() {
             ))}
           </select>
         </Field>
+        <label className="flex items-start gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={describeImages}
+            onChange={(event) => setDescribeImages(event.target.checked)}
+          />
+          <span>
+            Descrever as imagens recebidas para a IA entender
+            <span className="block text-[11px] text-slate-400">
+              A foto é lida pelo mesmo modelo do agente, que também transcreve o texto visível (comprovante, boleto,
+              print). O agente ainda decide pela capacidade &quot;Ver imagens do cliente&quot;.
+            </span>
+          </span>
+        </label>
         <p className="text-[11px] text-slate-400">
-          A transcrição é cobrada por minuto de áudio e entra no consumo como &quot;Transcrição de áudio&quot;, separada
-          do atendimento. Cada áudio é transcrito uma vez e a transcrição aparece na bolha da conversa, para a equipe
-          conferir o que a IA ouviu. Áudio acima de {Math.round(AI_TRANSCRIPTION_LIMITS.maxSeconds / 60)} minutos não é
-          transcrito — a IA pede que o cliente escreva.
+          Cada anexo é lido uma vez e o resultado aparece na bolha da conversa, para a equipe conferir o que a IA
+          entendeu. O áudio é cobrado por minuto (&quot;Transcrição de áudio&quot; no consumo) e a imagem por token do
+          modelo do agente (&quot;Leitura de imagem&quot;), as duas separadas do atendimento. Áudio acima de{" "}
+          {Math.round(AI_TRANSCRIPTION_LIMITS.maxSeconds / 60)} minutos e imagem acima de{" "}
+          {Math.round(AI_VISION_LIMITS.maxBytes / (1024 * 1024))} MB não são lidos. <strong>Documento</strong> (PDF,
+          DOCX e TXT) é lido aqui no servidor, sem custo, e por isso não tem interruptor: quem decide é a capacidade
+          &quot;Ler documentos do cliente&quot; de cada agente.
         </p>
       </Section>
 

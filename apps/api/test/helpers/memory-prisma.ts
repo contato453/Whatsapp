@@ -50,6 +50,8 @@ const RELATIONS: Record<string, Record<string, Relation>> = {
   conversationTag: { tag: { localKey: "tagId", table: "tag" } },
   tag: { departments: { foreignKey: "tagId", table: "tagDepartment", many: true } },
   aiUsageLog: { conversation: { localKey: "conversationId", table: "conversation" } },
+  // O chip de atendimento automático da lista lê o nome do fluxo pela execução.
+  automationExecution: { flow: { localKey: "flowId", table: "automationFlow" } },
   followUpExecution: { rule: { localKey: "ruleId", table: "followUpRule" } },
   followUpRule: {
     departments: { foreignKey: "ruleId", table: "followUpRuleDepartment", many: true },
@@ -81,6 +83,7 @@ export class MemoryPrisma {
       "aiProviderConfig", "aiSettings", "aiAgent", "aiAgentDepartment", "aiAgentVersion", "aiKnowledgeSource",
       "aiAgentKnowledgeSource", "aiAutomation", "aiSession", "aiUsageLog",
       "followUpRule", "followUpRuleDepartment", "followUpRuleStep", "followUpExecution", "followUpExecutionLog",
+      "automationFlow", "automationExecution",
     ]) {
       this.tables.set(name, []);
     }

@@ -2,10 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import pino from "pino";
 import type { WhatsAppProvider } from "@azvchat/whatsapp";
 import {
-  AI_AUDIO_TRANSCRIBED_LABEL,
-  AI_AUDIO_UNHEARD_LABEL,
+  AI_ATTACHMENT_CONTEXT_LABELS,
   defaultAiAgentConfig,
-  readAudioTranscript,
+  readAiAttachmentInsight,
   RealtimeEvents,
 } from "@azvchat/shared";
 import { createSecretCipher } from "../src/lib/ai-secrets.js";
@@ -365,16 +364,16 @@ describe("AiRuntime — turno de ponta a ponta", () => {
     const messages = chatCall?.body.messages as Array<{ role: string; content: string }>;
     expect(messages.at(-1)).toMatchObject({
       role: "user",
-      content: `${AI_AUDIO_TRANSCRIBED_LABEL} Preciso abrir uma empresa`,
+      content: `${AI_ATTACHMENT_CONTEXT_LABELS.audio.ok} Preciso abrir uma empresa`,
     });
     // O prompt avisa o modelo de que aquilo é fala transcrita, que erra.
-    expect(messages[0]?.content).toContain(AI_AUDIO_TRANSCRIBED_LABEL);
+    expect(messages[0]?.content).toContain(AI_ATTACHMENT_CONTEXT_LABELS.audio.ok);
     expect(s.sent.map((entry) => entry.text)).toEqual(["Claro! Abertura de empresa é com a gente."]);
 
     // Transcrição GRAVADA na mensagem: o próximo turno não paga de novo, e a
     // equipe vê na bolha o que a IA ouviu (evento de mensagem atualizada).
     const stored = s.db.rows("message").find((row) => row.id === message.id);
-    expect(readAudioTranscript(stored?.metadata)).toMatchObject({
+    expect(readAiAttachmentInsight(stored?.metadata)).toMatchObject({
       status: "ok",
       text: "Preciso abrir uma empresa",
       attempts: 1,
@@ -400,10 +399,10 @@ describe("AiRuntime — turno de ponta a ponta", () => {
 
     expect(calls.some((call) => call.url.endsWith("/audio/transcriptions"))).toBe(false);
     const messages = calls[0]?.body.messages as Array<{ role: string; content: string }>;
-    expect(messages.at(-1)).toMatchObject({ role: "user", content: AI_AUDIO_UNHEARD_LABEL });
+    expect(messages.at(-1)).toMatchObject({ role: "user", content: AI_ATTACHMENT_CONTEXT_LABELS.audio.unavailable });
     // Marcado como tentado: sem isto, cada turno tentaria de novo o que não tem arquivo.
     const stored = s.db.rows("message").find((row) => row.id === message.id);
-    expect(readAudioTranscript(stored?.metadata)?.status).toBe("no_file");
+    expect(readAiAttachmentInsight(stored?.metadata)?.status).toBe("no_file");
   });
 
   it("capacidade de ouvir áudio desligada: não transcreve e não marca a mensagem", async () => {
@@ -424,8 +423,8 @@ describe("AiRuntime — turno de ponta a ponta", () => {
     expect(messages.at(-1)).toMatchObject({ role: "user", content: "[áudio]" });
     // Nada gravado: religar a chave depois volta a transcrever os próximos.
     const stored = s.db.rows("message").find((row) => row.id === message.id);
-    expect(readAudioTranscript(stored?.metadata)).toBeNull();
-    expect(messages[0]?.content).toContain("Você NÃO ouve áudios");
+    expect(readAiAttachmentInsight(stored?.metadata)).toBeNull();
+    expect(messages[0]?.content).toContain("Áudio: você NÃO ouve");
   });
 
   it("transfer_to_human: nota com resumo, conversa entregue e sessão transferida", async () => {

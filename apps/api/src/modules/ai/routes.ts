@@ -36,7 +36,7 @@ import { createAiProvider, resolveCredentials } from "../../services/ai/credenti
 import { extractDocumentText, extractUrlText } from "../../services/ai/knowledge-extract.js";
 import { AiProviderError } from "../../services/ai/provider.js";
 import { endAiSession, loadLatestSession, serializeAiSession } from "../../services/ai/session.js";
-import { resolveTranscriptionModel } from "../../services/ai/transcription.js";
+import { resolveTranscriptionModel } from "../../services/ai/attachments.js";
 import { periodRange } from "../dashboard/metrics.js";
 import type { AppDeps } from "../../types.js";
 import {
@@ -284,6 +284,7 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
       pricingOverrides: view.pricingOverrides,
       transcribeAudio: view.transcribeAudio,
       transcriptionModel: resolveTranscriptionModel(view.transcriptionModel),
+      describeImages: view.describeImages,
       updatedAt: row?.updatedAt.toISOString() ?? null,
     };
   }
@@ -309,6 +310,7 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
     // provedor precisa poder ser usado no dia em que sair, sem deploy — é o
     // mesmo tratamento que o modelo de chat já tem.
     transcriptionModel: z.string().min(1).max(100),
+    describeImages: z.boolean(),
   });
 
   app.put("/ai/settings", { preHandler: requireRole("admin") }, async (request) => {
@@ -326,6 +328,7 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
         pricingOverrides: body.pricingOverrides as Prisma.InputJsonValue,
         transcribeAudio: body.transcribeAudio,
         transcriptionModel: body.transcriptionModel,
+        describeImages: body.describeImages,
         updatedById: request.user.sub,
       },
       create: {
@@ -338,6 +341,7 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
         pricingOverrides: body.pricingOverrides as Prisma.InputJsonValue,
         transcribeAudio: body.transcribeAudio,
         transcriptionModel: body.transcriptionModel,
+        describeImages: body.describeImages,
         updatedById: request.user.sub,
       },
     });
@@ -353,6 +357,7 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
         timeoutMs: body.timeoutMs,
         transcribeAudio: body.transcribeAudio,
         transcriptionModel: body.transcriptionModel,
+        describeImages: body.describeImages,
       },
     });
     return { settings: await settingsDto(organizationId) };

@@ -37,8 +37,9 @@ import {
   isEditContentUnavailable,
   isEditableMessageType,
   isWithinEditWindow,
+  AI_ATTACHMENT_INSIGHT_TITLES,
   quotedPreviewText,
-  readAudioTranscript,
+  readAiAttachmentInsight,
   readMessageVersions,
 } from "@azvchat/shared";
 import { api, fetchMediaBlobUrl } from "@/lib/api";
@@ -283,22 +284,22 @@ function PollContent({ message, outbound }: { message: MessageDto; outbound: boo
 }
 
 /**
- * O QUE A IA OUVIU, abaixo do player.
+ * O QUE A IA ENTENDEU DO ANEXO, abaixo da mídia.
  *
- * A transcrição só existe quando o atendimento por IA passou pela conversa
- * (ver `services/ai/transcription.ts`), e aparecer aqui não é enfeite: o
- * resumo que a IA deixa na nota interna, e a resposta que ela já mandou ao
- * cliente, saem deste texto. Sem ele na tela, a equipe teria de pôr o fone
- * para conferir se a IA entendeu certo — e transcrição automática erra nome,
- * número e valor.
+ * A leitura só existe quando o atendimento por IA passou pela conversa (ver
+ * `services/ai/attachments.ts`), e aparecer aqui não é enfeite: o resumo que a
+ * IA deixa na nota interna, e a resposta que ela já mandou ao cliente, saem
+ * deste texto. Sem ele na tela, a equipe teria de abrir o arquivo para conferir
+ * se a IA entendeu certo — e leitura automática erra nome, número e valor.
  *
- * Só o SUCESSO é exibido: "não deu para transcrever" é informação do motor
- * (que já pediu ao cliente para escrever), e um aviso em cada bolha de áudio
- * de conversa sem IA seria ruído em cima do que a equipe ouve sozinha.
+ * Só o SUCESSO é exibido: "não deu para ler" é informação do motor (que já
+ * pediu ao cliente para escrever), e um aviso em cada anexo de conversa sem IA
+ * seria ruído em cima do que a equipe abre sozinha. Recolhido por padrão, para
+ * o texto de um PDF não empurrar a conversa inteira.
  */
-function AudioTranscript({ message, outbound }: { message: MessageDto; outbound: boolean }) {
-  const transcript = readAudioTranscript(message.metadata);
-  if (!transcript || transcript.status !== "ok" || !transcript.text) return null;
+function AttachmentInsight({ message, outbound }: { message: MessageDto; outbound: boolean }) {
+  const insight = readAiAttachmentInsight(message.metadata);
+  if (!insight || insight.status !== "ok" || !insight.text) return null;
   return (
     <details className="max-w-[18rem]">
       <summary
@@ -307,15 +308,15 @@ function AudioTranscript({ message, outbound }: { message: MessageDto; outbound:
           outbound ? "text-chat-sent-meta" : "text-slate-400",
         )}
       >
-        <Bot className="h-3 w-3" /> Transcrição
+        <Bot className="h-3 w-3" /> {AI_ATTACHMENT_INSIGHT_TITLES[insight.kind]}
       </summary>
       <p
         className={cn(
-          "mt-1 whitespace-pre-wrap break-words border-l-2 pl-2 text-xs",
+          "mt-1 max-h-60 overflow-y-auto whitespace-pre-wrap break-words border-l-2 pl-2 text-xs",
           outbound ? "border-chat-sent-meta/40 text-chat-sent-text" : "border-slate-200 text-slate-600",
         )}
       >
-        {transcript.text}
+        {insight.text}
       </p>
     </details>
   );
@@ -401,14 +402,17 @@ function MediaContent({
     if (failed) return <p className="text-xs italic opacity-70">Falha ao carregar imagem</p>;
     if (!url) return <div className="h-40 w-52 animate-pulse rounded-lg bg-slate-200/60" />;
     return (
-      <button
-        type="button"
-        onClick={() => onOpenMedia?.(message)}
-        aria-label={message.type === "sticker" ? "Ampliar figurinha" : "Ampliar imagem"}
-        className="block cursor-zoom-in"
-      >
-        <img src={url} alt="Imagem" className="max-h-72 max-w-full rounded-lg" />
-      </button>
+      <div className="space-y-1.5">
+        <button
+          type="button"
+          onClick={() => onOpenMedia?.(message)}
+          aria-label={message.type === "sticker" ? "Ampliar figurinha" : "Ampliar imagem"}
+          className="block cursor-zoom-in"
+        >
+          <img src={url} alt="Imagem" className="max-h-72 max-w-full rounded-lg" />
+        </button>
+        <AttachmentInsight message={message} outbound={outbound} />
+      </div>
     );
   }
   if (isAudio) {
@@ -425,7 +429,7 @@ function MediaContent({
           }
           originalExtension={audioOriginalExtension(message.mimeType)}
         />
-        <AudioTranscript message={message} outbound={outbound} />
+        <AttachmentInsight message={message} outbound={outbound} />
       </div>
     );
   }
@@ -486,6 +490,9 @@ function MediaContent({
       {downloadFailed && (
         <p className="mt-1 text-xs italic opacity-80">Falha ao baixar o arquivo. Tente novamente.</p>
       )}
+      <div className="mt-1.5">
+        <AttachmentInsight message={message} outbound={outbound} />
+      </div>
     </div>
   );
 }

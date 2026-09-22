@@ -1,6 +1,6 @@
 import type {
+  AiAttachmentInsight,
   AiSessionDto,
-  AudioTranscriptMetadata,
   AutomationExecutionStatus,
   AutomationFlowStatus,
   AutomationGraph,
@@ -320,13 +320,17 @@ export interface MessageDto {
      */
     editedContentUnavailable?: boolean;
     /**
-     * Transcrição do áudio recebido, quando o atendimento por IA a fez (ver
-     * `services/ai/transcription.ts`). A bolha a mostra abaixo do player para
-     * a equipe ver o que a IA ouviu — sem isso, o resumo da transferência
-     * citaria conteúdo que ninguém consegue conferir sem pôr o fone. Leia com
-     * `readAudioTranscript` de `@azvchat/shared`.
+     * O que a IA entendeu do ANEXO, quando o atendimento por IA o leu (ver
+     * `services/ai/attachments.ts`): transcrição do áudio, descrição da imagem
+     * ou texto do documento. A bolha mostra abaixo da mídia, para a equipe ver
+     * o que a IA leu — sem isso, o resumo da transferência citaria conteúdo que
+     * ninguém consegue conferir sem abrir o arquivo. Leia com
+     * `readAiAttachmentInsight` de `@azvchat/shared`, que acha a chave certa
+     * sozinha.
      */
-    audioTranscript?: AudioTranscriptMetadata;
+    audioTranscript?: AiAttachmentInsight;
+    imageDescription?: AiAttachmentInsight;
+    documentText?: AiAttachmentInsight;
   } | null;
 }
 

@@ -111,6 +111,29 @@ export interface AiTranscriptionResult {
   usage: { inputTokens: number; outputTokens: number };
 }
 
+/**
+ * Descrição de uma IMAGEM recebida — a IA "vendo" a foto do cliente. Vai pelo
+ * mesmo endpoint de chat do provedor, com a imagem embutida na mensagem: os
+ * modelos que o atendimento já usa enxergam imagem, e um modelo separado só
+ * para isto seria mais uma configuração para o escritório manter.
+ */
+export interface AiImageDescriptionRequest {
+  apiKey: string;
+  model: string;
+  image: Buffer;
+  mimeType: string | null;
+  /** O que pedir ao modelo (em português; mora no serviço que chama). */
+  instruction: string;
+  maxOutputTokens: number;
+  timeoutMs: number;
+}
+
+export interface AiImageDescriptionResult {
+  /** Descrição em texto; vazia quando o modelo não devolveu nada. */
+  text: string;
+  usage: { inputTokens: number; outputTokens: number };
+}
+
 export interface AiProviderBilling {
   available: boolean;
   reason: string | null;
@@ -131,6 +154,12 @@ export interface AiProvider {
    * atendimento.
    */
   transcribeAudio(request: AiTranscriptionRequest): Promise<AiTranscriptionResult>;
+  /**
+   * Imagem → texto, para a IA entender a foto que o cliente mandou. Provedor
+   * (ou modelo) sem visão lança `AiProviderError` e quem chama marca a imagem
+   * como não lida, sem derrubar o atendimento.
+   */
+  describeImage(request: AiImageDescriptionRequest): Promise<AiImageDescriptionResult>;
   /**
    * Custo faturado no mês, quando o provedor expõe uma API para isso com o
    * tipo de credencial informada. `available: false` com o motivo quando

@@ -1,6 +1,5 @@
 import {
-  AI_AUDIO_TRANSCRIBED_LABEL,
-  AI_AUDIO_UNHEARD_LABEL,
+  AI_ATTACHMENT_CONTEXT_LABELS,
   AI_BEHAVIOR_KEYS,
   AI_BEHAVIOR_LABELS,
   AI_CAPABILITIES,
@@ -45,12 +44,12 @@ export interface PromptContext {
   /** Quantas mensagens a IA ainda pode enviar neste atendimento. */
   remainingAiMessages: number;
   /**
-   * A transcrição de áudio está valendo neste atendimento (capacidade do
-   * agente E interruptor do escritório). Decide o texto da seção "Áudios do
-   * cliente": o modelo tem de saber se o que ele lê é fala transcrita ou se
-   * há um áudio que ninguém ouviu.
+   * Quais ANEXOS a IA consegue ler neste atendimento (capacidade do agente E,
+   * no áudio e na imagem, o interruptor do escritório). Decide o texto da
+   * seção "Anexos do cliente": o modelo tem de saber se o que ele lê é leitura
+   * automática — que erra — ou se há um anexo que ninguém conseguiu abrir.
    */
-  audioListening: boolean;
+  attachmentReading: { audio: boolean; image: boolean; document: boolean };
 }
 
 const RESPONSE_LENGTH_GUIDE: Record<AiAgentConfig["communication"]["responseLength"], string> = {
@@ -120,17 +119,38 @@ export function buildSystemPrompt(config: AiAgentConfig, context: PromptContext)
     parts.push(section("Links", "Não envie links de nenhum tipo."));
   }
 
-  // Áudio: no WhatsApp o cliente com pressa GRAVA em vez de escrever. O modelo
-  // precisa saber que aquilo é fala transcrita — e que transcrição erra nome,
-  // número e valor, então o que for decisivo se confirma por escrito.
-  parts.push(
-    section(
-      "Áudios do cliente",
-      context.audioListening
-        ? `O áudio que o cliente manda chega a você TRANSCRITO, marcado como "${AI_AUDIO_TRANSCRIBED_LABEL}". A transcrição é automática e erra: quando a informação for decisiva (CNPJ, CPF, valor, data, nome próprio, e-mail), repita o que entendeu e confirme com o cliente antes de agir. Mensagem marcada como "${AI_AUDIO_UNHEARD_LABEL}" você NÃO ouviu: peça com educação que o cliente escreva o que disse, e nunca finja ter entendido.`
-        : `Você NÃO ouve áudios. Mensagem marcada como "[áudio]" você não tem como entender: peça com educação que o cliente escreva o que disse.`,
-    ),
+  // Anexos: no WhatsApp o cliente com pressa GRAVA, FOTOGRAFA o comprovante ou
+  // manda o PDF. O modelo precisa saber que aquilo é leitura automática — que
+  // erra nome, número e valor —, então o que for decisivo se confirma por
+  // escrito. E precisa saber o que ele NÃO consegue ler, para pedir em vez de
+  // seguir a conversa como se nada tivesse chegado.
+  const attachmentLines: string[] = [];
+  if (context.attachmentReading.audio) {
+    attachmentLines.push(
+      `Áudio: chega TRANSCRITO, marcado como "${AI_ATTACHMENT_CONTEXT_LABELS.audio.ok}".`,
+    );
+  } else {
+    attachmentLines.push('Áudio: você NÃO ouve. Marcado como "[áudio]", peça que o cliente escreva o que disse.');
+  }
+  if (context.attachmentReading.image) {
+    attachmentLines.push(
+      `Imagem: chega DESCRITA por leitura automática, marcada como "${AI_ATTACHMENT_CONTEXT_LABELS.image.ok}" — inclui o texto que aparece na foto (comprovante, boleto, nota, print).`,
+    );
+  } else {
+    attachmentLines.push('Imagem: você NÃO vê. Marcada como "[imagem]", peça que o cliente descreva ou escreva os dados.');
+  }
+  if (context.attachmentReading.document) {
+    attachmentLines.push(
+      `Documento: chega com o TEXTO EXTRAÍDO, marcado como "${AI_ATTACHMENT_CONTEXT_LABELS.document.ok}".`,
+    );
+  } else {
+    attachmentLines.push('Documento: você NÃO lê. Marcado como "[documento]", peça a informação por escrito.');
+  }
+  attachmentLines.push(
+    "A leitura automática ERRA: quando a informação for decisiva (CNPJ, CPF, valor, data, nome próprio, e-mail), repita o que entendeu e confirme com o cliente antes de agir.",
+    `Anexo marcado como "${AI_ATTACHMENT_CONTEXT_LABELS.audio.unavailable}", "${AI_ATTACHMENT_CONTEXT_LABELS.image.unavailable}" ou "${AI_ATTACHMENT_CONTEXT_LABELS.document.unavailable}" você não conseguiu abrir: peça com educação que o cliente mande a informação por escrito, e nunca finja ter entendido.`,
   );
+  parts.push(section("Anexos do cliente (áudio, imagem e documento)", bulletList(attachmentLines)));
 
   // 2. Transferência.
   const triggers = AI_HANDOFF_TRIGGER_KEYS.filter((key) => config.handoff.triggers[key]).map(
