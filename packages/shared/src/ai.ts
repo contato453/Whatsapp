@@ -197,6 +197,97 @@ export function formatUsdFromMicros(micros: number | null): string {
 }
 
 // ---------------------------------------------------------------------------
+// Transcrição de áudio — a IA "ouvindo" o cliente
+// ---------------------------------------------------------------------------
+
+/**
+ * Modelos que transcrevem áudio, com o preço POR MINUTO.
+ *
+ * POR MINUTO, e não por token, de propósito: o `whisper-1` é cobrado por
+ * minuto, e os modelos novos por token de ÁUDIO — uma unidade que ninguém
+ * consegue estimar antes de mandar o arquivo, e que a resposta nem sempre
+ * informa. A DURAÇÃO existe nas duas pontas (o WhatsApp já a manda, e ela fica
+ * em `metadata.durationSeconds`), então é ela que serve de régua. O custo aqui
+ * é estimativa, como todo o resto do módulo; sem preço no catálogo ou sem
+ * duração conhecida, o custo fica NULO e a tela avisa — nunca zero.
+ *
+ * A tabela de preço do escritório (`pricingOverrides`) NÃO vale aqui: ela é
+ * por milhão de tokens, outra unidade. Preço de transcrição que mudar entra
+ * neste catálogo.
+ */
+export interface AiTranscriptionModelInfo {
+  id: string;
+  label: string;
+  purpose: string;
+  /** USD por minuto de áudio. Nulo = preço desconhecido. */
+  perMinute: number | null;
+}
+
+export const AI_TRANSCRIPTION_MODELS: readonly AiTranscriptionModelInfo[] = [
+  {
+    id: "gpt-4o-mini-transcribe",
+    label: "GPT-4o mini transcribe",
+    purpose: "Padrão: bom em português falado e o mais barato por minuto",
+    perMinute: 0.003,
+  },
+  {
+    id: "gpt-4o-transcribe",
+    label: "GPT-4o transcribe",
+    purpose: "Mais preciso em áudio ruim, com ruído ou sotaque carregado; custa o dobro",
+    perMinute: 0.006,
+  },
+  {
+    id: "whisper-1",
+    label: "Whisper",
+    purpose: "Geração anterior, estável; serve de alternativa se os novos falharem",
+    perMinute: 0.006,
+  },
+];
+
+export const AI_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
+
+/**
+ * Como o áudio aparece PARA O MODELO no contexto do turno. As duas marcas
+ * moram aqui porque dois lugares precisam concordar palavra por palavra: o
+ * motor, que monta a linha da mensagem, e o prompt, que ensina o modelo a
+ * reconhecê-la. Divergindo, o modelo leria "[áudio transcrito]" sem nunca ter
+ * sido avisado do que isso significa — e trataria a transcrição como se o
+ * cliente tivesse digitado, sem confirmar nome, valor ou CNPJ.
+ */
+export const AI_AUDIO_TRANSCRIBED_LABEL = "[áudio transcrito]";
+export const AI_AUDIO_UNHEARD_LABEL = "[áudio que não foi possível transcrever]";
+
+/**
+ * Idioma informado ao provedor. A casa atende em português do Brasil, e a
+ * dica reduz o caso clássico de transcrição errada: áudio curto ("oi", "tá
+ * bom") que o modelo "ouve" em espanhol ou italiano.
+ */
+export const AI_TRANSCRIPTION_LANGUAGE = "pt";
+
+export const AI_TRANSCRIPTION_LIMITS = {
+  /**
+   * Dez minutos. Acima disso não é recado, é reunião gravada: a transcrição
+   * estouraria o contexto do turno e o custo por mensagem deixaria de ser
+   * previsível. O áudio continua na conversa para a equipe ouvir.
+   */
+  maxSeconds: 600,
+  /** Teto da API de transcrição da OpenAI é 25 MB; ficamos com folga. */
+  maxBytes: 24 * 1024 * 1024,
+} as const;
+
+export function aiTranscriptionModelInfo(modelId: string): AiTranscriptionModelInfo | null {
+  return AI_TRANSCRIPTION_MODELS.find((model) => model.id === modelId) ?? null;
+}
+
+/** Custo estimado da transcrição. Nulo quando falta preço OU duração. */
+export function estimateTranscriptionCostMicros(modelId: string, seconds: number | null): number | null {
+  const info = aiTranscriptionModelInfo(modelId);
+  if (!info || info.perMinute == null) return null;
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return null;
+  return Math.round((seconds / 60) * info.perMinute * AI_USD_MICROS);
+}
+
+// ---------------------------------------------------------------------------
 // Estados
 // ---------------------------------------------------------------------------
 
@@ -374,6 +465,7 @@ export interface AiCapabilityDefinition {
 export const AI_CAPABILITY_KEYS = [
   "answer_questions",
   "ask_questions",
+  "listen_audio",
   "collect_data",
   "update_contact_name",
   "add_tags",
@@ -401,6 +493,14 @@ export const AI_CAPABILITIES: readonly AiCapabilityDefinition[] = [
     key: "ask_questions",
     label: "Fazer perguntas",
     description: "Pergunta ao cliente o que precisa para entender a necessidade.",
+    tool: null,
+    default: true,
+  },
+  {
+    key: "listen_audio",
+    label: "Ouvir áudios do cliente",
+    description:
+      "O áudio que o cliente manda é transcrito e entra no atendimento como texto. Desligada, a IA sabe que não ouviu e pede para o cliente escrever.",
     tool: null,
     default: true,
   },
@@ -834,10 +934,11 @@ export function isAiMessage(metadata: unknown): metadata is AiMessageOriginMetad
 // Consumo
 // ---------------------------------------------------------------------------
 
-export const AI_USAGE_KINDS = ["chat", "test", "connection_test", "models"] as const;
+export const AI_USAGE_KINDS = ["chat", "transcription", "test", "connection_test", "models"] as const;
 export type AiUsageKind = (typeof AI_USAGE_KINDS)[number];
 export const AI_USAGE_KIND_LABELS: Record<AiUsageKind, string> = {
   chat: "Atendimento",
+  transcription: "Transcrição de áudio",
   test: "Testador",
   connection_test: "Teste de conexão",
   models: "Lista de modelos",
@@ -898,6 +999,10 @@ export interface AiSettingsDto {
   timeoutMs: number;
   contextMessageLimit: number;
   pricingOverrides: AiPricingOverrides;
+  /** Interruptor do escritório para a transcrição de áudio (custa por minuto). */
+  transcribeAudio: boolean;
+  /** Modelo que transcreve; nulo na tela significa o padrão do sistema. */
+  transcriptionModel: string;
   updatedAt: string | null;
 }
 

@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import pino from "pino";
 import type { WhatsAppProvider } from "@azvchat/whatsapp";
-import { defaultAiAgentConfig, RealtimeEvents } from "@azvchat/shared";
+import {
+  AI_AUDIO_TRANSCRIBED_LABEL,
+  AI_AUDIO_UNHEARD_LABEL,
+  defaultAiAgentConfig,
+  readAudioTranscript,
+  RealtimeEvents,
+} from "@azvchat/shared";
 import { createSecretCipher } from "../src/lib/ai-secrets.js";
 import { AiRuntime } from "../src/services/ai/runtime.js";
 import { interruptAiSessionForHuman } from "../src/services/ai/session.js";
@@ -26,7 +32,10 @@ import { MemoryPrisma } from "./helpers/memory-prisma.js";
  *   5. ferramenta não liberada pedida pelo modelo é recusada e registrada;
  *   6. provedor fora do ar → fallback: mensagem de contingência e humano;
  *   7. orçamento estourado com bloqueio: a IA nem começa;
- *   8. consumo registrado com tokens e custo estimado.
+ *   8. consumo registrado com tokens e custo estimado;
+ *   9. ÁUDIO do cliente transcrito antes do turno: o modelo recebe o texto, a
+ *      transcrição fica gravada na mensagem, e sem arquivo (ou com a
+ *      capacidade desligada) o provedor de transcrição nem é chamado.
  */
 
 const ORG = "org-1";
@@ -40,6 +49,8 @@ interface Scenario {
   emitted: Array<{ room: string[]; event: string; payload: unknown }>;
   agentId: string;
   conversationId: string;
+  /** Storage simulado: chave → bytes, para o áudio que a IA vai transcrever. */
+  files: Map<string, Buffer>;
 }
 
 function openAiResponse(content: string | null, toolCalls: Array<{ name: string; arguments: Record<string, unknown> }> = []) {
@@ -64,7 +75,10 @@ function openAiResponse(content: string | null, toolCalls: Array<{ name: string;
 /** `fetch` simulado: cada chamada a /chat/completions consome a próxima resposta da fila. */
 function mockFetch(queue: Array<() => unknown>, calls: Array<{ url: string; body: Record<string, unknown> }>) {
   return vi.fn(async (url: string, init?: RequestInit) => {
-    const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+    // A transcrição de áudio vai como multipart: o corpo não é JSON, e tentar
+    // decodificá-lo derrubaria o dublê em vez de exercitar o motor.
+    const body =
+      typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {};
     calls.push({ url, body });
     if (url.endsWith("/models")) {
       return new Response(JSON.stringify({ data: [{ id: "gpt-4.1-mini" }] }), { status: 200 });
@@ -170,6 +184,15 @@ function scenario(options: { config?: (config: ReturnType<typeof defaultAiAgentC
     to: (room: string[]) => ({ emit: (event: string, payload: unknown) => emitted.push({ room, event, payload }) }),
   };
   const audit = { record: () => undefined } as unknown as AuditService;
+  const files = new Map<string, Buffer>();
+  const media = {
+    save: async () => "nao-usado",
+    read: async (key: string) => {
+      const data = files.get(key);
+      if (!data) throw new Error("arquivo inexistente");
+      return data;
+    },
+  };
   const runtime = new AiRuntime({
     prisma: db.client(),
     io: io as never,
@@ -178,8 +201,17 @@ function scenario(options: { config?: (config: ReturnType<typeof defaultAiAgentC
     audit,
     azevedoOs: { enabled: false } as AzevedoOsClient,
     cipher: CIPHER,
+    media,
   });
-  return { db, runtime, sent, emitted, agentId: agent.id as string, conversationId: conversation.id as string };
+  return {
+    db,
+    runtime,
+    sent,
+    emitted,
+    agentId: agent.id as string,
+    conversationId: conversation.id as string,
+    files,
+  };
 }
 
 function inbound(db: MemoryPrisma, conversationId: string, content: string, at = new Date()) {
@@ -194,6 +226,32 @@ function inbound(db: MemoryPrisma, conversationId: string, content: string, at =
     status: "delivered",
     deletedAt: null,
     metadata: null,
+    senderName: null,
+    senderPhone: null,
+    senderExternalId: null,
+  });
+}
+
+/** Áudio recebido, com arquivo no storage simulado e duração conhecida. */
+function inboundAudio(
+  scenarioData: Scenario,
+  options: { mediaUrl?: string | null; durationSeconds?: number } = {},
+) {
+  const mediaUrl = options.mediaUrl === undefined ? "inst-1/audio.ogg" : options.mediaUrl;
+  if (mediaUrl) scenarioData.files.set(mediaUrl, Buffer.from("ogg-falso"));
+  return scenarioData.db.seed("message", {
+    organizationId: ORG,
+    conversationId: scenarioData.conversationId,
+    externalMessageId: `in-audio-${Math.random()}`,
+    direction: "inbound",
+    type: "audio",
+    content: null,
+    mediaUrl,
+    mimeType: "audio/ogg; codecs=opus",
+    timestamp: new Date(),
+    status: "delivered",
+    deletedAt: null,
+    metadata: { durationSeconds: options.durationSeconds ?? 12 },
     senderName: null,
     senderPhone: null,
     senderExternalId: null,
@@ -282,6 +340,92 @@ describe("AiRuntime — turno de ponta a ponta", () => {
     const messages = calls[0]?.body.messages as Array<{ role: string; content: string }>;
     expect(messages.filter((entry) => entry.role === "user").map((entry) => entry.content)).toEqual(["Oi", "Quero abrir empresa"]);
     expect(s.db.rows("aiSession")[0]?.customerMessageCount).toBe(2);
+  });
+
+  it("áudio do cliente é transcrito e chega ao modelo como texto", async () => {
+    const s = scenario({ config: (config) => (config.identity.sendGreeting = false) });
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(
+        [
+          () => ({ text: " Preciso abrir uma empresa ", usage: { input_tokens: 40, output_tokens: 8 } }),
+          () => openAiResponse("Claro! Abertura de empresa é com a gente."),
+        ],
+        calls,
+      ),
+    );
+
+    const message = inboundAudio(s, { durationSeconds: 12 });
+    await settle(s.runtime, s, message.id as string);
+
+    // O provedor foi chamado para transcrever, e o modelo recebeu o TEXTO.
+    expect(calls.some((call) => call.url.endsWith("/audio/transcriptions"))).toBe(true);
+    const chatCall = calls.find((call) => call.url.endsWith("/chat/completions"));
+    const messages = chatCall?.body.messages as Array<{ role: string; content: string }>;
+    expect(messages.at(-1)).toMatchObject({
+      role: "user",
+      content: `${AI_AUDIO_TRANSCRIBED_LABEL} Preciso abrir uma empresa`,
+    });
+    // O prompt avisa o modelo de que aquilo é fala transcrita, que erra.
+    expect(messages[0]?.content).toContain(AI_AUDIO_TRANSCRIBED_LABEL);
+    expect(s.sent.map((entry) => entry.text)).toEqual(["Claro! Abertura de empresa é com a gente."]);
+
+    // Transcrição GRAVADA na mensagem: o próximo turno não paga de novo, e a
+    // equipe vê na bolha o que a IA ouviu (evento de mensagem atualizada).
+    const stored = s.db.rows("message").find((row) => row.id === message.id);
+    expect(readAudioTranscript(stored?.metadata)).toMatchObject({
+      status: "ok",
+      text: "Preciso abrir uma empresa",
+      attempts: 1,
+    });
+    expect(s.emitted.some((entry) => entry.event === RealtimeEvents.MessageUpdated)).toBe(true);
+
+    // Consumo em linha PRÓPRIA, com custo por minuto (12s de gpt-4o-mini-transcribe).
+    const transcription = s.db.rows("aiUsageLog").find((row) => row.kind === "transcription");
+    expect(transcription?.model).toBe("gpt-4o-mini-transcribe");
+    expect(transcription?.outcome).toBe("ok");
+    expect(transcription?.costMicros).toBe(Math.round((12 / 60) * 0.003 * 1e6));
+    // O do chat continua separado — somados, mentiriam sobre o custo do turno.
+    expect(s.db.rows("aiUsageLog").filter((row) => row.kind === "chat")).toHaveLength(1);
+  });
+
+  it("áudio sem arquivo não chama o provedor e o modelo é avisado de que não ouviu", async () => {
+    const s = scenario({ config: (config) => (config.identity.sendGreeting = false) });
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", mockFetch([() => openAiResponse("Pode me escrever o que precisa?")], calls));
+
+    const message = inboundAudio(s, { mediaUrl: null });
+    await settle(s.runtime, s, message.id as string);
+
+    expect(calls.some((call) => call.url.endsWith("/audio/transcriptions"))).toBe(false);
+    const messages = calls[0]?.body.messages as Array<{ role: string; content: string }>;
+    expect(messages.at(-1)).toMatchObject({ role: "user", content: AI_AUDIO_UNHEARD_LABEL });
+    // Marcado como tentado: sem isto, cada turno tentaria de novo o que não tem arquivo.
+    const stored = s.db.rows("message").find((row) => row.id === message.id);
+    expect(readAudioTranscript(stored?.metadata)?.status).toBe("no_file");
+  });
+
+  it("capacidade de ouvir áudio desligada: não transcreve e não marca a mensagem", async () => {
+    const s = scenario({
+      config: (config) => {
+        config.identity.sendGreeting = false;
+        config.canDo.capabilities.listen_audio = false;
+      },
+    });
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", mockFetch([() => openAiResponse("Pode escrever, por favor?")], calls));
+
+    const message = inboundAudio(s);
+    await settle(s.runtime, s, message.id as string);
+
+    expect(calls.some((call) => call.url.endsWith("/audio/transcriptions"))).toBe(false);
+    const messages = calls[0]?.body.messages as Array<{ role: string; content: string }>;
+    expect(messages.at(-1)).toMatchObject({ role: "user", content: "[áudio]" });
+    // Nada gravado: religar a chave depois volta a transcrever os próximos.
+    const stored = s.db.rows("message").find((row) => row.id === message.id);
+    expect(readAudioTranscript(stored?.metadata)).toBeNull();
+    expect(messages[0]?.content).toContain("Você NÃO ouve áudios");
   });
 
   it("transfer_to_human: nota com resumo, conversa entregue e sessão transferida", async () => {

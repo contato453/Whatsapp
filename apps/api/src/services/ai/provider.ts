@@ -85,6 +85,32 @@ export interface AiProviderModel {
   createdAt: Date | null;
 }
 
+/**
+ * Transcrição de um áudio recebido. `audio` são os BYTES lidos do storage —
+ * nada de URL: a mídia do AZVCHAT só sai por rota autenticada, e mandar um
+ * link ao provedor exigiria expor o arquivo para fora.
+ */
+export interface AiTranscriptionRequest {
+  apiKey: string;
+  model: string;
+  audio: Buffer;
+  /** Nome só para o multipart; o provedor usa a extensão para o decodificador. */
+  filename: string;
+  mimeType: string | null;
+  /** Dica de idioma (ISO-639-1). Nulo deixa o provedor adivinhar. */
+  language: string | null;
+  timeoutMs: number;
+}
+
+export interface AiTranscriptionResult {
+  /** Texto reconhecido; vazio quando o áudio não tinha fala. */
+  text: string;
+  /** Duração informada pelo provedor, quando informa — nunca inventada. */
+  seconds: number | null;
+  /** Tokens, quando o provedor reporta. O custo é estimado pela duração. */
+  usage: { inputTokens: number; outputTokens: number };
+}
+
 export interface AiProviderBilling {
   available: boolean;
   reason: string | null;
@@ -98,6 +124,13 @@ export interface AiProvider {
   /** Modelos de chat que a credencial alcança. */
   listModels(apiKey: string, timeoutMs: number): Promise<AiProviderModel[]>;
   chat(request: AiChatRequest): Promise<AiChatResult>;
+  /**
+   * Áudio → texto, para a IA "ouvir" o que o cliente gravou. Provedor que não
+   * transcreve lança `AiProviderError("model_unavailable")` — quem chama já
+   * trata a falha marcando o áudio como não transcrito, sem derrubar o
+   * atendimento.
+   */
+  transcribeAudio(request: AiTranscriptionRequest): Promise<AiTranscriptionResult>;
   /**
    * Custo faturado no mês, quando o provedor expõe uma API para isso com o
    * tipo de credencial informada. `available: false` com o motivo quando

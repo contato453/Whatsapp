@@ -8,6 +8,8 @@ import {
   type AiProviderBilling,
   type AiProviderModel,
   type AiToolCall,
+  type AiTranscriptionRequest,
+  type AiTranscriptionResult,
 } from "./provider.js";
 
 /**
@@ -128,10 +130,28 @@ export class OpenAiProvider implements AiProvider {
     return (this.options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "");
   }
 
-  private async request(
+  private request(
     apiKey: string,
     path: string,
     init: { method: "GET" | "POST"; body?: unknown; timeoutMs: number },
+  ): Promise<unknown> {
+    return this.send(apiKey, path, {
+      method: init.method,
+      timeoutMs: init.timeoutMs,
+      // `Content-Type` só aqui: no multipart quem escreve o cabeçalho (com o
+      // boundary) é o próprio `fetch`, e defini-lo à mão quebra o envio.
+      headers: { "Content-Type": "application/json" },
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    });
+  }
+
+  private async send(
+    apiKey: string,
+    path: string,
+    // Corpo em JSON (string) ou multipart (`FormData`, do áudio) — são os dois
+    // formatos que a API da OpenAI usa, e nomear os dois evita depender dos
+    // tipos de DOM, que este pacote não carrega.
+    init: { method: "GET" | "POST"; body?: string | FormData; headers?: Record<string, string>; timeoutMs: number },
   ): Promise<unknown> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), init.timeoutMs);
@@ -141,9 +161,9 @@ export class OpenAiProvider implements AiProvider {
         method: init.method,
         headers: {
           Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
+          ...(init.headers ?? {}),
         },
-        body: init.body === undefined ? undefined : JSON.stringify(init.body),
+        body: init.body,
         signal: controller.signal,
       });
     } catch (err) {
@@ -228,6 +248,54 @@ export class OpenAiProvider implements AiProvider {
         outputTokens: data.usage?.completion_tokens ?? 0,
       },
       finishReason: choice.finish_reason ?? null,
+    };
+  }
+
+  /**
+   * Áudio → texto por `POST /audio/transcriptions`, que é MULTIPART e não
+   * JSON: o arquivo vai como campo `file`, então esta é a única chamada do
+   * provedor que não passa pelo `request()` de corpo JSON.
+   *
+   * `response_format: "json"` de propósito: o `verbose_json` (que traria a
+   * duração) só existe no `whisper-1`, e pedi-lo nos modelos novos devolve
+   * 400. A duração vem do WhatsApp, que já a manda — quem transcreve não
+   * precisa descobri-la.
+   */
+  async transcribeAudio(request: AiTranscriptionRequest): Promise<AiTranscriptionResult> {
+    const form = new FormData();
+    form.append("model", request.model);
+    form.append("response_format", "json");
+    if (request.language) form.append("language", request.language);
+    form.append(
+      "file",
+      new Blob([new Uint8Array(request.audio)], { type: request.mimeType ?? "application/octet-stream" }),
+      request.filename,
+    );
+    const data = (await this.send(request.apiKey, "/audio/transcriptions", {
+      method: "POST",
+      body: form,
+      timeoutMs: request.timeoutMs,
+    })) as {
+      text?: unknown;
+      duration?: unknown;
+      usage?: { input_tokens?: number; output_tokens?: number; seconds?: number };
+    };
+    if (typeof data.text !== "string") {
+      throw new AiProviderError("invalid_response", "O provedor devolveu uma transcrição sem texto.");
+    }
+    const seconds =
+      typeof data.duration === "number"
+        ? data.duration
+        : typeof data.usage?.seconds === "number"
+          ? data.usage.seconds
+          : null;
+    return {
+      text: data.text.trim(),
+      seconds,
+      usage: {
+        inputTokens: data.usage?.input_tokens ?? 0,
+        outputTokens: data.usage?.output_tokens ?? 0,
+      },
     };
   }
 

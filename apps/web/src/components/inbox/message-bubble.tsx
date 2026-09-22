@@ -38,6 +38,7 @@ import {
   isEditableMessageType,
   isWithinEditWindow,
   quotedPreviewText,
+  readAudioTranscript,
   readMessageVersions,
 } from "@azvchat/shared";
 import { api, fetchMediaBlobUrl } from "@/lib/api";
@@ -281,6 +282,45 @@ function PollContent({ message, outbound }: { message: MessageDto; outbound: boo
   );
 }
 
+/**
+ * O QUE A IA OUVIU, abaixo do player.
+ *
+ * A transcrição só existe quando o atendimento por IA passou pela conversa
+ * (ver `services/ai/transcription.ts`), e aparecer aqui não é enfeite: o
+ * resumo que a IA deixa na nota interna, e a resposta que ela já mandou ao
+ * cliente, saem deste texto. Sem ele na tela, a equipe teria de pôr o fone
+ * para conferir se a IA entendeu certo — e transcrição automática erra nome,
+ * número e valor.
+ *
+ * Só o SUCESSO é exibido: "não deu para transcrever" é informação do motor
+ * (que já pediu ao cliente para escrever), e um aviso em cada bolha de áudio
+ * de conversa sem IA seria ruído em cima do que a equipe ouve sozinha.
+ */
+function AudioTranscript({ message, outbound }: { message: MessageDto; outbound: boolean }) {
+  const transcript = readAudioTranscript(message.metadata);
+  if (!transcript || transcript.status !== "ok" || !transcript.text) return null;
+  return (
+    <details className="max-w-[18rem]">
+      <summary
+        className={cn(
+          "flex cursor-pointer items-center gap-1 text-[10px] font-semibold uppercase tracking-wide",
+          outbound ? "text-chat-sent-meta" : "text-slate-400",
+        )}
+      >
+        <Bot className="h-3 w-3" /> Transcrição
+      </summary>
+      <p
+        className={cn(
+          "mt-1 whitespace-pre-wrap break-words border-l-2 pl-2 text-xs",
+          outbound ? "border-chat-sent-meta/40 text-chat-sent-text" : "border-slate-200 text-slate-600",
+        )}
+      >
+        {transcript.text}
+      </p>
+    </details>
+  );
+}
+
 function MediaContent({
   message,
   outbound,
@@ -375,15 +415,18 @@ function MediaContent({
     if (failed) return <p className="text-xs italic opacity-70">Falha ao carregar áudio</p>;
     if (!url) return <div className="h-10 w-56 animate-pulse rounded-lg bg-slate-200/60" />;
     return (
-      <AudioPlayer
-        src={url}
-        outbound={outbound}
-        durationSeconds={message.metadata?.durationSeconds}
-        onDownload={(format: AudioDownloadFormat) =>
-          downloadMessageAudio(message, conversationTitle ?? null, format)
-        }
-        originalExtension={audioOriginalExtension(message.mimeType)}
-      />
+      <div className="space-y-1.5">
+        <AudioPlayer
+          src={url}
+          outbound={outbound}
+          durationSeconds={message.metadata?.durationSeconds}
+          onDownload={(format: AudioDownloadFormat) =>
+            downloadMessageAudio(message, conversationTitle ?? null, format)
+          }
+          originalExtension={audioOriginalExtension(message.mimeType)}
+        />
+        <AudioTranscript message={message} outbound={outbound} />
+      </div>
     );
   }
   if (isVideo) {

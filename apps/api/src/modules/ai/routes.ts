@@ -36,6 +36,7 @@ import { createAiProvider, resolveCredentials } from "../../services/ai/credenti
 import { extractDocumentText, extractUrlText } from "../../services/ai/knowledge-extract.js";
 import { AiProviderError } from "../../services/ai/provider.js";
 import { endAiSession, loadLatestSession, serializeAiSession } from "../../services/ai/session.js";
+import { resolveTranscriptionModel } from "../../services/ai/transcription.js";
 import { periodRange } from "../dashboard/metrics.js";
 import type { AppDeps } from "../../types.js";
 import {
@@ -281,6 +282,8 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
       timeoutMs: view.timeoutMs,
       contextMessageLimit: view.contextMessageLimit,
       pricingOverrides: view.pricingOverrides,
+      transcribeAudio: view.transcribeAudio,
+      transcriptionModel: resolveTranscriptionModel(view.transcriptionModel),
       updatedAt: row?.updatedAt.toISOString() ?? null,
     };
   }
@@ -301,6 +304,11 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
       z.string().min(1).max(100),
       z.object({ inputPerMillion: z.number().min(0).max(10_000), outputPerMillion: z.number().min(0).max(10_000) }),
     ),
+    transcribeAudio: z.boolean(),
+    // Texto livre, e não `z.enum` do catálogo: modelo de transcrição novo do
+    // provedor precisa poder ser usado no dia em que sair, sem deploy — é o
+    // mesmo tratamento que o modelo de chat já tem.
+    transcriptionModel: z.string().min(1).max(100),
   });
 
   app.put("/ai/settings", { preHandler: requireRole("admin") }, async (request) => {
@@ -316,6 +324,8 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
         timeoutMs: body.timeoutMs,
         contextMessageLimit: body.contextMessageLimit,
         pricingOverrides: body.pricingOverrides as Prisma.InputJsonValue,
+        transcribeAudio: body.transcribeAudio,
+        transcriptionModel: body.transcriptionModel,
         updatedById: request.user.sub,
       },
       create: {
@@ -326,6 +336,8 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
         timeoutMs: body.timeoutMs,
         contextMessageLimit: body.contextMessageLimit,
         pricingOverrides: body.pricingOverrides as Prisma.InputJsonValue,
+        transcribeAudio: body.transcribeAudio,
+        transcriptionModel: body.transcriptionModel,
         updatedById: request.user.sub,
       },
     });
@@ -335,7 +347,13 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
       action: "ai.settings_updated",
       entityType: "AiSettings",
       entityId: saved.id,
-      metadata: { monthlyBudgetCents: body.monthlyBudgetCents, budgetPolicy: body.budgetPolicy, timeoutMs: body.timeoutMs },
+      metadata: {
+        monthlyBudgetCents: body.monthlyBudgetCents,
+        budgetPolicy: body.budgetPolicy,
+        timeoutMs: body.timeoutMs,
+        transcribeAudio: body.transcribeAudio,
+        transcriptionModel: body.transcriptionModel,
+      },
     });
     return { settings: await settingsDto(organizationId) };
   });

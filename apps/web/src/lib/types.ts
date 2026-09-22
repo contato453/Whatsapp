@@ -1,5 +1,6 @@
 import type {
   AiSessionDto,
+  AudioTranscriptMetadata,
   AutomationExecutionStatus,
   AutomationFlowStatus,
   AutomationGraph,
@@ -318,6 +319,14 @@ export interface MessageDto {
      * atualizada.
      */
     editedContentUnavailable?: boolean;
+    /**
+     * Transcrição do áudio recebido, quando o atendimento por IA a fez (ver
+     * `services/ai/transcription.ts`). A bolha a mostra abaixo do player para
+     * a equipe ver o que a IA ouviu — sem isso, o resumo da transferência
+     * citaria conteúdo que ninguém consegue conferir sem pôr o fone. Leia com
+     * `readAudioTranscript` de `@azvchat/shared`.
+     */
+    audioTranscript?: AudioTranscriptMetadata;
   } | null;
 }
 

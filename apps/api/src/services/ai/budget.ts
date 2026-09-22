@@ -26,6 +26,10 @@ export interface AiSettingsView {
   timeoutMs: number;
   contextMessageLimit: number;
   pricingOverrides: AiPricingOverrides;
+  /** A IA pode ouvir áudio do cliente (ver `services/ai/transcription.ts`). */
+  transcribeAudio: boolean;
+  /** Modelo que transcreve; nulo = o padrão do sistema. */
+  transcriptionModel: string | null;
 }
 
 export const DEFAULT_AI_SETTINGS: AiSettingsView = {
@@ -35,6 +39,10 @@ export const DEFAULT_AI_SETTINGS: AiSettingsView = {
   timeoutMs: 30_000,
   contextMessageLimit: 20,
   pricingOverrides: {},
+  // Ligada por padrão, inclusive para a organização que ainda não tem linha
+  // de configurações: é o comportamento útil, e o mesmo default da coluna.
+  transcribeAudio: true,
+  transcriptionModel: null,
 };
 
 export function settingsView(row: AiSettings | null): AiSettingsView {
@@ -46,6 +54,8 @@ export function settingsView(row: AiSettings | null): AiSettingsView {
     timeoutMs: row.timeoutMs,
     contextMessageLimit: row.contextMessageLimit,
     pricingOverrides: readPricingOverrides(row.pricingOverrides),
+    transcribeAudio: row.transcribeAudio,
+    transcriptionModel: row.transcriptionModel,
   };
 }
 

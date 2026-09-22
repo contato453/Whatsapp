@@ -1,4 +1,6 @@
 import {
+  AI_AUDIO_TRANSCRIBED_LABEL,
+  AI_AUDIO_UNHEARD_LABEL,
   AI_BEHAVIOR_KEYS,
   AI_BEHAVIOR_LABELS,
   AI_CAPABILITIES,
@@ -42,6 +44,13 @@ export interface PromptContext {
   today: string;
   /** Quantas mensagens a IA ainda pode enviar neste atendimento. */
   remainingAiMessages: number;
+  /**
+   * A transcrição de áudio está valendo neste atendimento (capacidade do
+   * agente E interruptor do escritório). Decide o texto da seção "Áudios do
+   * cliente": o modelo tem de saber se o que ele lê é fala transcrita ou se
+   * há um áudio que ninguém ouviu.
+   */
+  audioListening: boolean;
 }
 
 const RESPONSE_LENGTH_GUIDE: Record<AiAgentConfig["communication"]["responseLength"], string> = {
@@ -110,6 +119,18 @@ export function buildSystemPrompt(config: AiAgentConfig, context: PromptContext)
   } else {
     parts.push(section("Links", "Não envie links de nenhum tipo."));
   }
+
+  // Áudio: no WhatsApp o cliente com pressa GRAVA em vez de escrever. O modelo
+  // precisa saber que aquilo é fala transcrita — e que transcrição erra nome,
+  // número e valor, então o que for decisivo se confirma por escrito.
+  parts.push(
+    section(
+      "Áudios do cliente",
+      context.audioListening
+        ? `O áudio que o cliente manda chega a você TRANSCRITO, marcado como "${AI_AUDIO_TRANSCRIBED_LABEL}". A transcrição é automática e erra: quando a informação for decisiva (CNPJ, CPF, valor, data, nome próprio, e-mail), repita o que entendeu e confirme com o cliente antes de agir. Mensagem marcada como "${AI_AUDIO_UNHEARD_LABEL}" você NÃO ouviu: peça com educação que o cliente escreva o que disse, e nunca finja ter entendido.`
+        : `Você NÃO ouve áudios. Mensagem marcada como "[áudio]" você não tem como entender: peça com educação que o cliente escreva o que disse.`,
+    ),
+  );
 
   // 2. Transferência.
   const triggers = AI_HANDOFF_TRIGGER_KEYS.filter((key) => config.handoff.triggers[key]).map(
