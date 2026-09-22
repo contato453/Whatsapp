@@ -2659,6 +2659,36 @@ mensagem), mas um `keyword`/`new_message` mal desenhado poderia, em tese,
 recomeçar depois que um humano já resolveu tudo. Fluxo de saudação deve
 preferir `first_message`, não `new_message`, por este motivo.
 
+**DESLIGAR UM FLUXO PARA O QUE ELE JÁ ESTÁ FAZENDO.** É a mesma armadilha do
+interruptor da IA (seção 20), na terceira porta, e nasceu do mesmo defeito: `status:
+"inactive"` tirava o fluxo só da disputa por GATILHO, e a execução em andamento seguia
+perguntando, esperando e respondendo — inclusive a IA que um bloco dela tivesse posto na
+conversa —, porque as três retomadas (resposta do cliente, timer e fim de sessão de IA)
+nunca reconferiam o fluxo. Falha silenciosa e do lado do cliente. Agora
+`POST /automation-flows/:id/deactivate` e o `DELETE` chamam
+`AutomationEngine.stopExecutionsForFlow`, e `canStillRun` guarda as TRÊS retomadas como
+rede de segurança (desligamento com a API fora do ar, direto no banco, ou cujo
+cancelamento falhou; fluxo excluído conta como desligado). Consequências que valem para
+qualquer mexida aqui: (1) **a ORDEM não é detalhe** — cancelar as execuções ANTES de
+encerrar as sessões de IA; ao contrário, a sessão terminaria primeiro, o `tick()` veria a
+execução ainda `waiting` com a sessão encerrada e a RETOMARIA, fazendo o fluxo desligado
+andar exatamente no instante em que deveria parar (há teste fixando isso); (2) o
+encerramento da IA passa pela interface estreita de sempre
+(`AiRuntimeForFlow.stopSessionsForFlowExecutions`), então a direção do acoplamento
+continua sendo só `AutomationEngine → AiRuntime` — quem recebe é a lista de EXECUÇÕES, e
+não o id do fluxo, porque o motor de IA não conhece a tabela de fluxos; (3) o motivo
+`flow_disabled` é separado de `agent_disabled` e `automation_disabled` pelo mesmo
+raciocínio: são três chaves diferentes, e o histórico precisa dizer qual delas parou
+aquele atendimento; (4) a exclusão encerra **antes** do `delete`, porque as execuções somem
+por `Cascade` e a sessão de IA fica com `automationExecutionId` nulo (`SetNull`) —
+indistinguível de uma sessão de automação, sem ninguém para desligá-la; (5) a execução
+termina como `canceled`, nunca `failed`: nada deu errado, alguém desligou; (6) as duas
+rotas devolvem `stoppedExecutions`, e as duas telas que desligam (lista de fluxos e o
+próprio construtor) mostram o número — `stoppedExecutionsMessage`, em
+`components/automations/automation-ui.ts`. Coberto por
+`apps/api/test/automation-engine.test.ts` ("desligar o fluxo alcança o que ele já está
+fazendo").
+
 **Bloco "Atendimento por IA" — onde este motor encosta no da seção 20.**
 Antes desta entrega, a IA só entrava numa conversa pelo próprio gatilho
 (`AiAutomation`, seção 20), sem passar pelo construtor visual — era a
@@ -3078,7 +3108,8 @@ nada com isso; (2) o motivo `automation_disabled` é separado de `agent_disabled
 propósito — o agente pode seguir no ar atendendo pelas outras portas, e quem lê o histórico
 precisa saber qual das duas chaves parou aquele atendimento; (3) sessão nascida de um **bloco
 de fluxo** tem `automationId` nulo e **não** é alcançada pelo interruptor da automação: quem
-a abriu foi o fluxo, e é lá que ela se desliga; (4) a exclusão da automação encerra **antes**
+a abriu foi o fluxo, e é lá que ela se desliga — desligar ou excluir o FLUXO a encerra, pelo
+`stopExecutionsForFlow` do motor de automações (motivo `flow_disabled`, ver a seção 18); (4) a exclusão da automação encerra **antes**
 do `delete`, porque `AiSession.automationId` é `SetNull` — depois de apagada não haveria mais
 como saber quais sessões eram dela, e elas ficariam indistinguíveis das de fluxo, rodando sem
 ninguém para desligá-las; (5) as rotas devolvem `stoppedSessions` e as três telas que

@@ -497,7 +497,7 @@ export class AiRuntime {
   private async stopActiveSessions(
     organizationId: string,
     filter: Prisma.AiSessionWhereInput,
-    reason: Extract<AiSessionEndReason, "agent_disabled" | "automation_disabled">,
+    reason: Extract<AiSessionEndReason, "agent_disabled" | "automation_disabled" | "flow_disabled">,
   ): Promise<number> {
     const { prisma, logger } = this.deps;
     const sessions = await prisma.aiSession.findMany({
@@ -540,6 +540,23 @@ export class AiRuntime {
    */
   stopSessionsForAutomation(input: { organizationId: string; automationId: string }): Promise<number> {
     return this.stopActiveSessions(input.organizationId, { automationId: input.automationId }, "automation_disabled");
+  }
+
+  /**
+   * Fluxo desligado (ou excluído): a IA que um bloco dele abriu para junto.
+   * Quem chama é o `AutomationEngine` — ele é que sabe quais execuções são
+   * daquele fluxo, e a direção do acoplamento continua sendo só uma
+   * (`AutomationEngine → AiRuntime`, ver `AiRuntimeForFlow`). Por isso a
+   * entrada é a lista de EXECUÇÕES, e não o id do fluxo: este motor não
+   * conhece a tabela de fluxos, e não deve passar a conhecer.
+   */
+  stopSessionsForFlowExecutions(input: { organizationId: string; executionIds: string[] }): Promise<number> {
+    if (input.executionIds.length === 0) return Promise.resolve(0);
+    return this.stopActiveSessions(
+      input.organizationId,
+      { automationExecutionId: { in: input.executionIds } },
+      "flow_disabled",
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -1770,6 +1787,8 @@ function reasonLabel(reason: AiSessionEndReason): string {
       return "Agente desativado durante o atendimento";
     case "automation_disabled":
       return "Automação de IA desligada durante o atendimento";
+    case "flow_disabled":
+      return "Fluxo de automação desligado durante o atendimento";
     case "attempt_limit":
       return "Limite de tentativas sem resolver";
     default:

@@ -320,14 +320,24 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
         data: { status: "inactive" },
         include: { whatsappInstance: true, publishedVersion: true, _count: { select: { executions: true } } },
       });
+      // Desligar para o que o fluxo JÁ está fazendo, e não só a disputa por
+      // gatilho: a execução em andamento seguia perguntando e respondendo, e
+      // a IA que um bloco dela tivesse aberto seguia atendendo. Quem desliga
+      // espera silêncio na hora.
+      const stoppedExecutions = await deps.automation.stopExecutionsForFlow({
+        organizationId: request.user.organizationId,
+        flowId: id,
+        note: `Fluxo "${updated.name}" desligado.`,
+      });
       deps.audit.record({
         organizationId: request.user.organizationId,
         userId: request.user.sub,
         action: "automation_flow.deactivated",
         entityType: "AutomationFlow",
         entityId: id,
+        metadata: { stoppedExecutions },
       });
-      return { flow: serializeAutomationFlowDetail(updated) };
+      return { flow: serializeAutomationFlowDetail(updated), stoppedExecutions };
     },
   );
 
@@ -372,7 +382,17 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
     { preHandler: requirePermission(deps, "automation.manage") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-      await findFlowOr404(id, request.user.organizationId);
+      const flow = await findFlowOr404(id, request.user.organizationId);
+      // ANTES do delete, sempre: as execuções somem junto com o fluxo
+      // (`onDelete: Cascade`) e a sessão de IA que uma delas abriu fica com
+      // `automationExecutionId` nulo (`SetNull`) — indistinguível de uma
+      // sessão de automação, sem ninguém para desligá-la. Depois de apagar
+      // não há mais como alcançá-las.
+      const stoppedExecutions = await deps.automation.stopExecutionsForFlow({
+        organizationId: request.user.organizationId,
+        flowId: id,
+        note: `Fluxo "${flow.name}" excluído.`,
+      });
       await deps.prisma.automationFlow.delete({ where: { id } });
       deps.audit.record({
         organizationId: request.user.organizationId,
@@ -380,8 +400,9 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
         action: "automation_flow.deleted",
         entityType: "AutomationFlow",
         entityId: id,
+        metadata: { stoppedExecutions },
       });
-      return { ok: true };
+      return { ok: true, stoppedExecutions };
     },
   );
 

@@ -20,6 +20,7 @@ import { automationApi } from "@/lib/api";
 import type { AutomationFlowSummaryDto } from "@/lib/types";
 import { Badge, Button, Card, EmptyState, Field, Input, Modal, Spinner } from "@/components/ui";
 import { AutomationTabs, AutomationsHeader } from "@/components/automations/automation-tabs";
+import { stoppedExecutionsMessage } from "@/components/automations/automation-ui";
 
 export default function AutomationFlowsPage() {
   const router = useRouter();
@@ -28,6 +29,7 @@ export default function AutomationFlowsPage() {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   function reload() {
     automationApi
@@ -58,9 +60,11 @@ export default function AutomationFlowsPage() {
 
   async function handleToggle(flow: AutomationFlowSummaryDto) {
     setBusyId(flow.id);
+    setNotice(null);
     try {
       if (flow.status === "active") {
-        await automationApi.deactivateFlow(flow.id);
+        const result = await automationApi.deactivateFlow(flow.id);
+        setNotice(stoppedExecutionsMessage(result.stoppedExecutions));
       } else if (flow.hasPublishedVersion) {
         await automationApi.activateFlow(flow.id);
       } else {
@@ -76,8 +80,10 @@ export default function AutomationFlowsPage() {
   async function handleDelete(id: string, name: string) {
     if (!window.confirm(`Excluir o fluxo "${name}"? Isso apaga também o histórico de execuções dele.`)) return;
     setBusyId(id);
+    setNotice(null);
     try {
-      await automationApi.deleteFlow(id);
+      const result = await automationApi.deleteFlow(id);
+      setNotice(stoppedExecutionsMessage(result.stoppedExecutions));
       reload();
     } finally {
       setBusyId(null);
@@ -103,6 +109,9 @@ export default function AutomationFlowsPage() {
       </div>
 
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+      {notice && (
+        <p className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">{notice}</p>
+      )}
 
       {!flows ? (
         <div className="flex justify-center py-12">

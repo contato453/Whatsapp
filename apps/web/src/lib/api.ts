@@ -945,11 +945,16 @@ export const automationApi = {
     api.post<{ flow: AutomationFlowDetailDto }>(`/automation-flows/${id}/publish`).then((data) => data.flow),
   activateFlow: (id: string) =>
     api.post<{ flow: AutomationFlowDetailDto }>(`/automation-flows/${id}/activate`).then((data) => data.flow),
+  /**
+   * Devolve o fluxo E quantos atendimentos em andamento o desligamento
+   * encerrou — a tela promete que desligar para o fluxo, então precisa poder
+   * dizer quantos foram.
+   */
   deactivateFlow: (id: string) =>
-    api.post<{ flow: AutomationFlowDetailDto }>(`/automation-flows/${id}/deactivate`).then((data) => data.flow),
+    api.post<{ flow: AutomationFlowDetailDto; stoppedExecutions: number }>(`/automation-flows/${id}/deactivate`),
   duplicateFlow: (id: string) =>
     api.post<{ flow: AutomationFlowDetailDto }>(`/automation-flows/${id}/duplicate`).then((data) => data.flow),
-  deleteFlow: (id: string) => api.delete<{ ok: boolean }>(`/automation-flows/${id}`),
+  deleteFlow: (id: string) => api.delete<{ ok: boolean; stoppedExecutions: number }>(`/automation-flows/${id}`),
   listTemplates: () =>
     api.get<{ templates: AutomationTemplateSummaryDto[] }>("/automation-templates").then((data) => data.templates),
   useTemplate: (key: string) =>

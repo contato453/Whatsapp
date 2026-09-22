@@ -57,7 +57,10 @@ function matches(row: Record<string, unknown>, where: Record<string, unknown> | 
 }
 
 function buildFakeEnvironment(opts?: {
-  aiRuntime?: { startSessionForFlow: (input: Record<string, unknown>) => Promise<{ id: string } | null> };
+  aiRuntime?: {
+    startSessionForFlow: (input: Record<string, unknown>) => Promise<{ id: string } | null>;
+    stopSessionsForFlowExecutions?: (input: Record<string, unknown>) => Promise<number>;
+  };
 }) {
   const conversations = new Map<string, Record<string, unknown>>();
   const messages = new Map<string, Record<string, unknown>>();
@@ -182,6 +185,10 @@ function buildFakeEnvironment(opts?: {
     attendanceSettings: { findUnique: async () => null },
     personProfile: { findMany: async () => [] },
     automationFlow: {
+      findUnique: async ({ where }: { where: { id: string } }) => {
+        const row = flows.get(where.id);
+        return row ? { ...row } : null;
+      },
       findMany: async ({
         where,
         orderBy,
@@ -252,6 +259,11 @@ function buildFakeEnvironment(opts?: {
         let rows = [...executions.values()].filter((row) => matches(row, where));
         if (take) rows = rows.slice(0, take);
         return rows.map((row) => ({ ...row }));
+      },
+      updateMany: async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+        const rows = [...executions.values()].filter((row) => matches(row, where));
+        for (const row of rows) Object.assign(row, data, { updatedAt: new Date() });
+        return { count: rows.length };
       },
     },
     automationExecutionLog: {
@@ -871,6 +883,168 @@ describe("AutomationEngine", () => {
       expect(env.sentMessages).toHaveLength(0);
       const execution = [...env.executions.values()][0] as Record<string, unknown>;
       expect(execution.status).toBe("waiting");
+    });
+  });
+  /**
+   * DESLIGAR O FLUXO PRECISA PARAR O QUE ELE JÁ ESTÁ FAZENDO.
+   *
+   * O defeito que estes casos trancam é o mesmo do interruptor da IA, na
+   * terceira porta: `status: "inactive"` só tirava o fluxo da disputa por
+   * gatilho, e a execução em andamento seguia perguntando, esperando e
+   * respondendo — inclusive a IA que um bloco dela tivesse colocado na
+   * conversa. Silencioso e do lado do cliente.
+   */
+  describe("desligar o fluxo alcança o que ele já está fazendo", () => {
+    const menuGraph: AutomationGraph = {
+      nodes: [
+        { id: "trigger", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+        { id: "menu", type: "menu", position: { x: 100, y: 0 }, data: { question: "1) Fiscal 2) Contábil", options: [{ id: "o1", label: "Fiscal" }] } },
+        { id: "depois", type: "send_message", position: { x: 200, y: 0 }, data: { messageType: "text", text: "Escolheu Fiscal." } },
+        { id: "fim", type: "finish", position: { x: 300, y: 0 }, data: {} },
+      ],
+      edges: [
+        { id: "e1", source: "trigger", target: "menu" },
+        { id: "e2", source: "menu", sourceHandle: "o1", target: "depois" },
+        { id: "e3", source: "depois", target: "fim" },
+      ],
+    };
+
+    const waitGraph: AutomationGraph = {
+      nodes: [
+        { id: "trigger", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+        { id: "espera", type: "wait", position: { x: 100, y: 0 }, data: { mode: "duration", amount: 10, unit: "minutes" } },
+        { id: "depois", type: "send_message", position: { x: 200, y: 0 }, data: { messageType: "text", text: "Ainda por aí?" } },
+        { id: "fim", type: "finish", position: { x: 300, y: 0 }, data: {} },
+      ],
+      edges: [
+        { id: "e1", source: "trigger", target: "espera" },
+        { id: "e2", source: "espera", target: "depois" },
+        { id: "e3", source: "depois", target: "fim" },
+      ],
+    };
+
+    /** Um fluxo que entrega a conversa à IA e espera a sessão terminar. */
+    function comIaGraph(agentId: string): AutomationGraph {
+      return {
+        nodes: [
+          { id: "trigger", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+          { id: "ai", type: "ai_agent", position: { x: 100, y: 0 }, data: { agentId } },
+          { id: "depois", type: "send_message", position: { x: 200, y: 0 }, data: { messageType: "text", text: "Depois da IA." } },
+          { id: "fim", type: "finish", position: { x: 300, y: 0 }, data: {} },
+        ],
+        edges: [
+          { id: "e1", source: "trigger", target: "ai" },
+          { id: "e2", source: "ai", sourceHandle: "transferido", target: "depois" },
+          { id: "e3", source: "depois", target: "fim" },
+        ],
+      };
+    }
+
+    /** Desliga o fluxo como a rota faz: marca inativo E manda parar o que roda. */
+    async function desligar(env: ReturnType<typeof buildFakeEnvironment>, flowId: string) {
+      (env.flows.get(flowId) as Record<string, unknown>).status = "inactive";
+      return env.engine.stopExecutionsForFlow({ organizationId: env.ORG, flowId, note: 'Fluxo "X" desligado.' });
+    }
+
+    it("cancela a execução em andamento, e o fluxo não continua na resposta seguinte", async () => {
+      const env = buildFakeEnvironment();
+      vi.setSystemTime(new Date("2026-03-05T10:00:00-03:00"));
+      const conversation = env.createConversation();
+      const flowId = env.createFlow({ name: "Menu", triggerType: "first_message", graph: menuGraph });
+      await env.inbound(conversation.id as string, "Oi");
+      expect(env.sentMessages).toHaveLength(1); // a pergunta do menu saiu
+
+      const stopped = await desligar(env, flowId);
+
+      expect(stopped).toBe(1);
+      const execution = [...env.executions.values()][0] as Record<string, unknown>;
+      expect(execution.status).toBe("canceled");
+      expect(execution.resultSummary).toBe('Fluxo "X" desligado.');
+
+      // O cliente responde ao menu: antes, isto fazia o fluxo desligado
+      // andar mais um bloco e mandar outra mensagem.
+      await env.inbound(conversation.id as string, "1");
+      expect(env.sentMessages).toHaveLength(1);
+    });
+
+    it("encerra também a IA que um bloco deste fluxo colocou na conversa", async () => {
+      const startSessionForFlow = vi.fn(async () => ({ id: "ai-session-1" }));
+      const stopSessionsForFlowExecutions = vi.fn(async (input: Record<string, unknown>) => {
+        void input;
+        return 1;
+      });
+      const env = buildFakeEnvironment({ aiRuntime: { startSessionForFlow, stopSessionsForFlowExecutions } });
+      vi.setSystemTime(new Date("2026-03-05T10:00:00-03:00"));
+      const conversation = env.createConversation();
+      const flowId = env.createFlow({ name: "Com IA", triggerType: "first_message", graph: comIaGraph("agent-1") });
+      await env.inbound(conversation.id as string, "Oi");
+      const executionId = [...env.executions.values()][0]?.id as string;
+
+      await desligar(env, flowId);
+
+      expect(stopSessionsForFlowExecutions).toHaveBeenCalledTimes(1);
+      const call = stopSessionsForFlowExecutions.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(call.executionIds).toEqual([executionId]);
+    });
+
+    it("a varredura não retoma o timer de um fluxo desligado", async () => {
+      const env = buildFakeEnvironment();
+      vi.setSystemTime(new Date("2026-03-05T10:00:00-03:00"));
+      const conversation = env.createConversation();
+      const flowId = env.createFlow({ name: "Espera", triggerType: "first_message", graph: waitGraph });
+      await env.inbound(conversation.id as string, "Oi");
+      expect(([...env.executions.values()][0] as Record<string, unknown>).status).toBe("waiting");
+
+      // Desligado DIRETO no banco (ou com a API fora do ar): o cancelamento
+      // da rota não rodou, e só a rede de segurança segura.
+      (env.flows.get(flowId) as Record<string, unknown>).status = "inactive";
+      vi.setSystemTime(new Date("2026-03-05T10:30:00-03:00"));
+      await env.engine.tick();
+
+      expect(env.sentMessages).toHaveLength(0);
+      const execution = [...env.executions.values()][0] as Record<string, unknown>;
+      expect(execution.status).toBe("canceled");
+    });
+
+    it("a varredura não retoma o bloco de IA de um fluxo desligado, nem com a sessão já encerrada", async () => {
+      // É a invariante que a ORDEM do desligamento protege: encerrar a
+      // sessão antes de cancelar a execução faria o tick achar a sessão
+      // terminada e mandar o fluxo desligado andar mais um passo.
+      const startSessionForFlow = vi.fn(async () => ({ id: "ai-session-1" }));
+      const env = buildFakeEnvironment({ aiRuntime: { startSessionForFlow } });
+      vi.setSystemTime(new Date("2026-03-05T10:00:00-03:00"));
+      const conversation = env.createConversation();
+      const flowId = env.createFlow({ name: "Com IA", triggerType: "first_message", graph: comIaGraph("agent-1") });
+      await env.inbound(conversation.id as string, "Oi");
+
+      (env.flows.get(flowId) as Record<string, unknown>).status = "inactive";
+      env.aiSessions.set("ai-session-1", { id: "ai-session-1", status: "stopped" });
+      await env.engine.tick();
+
+      expect(env.sentMessages).toHaveLength(0);
+      expect(([...env.executions.values()][0] as Record<string, unknown>).status).toBe("canceled");
+    });
+
+    it("fluxo que sumiu conta como desligado — não há para onde continuar", async () => {
+      const env = buildFakeEnvironment();
+      vi.setSystemTime(new Date("2026-03-05T10:00:00-03:00"));
+      const conversation = env.createConversation();
+      const flowId = env.createFlow({ name: "Espera", triggerType: "first_message", graph: waitGraph });
+      await env.inbound(conversation.id as string, "Oi");
+
+      env.flows.delete(flowId);
+      vi.setSystemTime(new Date("2026-03-05T10:30:00-03:00"));
+      await env.engine.tick();
+
+      expect(env.sentMessages).toHaveLength(0);
+      expect(([...env.executions.values()][0] as Record<string, unknown>).status).toBe("canceled");
+    });
+
+    it("sem nada em andamento, desligar não cancela nem manda mensagem nenhuma", async () => {
+      const env = buildFakeEnvironment();
+      const flowId = env.createFlow({ name: "Menu", triggerType: "first_message", graph: menuGraph });
+      expect(await desligar(env, flowId)).toBe(0);
+      expect(env.sentMessages).toHaveLength(0);
     });
   });
 });
