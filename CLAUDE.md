@@ -415,6 +415,12 @@ POST   /whatsapp-instances/:id/archive-all       (supervisor; arquiva todas as c
        em lotes de 500, auditado com a quantidade — usado no número de backup)
 
 GET    /conversations                     GET /conversations/:id
+       (a resposta traz `automation`: o mapa `id -> { ai, flow }` das conversas
+        que estão no AUTOMÁTICO agora — sessão de IA ativa e/ou execução de
+        fluxo em andamento. Mapa à parte, como o `unread`, mas por CUSTO e não
+        por privacidade: saber disso são duas consultas, pagas uma vez para a
+        página inteira e nunca por card. Conversa sem nada rodando não entra
+        no mapa — ver a armadilha do chip do automático na seção 13)
        (a lista EXCLUI arquivadas por padrão; `?archived=true` traz só elas —
         não existe "todas misturadas")
        TODO filtro aceita LISTA (parâmetro repetido ou separado por vírgula):
@@ -591,13 +597,24 @@ sempre `RealtimeEvents.X`:
 
 `message:new`, `message:status`, `message:reaction`, `message:updated`, `call:incoming`,
 `conversation:updated`, `conversation:read`, `group:participants`, `note:new`,
-`conversation:pinned-items`, `instance:status`, `instance:qr`, `scheduled:pending`,
+`conversation:pinned-items`, `conversation:automation`, `instance:status`,
+`instance:qr`, `scheduled:pending`,
 `session:closing`, `session:closed`, `ai:session`, `ai:budget-alert`.
 
 `ai:session` (`{ conversationId, session }`) sai para a `conversationAudience()` sempre que o
 atendimento por IA da conversa muda (começou, respondeu, transferiu, foi assumido/encerrado)
 e carrega a sessão inteira, nunca um patch — é a faixa "Atendimento por IA" da Inbox.
 `ai:budget-alert` vai só para a sala da organização (admin), uma vez por degrau por mês.
+
+`conversation:automation` (`{ conversationId, automation }`) sai sempre que uma conversa
+entra ou sai do ATENDIMENTO AUTOMÁTICO — sessão de IA que começou ou encerrou, fluxo do
+construtor que iniciou, concluiu, falhou ou foi assumido por um atendente. Carrega o estado
+inteiro (`{ ai, flow }`, os dois podendo ser nulos), nunca um patch: **o estado vazio é
+justamente o evento que APAGA o chip do card**. Evento próprio, e não `ai:session`, porque o
+consumidor é outro — aquele carrega a sessão inteira para a faixa do topo da conversa ABERTA,
+este é o chip dos cards da LISTA, que precisa de todas as conversas visíveis ao mesmo tempo e
+que também acende para fluxo, onde não existe sessão de IA nenhuma. Audiência: a
+`conversationAudience()` de sempre. Ver a armadilha do chip do automático na seção 13.
 
 `conversation:pinned-items` (`{ conversationId, items }`) sai sempre que a fixação (pin) de
 uma conversa muda — fixar, desafixar, substituir a mais antiga, ou a mensagem fixada ser
@@ -925,6 +942,19 @@ nome técnico no código e neste documento.
   quando chega `message:new` de entrada numa conversa que não é a aberta, e que só zera
   pelo evento `conversation:read` (ou pela resposta do `POST .../read`). O hook fica
   fora do `inbox-shell` de propósito: aquele arquivo já tem ~1300 linhas.
+- **Chip de atendimento automático no card** (`components/inbox/use-conversation-automation.ts`
+  + os dois `Badge` de `conversation-list.tsx`): a conversa que está sendo atendida por um
+  agente de IA (`AiSession` ativa) ou que está dentro de um fluxo do construtor
+  (`AutomationExecution` em andamento) mostra na primeira posição da linha de chips um
+  "IA" indigo e/ou um "Fluxo" azul, com o nome do agente e o do fluxo no `title`. Existe
+  porque, sem ele, a única pista de que a conversa está no automático era abrir o chat e
+  ver a faixa — e, no caso do fluxo, quem respondesse por cima ainda derrubava a automação
+  (`handleHumanTakeover`) sem ter tido como saber que ela existia. **Só o rótulo curto no
+  chip**: nome de agente ou de fluxo comprido empurraria os outros chips para uma linha
+  nova em todo card. O mapa vem do campo `automation` da resposta de `GET /conversations`
+  e é mantido em dia pelo evento `conversation:automation`, que chega para TODA conversa
+  visível (e não só para a aberta, como o `ai:session` da faixa). Hook fora do
+  `inbox-shell` pelo mesmo motivo do de não lidas.
 - **Rascunho do composer** (`src/lib/drafts.ts`): o que está escrito e ainda não foi enviado
   é gravado no `localStorage` a cada tecla, por conversa, com a chave
   `zapdesk.draft.<userId>.<conversationId>`. Existe por causa do fim do horário de uso (a
@@ -1695,6 +1725,26 @@ sempre juntos.
   evento `conversation:read`, dirigido a uma pessoa. A coluna antiga
   `Conversation.unreadCount` continua no banco com o dado histórico, sem leitura nem
   escrita: não volte a usá-la.
+- **O CHIP DO AUTOMÁTICO (IA/FLUXO) NÃO VIVE NO `ConversationDto`, E ACENDER SEM APAGAR É
+  O DEFEITO FÁCIL AQUI.** O estado sai de `lib/conversation-automation.ts`, fonte única
+  dos dois lados (quem lê a página e quem publica o evento), e fica fora do DTO da conversa
+  por CUSTO — saber disso são duas consultas, e pagá-las por card seria a lista inteira em
+  cima do banco a cada carga, o mesmo motivo que mantém `scheduledPendingCount` e as
+  fixações de fora. Regras para qualquer mexida: (1) **a página inteira em duas consultas**,
+  nunca duas por conversa, e conversa sem nada automático **não entra no mapa** — ausência é
+  o estado vazio; (2) **só conta o que ainda está no controle**: `AiSession` `active` e
+  `AutomationExecution` `running`/`waiting`; somar encerrada faz o card dizer "IA" para
+  sempre depois do primeiro atendimento; (3) **o estado vazio é publicado como qualquer
+  outro** — é ele que apaga o chip, então "não emitir quando não há nada" deixaria o aviso
+  ligado até o próximo F5, que é a falha silenciosa desta entrega; (4) os pontos de emissão
+  são os choke points de cada motor, e não cada caminho de saída: `emitAiSession`
+  (`services/ai/session.ts`, por onde TODA mudança de sessão passa) e os quatro do
+  `AutomationEngine` — começar, concluir, falhar e ser assumida por um atendente. Ponto novo
+  de fim de execução que não chame `publishAutomationState` acende um chip que ninguém
+  apaga; (5) a publicação **relê a conversa** em vez de reaproveitar a cópia do início da
+  execução: ela pode ter trocado de departamento ou de responsável no meio, e a audiência
+  sairia para as salas antigas. Nada disso encosta em `lib/access.ts` — quem já enxerga a
+  conversa enxerga o chip dela, sem recorte a mais.
 - **A leitura NÃO envia read receipt ao cliente.** O AZVCHAT nunca marcou visto azul
   para fora (o Baileys sobe com `markOnlineOnConnect: false` e nada chama
   `readMessages`), e agora há um motivo a mais para continuar assim: com leitura por
@@ -2107,7 +2157,9 @@ aba piscando com as conversas que receberam mensagem, até alguém abrir a Inbox
 permitido de login por dia da semana, aplicado a quem não é supervisor, com aviso 5 minutos
 antes e encerramento da sessão no fechamento; departamento marcado como interno, cujas
 conversas ficam fora do dashboard, do card de atrasados e do relatório por atendente sem
-sair da lista de conversas nem perder o aviso de mensagem nova; fixar mensagem (ou nota
+sair da lista de conversas nem perder o aviso de mensagem nova; sinal de atendimento automático no card da lista (chip "IA" com o agente e
+chip "Fluxo" com o nome do fluxo, acendendo e apagando em tempo real para todo mundo que
+enxerga a conversa); fixar mensagem (ou nota
 interna) no topo da conversa, faixa interna que nunca vai ao WhatsApp, com até 3 fixadas
 por conversa, sem prazo de validade, navegação entre elas e atualização em tempo real para
 todo mundo com a conversa aberta; API de integração para sistema externo disparar mensagem

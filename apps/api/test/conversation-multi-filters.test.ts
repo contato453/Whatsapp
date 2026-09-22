@@ -73,6 +73,10 @@ function fakePrisma(): PrismaClient {
     tag: catalogo("tag"),
     whatsAppInstance: catalogo("whatsAppInstance"),
     conversationRead: { findMany: async () => [] },
+    // Nenhuma conversa deste cenário está no automático: o chip de IA/fluxo
+    // da lista consulta as duas tabelas, e o mapa vazio basta aqui.
+    aiSession: { findMany: async () => [] },
+    automationExecution: { findMany: async () => [] },
     // Organização sem linha de parâmetros: a varredura de atraso cai nos
     // padrões de shared (limite de 30 min, seg-sex).
     attendanceSettings: { findUnique: async () => null },

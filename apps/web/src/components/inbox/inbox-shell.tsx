@@ -94,6 +94,10 @@ import {
 import { useConversationCompany } from "./use-conversation-company";
 import { useMessageScroll } from "./message-scroll";
 import { useUnreadCounts } from "./use-unread-counts";
+import {
+  useConversationAutomation,
+  type ConversationAutomationMap,
+} from "./use-conversation-automation";
 import { FilterBar } from "./filter-bar";
 import { ConversationAvatar, ParticipantAvatar } from "./conversation-avatar";
 import { MentionPicker, mentionOptions, type MentionOption } from "./mention-picker";
@@ -147,6 +151,14 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     bump: bumpUnreadCount,
     set: setUnreadCount,
   } = useUnreadCounts();
+  /**
+   * Quais conversas estão no automático (IA ou fluxo). Também fica fora do
+   * DTO da conversa, mas por custo e não por privacidade: é o mesmo estado
+   * para todo mundo que enxerga a conversa, só que saber dele custa duas
+   * consultas — que a lista paga uma vez por página, nunca por card.
+   */
+  const { automation: conversationAutomation, replaceAll: replaceConversationAutomation } =
+    useConversationAutomation();
   /**
    * Filtros da lista, num objeto só, reidratados do navegador já na
    * montagem. Este componente vive no layout da rota (`inbox/layout.tsx`)
@@ -484,6 +496,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         conversations: ConversationDto[];
         total: number;
         unread: Record<string, number>;
+        automation: ConversationAutomationMap;
         companyFilter: CompanyFilterStateDto | null;
       }>(`/conversations?${params.toString()}`)
       .then((data) => {
@@ -492,9 +505,13 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         setCompanyFilter(data.companyFilter);
         // O mapa vem calculado para a página inteira, numa consulta só.
         replaceUnreadCounts(data.unread ?? {});
+        // Idem para o chip de atendimento automático: só as conversas com IA
+        // ou fluxo rodando vêm no mapa, e daqui em diante quem o mantém em
+        // dia é o evento `conversation:automation`.
+        replaceConversationAutomation(data.automation ?? {});
       })
       .catch(() => undefined);
-  }, [filters, replaceUnreadCounts]);
+  }, [filters, replaceUnreadCounts, replaceConversationAutomation]);
 
   useEffect(() => {
     const timer = setTimeout(loadConversations, filters.search ? 300 : 0);
@@ -1671,6 +1688,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                 key={entry.id}
                 conversation={entry}
                 unreadCount={unreadCounts[entry.id] ?? 0}
+                automation={conversationAutomation[entry.id] ?? null}
                 active={entry.id === conversationId}
                 onClick={() => router.push(`/inbox/${entry.id}`)}
               />

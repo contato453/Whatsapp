@@ -233,6 +233,10 @@ function fakePrisma(): PrismaClient {
       },
     },
     conversationRead: { findMany: async () => [] },
+    // Nenhuma conversa deste cenário está no automático: o chip de IA/fluxo
+    // da lista consulta as duas tabelas, e o mapa vazio basta aqui.
+    aiSession: { findMany: async () => [] },
+    automationExecution: { findMany: async () => [] },
     personProfile: { findMany: async () => [] },
     // O contador de não lidas sai de um SQL cru; ele não é assunto deste
     // teste, e um mapa vazio basta.

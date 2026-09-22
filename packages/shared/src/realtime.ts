@@ -1,4 +1,5 @@
 import type { AiBudgetPolicy, AiSessionDto } from "./ai.js";
+import type { ConversationAutomationDto } from "./conversation-automation.js";
 import type { ConnectionStatus, MessageStatus } from "./enums.js";
 
 /**
@@ -83,6 +84,20 @@ export const RealtimeEvents = {
    */
   AiSession: "ai:session",
   /**
+   * O ATENDIMENTO AUTOMÁTICO da conversa mudou: uma sessão de IA começou ou
+   * terminou, ou um fluxo do construtor entrou, saiu ou foi assumido por um
+   * atendente. Carrega o estado inteiro (IA e fluxo juntos), nunca um patch —
+   * mesma ideia das fixações, e pelo mesmo motivo: reenviar duas linhas é
+   * mais simples do que sincronizar duas fontes.
+   *
+   * Existe separado do `ai:session` porque o consumidor é outro: aquele
+   * carrega a sessão inteira para a faixa do topo da conversa ABERTA, este é
+   * o chip dos cards da LISTA, que precisa saber de todas as conversas
+   * visíveis ao mesmo tempo — e que também acende para fluxo, que não tem
+   * sessão de IA nenhuma. Vai para a `conversationAudience()` de sempre.
+   */
+  ConversationAutomation: "conversation:automation",
+  /**
    * O consumo de IA cruzou um degrau do orçamento mensal (50/80/90/100%).
    * Vai para a sala da organização (só administradores a ouvem).
    */
@@ -93,6 +108,16 @@ export const RealtimeEvents = {
 export interface AiSessionPayload {
   conversationId: string;
   session: AiSessionDto | null;
+}
+
+/**
+ * Estado do atendimento automático de uma conversa, para o card da lista.
+ * As duas pontas podem vir nulas ao mesmo tempo (nada automático rodando) —
+ * é assim que o chip SOME da tela sem reload.
+ */
+export interface ConversationAutomationPayload {
+  conversationId: string;
+  automation: ConversationAutomationDto;
 }
 
 export interface AiBudgetAlertPayload {

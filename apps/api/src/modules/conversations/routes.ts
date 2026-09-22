@@ -51,6 +51,7 @@ import {
   markConversationUnread,
   unreadConversationWhere,
 } from "../../lib/conversation-reads.js";
+import { loadConversationAutomations } from "../../lib/conversation-automation.js";
 import { assertKnownFilterIds, listaDe } from "../../lib/conversation-filters.js";
 import { reportFilterConditions, resolvedInPeriodWhere } from "../../lib/report-slice.js";
 import { loadAttendanceSettings } from "../../lib/attendance-settings.js";
@@ -433,10 +434,19 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     // publicado por socket para a audiência inteira da conversa, e um número
     // pessoal ali vazaria de uma pessoa para a outra. Uma consulta só para a
     // página inteira — nunca uma por linha.
-    const [unread, personNames] = await Promise.all([
+    const [unread, automation, personNames] = await Promise.all([
       loadUnreadCounts(
         deps.prisma,
         request.user.sub,
+        conversations.map((conversation) => conversation.id),
+      ),
+      // Quem está atendendo no automático (IA ou fluxo). Vai em mapa à parte
+      // pelo mesmo motivo do contador: o DTO da conversa é publicado por
+      // socket a cada card, e carregá-lo com isto pagaria duas consultas por
+      // linha. Duas consultas para a página inteira, e só as conversas com
+      // algo rodando aparecem no mapa.
+      loadConversationAutomations(
+        deps.prisma,
         conversations.map((conversation) => conversation.id),
       ),
       // Nome da PESSOA nas conversas individuais — uma consulta para a
@@ -449,6 +459,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       ),
       total,
       unread: Object.fromEntries(unread),
+      automation: Object.fromEntries(automation),
       companyFilter: companyFilterActive ? { unavailable, truncated, unlinkedExcluded } : null,
     };
   });
