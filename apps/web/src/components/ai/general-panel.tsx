@@ -2,21 +2,28 @@
 
 import { useEffect, useState } from "react";
 import { Plus, Save, Trash2 } from "lucide-react";
-import { AI_MODEL_CATALOG, type AiSettingsDto } from "@azvchat/shared";
+import {
+  AI_MODEL_CATALOG,
+  AI_TRANSCRIPTION_LIMITS,
+  AI_TRANSCRIPTION_MODELS,
+  type AiSettingsDto,
+} from "@azvchat/shared";
 import { ApiError, aiApi } from "@/lib/api";
 import { Button, Field, Input } from "@/components/ui";
 import { Notice, Section } from "./ai-ui";
 
 /**
  * Configurações gerais — só admin: timeout do provedor, quantas mensagens
- * recentes vão ao modelo por padrão e a tabela de preço por modelo (para o
- * custo estimado de modelo que o catálogo não conhece, ou para corrigir um
- * preço que mudou).
+ * recentes vão ao modelo por padrão, a transcrição dos áudios do cliente e a
+ * tabela de preço por modelo (para o custo estimado de modelo que o catálogo
+ * não conhece, ou para corrigir um preço que mudou).
  */
 export function GeneralPanel() {
   const [settings, setSettings] = useState<AiSettingsDto | null>(null);
   const [timeoutSeconds, setTimeoutSeconds] = useState("30");
   const [contextLimit, setContextLimit] = useState("20");
+  const [transcribeAudio, setTranscribeAudio] = useState(true);
+  const [transcriptionModel, setTranscriptionModel] = useState(AI_TRANSCRIPTION_MODELS[0]?.id ?? "");
   const [pricing, setPricing] = useState<Array<{ model: string; input: string; output: string }>>([]);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ ok: boolean; message: string } | null>(null);
@@ -26,6 +33,8 @@ export function GeneralPanel() {
       setSettings(data);
       setTimeoutSeconds(String(Math.round(data.timeoutMs / 1000)));
       setContextLimit(String(data.contextMessageLimit));
+      setTranscribeAudio(data.transcribeAudio);
+      setTranscriptionModel(data.transcriptionModel);
       setPricing(
         Object.entries(data.pricingOverrides).map(([model, price]) => ({
           model,
@@ -57,6 +66,8 @@ export function GeneralPanel() {
         timeoutMs: Math.max(5, Math.min(120, Number(timeoutSeconds) || 30)) * 1000,
         contextMessageLimit: Math.max(4, Math.min(60, Number(contextLimit) || 20)),
         pricingOverrides: overrides,
+        transcribeAudio,
+        transcriptionModel: transcriptionModel.trim() || (AI_TRANSCRIPTION_MODELS[0]?.id ?? ""),
       });
       setSettings(saved);
       setFeedback({ ok: true, message: "Configurações salvas." });
@@ -82,6 +93,50 @@ export function GeneralPanel() {
         <p className="text-[11px] text-slate-400">
           Em timeout a chamada é registrada como erro; o motor tenta de novo com segurança e, esgotadas as tentativas do
           agente, aplica o fallback (mensagem ao cliente + fila humana). Nunca responde duas vezes.
+        </p>
+      </Section>
+
+      <Section
+        title="Áudios do cliente"
+        description="Com a transcrição ligada, o áudio que o cliente grava chega à IA como texto — é o caso mais comum do WhatsApp. Desligada, a IA avisa que não ouviu e pede que o cliente escreva."
+      >
+        <label className="flex items-start gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={transcribeAudio}
+            onChange={(event) => setTranscribeAudio(event.target.checked)}
+          />
+          <span>
+            Transcrever os áudios recebidos para a IA entender
+            <span className="block text-[11px] text-slate-400">
+              Cada agente ainda decide pela capacidade &quot;Ouvir áudios do cliente&quot;: este é o interruptor do
+              escritório, e desligado vale para todos.
+            </span>
+          </span>
+        </label>
+        <Field label="Modelo que transcreve">
+          <select
+            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            value={transcriptionModel}
+            onChange={(event) => setTranscriptionModel(event.target.value)}
+            disabled={!transcribeAudio}
+          >
+            {AI_TRANSCRIPTION_MODELS.every((model) => model.id !== transcriptionModel) && (
+              <option value={transcriptionModel}>{transcriptionModel}</option>
+            )}
+            {AI_TRANSCRIPTION_MODELS.map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.label} — {model.purpose}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <p className="text-[11px] text-slate-400">
+          A transcrição é cobrada por minuto de áudio e entra no consumo como &quot;Transcrição de áudio&quot;, separada
+          do atendimento. Cada áudio é transcrito uma vez e a transcrição aparece na bolha da conversa, para a equipe
+          conferir o que a IA ouviu. Áudio acima de {Math.round(AI_TRANSCRIPTION_LIMITS.maxSeconds / 60)} minutos não é
+          transcrito — a IA pede que o cliente escreva.
         </p>
       </Section>
 

@@ -128,7 +128,7 @@ async function main(): Promise<void> {
   // ele (`startSessionForFlow`); a volta (sessão terminou, retomar o fluxo)
   // não usa chamada direta, é varredura no `tick()`, então esta é a ÚNICA
   // direção de acoplamento entre os dois motores.
-  const aiRuntime = new AiRuntime({ prisma, io, logger: logger.child({ module: "ai" }), provider, audit, azevedoOs, cipher: aiCipher });
+  const aiRuntime = new AiRuntime({ prisma, io, logger: logger.child({ module: "ai" }), provider, audit, azevedoOs, cipher: aiCipher, media: storage });
   deps.aiRuntime = aiRuntime;
 
   // Motor de automações (construtor visual de fluxos) — precisa do `io`

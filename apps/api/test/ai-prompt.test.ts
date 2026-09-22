@@ -25,11 +25,28 @@ function context(overrides: Partial<PromptContext> = {}): PromptContext {
     knowledge: [{ sourceId: "s", sourceTitle: "Serviços", text: "Abertura de empresa leva 15 dias.", score: 1 }],
     today: "sábado, 6 de setembro de 2026",
     remainingAiMessages: 12,
+    audioListening: true,
     ...overrides,
   };
 }
 
 describe("buildSystemPrompt", () => {
+  it("explica o áudio transcrito quando a IA ouve, e pede texto quando não ouve", () => {
+    const config = defaultAiAgentConfig();
+    // Ouvindo: o modelo tem de saber que "[áudio transcrito]" é fala passada
+    // por transcrição automática — que erra nome, número e valor.
+    const ouvindo = buildSystemPrompt(config, context({ audioListening: true }));
+    expect(ouvindo).toContain("[áudio transcrito]");
+    expect(ouvindo).toContain("[áudio que não foi possível transcrever]");
+    expect(ouvindo).toContain("confirme com o cliente");
+
+    // Sem ouvir, a instrução é a oposta: pedir que o cliente escreva. Sem esta
+    // seção o modelo responderia "[áudio]" como se fosse uma frase do cliente.
+    const surdo = buildSystemPrompt(config, context({ audioListening: false }));
+    expect(surdo).toContain("Você NÃO ouve áudios");
+    expect(surdo).not.toContain("[áudio transcrito]");
+  });
+
   it("leva objetivo, regras proibidas, gatilhos e trechos da base", () => {
     const config = defaultAiAgentConfig();
     config.objective = "Qualificar leads de abertura de empresa.";

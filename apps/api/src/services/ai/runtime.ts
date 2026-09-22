@@ -1,6 +1,8 @@
 import type { AiAgent, AiAgentVersion, AiAutomation, AiSession, Conversation, Prisma, PrismaClient } from "@azvchat/database";
 import type { WhatsAppProvider } from "@azvchat/whatsapp";
 import {
+  AI_AUDIO_TRANSCRIBED_LABEL,
+  AI_AUDIO_UNHEARD_LABEL,
   AI_MESSAGE_ORIGIN,
   RealtimeEvents,
   automationMatchesType,
@@ -13,10 +15,12 @@ import {
   type AiTestDebugDto,
   type AiTestResultDto,
   type AiUsageOutcome,
+  readAudioTranscript,
 } from "@azvchat/shared";
 import type { Server } from "socket.io";
 import type { Logger } from "pino";
 import type { SecretCipher } from "../../lib/ai-secrets.js";
+import type { MediaStorage } from "../../lib/media-storage.js";
 import { loadAttendanceSettings } from "../../lib/attendance-settings.js";
 import { isWithinBusinessHours } from "../../lib/automation/business-hours.js";
 import { assignToUserData } from "../../lib/conversation-assignment.js";
@@ -49,6 +53,7 @@ import {
   type AiSessionState,
 } from "./session.js";
 import { buildToolDefinitions } from "./tools.js";
+import { ensureAudioTranscripts, resolveTranscriptionModel } from "./transcription.js";
 
 /**
  * O MOTOR do atendimento por IA.
@@ -95,6 +100,12 @@ export interface AiRuntimeDeps {
   audit: AuditService;
   azevedoOs: AzevedoOsClient;
   cipher: SecretCipher;
+  /**
+   * Storage da mídia — é de onde sai o ÁUDIO que vai ser transcrito para a IA
+   * entender o que o cliente gravou (ver `transcription.ts`). O mesmo driver
+   * que serve a rota autenticada de mídia: o arquivo nunca é buscado por URL.
+   */
+  media: MediaStorage;
 }
 
 type SessionRow = AiSession & {
@@ -513,11 +524,32 @@ export class AiRuntime {
         ...(lastProcessed ? { timestamp: { gt: lastProcessed.timestamp } } : {}),
       },
       orderBy: { timestamp: "asc" },
-      select: { id: true, content: true, type: true, timestamp: true },
+      select: { id: true, content: true, type: true, timestamp: true, mediaUrl: true, mimeType: true, metadata: true },
     });
     if (newInbound.length === 0) return;
     const newestInbound = newInbound[newInbound.length - 1] as (typeof newInbound)[number];
-    const queryText = newInbound.map((message) => messageText(message)).join("\n");
+
+    // ÁUDIO VIRA TEXTO ANTES DO TURNO. Sem isto o modelo receberia "[áudio]" e
+    // responderia sem saber o que o cliente disse — o caso mais comum do
+    // WhatsApp (quem tem pressa grava) era o que a IA não atendia. A
+    // transcrição fica gravada no `metadata` da mensagem, então cada áudio é
+    // transcrito UMA vez e o histórico dos turnos seguintes já a encontra.
+    const listenToAudio = settings.transcribeAudio && config.canDo.capabilities.listen_audio;
+    const heardInbound = await ensureAudioTranscripts(
+      { prisma, io: this.deps.io, logger, media: this.deps.media },
+      {
+        organizationId,
+        conversation,
+        credentials,
+        model: resolveTranscriptionModel(settings.transcriptionModel),
+        timeoutMs: settings.timeoutMs,
+        enabled: listenToAudio,
+        sessionId: session.id,
+        agent: session.agent,
+      },
+      newInbound,
+    );
+    const queryText = heardInbound.map((message) => messageText(message)).join("\n");
 
     const env = await this.buildEnvironment(session, conversation, config, settings);
     // Histórico recente SEM as mensagens novas, que entram por último: o
@@ -529,12 +561,12 @@ export class AiRuntime {
       config.advanced.contextMessageLimit || settings.contextMessageLimit,
       new Set(newInbound.map((message) => message.id)),
     );
-    const newTurns: AiChatMessage[] = newInbound.map((message) => ({ role: "user", content: messageText(message) }));
+    const newTurns: AiChatMessage[] = heardInbound.map((message) => ({ role: "user", content: messageText(message) }));
     const knowledge = retrieveKnowledge(
       [...env.knowledgeSources, ...(config.knowledge.includeQuickReplies ? env.quickReplies : [])],
       queryText,
     );
-    const promptContext = await this.promptContext(session, conversation, config, env, knowledge);
+    const promptContext = await this.promptContext(session, conversation, config, env, knowledge, listenToAudio);
     const system = buildSystemPrompt(config, promptContext);
     const tools = buildToolDefinitions(config, {
       hasKnowledge: env.knowledgeSources.length > 0 || (config.knowledge.includeQuickReplies && env.quickReplies.length > 0),
@@ -831,6 +863,7 @@ export class AiRuntime {
     config: AiAgentConfig,
     env: ActionEnvironment,
     knowledge: KnowledgeHit[],
+    audioListening: boolean,
   ): Promise<PromptContext> {
     const { prisma } = this.deps;
     const [organization, department, settings, personName] = await Promise.all([
@@ -856,6 +889,7 @@ export class AiRuntime {
       knowledge,
       today: new Intl.DateTimeFormat("pt-BR", { dateStyle: "full", timeZone: settings.timezone }).format(new Date()),
       remainingAiMessages: Math.max(0, config.limits.maxAiMessages - session.aiMessageCount),
+      audioListening,
     };
   }
 
@@ -1312,6 +1346,10 @@ export class AiRuntime {
       knowledge,
       today: new Intl.DateTimeFormat("pt-BR", { dateStyle: "full", timeZone: attendance.timezone }).format(new Date()),
       remainingAiMessages: Math.max(0, config.limits.maxAiMessages - aiMessages),
+      // O testador digita texto: não há áudio para transcrever. O que ele
+      // precisa mostrar é o prompt que o agente TERIA, então a seção de áudio
+      // reflete a configuração em vigor, igual ao atendimento real.
+      audioListening: settings.transcribeAudio && config.canDo.capabilities.listen_audio,
     });
     const tools = buildToolDefinitions(config, {
       hasKnowledge: sources.length > 0,
@@ -1559,8 +1597,24 @@ export function automationMatches(
   return true;
 }
 
-function messageText(message: { content: string | null; type: string }): string {
+/**
+ * A linha da mensagem como o MODELO a lê. Mídia vira rótulo, e o áudio vira o
+ * que foi transcrito — quando foi: transcrição que não saiu chega marcada como
+ * não ouvida, e não como "[áudio]" genérico, porque o prompt ensina o modelo a
+ * pedir que o cliente escreva nesse caso exato. Confundir os dois faria a IA
+ * tratar silêncio como se o cliente nada tivesse dito.
+ */
+function messageText(message: { content: string | null; type: string; metadata?: unknown }): string {
   if (message.type === "text") return message.content ?? "";
+  if (message.type === "audio") {
+    const transcript = readAudioTranscript(message.metadata);
+    if (transcript?.status === "ok" && transcript.text) {
+      return `${AI_AUDIO_TRANSCRIBED_LABEL} ${transcript.text}`;
+    }
+    // Sem registro nenhum é o caso de a transcrição estar desligada: aí o
+    // rótulo genérico basta, e o prompt já diz que a IA não ouve áudio.
+    if (transcript) return AI_AUDIO_UNHEARD_LABEL;
+  }
   const labels: Record<string, string> = {
     image: "[imagem]",
     audio: "[áudio]",

@@ -167,6 +167,8 @@ function BudgetSettings({ onSaved }: { onSaved: () => Promise<void> }) {
         timeoutMs: settings.timeoutMs,
         contextMessageLimit: settings.contextMessageLimit,
         pricingOverrides: settings.pricingOverrides,
+        transcribeAudio: settings.transcribeAudio,
+        transcriptionModel: settings.transcriptionModel,
       });
       setSettings(saved);
       setFeedback({ ok: true, message: "Orçamento salvo." });

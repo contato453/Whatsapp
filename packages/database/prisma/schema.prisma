@@ -2121,6 +2121,7 @@ enum AiBudgetPolicy {
 
 enum AiUsageKind {
   chat
+  transcription
   test
   connection_test
   models
@@ -2179,6 +2180,17 @@ model AiSettings {
   contextMessageLimit Int            @default(20)
   /// Preço por modelo sobreposto pelo escritório (USD por 1M tokens).
   pricingOverrides    Json?
+  /// Interruptor da transcrição de áudio (a IA "ouvindo" o cliente). Ligado
+  /// por padrão: é o comportamento útil, e desligado a IA responderia a
+  /// "[áudio]" sem saber o que o cliente disse. Existe porque transcrever é
+  /// chamada PAGA por minuto — quem administra precisa poder cortar o custo
+  /// sem mexer em agente nenhum.
+  transcribeAudio     Boolean        @default(true)
+  /// Modelo que transcreve; nulo = o padrão do sistema
+  /// (`AI_DEFAULT_TRANSCRIPTION_MODEL`). Coluna separada do `defaultModel` de
+  /// chat de propósito: são catálogos diferentes, e o modelo de chat não
+  /// transcreve.
+  transcriptionModel  String?
   /// Mês (AAAA-MM) e degraus já avisados nele — para o alerta de 80% não
   /// repetir a cada chamada.
   alertedMonth        String?
