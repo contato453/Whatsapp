@@ -81,6 +81,12 @@ export interface AiRuntimeForFlow {
     agentId: string;
     automationExecutionId: string;
   }): Promise<{ id: string } | null>;
+  /**
+   * Desligar o fluxo precisa alcançar a IA que um bloco dele colocou na
+   * conversa — senão o interruptor para o fluxo e deixa a IA respondendo,
+   * que para quem administra é o mesmo defeito com outro nome.
+   */
+  stopSessionsForFlowExecutions(input: { organizationId: string; executionIds: string[] }): Promise<number>;
 }
 
 type NodeStepResult =
@@ -241,6 +247,97 @@ export class AutomationEngine {
     } catch (err) {
       this.logger.error({ event: "automation_handover_failed", conversationId, error: String(err) });
     }
+  }
+
+  /**
+   * DESLIGAR UM FLUXO PRECISA PARAR O QUE ELE JÁ ESTÁ FAZENDO. É a mesma
+   * armadilha do interruptor da IA (seção 20 do `CLAUDE.md`), na terceira
+   * porta: `status: "inactive"` só tirava o fluxo da disputa por gatilho —
+   * a execução que já estava no meio do caminho seguia perguntando,
+   * esperando e respondendo, porque as três retomadas (resposta do cliente,
+   * timer e fim de sessão de IA) nunca reconferiam o fluxo. Falha
+   * silenciosa e do lado do cliente: nada fica vermelho, e quem desligou
+   * conclui que o interruptor não funciona.
+   *
+   * A ORDEM AQUI NÃO É DETALHE. Cancelar as execuções ANTES de encerrar as
+   * sessões de IA: ao contrário, a sessão terminaria primeiro, o `tick()`
+   * veria a execução ainda `waiting` com a sessão encerrada e a retomaria —
+   * o fluxo desligado voltaria a andar exatamente no instante em que
+   * deveria parar.
+   *
+   * Execução `running` (mid-passo, raro) também entra: o passo em voo pode
+   * gravar por cima, e é para isso que a conferência das retomadas existe.
+   */
+  async stopExecutionsForFlow(input: {
+    organizationId: string;
+    flowId: string;
+    note: string;
+  }): Promise<number> {
+    const active = await this.prisma.automationExecution.findMany({
+      where: {
+        organizationId: input.organizationId,
+        flowId: input.flowId,
+        status: { in: ["running", "waiting"] },
+      },
+      select: { id: true, conversationId: true },
+    });
+    if (active.length === 0) return 0;
+    const executionIds = active.map((execution) => execution.id);
+
+    await this.prisma.automationExecution.updateMany({
+      where: { id: { in: executionIds } },
+      data: {
+        status: "canceled",
+        waitingReason: null,
+        waitingUntil: null,
+        finishedAt: new Date(),
+        resultSummary: input.note,
+      },
+    });
+    for (const executionId of executionIds) {
+      await this.log(executionId, "info", "automation_flow_disabled", { message: input.note });
+    }
+
+    // A IA que um bloco deste fluxo abriu para junto — com o aviso de
+    // contingência e a transferência de sempre, nunca um corte mudo. Falhar
+    // aqui não desfaz o cancelamento que já aconteceu: o fluxo está parado
+    // de qualquer jeito, e a varredura da IA ainda é rede de segurança.
+    if (this.aiRuntime) {
+      try {
+        await this.aiRuntime.stopSessionsForFlowExecutions({
+          organizationId: input.organizationId,
+          executionIds,
+        });
+      } catch (err) {
+        this.logger.error({ event: "automation_flow_stop_ai_failed", flowId: input.flowId, error: String(err) });
+      }
+    }
+
+    for (const execution of active) {
+      await this.publishAutomationState(input.organizationId, execution.conversationId);
+    }
+    this.logger.info({ event: "automation_flow_executions_stopped", flowId: input.flowId, count: active.length });
+    return active.length;
+  }
+
+  /**
+   * A execução ainda pode andar? Rede de segurança das TRÊS retomadas, para
+   * o desligamento valer mesmo quando ele aconteceu com a API fora do ar,
+   * direto no banco, ou quando o cancelamento acima falhou. Fluxo que sumiu
+   * conta como desligado — não há para onde continuar.
+   */
+  private async canStillRun(execution: { id: string; flowId: string }): Promise<boolean> {
+    const flow = await this.prisma.automationFlow.findUnique({
+      where: { id: execution.flowId },
+      select: { status: true },
+    });
+    if (flow?.status === "active") return true;
+    this.logger.info({ event: "automation_execution_flow_disabled", executionId: execution.id });
+    await this.cancelExecution(
+      execution.id,
+      flow ? "Fluxo desligado durante a execução." : "O fluxo desta execução não existe mais.",
+    );
+    return false;
   }
 
   /** Uma etiqueta foi aplicada à conversa — avalia fluxos do gatilho `tag_added`. */
@@ -420,11 +517,12 @@ export class AutomationEngine {
   }
 
   private async handleMessageForActiveExecution(
-    execution: { id: string; flowVersionId: string; currentNodeId: string | null; status: string; waitingReason: string | null; context: Prisma.JsonValue },
+    execution: { id: string; flowId: string; flowVersionId: string; currentNodeId: string | null; status: string; waitingReason: string | null; context: Prisma.JsonValue },
     conversation: Conversation,
     content: string | null,
   ): Promise<void> {
     if (execution.status !== "waiting") return;
+    if (!(await this.canStillRun(execution))) return;
     if (execution.waitingReason === "reply") {
       await this.resumeFromReply(execution, conversation, content);
       return;
@@ -1135,6 +1233,26 @@ export class AutomationEngine {
     await this.publishAutomationStateFor(executionId);
   }
 
+  /**
+   * Encerrada por DECISÃO de fora (hoje: o fluxo foi desligado ou excluído)
+   * — `canceled`, e não `failed`: nada deu errado, alguém desligou. É a
+   * distinção que o enum já registra, e ela é o que o Histórico mostra.
+   */
+  private async cancelExecution(executionId: string, note: string): Promise<void> {
+    await this.prisma.automationExecution.update({
+      where: { id: executionId },
+      data: {
+        status: "canceled",
+        resultSummary: note,
+        finishedAt: new Date(),
+        waitingReason: null,
+        waitingUntil: null,
+      },
+    });
+    await this.log(executionId, "info", "automation_execution_canceled", { message: note });
+    await this.publishAutomationStateFor(executionId);
+  }
+
   private async failExecution(
     executionId: string,
     error: string,
@@ -1233,11 +1351,13 @@ export class AutomationEngine {
   private async resumeTimerExecution(execution: {
     id: string;
     conversationId: string;
+    flowId: string;
     flowVersionId: string;
     currentNodeId: string | null;
     context: Prisma.JsonValue;
   }): Promise<void> {
     try {
+      if (!(await this.canStillRun(execution))) return;
       const conversation = await this.prisma.conversation.findUnique({ where: { id: execution.conversationId } });
       if (!conversation) {
         await this.failExecution(execution.id, "A conversa não existe mais.");
@@ -1283,11 +1403,13 @@ export class AutomationEngine {
   private async resumeAiSessionExecution(execution: {
     id: string;
     conversationId: string;
+    flowId: string;
     flowVersionId: string;
     currentNodeId: string | null;
     context: Prisma.JsonValue;
   }): Promise<void> {
     try {
+      if (!(await this.canStillRun(execution))) return;
       const contextData = ((execution.context as AutomationExecutionContextData) ?? {}) as AutomationExecutionContextData;
       const sessionId = contextData.aiSessionId;
       if (!sessionId) {

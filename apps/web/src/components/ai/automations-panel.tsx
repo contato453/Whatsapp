@@ -13,7 +13,7 @@ import {
 import { ApiError, aiApi, api, type AiAutomationInput } from "@/lib/api";
 import type { DepartmentDto, InstanceDto, TagDto } from "@/lib/types";
 import { Badge, Button, Card, EmptyState, Field, Input, Modal, Spinner } from "@/components/ui";
-import { Notice, Section, Select, Toggle } from "./ai-ui";
+import { Notice, Section, Select, Toggle, stoppedSessionsMessage } from "./ai-ui";
 
 /**
  * Automações — o "bloco Atendimento por IA". Este repositório não tem
@@ -45,6 +45,7 @@ export function AutomationsPanel() {
   const [departments, setDepartments] = useState<DepartmentDto[]>([]);
   const [tags, setTags] = useState<TagDto[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [editing, setEditing] = useState<AiAutomationDto | "new" | null>(null);
   const [form, setForm] = useState<AiAutomationInput>(EMPTY);
   const [busy, setBusy] = useState(false);
@@ -94,9 +95,16 @@ export function AutomationsPanel() {
     if (!editing) return;
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       if (editing === "new") await aiApi.createAutomation(form);
-      else await aiApi.updateAutomation(editing.id, form);
+      else {
+        // Desligar a automação encerra os atendimentos que ela abriu — a
+        // tela diz quantos, senão quem desligou não tem como saber se a
+        // conversa que estava com a IA parou de verdade.
+        const result = await aiApi.updateAutomation(editing.id, form);
+        setNotice(stoppedSessionsMessage(result.stoppedSessions));
+      }
       setEditing(null);
       await load();
     } catch (err) {
@@ -109,7 +117,8 @@ export function AutomationsPanel() {
   async function remove(automation: AiAutomationDto) {
     if (!window.confirm(`Excluir a automação "${automation.name}"?`)) return;
     try {
-      await aiApi.deleteAutomation(automation.id);
+      const result = await aiApi.deleteAutomation(automation.id);
+      setNotice(stoppedSessionsMessage(result.stoppedSessions));
       await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Não foi possível excluir");
@@ -148,6 +157,7 @@ export function AutomationsPanel() {
       </div>
       {agents.length === 0 && <Notice tone="info">Crie e ative um agente antes de criar uma automação.</Notice>}
       {error && <Notice tone="error">{error}</Notice>}
+      {notice && <Notice tone="warn">{notice}</Notice>}
 
       {automations.length === 0 ? (
         <Card>

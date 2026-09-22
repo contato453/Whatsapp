@@ -10,6 +10,20 @@ import { Card } from "@/components/ui";
  * (`components/ui.tsx`) — nada aqui inventa identidade visual nova.
  */
 
+/**
+ * O aviso de que desligar alcançou conversa que já estava sendo atendida.
+ * Mora aqui porque as três telas que desligam (agente na lista, agente na
+ * própria tela, automação) precisam dizer a MESMA coisa — desligar sem
+ * contar quantos atendimentos pararam deixa quem administra sem saber se o
+ * interruptor pegou, que é o defeito que isto veio consertar.
+ */
+export function stoppedSessionsMessage(count: number): string | null {
+  if (count <= 0) return null;
+  return count === 1
+    ? "1 atendimento em andamento foi encerrado: o cliente recebeu a mensagem de contingência e a conversa foi para a fila humana."
+    : `${count} atendimentos em andamento foram encerrados: os clientes receberam a mensagem de contingência e as conversas foram para a fila humana.`;
+}
+
 /** `select` nativo com o mesmo visual do `Input` do kit. */
 export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (

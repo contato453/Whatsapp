@@ -784,19 +784,23 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
       if (!config.objective.trim()) throw new AppError("Defina o objetivo do agente antes de ativá-lo.", 400, "missing_objective");
     }
     const updated = await prisma.aiAgent.update({ where: { id }, data: { status, updatedById: request.user.sub }, include: agentInclude });
-    // Desativar com atendimento em andamento: as sessões ativas são
-    // encerradas com transferência na próxima varredura/turno (o motor
-    // confere `agent.status`). Aqui só registramos.
+    // Desativar com atendimento em andamento encerra as sessões AQUI, e não
+    // "na próxima mensagem do cliente" como antes: esperar o cliente escrever
+    // significa a IA responder mais uma vez depois de a casa a ter desligado,
+    // e quem desligou conclui que o interruptor não pegou. O cliente recebe o
+    // aviso de contingência e a conversa vai para a fila humana.
+    const stoppedSessions =
+      status === "active" ? 0 : await deps.aiRuntime.stopSessionsForAgent({ organizationId: request.user.organizationId, agentId: id });
     deps.audit.record({
       organizationId: request.user.organizationId,
       userId: request.user.sub,
       action: "ai.agent_status_changed",
       entityType: "AiAgent",
       entityId: id,
-      metadata: { from: agent.status, to: status },
+      metadata: { from: agent.status, to: status, stoppedSessions },
     });
     const [costs, defaultModel] = await Promise.all([agentCosts([id]), defaultModelOf(request.user.organizationId)]);
-    return { agent: serializeAiAgent(updated, { costMicros: costs.get(id) ?? 0, defaultModel }) };
+    return { agent: serializeAiAgent(updated, { costMicros: costs.get(id) ?? 0, defaultModel }), stoppedSessions };
   });
 
   app.post("/ai/agents/:id/duplicate", { preHandler: requirePermission(deps, "ai.agent.manage") }, async (request, reply) => {
@@ -1025,17 +1029,36 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
       data: { ...body, departmentId: body.onlyWithoutDepartment ? null : body.departmentId },
       include: automationInclude,
     });
-    deps.audit.record({ organizationId: request.user.organizationId, userId: request.user.sub, action: "ai.automation_updated", entityType: "AiAutomation", entityId: id, metadata: { name: updated.name, active: updated.active } });
-    return { automation: serializeAiAutomation(updated) };
+    // Desligar a automação alcança as sessões que ELA abriu. Sem isto,
+    // desligar só fechava a porta de entrada: a conversa que já estava com a
+    // IA continuava sendo respondida, que é exatamente o que ninguém espera
+    // de um interruptor. Vale para toda gravação que termina desligada (e
+    // não só para a transição ligada→desligada), para regravar a automação
+    // já desligada também limpar o que tiver sobrado.
+    const stoppedSessions = updated.active
+      ? 0
+      : await deps.aiRuntime.stopSessionsForAutomation({ organizationId: request.user.organizationId, automationId: id });
+    deps.audit.record({ organizationId: request.user.organizationId, userId: request.user.sub, action: "ai.automation_updated", entityType: "AiAutomation", entityId: id, metadata: { name: updated.name, active: updated.active, stoppedSessions } });
+    return { automation: serializeAiAutomation(updated), stoppedSessions };
   });
 
   app.delete("/ai/automations/:id", { preHandler: requirePermission(deps, "ai.agent.manage") }, async (request) => {
     const { id } = idParams.parse(request.params);
     const existing = await prisma.aiAutomation.findFirst({ where: { id, organizationId: request.user.organizationId } });
     if (!existing) throw new NotFoundError("Automação");
+    // ANTES do delete, sempre: `AiSession.automationId` é `SetNull`, então
+    // depois da exclusão não há mais como saber quais sessões nasceram desta
+    // automação — elas ficariam indistinguíveis das que vieram de um bloco de
+    // fluxo, rodando sem ninguém para desligá-las. Aqui não há a condição de
+    // "estava ligada": automação já desligada pode ter sessão viva justamente
+    // pelo defeito que isto conserta.
+    const stoppedSessions = await deps.aiRuntime.stopSessionsForAutomation({
+      organizationId: request.user.organizationId,
+      automationId: id,
+    });
     await prisma.aiAutomation.delete({ where: { id } });
-    deps.audit.record({ organizationId: request.user.organizationId, userId: request.user.sub, action: "ai.automation_deleted", entityType: "AiAutomation", entityId: id, metadata: { name: existing.name } });
-    return { ok: true };
+    deps.audit.record({ organizationId: request.user.organizationId, userId: request.user.sub, action: "ai.automation_deleted", entityType: "AiAutomation", entityId: id, metadata: { name: existing.name, stoppedSessions } });
+    return { ok: true, stoppedSessions };
   });
 
   /** Opções para os seletores da tela (responsável de transferência). */

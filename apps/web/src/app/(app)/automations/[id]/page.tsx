@@ -46,6 +46,7 @@ import type {
 } from "@/lib/types";
 import { Button, Spinner } from "@/components/ui";
 import { FlowNode, FLOW_NODE_TYPE, type FlowNodeData } from "@/components/automations/flow-node";
+import { stoppedExecutionsMessage } from "@/components/automations/automation-ui";
 import { NodeInspector } from "@/components/automations/node-inspector";
 import { NodePalette } from "@/components/automations/node-palette";
 
@@ -145,6 +146,8 @@ export default function AutomationFlowBuilderPage() {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [problems, setProblems] = useState<AutomationFlowProblemDto[] | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Quantos atendimentos o desligamento deste fluxo encerrou (some ao ligar de novo). */
+  const [stoppedNotice, setStoppedNotice] = useState<string | null>(null);
 
   const loadedRef = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -277,8 +280,14 @@ export default function AutomationFlowBuilderPage() {
     if (!flow) return;
     setBusy(true);
     try {
-      const updated = flow.status === "active" ? await automationApi.deactivateFlow(flowId) : await automationApi.activateFlow(flowId);
-      setFlow(updated);
+      if (flow.status === "active") {
+        const result = await automationApi.deactivateFlow(flowId);
+        setFlow(result.flow);
+        setStoppedNotice(stoppedExecutionsMessage(result.stoppedExecutions));
+      } else {
+        setFlow(await automationApi.activateFlow(flowId));
+        setStoppedNotice(null);
+      }
     } finally {
       setBusy(false);
     }
@@ -297,6 +306,9 @@ export default function AutomationFlowBuilderPage() {
 
   return (
     <div className="flex h-full flex-col">
+      {stoppedNotice && (
+        <p className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-800">{stoppedNotice}</p>
+      )}
       <div className="flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-2.5">
         <Button variant="ghost" size="sm" onClick={() => router.push("/automations")}>
           <ArrowLeft className="h-4 w-4" />
