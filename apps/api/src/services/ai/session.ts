@@ -9,6 +9,7 @@ import {
 import type { Server } from "socket.io";
 import type { Logger } from "pino";
 import { conversationAudience } from "../../realtime/socket.js";
+import { emitConversationAutomation } from "../../lib/conversation-automation.js";
 
 /**
  * Ciclo de vida da SESSÃO de atendimento por IA — o que a Inbox mostra e o
@@ -118,6 +119,11 @@ export async function emitAiSession(
     session: session ? serializeAiSession(session) : null,
   };
   deps.io.to(conversationAudience(organizationId, conversation)).emit(RealtimeEvents.AiSession, payload);
+  // O chip "IA" dos cards da lista sai daqui junto: este é o único ponto por
+  // onde toda mudança de sessão passa, então acender e apagar o chip nunca
+  // depende de alguém lembrar de avisar em cada caminho de encerramento. A
+  // conversa já foi lida acima — vai emprestada para não repetir a consulta.
+  await emitConversationAutomation(deps, organizationId, conversationId, conversation);
 }
 
 const STATUS_BY_REASON: Record<AiSessionEndReason, AiSessionStatus> = {
