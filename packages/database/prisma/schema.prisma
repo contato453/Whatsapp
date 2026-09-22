@@ -2122,6 +2122,7 @@ enum AiBudgetPolicy {
 enum AiUsageKind {
   chat
   transcription
+  vision
   test
   connection_test
   models
@@ -2191,6 +2192,11 @@ model AiSettings {
   /// chat de propósito: são catálogos diferentes, e o modelo de chat não
   /// transcreve.
   transcriptionModel  String?
+  /// Interruptor da leitura de IMAGEM (a IA "vendo" a foto que o cliente
+  /// manda). Ligado por padrão, mesmo motivo do áudio. Não há coluna
+  /// equivalente para DOCUMENTO: o texto de PDF/DOCX/TXT é extraído aqui
+  /// dentro, sem chamada paga, então só a capacidade do agente decide.
+  describeImages      Boolean        @default(true)
   /// Mês (AAAA-MM) e degraus já avisados nele — para o alerta de 80% não
   /// repetir a cada chamada.
   alertedMonth        String?

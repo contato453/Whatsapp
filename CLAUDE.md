@@ -534,8 +534,8 @@ GET    /ai/providers                 PUT /ai/providers/:provider   (admin; a cha
 POST   /ai/providers/:provider/test  POST /ai/providers/:provider/disconnect   volta só o hint)
 GET    /ai/providers/:provider/models[?refresh=1]   GET /ai/providers/:provider/billing
 GET    /ai/settings (ai.view_usage|ai.agent.manage)  PUT /ai/settings (admin; orçamento, política,
-       timeout, contexto, tabela de preço, transcrição de áudio — ligar/desligar e o modelo
-       que transcreve; ver a seção 20)
+       timeout, contexto, tabela de preço, leitura de anexo — transcrição de áudio
+       (ligar/desligar e o modelo) e descrição de imagem; ver a seção 20)
 GET    /ai/usage?period=   GET /ai/stats?period=   GET /ai/logs   (ai.view_usage)
 GET    /ai/agents (manage|view_usage)  GET|POST /ai/agents  PATCH|DELETE /ai/agents/:id
 POST   /ai/agents/:id/status  POST /ai/agents/:id/duplicate  GET /ai/agents/:id/versions
@@ -1935,23 +1935,24 @@ sempre juntos.
   avisa em português e o original continua no menu. Nada disso encosta em
   `lib/access.ts` nem em `media-storage.ts`, e a mídia continua servida só
   autenticada — `fetchAudioMp3BlobUrl` é a mesma rota com outro `format`.
-- **TRANSCRIÇÃO DE ÁUDIO DA IA: É PAGA POR MINUTO, E POR ISSO É GRAVADA.** A IA ouve o
-  áudio do cliente transcrevendo-o antes do turno (seção 20), e a transcrição fica no
-  `metadata` da mensagem (`audioTranscript`). Quem "simplificar" isso transcrevendo a cada
-  turno não quebra nada visível: a IA continua respondendo certo, e só a fatura do provedor
-  denuncia, multiplicada pelo tamanho do histórico — o mesmo áudio entra no contexto de
-  todos os turnos seguintes. Três consequências que valem para qualquer mexida: (1) a marca
-  de INSUCESSO é tão necessária quanto a de sucesso, senão áudio que não dá para transcrever
-  vira uma chamada paga por turno, para sempre — só falha do PROVEDOR é retentada, e uma
-  vez só (`attempts`); (2) o rótulo que entra no contexto do modelo sai do shared
-  (`AI_AUDIO_TRANSCRIBED_LABEL` / `AI_AUDIO_UNHEARD_LABEL`), porque o `prompt-builder`
-  ensina o modelo a reconhecer exatamente aquele texto — divergir faz a IA tratar
-  transcrição automática (que erra CNPJ, valor e nome) como se o cliente tivesse digitado;
-  (3) o consumo entra como `kind = "transcription"`, nunca somado ao `chat`: misturar faz o
-  custo por turno de atendimento deixar de fechar, que é o defeito que a separação de
-  "Ligações" no dashboard já ensinou aqui. A transcrição só acontece em conversa com
-  atendimento por IA ativo — não é recurso de Inbox, e ligá-lo para toda conversa
-  transformaria cada áudio recebido no escritório numa chamada paga.
+- **A LEITURA DE ANEXO DA IA É PAGA, E POR ISSO É GRAVADA.** A IA lê o áudio, a imagem e o
+  documento do cliente antes do turno (seção 20), e o resultado fica no `metadata` da
+  mensagem (`audioTranscript`, `imageDescription`, `documentText`). Quem "simplificar" isso
+  relendo a cada turno não quebra nada visível: a IA continua respondendo certo, e só a fatura
+  do provedor denuncia, multiplicada pelo tamanho do histórico — o mesmo anexo entra no
+  contexto de todos os turnos seguintes. Quatro consequências que valem para qualquer mexida:
+  (1) a marca de INSUCESSO é tão necessária quanto a de sucesso, senão anexo ilegível vira uma
+  chamada paga por turno, para sempre — só falha do PROVEDOR é retentada, e uma vez só
+  (`attempts`); (2) o rótulo que entra no contexto do modelo sai do shared
+  (`AI_ATTACHMENT_CONTEXT_LABELS`), porque o `prompt-builder` ensina o modelo a reconhecer
+  exatamente aquele texto — divergir faz a IA tratar leitura automática (que erra CNPJ, valor
+  e nome) como se o cliente tivesse digitado; (3) o consumo entra como `transcription` ou
+  `vision`, nunca somado ao `chat`: misturar faz o custo por turno de atendimento deixar de
+  fechar, que é o defeito que a separação de "Ligações" no dashboard já ensinou aqui; (4)
+  DOCUMENTO é a exceção que confirma a regra — é lido localmente, não custa chamada, e por
+  isso não tem interruptor de escritório nem linha de consumo. A leitura só acontece em
+  conversa com atendimento por IA ativo — não é recurso de Inbox, e ligá-la para toda conversa
+  transformaria cada anexo recebido no escritório numa chamada paga.
 - **MÍDIA NUNCA É APONTADA POR `href`, E ISSO VALE PARA O DOWNLOAD DE ÁUDIO
   TAMBÉM.** O nome do arquivo salvo é montado na tela
   (`audioDownloadName`, em `lib/media-download.ts`): `audio-` + nome exibido da
@@ -2181,8 +2182,10 @@ no backend (sobrevive a reinício e a fechar o navegador); **atendimento por IA*
 agente configurável por objetivo/limites/conhecimento, disparado por automação própria de
 zero configuração OU por um bloco "Atendimento por IA" dentro do construtor de fluxos (as
 duas portas abrem a mesma sessão), com transferência para humano e resumo em nota interna, e
-OUVINDO o áudio que o cliente grava (transcrito uma vez, guardado na própria mensagem,
-exibido na bolha para a equipe conferir e cobrado em linha separada no consumo).
+LENDO os anexos que o cliente manda — áudio transcrito, imagem descrita (com o texto visível
+do comprovante) e documento PDF/DOCX/TXT com o texto extraído, cada um lido uma vez, guardado
+na própria mensagem, exibido na bolha para a equipe conferir e cobrado em linha separada no
+consumo (documento não custa: é lido no servidor).
 
 CRM em Kanban integrado ao atendimento: funis por departamento com etapas configuráveis
 (probabilidade, prazo de parada e automações de entrada/saída), oportunidade criada de dentro
@@ -3091,47 +3094,63 @@ nenhum fluxo a capturar antes; pelo bloco de fluxo, `startSessionForFlow`
 devolve `null` e o fluxo segue pela saída "Transferido / encerrado" de
 sempre — o mesmo caminho de quando não há agente configurado.
 
-**A IA OUVE O ÁUDIO DO CLIENTE** (`services/ai/transcription.ts`). No WhatsApp,
-quem tem pressa GRAVA em vez de escrever — e até esta entrega o áudio chegava ao modelo
-como o rótulo "[áudio]": a IA respondia sem saber o que havia sido dito, então o caso mais
-comum do canal era justamente o que o atendimento por IA não atendia. Agora, antes do
-turno, o áudio recebido vira TEXTO: o arquivo sai do `MediaStorage` (em bytes — mídia do
-AZVCHAT nunca é passada como link), vai por `AiProvider.transcribeAudio` (na OpenAI,
-`POST /audio/transcriptions`, a ÚNICA chamada multipart do provedor) e entra no contexto
-marcado com `AI_AUDIO_TRANSCRIBED_LABEL`. Decisões que não são opcionais:
-- **A transcrição é GRAVADA no `metadata` da mensagem** (chave `audioTranscript`, em
-  `@azvchat/shared`), nunca recalculada por turno: o mesmo áudio entra no contexto de
-  vários turnos seguidos, e cada transcrição é chamada PAGA por minuto — refazê-la a cada
-  volta multiplicaria a conta pelo tamanho do histórico. Sem tabela nova: transcrição é do
-  áudio, e áudio é `Message` (mesmo desenho do MP3 do download e do histórico de versões).
-  De graça vêm a sobrevivência a reinício e a bolha da equipe vendo o que a IA ouviu — o
-  `metadata` já viaja inteiro no DTO, então o `message:updated` que a gravação emite não
-  mudou contrato de tempo real nenhum.
-- **O INSUCESSO também é gravado**, e essa é a parte que alguém vai querer "simplificar".
-  Sem a marca, áudio que não dá para transcrever seria tentado de novo a cada turno e o
-  modelo seguiria respondendo como se o cliente não tivesse falado nada. Os status
-  determinísticos (`no_file`, `too_long`, `empty`) nunca são tentados outra vez; só
-  `failed` (o provedor recusou ou caiu) vale UMA segunda tentativa, contada em `attempts`
-  — é a mesma lição da retentativa do download de mídia.
-- **Os dois marcadores moram no shared** (`AI_AUDIO_TRANSCRIBED_LABEL` e
-  `AI_AUDIO_UNHEARD_LABEL`) porque dois lugares precisam concordar palavra por palavra: o
-  motor, que monta a linha da mensagem, e `prompt-builder`, que ensina o modelo a
-  reconhecê-la e a confirmar por escrito o que for decisivo (CNPJ, valor, data, nome).
-  Divergindo, o modelo trataria transcrição como se o cliente tivesse digitado.
-- **Duas chaves, e as duas valem**: a capacidade `listen_audio` do agente (padrão ligada) e
-  o interruptor `AiSettings.transcribeAudio` do escritório (padrão ligado, em Configurações
-  gerais, com o modelo em `AiSettings.transcriptionModel` — catálogo
-  `AI_TRANSCRIPTION_MODELS`, padrão `gpt-4o-mini-transcribe`). Desligado, nada é lido nem
-  marcado: religar volta a transcrever os próximos áudios sem deixar registro de "tentei e
-  não pude", e o prompt passa a dizer que a IA não ouve.
-- **Consumo em linha PRÓPRIA** (`AiUsageKind` ganhou `transcription`), com custo estimado
-  POR MINUTO (`estimateTranscriptionCostMicros`, pela duração que o WhatsApp já manda em
-  `metadata.durationSeconds`) — nunca somado ao `chat`, senão o custo por turno de
-  atendimento deixaria de fechar. O total da SESSÃO inclui os dois, porque ele responde
-  "quanto custou este atendimento". Sem preço ou sem duração, o custo é NULO, nunca zero.
-- **Falhar aqui não derruba o turno**: a função não lança, e o teto de duração
-  (`AI_TRANSCRIPTION_LIMITS.maxSeconds`, 10 min) barra a reunião gravada antes de ela
-  estourar o contexto. Nada disso encosta em `lib/access.ts` nem em `media-storage.ts`.
+**A IA LÊ OS ANEXOS DO CLIENTE — ÁUDIO, IMAGEM E DOCUMENTO**
+(`services/ai/attachments.ts`). No WhatsApp, quem tem pressa GRAVA um áudio, FOTOGRAFA o
+comprovante ou manda o PDF do contrato — e até estas entregas os três chegavam ao modelo
+como rótulo ("[áudio]", "[imagem]", "[documento]"): a IA respondia sem saber o que havia
+recebido, então o caso mais comum do canal era justamente o que o atendimento por IA não
+atendia. Agora, antes do turno, o anexo vira TEXTO, por três caminhos com um desenho só:
+- **áudio** → transcrição (`AiProvider.transcribeAudio`; na OpenAI, `POST
+  /audio/transcriptions`, a ÚNICA chamada multipart do provedor), cobrada por MINUTO;
+- **imagem** → descrição por visão (`AiProvider.describeImage`), no MESMO `/chat/completions`
+  com a imagem embutida em base64 (`data:` URI — nunca um link: mídia do AZVCHAT só existe
+  atrás de rota autenticada) e com o **mesmo modelo de chat do agente**: ele já enxerga, e um
+  modelo à parte seria mais uma configuração para o escritório manter. A instrução manda
+  TRANSCREVER o texto visível antes de descrever, porque num escritório contábil a foto quase
+  sempre é de um papel;
+- **documento** → texto extraído AQUI, pelo MESMO `extractDocumentText` da base de
+  conhecimento (PDF, DOCX, TXT). Sem chamada, sem custo e sem linha de consumo.
+
+Decisões que não são opcionais:
+- **O resultado é GRAVADO no `metadata` da mensagem** (chaves `audioTranscript`,
+  `imageDescription` e `documentText`, em `@azvchat/shared`), nunca recalculado por turno: o
+  mesmo anexo entra no contexto de vários turnos seguidos, e ler é chamada PAGA — refazer a
+  leitura a cada volta multiplicaria a conta pelo tamanho do histórico. Sem tabela nova:
+  leitura é do anexo, e anexo é `Message` (mesmo desenho do MP3 do download e do histórico de
+  versões). **Uma chave por tipo**, e não uma genérica, porque a do áudio já está em linhas de
+  produção e renomeá-la cegaria as bolhas que já a têm — e porque transcrição, descrição e
+  texto extraído não são a mesma coisa para quem lê o `metadata` cru depois. De graça vêm a
+  sobrevivência a reinício e a bolha da equipe vendo o que a IA entendeu: o `metadata` já
+  viaja inteiro no DTO, então o `message:updated` que a gravação emite não mudou contrato de
+  tempo real nenhum.
+- **O INSUCESSO também é gravado**, e essa é a parte que alguém vai querer "simplificar". Sem
+  a marca, anexo que não dá para ler seria tentado de novo a cada turno e o modelo seguiria
+  respondendo como se o cliente não tivesse mandado nada. Status determinístico — `no_file`,
+  `too_long`, `empty` (áudio sem fala, PDF digitalizado), `unsupported` (planilha, zip) —
+  nunca é tentado outra vez; só `failed` (o provedor recusou ou caiu) vale UMA segunda
+  tentativa, contada em `attempts`.
+- **Os marcadores moram no shared** (`AI_ATTACHMENT_CONTEXT_LABELS`, um `ok` e um
+  `unavailable` por tipo) porque dois lugares precisam concordar palavra por palavra: o motor,
+  que monta a linha da mensagem, e `prompt-builder`, que ensina o modelo a reconhecê-la, a
+  confirmar por escrito o que for decisivo (CNPJ, valor, data, nome) e a pedir o dado quando
+  não conseguiu abrir o anexo. A **legenda** que o cliente escreveu junto vai sempre na mesma
+  linha: ela é que diz o que ele quer ("esse boleto está certo?").
+- **Chaves, e quantas**: capacidades do agente `listen_audio`, `read_images` e
+  `read_documents` (todas padrão ligadas) mais os interruptores do escritório
+  `AiSettings.transcribeAudio` e `AiSettings.describeImages`. **Documento não tem
+  interruptor**: é leitura local, sem custo, então só a capacidade decide — interruptor
+  existe para cortar conta, não por simetria. Desligado, nada é lido nem marcado: religar
+  volta a ler os próximos anexos sem deixar registro de "tentei e não pude".
+- **Consumo em linha PRÓPRIA por tipo de chamada**: `transcription` (custo por minuto, pela
+  duração que o WhatsApp manda em `metadata.durationSeconds`) e `vision` (custo por TOKEN, com
+  `estimateCostMicros` e a tabela de preço do escritório, porque é o modelo de chat). Nunca
+  somadas ao `chat`, senão o custo por turno de atendimento deixaria de fechar; o total da
+  SESSÃO inclui tudo, porque ele responde "quanto custou este atendimento". Sem preço ou sem
+  duração, o custo é NULO, nunca zero. Documento não gera linha nenhuma.
+- **Falhar aqui não derruba o turno**: a função não lança, e os tetos
+  (`AI_TRANSCRIPTION_LIMITS`, `AI_VISION_LIMITS`, `AI_DOCUMENT_LIMITS`) barram o arquivo grande
+  antes de ele estourar contexto e custo. Nada disso encosta em `lib/access.ts` nem em
+  `media-storage.ts`.
 
 **Ferramentas** (`AI_TOOL_NAMES`): `save_collected_data`, `update_contact_name`, `add_tag`,
 `remove_tag`, `add_internal_note`, `set_conversation_status`, `schedule_followup`,
@@ -3215,9 +3234,10 @@ traduzido em português), `ai-prompt` (prompt/ferramentas/config), `ai-actions` 
 humano no meio do turno, ferramenta bloqueada, fallback, orçamento), `ai-routes` (chave nunca
 vaza, papéis, versão).
 
-**Limitações desta entrega** (registradas, não escondidas): a IA OUVE áudio (transcrito) mas
-responde só em texto, e imagem/documento continuam chegando como rótulo — ela não "vê"
-anexo; a base de conhecimento usa busca lexical, sem embeddings (link e documento viram texto
+**Limitações desta entrega** (registradas, não escondidas): a IA LÊ áudio, imagem e documento
+(transcrição, descrição por visão e texto extraído) mas responde só em TEXTO — nunca manda
+mídia; PDF digitalizado sem texto real vira `empty` (transformar página em imagem e passar por
+visão é outro desenho, com outro custo); planilha, zip e apresentação não são lidos; a base de conhecimento usa busca lexical, sem embeddings (link e documento viram texto
 extraído, mas a recuperação continua por sobreposição de termos, não semântica); vídeo do
 YouTube e transcrição de áudio não entram como fonte; a pesquisa de saldo da OpenAI depende de
 Admin key; a API roda em instância única (a fila por conversa é em memória, como o scheduler).

@@ -27,6 +27,7 @@
 
 import { DEFAULT_SCHEDULE_MODE, type ScheduleMode } from "./attendance.js";
 import type { ConversationStatus, ConversationType } from "./enums.js";
+import type { AiAttachmentKind } from "./message-media.js";
 
 // ---------------------------------------------------------------------------
 // Provedores
@@ -247,15 +248,22 @@ export const AI_TRANSCRIPTION_MODELS: readonly AiTranscriptionModelInfo[] = [
 export const AI_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
 
 /**
- * Como o áudio aparece PARA O MODELO no contexto do turno. As duas marcas
- * moram aqui porque dois lugares precisam concordar palavra por palavra: o
- * motor, que monta a linha da mensagem, e o prompt, que ensina o modelo a
- * reconhecê-la. Divergindo, o modelo leria "[áudio transcrito]" sem nunca ter
- * sido avisado do que isso significa — e trataria a transcrição como se o
- * cliente tivesse digitado, sem confirmar nome, valor ou CNPJ.
+ * Como o ANEXO aparece PARA O MODELO no contexto do turno. As marcas moram aqui
+ * porque dois lugares precisam concordar palavra por palavra: o motor, que
+ * monta a linha da mensagem, e o prompt, que ensina o modelo a reconhecê-las.
+ * Divergindo, o modelo leria "[áudio transcrito]" sem nunca ter sido avisado do
+ * que isso significa — e trataria a leitura automática (que erra nome, valor e
+ * CNPJ) como se o cliente tivesse digitado.
+ *
+ * `unavailable` é tão importante quanto `ok`: sem uma marca própria para "não
+ * consegui ler", o anexo ilegível viraria um rótulo genérico e a IA seguiria a
+ * conversa como se nada tivesse sido mandado.
  */
-export const AI_AUDIO_TRANSCRIBED_LABEL = "[áudio transcrito]";
-export const AI_AUDIO_UNHEARD_LABEL = "[áudio que não foi possível transcrever]";
+export const AI_ATTACHMENT_CONTEXT_LABELS: Record<AiAttachmentKind, { ok: string; unavailable: string }> = {
+  audio: { ok: "[áudio transcrito]", unavailable: "[áudio que não foi possível transcrever]" },
+  image: { ok: "[imagem descrita]", unavailable: "[imagem que não foi possível ver]" },
+  document: { ok: "[documento lido]", unavailable: "[documento que não foi possível ler]" },
+};
 
 /**
  * Idioma informado ao provedor. A casa atende em português do Brasil, e a
@@ -273,6 +281,37 @@ export const AI_TRANSCRIPTION_LIMITS = {
   maxSeconds: 600,
   /** Teto da API de transcrição da OpenAI é 25 MB; ficamos com folga. */
   maxBytes: 24 * 1024 * 1024,
+} as const;
+
+/**
+ * A IMAGEM é lida pelo MESMO modelo de chat do agente, e por isso não tem
+ * catálogo nem configuração de modelo própria: os modelos que o atendimento já
+ * usa (linha GPT-4.1/4o/5) enxergam imagem, e o custo sai em token de entrada,
+ * já coberto por `estimateCostMicros` e pela tabela de preço do escritório.
+ * Modelo sem visão simplesmente recusa a chamada, e o anexo fica marcado como
+ * não lido — o mesmo caminho de qualquer outra falha do provedor.
+ */
+export const AI_VISION_LIMITS = {
+  /** Teto nosso, bem abaixo do que o provedor aceita: foto de celular passa longe disso. */
+  maxBytes: 8 * 1024 * 1024,
+  /**
+   * A descrição é para o modelo entender o que veio, não para virar redação:
+   * o teto de saída segura o custo de cada imagem em algo previsível.
+   */
+  maxOutputTokens: 400,
+} as const;
+
+/**
+ * DOCUMENTO é lido AQUI (pdf-parse/mammoth/texto puro, o mesmo extrator da base
+ * de conhecimento) e não custa chamada nenhuma — por isso não tem interruptor
+ * de escritório, só a capacidade do agente. PDF digitalizado sem texto real cai
+ * em `empty`: extrair imagem de página e passar por visão seria outro desenho,
+ * com outro custo, e está registrado como limitação.
+ */
+export const AI_DOCUMENT_LIMITS = {
+  maxBytes: 12 * 1024 * 1024,
+  /** Extensões que o extrator sabe abrir; o resto vira `unsupported`. */
+  extensions: ["pdf", "docx", "txt"],
 } as const;
 
 export function aiTranscriptionModelInfo(modelId: string): AiTranscriptionModelInfo | null {
@@ -466,6 +505,8 @@ export const AI_CAPABILITY_KEYS = [
   "answer_questions",
   "ask_questions",
   "listen_audio",
+  "read_images",
+  "read_documents",
   "collect_data",
   "update_contact_name",
   "add_tags",
@@ -501,6 +542,22 @@ export const AI_CAPABILITIES: readonly AiCapabilityDefinition[] = [
     label: "Ouvir áudios do cliente",
     description:
       "O áudio que o cliente manda é transcrito e entra no atendimento como texto. Desligada, a IA sabe que não ouviu e pede para o cliente escrever.",
+    tool: null,
+    default: true,
+  },
+  {
+    key: "read_images",
+    label: "Ver imagens do cliente",
+    description:
+      "A foto que o cliente manda é descrita (inclusive o texto visível nela) e entra no atendimento. Desligada, a IA sabe que não viu e pede para o cliente escrever.",
+    tool: null,
+    default: true,
+  },
+  {
+    key: "read_documents",
+    label: "Ler documentos do cliente",
+    description:
+      "PDF, DOCX e TXT recebidos têm o texto extraído e entram no atendimento. A leitura é feita aqui, sem custo de provedor.",
     tool: null,
     default: true,
   },
@@ -934,11 +991,12 @@ export function isAiMessage(metadata: unknown): metadata is AiMessageOriginMetad
 // Consumo
 // ---------------------------------------------------------------------------
 
-export const AI_USAGE_KINDS = ["chat", "transcription", "test", "connection_test", "models"] as const;
+export const AI_USAGE_KINDS = ["chat", "transcription", "vision", "test", "connection_test", "models"] as const;
 export type AiUsageKind = (typeof AI_USAGE_KINDS)[number];
 export const AI_USAGE_KIND_LABELS: Record<AiUsageKind, string> = {
   chat: "Atendimento",
   transcription: "Transcrição de áudio",
+  vision: "Leitura de imagem",
   test: "Testador",
   connection_test: "Teste de conexão",
   models: "Lista de modelos",
@@ -1003,6 +1061,8 @@ export interface AiSettingsDto {
   transcribeAudio: boolean;
   /** Modelo que transcreve; nulo na tela significa o padrão do sistema. */
   transcriptionModel: string;
+  /** Interruptor do escritório para a leitura de imagem (custa token de visão). */
+  describeImages: boolean;
   updatedAt: string | null;
 }
 

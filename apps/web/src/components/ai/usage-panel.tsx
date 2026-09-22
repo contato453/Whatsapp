@@ -169,6 +169,7 @@ function BudgetSettings({ onSaved }: { onSaved: () => Promise<void> }) {
         pricingOverrides: settings.pricingOverrides,
         transcribeAudio: settings.transcribeAudio,
         transcriptionModel: settings.transcriptionModel,
+        describeImages: settings.describeImages,
       });
       setSettings(saved);
       setFeedback({ ok: true, message: "Orçamento salvo." });

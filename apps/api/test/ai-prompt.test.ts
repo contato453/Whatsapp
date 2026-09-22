@@ -25,26 +25,38 @@ function context(overrides: Partial<PromptContext> = {}): PromptContext {
     knowledge: [{ sourceId: "s", sourceTitle: "Serviços", text: "Abertura de empresa leva 15 dias.", score: 1 }],
     today: "sábado, 6 de setembro de 2026",
     remainingAiMessages: 12,
-    audioListening: true,
+    attachmentReading: { audio: true, image: true, document: true },
     ...overrides,
   };
 }
 
 describe("buildSystemPrompt", () => {
-  it("explica o áudio transcrito quando a IA ouve, e pede texto quando não ouve", () => {
+  it("explica cada anexo que a IA lê, e pede texto para o que ela não lê", () => {
     const config = defaultAiAgentConfig();
-    // Ouvindo: o modelo tem de saber que "[áudio transcrito]" é fala passada
-    // por transcrição automática — que erra nome, número e valor.
-    const ouvindo = buildSystemPrompt(config, context({ audioListening: true }));
-    expect(ouvindo).toContain("[áudio transcrito]");
-    expect(ouvindo).toContain("[áudio que não foi possível transcrever]");
-    expect(ouvindo).toContain("confirme com o cliente");
+    // Lendo tudo: o modelo tem de saber que aquilo é leitura AUTOMÁTICA — que
+    // erra nome, número e valor — e não algo que o cliente digitou.
+    const lendo = buildSystemPrompt(
+      config,
+      context({ attachmentReading: { audio: true, image: true, document: true } }),
+    );
+    expect(lendo).toContain("[áudio transcrito]");
+    expect(lendo).toContain("[imagem descrita]");
+    expect(lendo).toContain("[documento lido]");
+    expect(lendo).toContain("confirme com o cliente");
+    // As marcas de "não consegui ler" precisam estar no prompt mesmo quando a
+    // leitura está ligada: falha de leitura acontece com a chave ligada.
+    expect(lendo).toContain("[imagem que não foi possível ver]");
 
-    // Sem ouvir, a instrução é a oposta: pedir que o cliente escreva. Sem esta
-    // seção o modelo responderia "[áudio]" como se fosse uma frase do cliente.
-    const surdo = buildSystemPrompt(config, context({ audioListening: false }));
-    expect(surdo).toContain("Você NÃO ouve áudios");
-    expect(surdo).not.toContain("[áudio transcrito]");
+    // Desligado, a instrução é a oposta: pedir por escrito. Sem esta seção o
+    // modelo trataria "[imagem]" como se fosse uma frase do cliente.
+    const semLer = buildSystemPrompt(
+      config,
+      context({ attachmentReading: { audio: false, image: false, document: false } }),
+    );
+    expect(semLer).toContain("você NÃO ouve");
+    expect(semLer).toContain("você NÃO vê");
+    expect(semLer).toContain("você NÃO lê");
+    expect(semLer).not.toContain("[áudio transcrito]");
   });
 
   it("leva objetivo, regras proibidas, gatilhos e trechos da base", () => {
