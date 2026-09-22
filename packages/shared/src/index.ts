@@ -15,6 +15,7 @@ export * from "./mentions.js";
 export * from "./message-edit.js";
 export * from "./message-media.js";
 export * from "./poll.js";
+export * from "./quality.js";
 export * from "./message-quote.js";
 export * from "./permissions.js";
 export * from "./phone.js";

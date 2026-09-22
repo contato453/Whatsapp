@@ -1009,3 +1009,35 @@ export interface CrmReportDto {
   byOrigin: CrmBreakdownRowDto[];
   lossReasons: Array<{ id: string; name: string; count: number }>;
 }
+
+// ---------------------------------------------------------------------------
+// QUALITY — avaliação do atendimento (só administrador)
+// ---------------------------------------------------------------------------
+
+/**
+ * Os DTOs do Quality vêm do shared, que é a fonte única dos catálogos (assunto,
+ * critério, confiança) usada pela API, pelo prompt e por esta tela. Reescrevê-los
+ * aqui faria a tela rotular um critério que a API não conhece.
+ */
+export type {
+  QualityActionPlanDto,
+  QualityAgentSummaryDto,
+  QualityAvailabilityDto,
+  QualityConfidence,
+  QualityCriterionKey,
+  QualityCriterionScoreDto,
+  QualityEvaluationDto,
+  QualityFailureReason,
+  QualityImprovementDto,
+  QualityItemStatus,
+  QualityMetricsDto,
+  QualityOutcome,
+  QualityRunDetailDto,
+  QualityRunDto,
+  QualityRunItemDto,
+  QualityRunStatus,
+  QualitySettingsDto,
+  QualitySkipReason,
+  QualitySubject,
+  QualityTranscriptDto,
+} from "@azvchat/shared";

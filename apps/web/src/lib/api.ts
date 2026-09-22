@@ -33,6 +33,14 @@ import type {
   ConversationStatus,
   ParticipantClientRole,
   PermissionAction,
+  QualityAgentSummaryDto,
+  QualityAvailabilityDto,
+  QualityEvaluationDto,
+  QualityRunDetailDto,
+  QualityRunDto,
+  QualitySettingsDto,
+  QualitySubject,
+  QualityTranscriptDto,
   ScheduleMode,
 } from "@azvchat/shared";
 import type { DashboardFilters } from "./dashboard-filters";
@@ -1320,5 +1328,83 @@ export const crmApi = {
     if (params.from) search.set("from", params.from);
     if (params.to) search.set("to", params.to);
     return api.get<CrmReportDto>(`/crm/reports?${search.toString()}`);
+  },
+};
+
+/**
+ * QUALITY — avaliação do atendimento pela IA.
+ *
+ * Todas as rotas são de ADMINISTRADOR e respondem 404 para qualquer outro
+ * papel: o atendente não descobre nem que o módulo existe. Nada aqui faz
+ * `fetch` solto — é o client único da casa, como todo o resto.
+ */
+/**
+ * A busca de conversas que a Inbox já usa. Ela existe aqui para o seletor de
+ * conversas do Quality reaproveitá-la em vez de nascer com uma busca própria,
+ * que divergiria da que a equipe conhece.
+ */
+export const searchApi = {
+  query: (q: string, limit = 20) =>
+    api.get<{ conversations: ConversationDto[] }>(
+      `/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    ),
+};
+
+export const qualityApi = {
+  availability: () =>
+    api.get<{ availability: QualityAvailabilityDto }>("/quality/availability").then((d) => d.availability),
+  settings: () => api.get<{ settings: QualitySettingsDto }>("/quality/settings").then((d) => d.settings),
+  saveSettings: (input: Omit<QualitySettingsDto, "updatedAt">) =>
+    api.put<{ settings: QualitySettingsDto }>("/quality/settings", input).then((d) => d.settings),
+
+  runs: (limit = 30) =>
+    api.get<{ runs: QualityRunDto[] }>(`/quality/runs?limit=${limit}`).then((d) => d.runs),
+  run: (id: string) => api.get<{ run: QualityRunDetailDto }>(`/quality/runs/${id}`).then((d) => d.run),
+  start: (input: { conversationIds: string[]; from: string; to: string }) =>
+    api.post<{ run: QualityRunDto }>("/quality/runs", input).then((d) => d.run),
+  transcripts: (runId: string, itemId: string) =>
+    api
+      .get<{ transcripts: QualityTranscriptDto[] }>(`/quality/runs/${runId}/items/${itemId}/transcripts`)
+      .then((d) => d.transcripts),
+
+  evaluations: (
+    query: {
+      userId?: string;
+      subject?: QualitySubject;
+      from?: string;
+      to?: string;
+      minScore?: number;
+      maxScore?: number;
+      includeDiscarded?: boolean;
+    } = {},
+  ) => {
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined && value !== "") search.set(key, String(value));
+    }
+    const suffix = search.toString();
+    return api
+      .get<{ evaluations: QualityEvaluationDto[] }>(`/quality/evaluations${suffix ? `?${suffix}` : ""}`)
+      .then((d) => d.evaluations);
+  },
+  discard: (id: string, comment?: string) =>
+    api
+      .post<{ evaluation: QualityEvaluationDto }>(`/quality/evaluations/${id}/discard`, { comment })
+      .then((d) => d.evaluation),
+  restore: (id: string) =>
+    api.post<{ evaluation: QualityEvaluationDto }>(`/quality/evaluations/${id}/restore`).then((d) => d.evaluation),
+  comment: (id: string, comment: string) =>
+    api
+      .patch<{ evaluation: QualityEvaluationDto }>(`/quality/evaluations/${id}/comment`, { comment })
+      .then((d) => d.evaluation),
+
+  agents: (query: { from?: string; to?: string } = {}) => {
+    const search = new URLSearchParams();
+    if (query.from) search.set("from", query.from);
+    if (query.to) search.set("to", query.to);
+    const suffix = search.toString();
+    return api
+      .get<{ agents: QualityAgentSummaryDto[] }>(`/quality/agents${suffix ? `?${suffix}` : ""}`)
+      .then((d) => d.agents);
   },
 };

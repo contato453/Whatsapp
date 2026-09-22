@@ -9,6 +9,9 @@ import type {
   InternalNote,
   Message,
   ParticipantClientRole,
+  QualityEvaluation,
+  QualityRun,
+  QualityRunItem,
   QuickReply,
   Tag,
   User,
@@ -16,7 +19,13 @@ import type {
 } from "@azvchat/database";
 import {
   formatPhone,
+  isQualityCriterionKey,
+  isQualitySubject,
   PARTICIPANT_WITHOUT_NAME_LABEL,
+  QUALITY_CONFIDENCE_LEVELS,
+  QUALITY_FAILURE_REASONS,
+  QUALITY_OUTCOMES,
+  QUALITY_SKIP_REASONS,
   quickReplyMediaTypeFromMime,
   readQuotedSnapshot,
   type AttendanceSettings,
@@ -26,6 +35,15 @@ import {
   type ConfigurableRole,
   type DashboardPeriod,
   type PermissionAction,
+  type QualityActionPlanDto,
+  type QualityConfidence,
+  type QualityCriterionScoreDto,
+  type QualityEvaluationDto,
+  type QualityFailureReason,
+  type QualityOutcome,
+  type QualityRunDto,
+  type QualityRunItemDto,
+  type QualitySkipReason,
   type UserRole,
 } from "@azvchat/shared";
 import type { OrganizationFeatures } from "./organization-features.js";
@@ -757,4 +775,147 @@ export function serializePinnedItems(
   pins: Array<Parameters<typeof serializePinnedItem>[0]>,
 ) {
   return pins.map(serializePinnedItem);
+}
+
+// ---------------------------------------------------------------------------
+// QUALITY — avaliação do atendimento (só administrador)
+// ---------------------------------------------------------------------------
+
+/**
+ * Serializadores do módulo Quality. Eles existem aqui, e não dentro da rota,
+ * pela convenção da casa: nunca devolver a entidade do Prisma crua.
+ *
+ * Nenhum destes DTOs sai por endpoint de fora do módulo, e nenhum encosta em
+ * `serializeUserDirectory`: nota, plano de ação e avaliação são do administrador
+ * e de mais ninguém — o atendente não vê nem a existência delas.
+ */
+
+export function serializeQualityRun(run: QualityRun): QualityRunDto {
+  return {
+    id: run.id,
+    status: run.status,
+    periodFrom: run.periodFrom.toISOString(),
+    periodTo: run.periodTo.toISOString(),
+    requestedByName: run.requestedByName,
+    model: run.model,
+    conversationCount: run.conversationCount,
+    failureReason: asFailureReason(run.failureReason),
+    startedAt: run.startedAt ? run.startedAt.toISOString() : null,
+    finishedAt: run.finishedAt ? run.finishedAt.toISOString() : null,
+    createdAt: run.createdAt.toISOString(),
+  };
+}
+
+export function serializeQualityEvaluation(
+  evaluation: QualityEvaluation,
+  conversationTitle: string | null,
+): QualityEvaluationDto {
+  return {
+    id: evaluation.id,
+    runId: evaluation.runId,
+    itemId: evaluation.itemId,
+    conversationId: evaluation.conversationId,
+    conversationTitle,
+    userId: evaluation.userId,
+    userName: evaluation.userName,
+    overallScore: evaluation.overallScore,
+    criteria: readQualityCriteria(evaluation.criteria),
+    // Assunto que saiu do catálogo depois de gravado cai em "outro" em vez de
+    // derrubar a leitura: linha órfã é ignorada em silêncio, como em
+    // `RolePermission.action`.
+    subject: isQualitySubject(evaluation.subject) ? evaluation.subject : "other",
+    actionPlan: readQualityActionPlan(evaluation.actionPlan),
+    confidence: readQualityConfidence(evaluation.confidence),
+    coveragePercent: evaluation.coveragePercent,
+    partial: evaluation.partial,
+    metrics: {
+      firstResponseMinutes: evaluation.firstResponseMinutes,
+      avgResponseMinutes: evaluation.avgResponseMinutes,
+      responsesMeasured: evaluation.responsesMeasured,
+      limitBreaches: evaluation.limitBreaches,
+      messagesSent: evaluation.messagesSent,
+      outcome: readQualityOutcome(evaluation.conversationOutcome),
+    },
+    discardedAt: evaluation.discardedAt ? evaluation.discardedAt.toISOString() : null,
+    adminComment: evaluation.adminComment,
+    createdAt: evaluation.createdAt.toISOString(),
+  };
+}
+
+export function serializeQualityRunItem(
+  item: QualityRunItem,
+  conversationTitle: string | null,
+  evaluations: QualityEvaluationDto[],
+): QualityRunItemDto {
+  return {
+    id: item.id,
+    conversationId: item.conversationId,
+    conversationTitle,
+    status: item.status,
+    skipReason: asSkipReason(item.skipReason),
+    failureReason: asFailureReason(item.failureReason),
+    coveragePercent: item.coveragePercent,
+    partial: item.partial,
+    truncated: item.truncated,
+    messageCount: item.messageCount,
+    audioCount: item.audioCount,
+    audioTranscribedCount: item.audioTranscribedCount,
+    promptChars: item.promptChars,
+    model: item.model,
+    costMicros: item.costMicros,
+    evaluations,
+  };
+}
+
+function readQualityCriteria(raw: unknown): QualityCriterionScoreDto[] {
+  if (!Array.isArray(raw)) return [];
+  const result: QualityCriterionScoreDto[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const value = entry as Record<string, unknown>;
+    if (!isQualityCriterionKey(value.key) || typeof value.score !== "number") continue;
+    result.push({
+      key: value.key,
+      score: value.score,
+      justification: typeof value.justification === "string" ? value.justification : "",
+      messageIds: Array.isArray(value.messageIds)
+        ? value.messageIds.filter((id): id is string => typeof id === "string")
+        : [],
+    });
+  }
+  return result;
+}
+
+function readQualityActionPlan(raw: unknown): QualityActionPlanDto {
+  const empty: QualityActionPlanDto = { improvements: [], strengths: [] };
+  if (!raw || typeof raw !== "object") return empty;
+  const value = raw as Record<string, unknown>;
+  const improvements = Array.isArray(value.improvements)
+    ? value.improvements.flatMap((entry) => {
+        if (!entry || typeof entry !== "object") return [];
+        const row = entry as Record<string, unknown>;
+        if (typeof row.point !== "string" || typeof row.action !== "string") return [];
+        return [{ point: row.point, action: row.action }];
+      })
+    : [];
+  const strengths = Array.isArray(value.strengths)
+    ? value.strengths.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  return { improvements, strengths };
+}
+
+function readQualityConfidence(raw: string): QualityConfidence {
+  return QUALITY_CONFIDENCE_LEVELS.find((level) => level === raw) ?? "low";
+}
+
+function readQualityOutcome(raw: string): QualityOutcome {
+  return QUALITY_OUTCOMES.find((outcome) => outcome === raw) ?? "ongoing";
+}
+
+function asSkipReason(raw: string | null): QualitySkipReason | null {
+  return QUALITY_SKIP_REASONS.find((reason) => reason === raw) ?? null;
+}
+
+function asFailureReason(raw: string | null): QualityFailureReason | null {
+  return QUALITY_FAILURE_REASONS.find((reason) => reason === raw) ?? null;
 }

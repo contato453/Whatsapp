@@ -102,7 +102,17 @@ export const RealtimeEvents = {
    * Vai para a sala da organização (só administradores a ouvem).
    */
   AiBudgetAlert: "ai:budget-alert",
+  /**
+   * Um disparo de análise do QUALITY mudou de estado (na fila → transcrevendo →
+   * analisando → concluída/falhou). Vai SÓ para a sala da organização, que é a
+   * sala de administrador — nenhum atendente pode saber que a avaliação existe.
+   * Carrega o disparo inteiro, nunca um patch: a tela troca a linha da lista.
+   */
+  QualityRun: "quality:run",
 } as const;
+
+/** Estado de um disparo de análise do Quality. Só administradores ouvem. */
+export type { QualityRunPayload } from "./quality.js";
 
 /** Sessão de IA de uma conversa mudou. `session` nulo = nenhuma sessão. */
 export interface AiSessionPayload {

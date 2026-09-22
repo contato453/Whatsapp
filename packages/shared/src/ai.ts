@@ -1003,7 +1003,7 @@ export function isAiMessage(metadata: unknown): metadata is AiMessageOriginMetad
 // Consumo
 // ---------------------------------------------------------------------------
 
-export const AI_USAGE_KINDS = ["chat", "transcription", "vision", "test", "connection_test", "models"] as const;
+export const AI_USAGE_KINDS = ["chat", "transcription", "vision", "test", "connection_test", "models", "quality"] as const;
 export type AiUsageKind = (typeof AI_USAGE_KINDS)[number];
 export const AI_USAGE_KIND_LABELS: Record<AiUsageKind, string> = {
   chat: "Atendimento",
@@ -1012,6 +1012,7 @@ export const AI_USAGE_KIND_LABELS: Record<AiUsageKind, string> = {
   test: "Testador",
   connection_test: "Teste de conexão",
   models: "Lista de modelos",
+  quality: "Avaliação de qualidade",
 };
 
 export const AI_USAGE_OUTCOMES = ["ok", "error", "timeout", "blocked"] as const;
