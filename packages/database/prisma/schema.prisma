@@ -12,8 +12,8 @@ datasource db {
 // ============================================================
 
 model Organization {
-  id        String   @id @default(uuid())
-  name      String
+  id         String   @id @default(uuid())
+  name       String
   /// O CRM (Kanban) está ligado para este escritório?
   ///
   /// Interruptor do MÓDULO, e não permissão: permissão diz o que cada perfil
@@ -25,9 +25,9 @@ model Organization {
   /// Nasce LIGADO: quem já tem funil montado não pode perder a tela num
   /// deploy. Desligar NUNCA apaga dado — funis, oportunidades e histórico
   /// continuam no banco esperando alguém religar.
-  crmEnabled Boolean @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  crmEnabled Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   users                User[]
   departments          Department[]
@@ -59,13 +59,17 @@ model Organization {
   aiAutomations        AiAutomation[]
   aiSessions           AiSession[]
   aiUsageLogs          AiUsageLog[]
-  crmPipelines        CrmPipeline[]
-  crmStages           CrmStage[]
-  crmOpportunities    CrmOpportunity[]
-  crmActivities       CrmActivity[]
+  crmPipelines         CrmPipeline[]
+  crmStages            CrmStage[]
+  crmOpportunities     CrmOpportunity[]
+  crmActivities        CrmActivity[]
   crmOpportunityEvents CrmOpportunityEvent[]
-  crmProducts         CrmProduct[]
-  crmLossReasons      CrmLossReason[]
+  crmProducts          CrmProduct[]
+  crmLossReasons       CrmLossReason[]
+  qualitySettings      QualitySettings?
+  qualityRuns          QualityRun[]
+  qualityRunItems      QualityRunItem[]
+  qualityEvaluations   QualityEvaluation[]
 
   @@map("organizations")
 }
@@ -122,41 +126,45 @@ model User {
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
-  organization          Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  assignedConversations Conversation[]                  @relation("AssignedConversations")
-  archivedConversations Conversation[]                  @relation("ArchivedConversations")
-  sentMessages          Message[]
-  internalNotes         InternalNote[]
-  performedAssignments  ConversationAssignmentHistory[] @relation("PerformedAssignments")
-  auditLogs             AuditLog[]
-  quickReplies          QuickReply[]
-  scheduledMessages     ScheduledMessage[]
-  whatsappAccess        UserWhatsAppInstance[]
-  departmentAccess      UserDepartment[]
-  defaultForDepartments Department[]                    @relation("DepartmentDefaultAssignee")
-  defaultForInstances   WhatsAppInstance[]              @relation("InstanceDefaultAssignee")
-  permissionChanges     RolePermission[]                @relation("RolePermissionUpdatedBy")
-  conversationReads     ConversationRead[]
-  pinnedItems           PinnedItem[]
-  integrationTokens     IntegrationToken[]              @relation("IntegrationTokenCreatedBy")
-  followUpRulesCreated  FollowUpRule[]                  @relation("FollowUpRuleCreatedBy")
-  followUpLogActions    FollowUpExecutionLog[]          @relation("FollowUpExecutionLogActor")
-  aiAgentsCreated       AiAgent[]                       @relation("AiAgentCreatedBy")
-  aiAgentsUpdated       AiAgent[]                       @relation("AiAgentUpdatedBy")
-  aiAgentVersions       AiAgentVersion[]                @relation("AiAgentVersionCreatedBy")
-  aiHandoffTargets      AiAgent[]                       @relation("AiAgentHandoffAssignee")
-  aiSessionsEnded       AiSession[]                     @relation("AiSessionEndedBy")
-  aiSettingsUpdated     AiSettings[]                    @relation("AiSettingsUpdatedBy")
-  aiKnowledgeCreated    AiKnowledgeSource[]             @relation("AiKnowledgeCreatedBy")
-  crmPipelinesCreated   CrmPipeline[]                   @relation("CrmPipelineCreatedBy")
-  crmPipelinesFixedFor  CrmPipeline[]                   @relation("CrmPipelineFixedAssignee")
-  crmPipelineAssignees  CrmPipelineAssignee[]           @relation("CrmPipelineAssignees")
-  crmStageActions       CrmStageAction[]                @relation("CrmStageActionUser")
-  crmAssignedOpportunities CrmOpportunity[]             @relation("CrmAssignedOpportunities")
-  crmCreatedOpportunities  CrmOpportunity[]             @relation("CrmCreatedOpportunities")
-  crmAssignedActivities CrmActivity[]                   @relation("CrmAssignedActivities")
-  crmCompletedActivities CrmActivity[]                  @relation("CrmCompletedActivities")
-  crmPerformedEvents    CrmOpportunityEvent[]           @relation("CrmPerformedEvents")
+  organization                Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignedConversations       Conversation[]                  @relation("AssignedConversations")
+  archivedConversations       Conversation[]                  @relation("ArchivedConversations")
+  sentMessages                Message[]
+  internalNotes               InternalNote[]
+  performedAssignments        ConversationAssignmentHistory[] @relation("PerformedAssignments")
+  auditLogs                   AuditLog[]
+  quickReplies                QuickReply[]
+  scheduledMessages           ScheduledMessage[]
+  whatsappAccess              UserWhatsAppInstance[]
+  departmentAccess            UserDepartment[]
+  defaultForDepartments       Department[]                    @relation("DepartmentDefaultAssignee")
+  defaultForInstances         WhatsAppInstance[]              @relation("InstanceDefaultAssignee")
+  permissionChanges           RolePermission[]                @relation("RolePermissionUpdatedBy")
+  conversationReads           ConversationRead[]
+  pinnedItems                 PinnedItem[]
+  integrationTokens           IntegrationToken[]              @relation("IntegrationTokenCreatedBy")
+  followUpRulesCreated        FollowUpRule[]                  @relation("FollowUpRuleCreatedBy")
+  followUpLogActions          FollowUpExecutionLog[]          @relation("FollowUpExecutionLogActor")
+  aiAgentsCreated             AiAgent[]                       @relation("AiAgentCreatedBy")
+  aiAgentsUpdated             AiAgent[]                       @relation("AiAgentUpdatedBy")
+  aiAgentVersions             AiAgentVersion[]                @relation("AiAgentVersionCreatedBy")
+  aiHandoffTargets            AiAgent[]                       @relation("AiAgentHandoffAssignee")
+  aiSessionsEnded             AiSession[]                     @relation("AiSessionEndedBy")
+  aiSettingsUpdated           AiSettings[]                    @relation("AiSettingsUpdatedBy")
+  aiKnowledgeCreated          AiKnowledgeSource[]             @relation("AiKnowledgeCreatedBy")
+  crmPipelinesCreated         CrmPipeline[]                   @relation("CrmPipelineCreatedBy")
+  crmPipelinesFixedFor        CrmPipeline[]                   @relation("CrmPipelineFixedAssignee")
+  crmPipelineAssignees        CrmPipelineAssignee[]           @relation("CrmPipelineAssignees")
+  crmStageActions             CrmStageAction[]                @relation("CrmStageActionUser")
+  crmAssignedOpportunities    CrmOpportunity[]                @relation("CrmAssignedOpportunities")
+  crmCreatedOpportunities     CrmOpportunity[]                @relation("CrmCreatedOpportunities")
+  crmAssignedActivities       CrmActivity[]                   @relation("CrmAssignedActivities")
+  crmCompletedActivities      CrmActivity[]                   @relation("CrmCompletedActivities")
+  crmPerformedEvents          CrmOpportunityEvent[]           @relation("CrmPerformedEvents")
+  qualitySettingsUpdated      QualitySettings[]               @relation("QualitySettingsUpdatedBy")
+  qualityRunsRequested        QualityRun[]                    @relation("QualityRunRequestedBy")
+  qualityEvaluations          QualityEvaluation[]             @relation("QualityEvaluationUser")
+  qualityEvaluationsDiscarded QualityEvaluation[]             @relation("QualityEvaluationDiscardedBy")
 
   @@index([organizationId])
   @@map("users")
@@ -200,9 +208,9 @@ model Department {
   aiHandoffAgents   AiAgent[]                @relation("AiAgentHandoffDepartment")
   aiAutomations     AiAutomation[]
   aiUsageLogs       AiUsageLog[]
-  crmPipelineLinks CrmPipelineDepartment[]
-  crmOpportunities CrmOpportunity[]
-  crmStageActions  CrmStageAction[]      @relation("CrmStageActionDepartment")
+  crmPipelineLinks  CrmPipelineDepartment[]
+  crmOpportunities  CrmOpportunity[]
+  crmStageActions   CrmStageAction[]         @relation("CrmStageActionDepartment")
 
   @@unique([organizationId, name])
   @@map("departments")
@@ -518,6 +526,8 @@ model Conversation {
   /// Oportunidades do CRM abertas a partir desta conversa. A conversa é a
   /// FONTE do contato — o CRM não copia nome, telefone nem empresa.
   crmOpportunities       CrmOpportunity[]
+  qualityRunItems        QualityRunItem[]
+  qualityEvaluations     QualityEvaluation[]
 
   @@unique([whatsappInstanceId, externalChatId])
   @@index([organizationId, status])
@@ -749,18 +759,18 @@ model Tag {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization          Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  departments           TagDepartment[]
-  conversations         ConversationTag[]
-  followUpSteps         FollowUpRuleStep[]
-  followUpFinalizeRules FollowUpRule[]
-  aiAutomations         AiAutomation[]
+  organization           Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  departments            TagDepartment[]
+  conversations          ConversationTag[]
+  followUpSteps          FollowUpRuleStep[]
+  followUpFinalizeRules  FollowUpRule[]
+  aiAutomations          AiAutomation[]
   /// Usos da etiqueta no CRM: nas oportunidades, nas automações de etapa e
   /// como gatilho de criação automática de oportunidade. É a MESMA etiqueta
   /// da conversa — o CRM nunca teve lista própria.
-  crmOpportunities   CrmOpportunityTag[]
-  crmStageActions    CrmStageAction[] @relation("CrmStageActionTag")
-  crmAutoCreatePipelines CrmPipeline[] @relation("CrmPipelineAutoCreateTag")
+  crmOpportunities       CrmOpportunityTag[]
+  crmStageActions        CrmStageAction[]    @relation("CrmStageActionTag")
+  crmAutoCreatePipelines CrmPipeline[]       @relation("CrmPipelineAutoCreateTag")
 
   // Nome único na organização inteira: a etiqueta aparece na conversa sem
   // dizer de qual departamento é, então dois "URGENTE" seriam indistinguíveis.
@@ -904,17 +914,17 @@ enum ScheduledMessageStatus {
 }
 
 model ScheduledMessage {
-  id             String                 @id @default(uuid())
-  organizationId String
-  conversationId String
-  content        String
-  scheduledFor   DateTime
-  status         ScheduledMessageStatus @default(pending)
-  createdById    String?
-  sentMessageId  String?
-  error          String?
+  id               String                 @id @default(uuid())
+  organizationId   String
+  conversationId   String
+  content          String
+  scheduledFor     DateTime
+  status           ScheduledMessageStatus @default(pending)
+  createdById      String?
+  sentMessageId    String?
+  error            String?
   /// Tentativas de envio já realizadas (falhas temporárias são retentadas)
-  attempts       Int                    @default(0)
+  attempts         Int                    @default(0)
   /// Follow-up do CRM: qual oportunidade agendou esta mensagem. Nulo = o
   /// agendamento normal do composer, feito por uma pessoa.
   ///
@@ -924,12 +934,12 @@ model ScheduledMessage {
   /// com o cliente nunca é desmarcado pelo CRM. O motor de envio continua
   /// sendo um só (`services/scheduler.ts`): o CRM não tem agendador próprio.
   crmOpportunityId String?
-  createdAt      DateTime               @default(now())
-  updatedAt      DateTime               @updatedAt
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  createdBy    User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation   Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  createdBy      User?           @relation(fields: [createdById], references: [id], onDelete: SetNull)
   crmOpportunity CrmOpportunity? @relation(fields: [crmOpportunityId], references: [id], onDelete: SetNull)
 
   @@index([status, scheduledFor])
@@ -1384,25 +1394,25 @@ model IntegrationMessageLog {
 /// significa geral — excluir um departamento tornaria um funil restrito
 /// visível para todo mundo sem ninguém perceber (ver `lib/department-resource.ts`).
 model CrmPipeline {
-  id             String   @id @default(uuid())
-  organizationId String
-  name           String
-  description    String?
+  id                    String            @id @default(uuid())
+  organizationId        String
+  name                  String
+  description           String?
   /// Cor de identificação do funil na tela (hex). Dado de cadastro, não tema.
-  color          String   @default("#102a4c")
+  color                 String            @default("#102a4c")
   /// Funil desligado some dos seletores mas mantém o histórico de pé — o
   /// mesmo motivo de revogar token em vez de apagar.
-  isActive       Boolean  @default(true)
+  isActive              Boolean           @default(true)
   /// Vale para todos os departamentos (ver acima).
-  isGeneral      Boolean  @default(false)
+  isGeneral             Boolean           @default(false)
   /// Ordem na lista de funis.
-  position       Int      @default(0)
+  position              Int               @default(0)
   /// Funil que abre quando ninguém escolheu nenhum. Um por organização, mas
   /// sem constraint: a leitura pega o primeiro, então dois marcados degradam
   /// para "abre o de menor posição", nunca para erro na cara do usuário.
-  isDefault      Boolean  @default(false)
+  isDefault             Boolean           @default(false)
   /// Como este funil distribui as oportunidades novas (ver `CrmAssignmentMode`).
-  assignmentMode  CrmAssignmentMode @default(inherit_conversation)
+  assignmentMode        CrmAssignmentMode @default(inherit_conversation)
   /// Alvo do modo `fixed`. Ignorado nos demais modos.
   assignmentFixedUserId String?
   /// Contador do rodízio. É INCREMENTADO ATOMICAMENTE no banco (`increment`) e
@@ -1411,27 +1421,27 @@ model CrmPipeline {
   /// "o último que recebeu" e calcular o próximo em memória perderia essa
   /// corrida em silêncio, e o rodízio passaria a entregar dois leads seguidos
   /// para a mesma pessoa sem ninguém entender por quê.
-  assignmentCursor Int              @default(0)
+  assignmentCursor      Int               @default(0)
   /// Etiqueta que CRIA oportunidade sozinha: pendurada numa conversa, o
   /// sistema abre um card na primeira etapa deste funil. Nulo = criação
   /// automática desligada. Reusa a etiqueta que o escritório já tem — não
   /// existe gatilho paralelo nem lista de palavras-chave.
-  autoCreateTagId String?
-  createdById    String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  autoCreateTagId       String?
+  createdById           String?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
 
-  organization  Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  autoCreateTag Tag?                    @relation("CrmPipelineAutoCreateTag", fields: [autoCreateTagId], references: [id], onDelete: SetNull)
-  createdBy     User?                   @relation("CrmPipelineCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  assignmentFixedUser User?             @relation("CrmPipelineFixedAssignee", fields: [assignmentFixedUserId], references: [id], onDelete: SetNull)
-  departments   CrmPipelineDepartment[]
+  organization        Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  autoCreateTag       Tag?                    @relation("CrmPipelineAutoCreateTag", fields: [autoCreateTagId], references: [id], onDelete: SetNull)
+  createdBy           User?                   @relation("CrmPipelineCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  assignmentFixedUser User?                   @relation("CrmPipelineFixedAssignee", fields: [assignmentFixedUserId], references: [id], onDelete: SetNull)
+  departments         CrmPipelineDepartment[]
   /// Quem participa do rodízio deste funil. VAZIO significa "todo mundo que
   /// enxerga a conversa" — e não "ninguém": lista vazia bloquearia a
   /// distribuição inteira no dia em que alguém saísse do cadastro.
-  assignees     CrmPipelineAssignee[]
-  stages        CrmStage[]
-  opportunities CrmOpportunity[]
+  assignees           CrmPipelineAssignee[]
+  stages              CrmStage[]
+  opportunities       CrmOpportunity[]
 
   @@unique([organizationId, name])
   @@index([organizationId, isActive])
@@ -1559,28 +1569,28 @@ enum CrmStageActionType {
 /// excluir a etiqueta apaga a ação junto em vez de deixar uma automação
 /// apontando para o nada e falhando toda vez que o card se mexe.
 model CrmStageAction {
-  id           String                @id @default(uuid())
-  stageId      String
-  trigger      CrmStageActionTrigger @default(enter)
-  type         CrmStageActionType
+  id             String                @id @default(uuid())
+  stageId        String
+  trigger        CrmStageActionTrigger @default(enter)
+  type           CrmStageActionType
   /// Alvo de `add_tag` / `remove_tag` — a etiqueta que o escritório já usa.
-  tagId        String?
+  tagId          String?
   /// Alvo de `assign_user`.
-  userId       String?
+  userId         String?
   /// Alvo de `change_department`.
-  departmentId String?
+  departmentId   String?
   /// `schedule_message`: quanto tempo depois da entrada a mensagem sai.
   /// `create_activity`: prazo da atividade. Em minutos, para caber "2 horas"
   /// e "3 dias" no mesmo campo.
-  delayMinutes Int                   @default(0)
+  delayMinutes   Int                   @default(0)
   /// Texto da mensagem agendada, da nota interna ou título da atividade.
-  content      String?
+  content        String?
   /// Regra de distribuição de `auto_assign`. Nulo = usa a regra configurada no
   /// funil. Campo próprio (e não o `content`) porque é enum de verdade: a
   /// gravação recusa valor inventado, e a tela monta o seletor do catálogo.
   assignmentMode CrmAssignmentMode?
-  position     Int                   @default(0)
-  createdAt    DateTime              @default(now())
+  position       Int                   @default(0)
+  createdAt      DateTime              @default(now())
 
   stage      CrmStage    @relation(fields: [stageId], references: [id], onDelete: Cascade)
   tag        Tag?        @relation("CrmStageActionTag", fields: [tagId], references: [id], onDelete: Cascade)
@@ -1652,63 +1662,63 @@ model CrmLossReason {
 /// ter duas oportunidades ABERTAS no MESMO funil — que é o caso de duplicata
 /// de verdade (dois cliques no botão, dois webhooks, automação repetida).
 model CrmOpportunity {
-  id             String               @id @default(uuid())
-  organizationId String
-  pipelineId     String
-  stageId        String
-  title          String
+  id                String               @id @default(uuid())
+  organizationId    String
+  pipelineId        String
+  stageId           String
+  title             String
   /// A conversa do WhatsApp. Nulo = lead avulso, ainda sem conversa.
-  conversationId String?
+  conversationId    String?
   /// Telefone/nome do lead avulso, ou a cópia de exibição do contato.
-  contactName    String?
-  contactPhone   String?
-  assignedUserId String?
+  contactName       String?
+  contactPhone      String?
+  assignedUserId    String?
   /// Departamento da oportunidade — herdado da conversa na criação. É por ele
   /// (mais o responsável) que o recorte de visibilidade acontece, com a mesma
   /// forma de `conversationScope`. Nulo = sem departamento, visível a quem
   /// alcança a conversa, igual à conversa sem departamento.
-  departmentId   String?
-  productId      String?
-  value          Decimal              @default(0) @db.Decimal(12, 2)
-  discount       Decimal?             @db.Decimal(12, 2)
+  departmentId      String?
+  productId         String?
+  value             Decimal              @default(0) @db.Decimal(12, 2)
+  discount          Decimal?             @db.Decimal(12, 2)
   /// Chance de fechamento definida à mão. Nulo = vale a probabilidade da
   /// etapa. Mover de etapa NÃO apaga o ajuste manual: apagar faria a correção
   /// de quem está negociando sumir no meio de um arrasto.
-  probability    Int?
+  probability       Int?
   expectedCloseDate DateTime?
   /// Chave de `CRM_ORIGINS` (@azvchat/shared). Texto e não enum: origem nova
   /// (uma campanha, um evento) não pode exigir migration.
-  origin         String?
-  status         CrmOpportunityStatus @default(open)
-  lossReasonId   String?
-  lossNote       String?
+  origin            String?
+  status            CrmOpportunityStatus @default(open)
+  lossReasonId      String?
+  lossNote          String?
   /// Valor efetivamente fechado, registrado no ganho. Separado de `value`
   /// porque o estimado é o que se previu e este é o que aconteceu — sobrescrever
   /// um com o outro apagaria a diferença que o relatório mede.
-  closedValue    Decimal?             @db.Decimal(12, 2)
-  closedAt       DateTime?
-  notes          String?
+  closedValue       Decimal?             @db.Decimal(12, 2)
+  closedAt          DateTime?
+  notes             String?
   /// Ordem dentro da coluna, espaçada (ver CRM_POSITION_STEP no shared).
-  position       Float                @default(1000)
+  position          Float                @default(1000)
   /// Quando entrou na etapa atual — é daqui que sai "2 dias nesta etapa" e o
   /// alerta de oportunidade parada.
-  stageEnteredAt DateTime             @default(now())
+  stageEnteredAt    DateTime             @default(now())
   /// Última mensagem do cliente na conversa vinculada. Alimenta o card e o
   /// cancelamento de follow-up.
   lastInteractionAt DateTime?
-  createdById    String?
-  createdAt      DateTime             @default(now())
-  updatedAt      DateTime             @updatedAt
+  createdById       String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
 
-  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  pipeline     CrmPipeline            @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
-  stage        CrmStage               @relation(fields: [stageId], references: [id], onDelete: Restrict)
-  conversation Conversation?          @relation(fields: [conversationId], references: [id], onDelete: SetNull)
-  assignedUser User?                  @relation("CrmAssignedOpportunities", fields: [assignedUserId], references: [id], onDelete: SetNull)
-  department   Department?            @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  product      CrmProduct?            @relation(fields: [productId], references: [id], onDelete: SetNull)
-  lossReason   CrmLossReason?         @relation(fields: [lossReasonId], references: [id], onDelete: SetNull)
-  createdBy    User?                  @relation("CrmCreatedOpportunities", fields: [createdById], references: [id], onDelete: SetNull)
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  pipeline     CrmPipeline           @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  stage        CrmStage              @relation(fields: [stageId], references: [id], onDelete: Restrict)
+  conversation Conversation?         @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  assignedUser User?                 @relation("CrmAssignedOpportunities", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  department   Department?           @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  product      CrmProduct?           @relation(fields: [productId], references: [id], onDelete: SetNull)
+  lossReason   CrmLossReason?        @relation(fields: [lossReasonId], references: [id], onDelete: SetNull)
+  createdBy    User?                 @relation("CrmCreatedOpportunities", fields: [createdById], references: [id], onDelete: SetNull)
   tags         CrmOpportunityTag[]
   activities   CrmActivity[]
   events       CrmOpportunityEvent[]
@@ -1919,12 +1929,12 @@ enum AutomationExecutionStatus {
 /// nova e aponta `publishedVersionId` para ela; o rascunho pode seguir sendo
 /// editado por cima sem afetar quem já está publicado.
 model AutomationFlow {
-  id                 String                @id @default(uuid())
+  id                 String                 @id @default(uuid())
   organizationId     String
   name               String
   description        String?
-  status             AutomationFlowStatus  @default(draft)
-  triggerType        AutomationTriggerType @default(new_message)
+  status             AutomationFlowStatus   @default(draft)
+  triggerType        AutomationTriggerType  @default(new_message)
   /// Config extra do gatilho (ex.: lista de palavras-chave do tipo `keyword`,
   /// minutos do tipo `no_reply_timeout`, id da etiqueta de `tag_added`).
   triggerConfig      Json?
@@ -1933,12 +1943,12 @@ model AutomationFlow {
   /// Ordem de disputa entre fluxos cujo gatilho combina ao mesmo tempo
   /// (seção 27) — MENOR NÚMERO VENCE. Fluxo específico de palavra-chave nasce
   /// com prioridade menor (mais forte) que o atendimento geral, por padrão.
-  priority           Int                   @default(100)
+  priority           Int                    @default(100)
   /// Intervalo mínimo, em minutos, entre duas execuções DESTE fluxo para a
   /// MESMA conversa — trava contra saudação/fluxo repetindo a cada mensagem
   /// (seção 26). Zero = sem trava própria (o motor ainda impede duas
   /// execuções ATIVAS simultâneas da mesma conversa, ver `AutomationExecution`).
-  cooldownMinutes    Int                   @default(0)
+  cooldownMinutes    Int                    @default(0)
   /// A qualquer hora (padrão, o comportamento de sempre), só dentro ou só
   /// fora do expediente cadastrado em Parâmetros — mesma régua do agente de
   /// IA (`AiAgentConfig.advanced.scheduleMode`) e do mesmo `AttendanceSettings`
@@ -1947,11 +1957,11 @@ model AutomationFlow {
   /// (ou nenhum) responde por ele.
   scheduleMode       AutomationScheduleMode @default(always)
   draftGraph         Json
-  publishedVersionId String?               @unique
+  publishedVersionId String?                @unique
   createdById        String?
   updatedById        String?
-  createdAt          DateTime              @default(now())
-  updatedAt          DateTime              @updatedAt
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
 
   organization     Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   whatsappInstance WhatsAppInstance?       @relation(fields: [whatsappInstanceId], references: [id], onDelete: SetNull)
@@ -2126,6 +2136,10 @@ enum AiUsageKind {
   test
   connection_test
   models
+  /// Avaliação do módulo Quality. Tipo próprio, e não `chat`: somá-la ao
+  /// atendimento faria o custo por turno de conversa deixar de fechar, o mesmo
+  /// defeito que a separação de `transcription` e `vision` já evitou.
+  quality
 }
 
 enum AiUsageOutcome {
@@ -2133,6 +2147,31 @@ enum AiUsageOutcome {
   error
   timeout
   blocked
+}
+
+/// Estado de um disparo de análise do Quality, como a tela o mostra.
+/// `transcribing` e `analyzing` são separados de propósito: são dois PASSOS
+/// distintos (ver `services/quality/`), e quem olha a tela precisa saber em
+/// qual deles o disparo está — transcrever áudio longo demora mais que avaliar.
+enum QualityRunStatus {
+  queued
+  transcribing
+  analyzing
+  completed
+  failed
+}
+
+/// Estado de UMA conversa dentro do disparo. Tem dois estados que o disparo não
+/// tem: `skipped` (não havia o que avaliar — nenhuma mensagem do atendente, ou
+/// só áudio intranscrevível) e `failed` de uma conversa só, que não derruba as
+/// demais do mesmo disparo.
+enum QualityItemStatus {
+  queued
+  transcribing
+  analyzing
+  completed
+  skipped
+  failed
 }
 
 /// Credencial de um provedor de IA, por organização. A chave é gravada
@@ -2450,4 +2489,156 @@ model AiUsageLog {
   @@index([organizationId, createdAt])
   @@index([agentId, createdAt])
   @@map("ai_usage_logs")
+}
+
+// ---------------------------------------------------------------------------
+// QUALITY — avaliação do atendimento pela IA (só administrador)
+// ---------------------------------------------------------------------------
+
+/// Tetos do módulo Quality, uma linha por organização.
+///
+/// Configuráveis porque o custo é do escritório: quantas conversas cabem num
+/// disparo, até quanto de áudio vale transcrever e qual cobertura mínima faz a
+/// avaliação NÃO sair marcada como parcial. Lidos a cada disparo, sem cache —
+/// mesma regra dos parâmetros de atendimento, e pelo mesmo motivo: em cache, o
+/// teto novo só valeria depois de reiniciar o contêiner.
+model QualitySettings {
+  id                     String   @id @default(uuid())
+  organizationId         String   @unique
+  maxConversationsPerRun Int      @default(20)
+  /// Áudio mais longo que isto entra como MARCADOR com a duração, e pesa
+  /// contra a cobertura — transcrever reunião gravada estouraria contexto e custo.
+  maxAudioSeconds        Int      @default(600)
+  /// Abaixo disso a avaliação sai marcada como PARCIAL.
+  minCoveragePercent     Int      @default(60)
+  /// Nulo = modelo padrão do provedor já configurado.
+  model                  String?
+  updatedById            String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  updatedBy    User?        @relation("QualitySettingsUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@map("quality_settings")
+}
+
+/// UM disparo: as conversas escolhidas mais o período. Nada roda sozinho — o
+/// administrador aciona, e é isso que mantém o custo sob controle.
+model QualityRun {
+  id                String           @id @default(uuid())
+  organizationId    String
+  status            QualityRunStatus @default(queued)
+  periodFrom        DateTime
+  periodTo          DateTime
+  requestedById     String?
+  /// Nome copiado na hora do disparo: administrador removido do cadastro não
+  /// apaga a autoria, que é justamente o que a auditoria precisa responder.
+  requestedByName   String
+  model             String
+  conversationCount Int              @default(0)
+  failureReason     String?
+  startedAt         DateTime?
+  finishedAt        DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  requestedBy  User?               @relation("QualityRunRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  items        QualityRunItem[]
+  evaluations  QualityEvaluation[]
+
+  @@index([organizationId, createdAt])
+  @@map("quality_runs")
+}
+
+/// Uma conversa dentro de um disparo: o estado que a tela mostra e a COBERTURA
+/// (quanto da conversa chegou legível à avaliação). Motivos são CÓDIGO, nunca
+/// frase montada no banco — a tela traduz, e o texto muda sem migration.
+model QualityRunItem {
+  id                    String            @id @default(uuid())
+  organizationId        String
+  runId                 String
+  conversationId        String
+  status                QualityItemStatus @default(queued)
+  skipReason            String?
+  failureReason         String?
+  coveragePercent       Int?
+  partial               Boolean           @default(false)
+  truncated             Boolean           @default(false)
+  messageCount          Int               @default(0)
+  audioCount            Int               @default(0)
+  audioTranscribedCount Int               @default(0)
+  /// Tamanho do material enviado à IA, em caracteres. SÓ o tamanho: o material
+  /// em si nunca é gravado nem logado.
+  promptChars           Int               @default(0)
+  model                 String?
+  inputTokens           Int               @default(0)
+  outputTokens          Int               @default(0)
+  costMicros            Int?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  run          QualityRun          @relation(fields: [runId], references: [id], onDelete: Cascade)
+  conversation Conversation        @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  evaluations  QualityEvaluation[]
+
+  @@unique([runId, conversationId])
+  @@index([organizationId, status])
+  @@map("quality_run_items")
+}
+
+/// A avaliação de UM atendente numa conversa e período.
+///
+/// Mais de um atendente no período rende uma linha por pessoa, cada uma com o
+/// contexto da conversa inteira — a atuação é individual, o contexto não.
+/// Métricas objetivas ficam em COLUNA (a visão por atendente filtra e soma por
+/// elas); notas por critério e plano de ação ficam em JSON, porque só são lidos
+/// inteiros, no detalhe.
+model QualityEvaluation {
+  id                   String    @id @default(uuid())
+  organizationId       String
+  runId                String
+  itemId               String
+  conversationId       String
+  userId               String?
+  /// Nome copiado: atendente desativado continua legível para o administrador.
+  userName             String
+  overallScore         Float
+  criteria             Json
+  /// Catálogo FECHADO em `@azvchat/shared`. Texto, e não enum, pelo mesmo
+  /// motivo de `role_permissions.action`: assunto novo não exige migration, e
+  /// assunto que saiu do catálogo é ignorado em silêncio pela leitura.
+  subject              String
+  actionPlan           Json
+  confidence           String
+  coveragePercent      Int       @default(100)
+  partial              Boolean   @default(false)
+  /// Minutos de EXPEDIENTE (a mesma régua do card de atraso), nunca de relógio.
+  firstResponseMinutes Int?
+  avgResponseMinutes   Int?
+  responsesMeasured    Int       @default(0)
+  limitBreaches        Int       @default(0)
+  messagesSent         Int       @default(0)
+  conversationOutcome  String
+  /// Descarte é do administrador e não apaga a linha; o comentário dele NUNCA
+  /// altera a nota — a nota é da IA, por decisão do desenho.
+  discardedAt          DateTime?
+  discardedByUserId    String?
+  adminComment         String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  run          QualityRun     @relation(fields: [runId], references: [id], onDelete: Cascade)
+  item         QualityRunItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  conversation Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User?          @relation("QualityEvaluationUser", fields: [userId], references: [id], onDelete: SetNull)
+  discardedBy  User?          @relation("QualityEvaluationDiscardedBy", fields: [discardedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, userId, createdAt])
+  @@index([organizationId, subject])
+  @@index([itemId])
+  @@map("quality_evaluations")
 }

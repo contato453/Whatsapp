@@ -58,6 +58,16 @@ const RELATIONS: Record<string, Record<string, Relation>> = {
     steps: { foreignKey: "ruleId", table: "followUpRuleStep", many: true },
   },
   aiKnowledgeSource: { agents: { foreignKey: "sourceId", table: "aiAgentKnowledgeSource", many: true } },
+  qualityRun: {
+    items: { foreignKey: "runId", table: "qualityRunItem", many: true },
+    evaluations: { foreignKey: "runId", table: "qualityEvaluation", many: true },
+  },
+  qualityRunItem: {
+    run: { localKey: "runId", table: "qualityRun" },
+    conversation: { localKey: "conversationId", table: "conversation" },
+    evaluations: { foreignKey: "itemId", table: "qualityEvaluation", many: true },
+  },
+  qualityEvaluation: { conversation: { localKey: "conversationId", table: "conversation" } },
   attendanceSettings: {
     businessHours: { foreignKey: "settingsId", table: "attendanceBusinessHours", many: true },
     loginHours: { foreignKey: "settingsId", table: "attendanceLoginHours", many: true },
@@ -84,6 +94,7 @@ export class MemoryPrisma {
       "aiAgentKnowledgeSource", "aiAutomation", "aiSession", "aiUsageLog",
       "followUpRule", "followUpRuleDepartment", "followUpRuleStep", "followUpExecution", "followUpExecutionLog",
       "automationFlow", "automationExecution",
+      "qualitySettings", "qualityRun", "qualityRunItem", "qualityEvaluation",
     ]) {
       this.tables.set(name, []);
     }
@@ -231,6 +242,36 @@ export class MemoryPrisma {
       row.timestamp ??= new Date();
       row.deletedAt ??= null;
       row.metadata ??= null;
+    }
+    if (table === "qualityRun") {
+      row.status ??= "queued";
+      row.failureReason ??= null;
+      row.startedAt ??= null;
+      row.finishedAt ??= null;
+      row.conversationCount ??= 0;
+    }
+    if (table === "qualityRunItem") {
+      row.status ??= "queued";
+      row.skipReason ??= null;
+      row.failureReason ??= null;
+      row.coveragePercent ??= null;
+      row.partial ??= false;
+      row.truncated ??= false;
+      for (const key of ["messageCount", "audioCount", "audioTranscribedCount", "promptChars", "inputTokens", "outputTokens"]) {
+        row[key] ??= 0;
+      }
+      row.model ??= null;
+      row.costMicros ??= null;
+    }
+    if (table === "qualityEvaluation") {
+      row.discardedAt ??= null;
+      row.discardedByUserId ??= null;
+      row.adminComment ??= null;
+      row.coveragePercent ??= 100;
+      row.partial ??= false;
+      for (const key of ["responsesMeasured", "limitBreaches", "messagesSent"]) row[key] ??= 0;
+      row.firstResponseMinutes ??= null;
+      row.avgResponseMinutes ??= null;
     }
     if (table === "aiUsageLog") {
       row.inputTokens ??= 0;

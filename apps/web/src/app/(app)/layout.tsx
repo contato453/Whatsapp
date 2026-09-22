@@ -24,6 +24,7 @@ import {
   Zap,
   Lock,
   ChevronDown,
+  Gauge,
 } from "lucide-react";
 import {
   USER_ROLE_LABELS,
@@ -32,6 +33,7 @@ import {
   type UserRole,
 } from "@azvchat/shared";
 import { useAuth } from "@/lib/auth-context";
+import { useQualityAvailability } from "@/lib/use-quality-availability";
 import type { OrganizationFeaturesDto, UserDto } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Spinner, Tooltip } from "@/components/ui";
@@ -74,6 +76,17 @@ interface NavLeaf {
    * O item só aparece quando os dois concordam.
    */
   feature?: keyof OrganizationFeaturesDto;
+  /**
+   * Módulo de ADMINISTRADOR cuja existência depende de configuração, e cuja
+   * disponibilidade não pode viajar na sessão de todo mundo.
+   *
+   * O Quality é o caso: ele depende da IA configurada, e um `features.quality`
+   * em `/auth/me` contaria ao atendente que existe um módulo que avalia o
+   * atendimento dele — exatamente o que o sigilo do módulo proíbe. Por isso a
+   * resposta vem de uma rota de admin (`useQualityAvailability`) e chega aqui
+   * como booleano já resolvido.
+   */
+  adminModule?: "quality";
   /**
    * Telas ABAIXO deste caminho continuam exclusivas do administrador, mesmo
    * que a lista esteja liberada por chave. É o caso de /users: quem tem
@@ -211,6 +224,17 @@ const NAV: NavEntry[] = [
   // Só admin abre e só admin grava, sem chave: uma chave "editar permissões"
   // deixaria um supervisor se promover sozinho, e o menu inteiro deixaria de
   // valer alguma coisa.
+  // Quality: avaliação do atendimento pela IA. Só admin executa e só admin lê,
+  // fixo no código e fora do catálogo de Permissões — a promessa do módulo é
+  // que o atendente não vê nem que ele existe, e uma chave por papel faria
+  // dessa promessa uma configuração que alguém afrouxa sem perceber.
+  {
+    href: "/quality",
+    label: "Quality",
+    icon: Gauge,
+    minRole: "admin",
+    adminModule: "quality",
+  },
   { href: "/permissions", label: "Permissões", icon: ShieldCheck, minRole: "admin" },
   { href: "/settings", label: "Configurações", icon: Settings, minRole: "agent" },
 ];
@@ -221,10 +245,12 @@ function navAllowed(
   role: UserRole,
   can: (action: PermissionAction) => boolean,
   hasFeature: (feature: keyof OrganizationFeaturesDto) => boolean,
+  qualityEnabled: boolean,
 ): boolean {
   // Módulo desligado fecha a tela para todo mundo, antes de olhar a chave:
   // administrador também não vê o menu do que o escritório desligou.
   if (item.feature && !hasFeature(item.feature)) return false;
+  if (item.adminModule === "quality" && !qualityEnabled) return false;
   // Admin passa em qualquer chave, então `can` já o cobre nos dois ramos.
   if (!item.permission) return hasRole(role, item.minRole);
   const permissions = Array.isArray(item.permission) ? item.permission : [item.permission];
@@ -242,8 +268,9 @@ function pathAllowed(
   role: UserRole,
   can: (action: PermissionAction) => boolean,
   hasFeature: (feature: keyof OrganizationFeaturesDto) => boolean,
+  qualityEnabled: boolean,
 ): boolean {
-  if (!navAllowed(item, role, can, hasFeature)) return false;
+  if (!navAllowed(item, role, can, hasFeature, qualityEnabled)) return false;
   if (item.adminOnlySubRoutes && pathname !== item.href) return hasRole(role, "admin");
   return true;
 }
@@ -291,11 +318,13 @@ function Sidebar({
   logout,
   can,
   hasFeature,
+  qualityEnabled,
 }: {
   user: UserDto;
   logout: () => void;
   can: (action: PermissionAction) => boolean;
   hasFeature: (feature: keyof OrganizationFeaturesDto) => boolean;
+  qualityEnabled: boolean;
 }) {
   const pathname = usePathname();
   // Começa expandida: é o estado de hoje e o que o servidor renderiza. A
@@ -362,11 +391,11 @@ function Sidebar({
   const items = NAV.map((item): NavEntry | null => {
     if (isNavGroup(item)) {
       const children = item.children.filter((child) =>
-        navAllowed(child, user.role, can, hasFeature),
+        navAllowed(child, user.role, can, hasFeature, qualityEnabled),
       );
       return children.length > 0 ? { ...item, children } : null;
     }
-    return navAllowed(item, user.role, can, hasFeature) ? item : null;
+    return navAllowed(item, user.role, can, hasFeature, qualityEnabled) ? item : null;
   }).filter((item): item is NavEntry => item !== null);
 
   return (
@@ -599,6 +628,9 @@ function AccessDenied({ moduleOff }: { moduleOff?: boolean }) {
 
 export default function AppLayout({ children }: { children: ReactNode }) {
   const { user, loading, logout, can, hasFeature } = useAuth();
+  // Quality depende da IA configurada, e a resposta vem de uma rota de admin —
+  // ver o comentário de `adminModule` em `NavLeaf`.
+  const { enabled: qualityEnabled, loading: qualityLoading } = useQualityAvailability();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -622,16 +654,35 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const current = flattenNav(NAV).find(
     (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),
   );
-  const allowed = !current || pathAllowed(current, pathname, user.role, can, hasFeature);
+  // Enquanto a disponibilidade do Quality ainda está carregando, a tela dele
+  // espera em vez de mostrar "acesso restrito" e piscar: negar antes da
+  // resposta faria o administrador ver a recusa no primeiro segundo de cada F5.
+  const aguardandoQuality = qualityLoading && current?.adminModule === "quality";
+  const allowed =
+    !current || pathAllowed(current, pathname, user.role, can, hasFeature, qualityEnabled || qualityLoading);
   // Bloqueio por módulo desligado tem texto próprio (ver AccessDenied).
   const moduleOff = Boolean(current?.feature && !hasFeature(current.feature));
 
   return (
     <CallProvider>
     <div className="flex h-screen overflow-hidden bg-slate-50">
-      <Sidebar user={user} logout={logout} can={can} hasFeature={hasFeature} />
+      <Sidebar
+        user={user}
+        logout={logout}
+        can={can}
+        hasFeature={hasFeature}
+        qualityEnabled={qualityEnabled}
+      />
       <main className="min-w-0 flex-1 overflow-hidden">
-        {allowed ? children : <AccessDenied moduleOff={moduleOff} />}
+        {aguardandoQuality ? (
+          <div className="flex h-full items-center justify-center">
+            <Spinner className="h-8 w-8" />
+          </div>
+        ) : allowed ? (
+          children
+        ) : (
+          <AccessDenied moduleOff={moduleOff} />
+        )}
       </main>
       {/* Chamada tocando: aviso em qualquer tela do sistema. */}
       <CallAlerts />
