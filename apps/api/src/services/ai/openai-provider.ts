@@ -6,6 +6,8 @@ import {
   type AiChatResult,
   type AiProvider,
   type AiProviderBilling,
+  type AiImageDescriptionRequest,
+  type AiImageDescriptionResult,
   type AiProviderModel,
   type AiToolCall,
   type AiTranscriptionRequest,
@@ -248,6 +250,48 @@ export class OpenAiProvider implements AiProvider {
         outputTokens: data.usage?.completion_tokens ?? 0,
       },
       finishReason: choice.finish_reason ?? null,
+    };
+  }
+
+  /**
+   * Imagem → texto pelo MESMO `/chat/completions`, com a imagem embutida como
+   * `image_url` em base64 (`data:` URI). Base64, e não um link: a mídia do
+   * AZVCHAT só existe atrás de rota autenticada, e mandar uma URL exigiria
+   * expor o arquivo para fora.
+   *
+   * Sem ferramentas e com teto de saída próprio: aqui não se quer conversa, e
+   * sim uma descrição curta que vai virar contexto do turno.
+   */
+  async describeImage(request: AiImageDescriptionRequest): Promise<AiImageDescriptionResult> {
+    const mime = (request.mimeType ?? "image/jpeg").split(";")[0]?.trim() || "image/jpeg";
+    const dataUrl = `data:${mime};base64,${request.image.toString("base64")}`;
+    const data = (await this.request(request.apiKey, "/chat/completions", {
+      method: "POST",
+      body: {
+        model: request.model,
+        max_completion_tokens: request.maxOutputTokens,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: request.instruction },
+              { type: "image_url", image_url: { url: dataUrl } },
+            ],
+          },
+        ],
+      },
+      timeoutMs: request.timeoutMs,
+    })) as OpenAiChatResponse;
+    const choice = data.choices?.[0];
+    if (!choice?.message) {
+      throw new AiProviderError("invalid_response", "O provedor devolveu uma resposta sem conteúdo.");
+    }
+    return {
+      text: (choice.message.content ?? "").trim(),
+      usage: {
+        inputTokens: data.usage?.prompt_tokens ?? 0,
+        outputTokens: data.usage?.completion_tokens ?? 0,
+      },
     };
   }
 

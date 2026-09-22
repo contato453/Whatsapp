@@ -1,8 +1,7 @@
 import type { AiAgent, AiAgentVersion, AiAutomation, AiSession, Conversation, Prisma, PrismaClient } from "@azvchat/database";
 import type { WhatsAppProvider } from "@azvchat/whatsapp";
 import {
-  AI_AUDIO_TRANSCRIBED_LABEL,
-  AI_AUDIO_UNHEARD_LABEL,
+  AI_ATTACHMENT_CONTEXT_LABELS,
   AI_MESSAGE_ORIGIN,
   RealtimeEvents,
   automationMatchesType,
@@ -15,7 +14,7 @@ import {
   type AiTestDebugDto,
   type AiTestResultDto,
   type AiUsageOutcome,
-  readAudioTranscript,
+  readAiAttachmentInsight,
 } from "@azvchat/shared";
 import type { Server } from "socket.io";
 import type { Logger } from "pino";
@@ -53,7 +52,7 @@ import {
   type AiSessionState,
 } from "./session.js";
 import { buildToolDefinitions } from "./tools.js";
-import { ensureAudioTranscripts, resolveTranscriptionModel } from "./transcription.js";
+import { ensureAttachmentInsights, resolveTranscriptionModel } from "./attachments.js";
 
 /**
  * O MOTOR do atendimento por IA.
@@ -524,28 +523,40 @@ export class AiRuntime {
         ...(lastProcessed ? { timestamp: { gt: lastProcessed.timestamp } } : {}),
       },
       orderBy: { timestamp: "asc" },
-      select: { id: true, content: true, type: true, timestamp: true, mediaUrl: true, mimeType: true, metadata: true },
+      select: { id: true, content: true, type: true, timestamp: true, mediaUrl: true, mimeType: true, filename: true, metadata: true },
     });
     if (newInbound.length === 0) return;
     const newestInbound = newInbound[newInbound.length - 1] as (typeof newInbound)[number];
 
-    // ÁUDIO VIRA TEXTO ANTES DO TURNO. Sem isto o modelo receberia "[áudio]" e
-    // responderia sem saber o que o cliente disse — o caso mais comum do
-    // WhatsApp (quem tem pressa grava) era o que a IA não atendia. A
-    // transcrição fica gravada no `metadata` da mensagem, então cada áudio é
-    // transcrito UMA vez e o histórico dos turnos seguintes já a encontra.
-    const listenToAudio = settings.transcribeAudio && config.canDo.capabilities.listen_audio;
-    const heardInbound = await ensureAudioTranscripts(
+    // ANEXO VIRA TEXTO ANTES DO TURNO. Sem isto o modelo receberia "[áudio]",
+    // "[imagem]" ou "[documento]" e responderia sem saber o que o cliente
+    // mandou — o caso mais comum do WhatsApp (quem tem pressa grava, fotografa
+    // o comprovante ou manda o PDF) era o que a IA não atendia. A leitura fica
+    // gravada no `metadata` da mensagem, então cada anexo é lido UMA vez e o
+    // histórico dos turnos seguintes já a encontra.
+    const attachments = {
+      audio: {
+        enabled: settings.transcribeAudio && config.canDo.capabilities.listen_audio,
+        model: resolveTranscriptionModel(settings.transcriptionModel),
+      },
+      // A imagem é lida pelo MESMO modelo do turno: ele já enxerga, e um modelo
+      // à parte seria mais uma configuração para o escritório manter.
+      image: { enabled: settings.describeImages && config.canDo.capabilities.read_images, model },
+      // Documento não tem interruptor de escritório: é lido aqui dentro, sem
+      // chamada paga — só a capacidade do agente decide.
+      document: { enabled: config.canDo.capabilities.read_documents },
+    };
+    const heardInbound = await ensureAttachmentInsights(
       { prisma, io: this.deps.io, logger, media: this.deps.media },
       {
         organizationId,
         conversation,
         credentials,
-        model: resolveTranscriptionModel(settings.transcriptionModel),
         timeoutMs: settings.timeoutMs,
-        enabled: listenToAudio,
         sessionId: session.id,
         agent: session.agent,
+        pricingOverrides: settings.pricingOverrides,
+        ...attachments,
       },
       newInbound,
     );
@@ -566,7 +577,11 @@ export class AiRuntime {
       [...env.knowledgeSources, ...(config.knowledge.includeQuickReplies ? env.quickReplies : [])],
       queryText,
     );
-    const promptContext = await this.promptContext(session, conversation, config, env, knowledge, listenToAudio);
+    const promptContext = await this.promptContext(session, conversation, config, env, knowledge, {
+      audio: attachments.audio.enabled,
+      image: attachments.image.enabled,
+      document: attachments.document.enabled,
+    });
     const system = buildSystemPrompt(config, promptContext);
     const tools = buildToolDefinitions(config, {
       hasKnowledge: env.knowledgeSources.length > 0 || (config.knowledge.includeQuickReplies && env.quickReplies.length > 0),
@@ -863,7 +878,7 @@ export class AiRuntime {
     config: AiAgentConfig,
     env: ActionEnvironment,
     knowledge: KnowledgeHit[],
-    audioListening: boolean,
+    attachmentReading: PromptContext["attachmentReading"],
   ): Promise<PromptContext> {
     const { prisma } = this.deps;
     const [organization, department, settings, personName] = await Promise.all([
@@ -889,7 +904,7 @@ export class AiRuntime {
       knowledge,
       today: new Intl.DateTimeFormat("pt-BR", { dateStyle: "full", timeZone: settings.timezone }).format(new Date()),
       remainingAiMessages: Math.max(0, config.limits.maxAiMessages - session.aiMessageCount),
-      audioListening,
+      attachmentReading,
     };
   }
 
@@ -1346,10 +1361,14 @@ export class AiRuntime {
       knowledge,
       today: new Intl.DateTimeFormat("pt-BR", { dateStyle: "full", timeZone: attendance.timezone }).format(new Date()),
       remainingAiMessages: Math.max(0, config.limits.maxAiMessages - aiMessages),
-      // O testador digita texto: não há áudio para transcrever. O que ele
-      // precisa mostrar é o prompt que o agente TERIA, então a seção de áudio
-      // reflete a configuração em vigor, igual ao atendimento real.
-      audioListening: settings.transcribeAudio && config.canDo.capabilities.listen_audio,
+      // O testador digita texto: não há anexo para ler. O que ele precisa
+      // mostrar é o prompt que o agente TERIA, então a seção de anexos reflete
+      // a configuração em vigor, igual ao atendimento real.
+      attachmentReading: {
+        audio: settings.transcribeAudio && config.canDo.capabilities.listen_audio,
+        image: settings.describeImages && config.canDo.capabilities.read_images,
+        document: config.canDo.capabilities.read_documents,
+      },
     });
     const tools = buildToolDefinitions(config, {
       hasKnowledge: sources.length > 0,
@@ -1598,23 +1617,26 @@ export function automationMatches(
 }
 
 /**
- * A linha da mensagem como o MODELO a lê. Mídia vira rótulo, e o áudio vira o
- * que foi transcrito — quando foi: transcrição que não saiu chega marcada como
- * não ouvida, e não como "[áudio]" genérico, porque o prompt ensina o modelo a
- * pedir que o cliente escreva nesse caso exato. Confundir os dois faria a IA
- * tratar silêncio como se o cliente nada tivesse dito.
+ * A linha da mensagem como o MODELO a lê. Mídia vira rótulo, e o ANEXO vira o
+ * que foi lido — quando foi: leitura que não saiu chega marcada como
+ * indisponível, e não como "[imagem]" genérico, porque o prompt ensina o modelo
+ * a pedir que o cliente escreva nesse caso exato. Confundir os dois faria a IA
+ * tratar silêncio como se o cliente nada tivesse mandado.
  */
 function messageText(message: { content: string | null; type: string; metadata?: unknown }): string {
   if (message.type === "text") return message.content ?? "";
-  if (message.type === "audio") {
-    const transcript = readAudioTranscript(message.metadata);
-    if (transcript?.status === "ok" && transcript.text) {
-      return `${AI_AUDIO_TRANSCRIBED_LABEL} ${transcript.text}`;
-    }
-    // Sem registro nenhum é o caso de a transcrição estar desligada: aí o
-    // rótulo genérico basta, e o prompt já diz que a IA não ouve áudio.
-    if (transcript) return AI_AUDIO_UNHEARD_LABEL;
+  const insight = readAiAttachmentInsight(message.metadata);
+  if (insight) {
+    const labels = AI_ATTACHMENT_CONTEXT_LABELS[insight.kind];
+    // A legenda que o cliente escreveu junto do anexo entra sempre: ela costuma
+    // dizer o que ele quer ("esse boleto está certo?"), e o conteúdo lido
+    // sozinho não responde isso.
+    const caption = message.content?.trim() ? ` (legenda do cliente: ${message.content.trim()})` : "";
+    if (insight.status === "ok" && insight.text) return `${labels.ok} ${insight.text}${caption}`;
+    return `${labels.unavailable}${caption}`;
   }
+  // Sem registro nenhum é o caso de a leitura estar desligada para aquele tipo:
+  // aí o rótulo genérico basta, e o prompt já diz o que a IA não lê.
   const labels: Record<string, string> = {
     image: "[imagem]",
     audio: "[áudio]",
