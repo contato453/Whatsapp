@@ -132,6 +132,7 @@ const STATUS_BY_REASON: Record<AiSessionEndReason, AiSessionStatus> = {
   provider_error: "error",
   budget_exceeded: "error",
   agent_disabled: "stopped",
+  automation_disabled: "stopped",
   conversation_archived: "stopped",
 };
 

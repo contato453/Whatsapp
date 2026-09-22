@@ -15,7 +15,7 @@ import { ApiError, aiApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { formatDateTime } from "@/lib/utils";
 import { Badge, Button, Card, EmptyState, Spinner } from "@/components/ui";
-import { Notice } from "./ai-ui";
+import { Notice, stoppedSessionsMessage } from "./ai-ui";
 
 /**
  * Lista de agentes. Criar, editar e testar acontecem na tela do agente
@@ -27,6 +27,7 @@ export function AgentsPanel() {
   const [agents, setAgents] = useState<AiAgentSummaryDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const canManage = can("ai.agent.manage");
 
   const load = useCallback(async () => {
@@ -41,6 +42,7 @@ export function AgentsPanel() {
   async function run(id: string, action: () => Promise<unknown>) {
     setBusyId(id);
     setError(null);
+    setNotice(null);
     try {
       await action();
       await load();
@@ -75,6 +77,7 @@ export function AgentsPanel() {
         )}
       </div>
       {error && <Notice tone="error">{error}</Notice>}
+      {notice && <Notice tone="warn">{notice}</Notice>}
       {agents.length === 0 ? (
         <Card>
           <EmptyState
@@ -158,7 +161,10 @@ export function AgentsPanel() {
                             title={agent.status === "active" ? "Desativar" : "Ativar"}
                             disabled={busyId === agent.id}
                             onClick={() =>
-                              void run(agent.id, () => aiApi.setAgentStatus(agent.id, agent.status === "active" ? "inactive" : "active"))
+                              void run(agent.id, async () => {
+                                const result = await aiApi.setAgentStatus(agent.id, agent.status === "active" ? "inactive" : "active");
+                                setNotice(stoppedSessionsMessage(result.stoppedSessions));
+                              })
                             }
                           >
                             <Power className={agent.status === "active" ? "h-3.5 w-3.5 text-emerald-600" : "h-3.5 w-3.5 text-slate-400"} />

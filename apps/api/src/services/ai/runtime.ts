@@ -471,6 +471,79 @@ export class AiRuntime {
   }
 
   // -------------------------------------------------------------------------
+  // Desligar alcança quem JÁ está sendo atendido
+  // -------------------------------------------------------------------------
+
+  /**
+   * DESLIGAR PRECISA VALER PARA A CONVERSA QUE JÁ ESTÁ COM A IA — era o
+   * defeito, e o pior tipo dele: silencioso e do lado do cliente. O turno
+   * carrega a sessão ativa ANTES de perguntar "alguma automação casa?"
+   * (`handleInbound`), então desligar a automação só fechava a porta de
+   * ENTRADA: a sessão aberta seguia respondendo até bater em limite, tempo,
+   * orçamento ou alguém apertar "Encerrar IA" na conversa. Quem desliga
+   * espera silêncio na hora, não no fim do dia — e, sem isso, a conclusão
+   * natural de quem administra é que o interruptor não funciona.
+   *
+   * O encerramento é o MESMO `finishWithFallback` de sempre: aviso de
+   * contingência ao cliente e transferência para a fila humana. Cortar no
+   * meio sem avisar deixaria o cliente falando sozinho — desligar a IA é
+   * decisão do escritório, e o cliente não tem nada com isso.
+   *
+   * Uma conversa por FILA (`enqueue`), e as filas em paralelo: cada conversa
+   * continua com um turno de cada vez (nunca cruza com um turno em
+   * andamento), e a rota que desligou espera o tempo de UM encerramento, não
+   * o da soma deles — com `responseDelaySeconds` configurado, em série isso
+   * seria um minuto por conversa segurando a resposta HTTP.
+   */
+  private async stopActiveSessions(
+    organizationId: string,
+    filter: Prisma.AiSessionWhereInput,
+    reason: Extract<AiSessionEndReason, "agent_disabled" | "automation_disabled">,
+  ): Promise<number> {
+    const { prisma, logger } = this.deps;
+    const sessions = await prisma.aiSession.findMany({
+      where: { ...filter, organizationId, status: "active" },
+      include: { agent: true, agentVersion: true },
+    });
+    if (sessions.length === 0) return 0;
+
+    await Promise.all(
+      sessions.map(async (session) => {
+        const conversation = await prisma.conversation.findUnique({ where: { id: session.conversationId } });
+        if (!conversation) return;
+        const config = parseStoredAgentConfig(session.agentVersion?.config ?? session.agent.config);
+        await this.enqueue(session.conversationId, () => this.finishWithFallback(session, conversation, config, reason, null));
+      }),
+    );
+
+    // Quantas REALMENTE saíram do ar. O `enqueue` engole a falha de um
+    // encerramento (e loga), então contar as que foram encontradas diria
+    // "3 atendimentos encerrados" para quem talvez ainda tenha um rodando —
+    // e o número que a tela mostra é justamente o que essa pessoa veio
+    // conferir. A varredura pega a que sobrou no minuto seguinte.
+    const stopped = await prisma.aiSession.count({
+      where: { id: { in: sessions.map((session) => session.id) }, status: { not: "active" } },
+    });
+    logger.info({ event: "ai_sessions_stopped", organizationId, reason, found: sessions.length, stopped });
+    return stopped;
+  }
+
+  /** Agente desativado: as conversas que ele atende param AGORA. */
+  stopSessionsForAgent(input: { organizationId: string; agentId: string }): Promise<number> {
+    return this.stopActiveSessions(input.organizationId, { agentId: input.agentId }, "agent_disabled");
+  }
+
+  /**
+   * Automação desligada (ou excluída): as sessões que ELA abriu param junto.
+   * Só elas — a sessão nascida de um bloco de fluxo tem `automationId` nulo
+   * e não é alcançada por este interruptor, que é o certo: quem a abriu foi
+   * o fluxo, e é lá que ela se desliga.
+   */
+  stopSessionsForAutomation(input: { organizationId: string; automationId: string }): Promise<number> {
+    return this.stopActiveSessions(input.organizationId, { automationId: input.automationId }, "automation_disabled");
+  }
+
+  // -------------------------------------------------------------------------
   // O turno
   // -------------------------------------------------------------------------
 
@@ -1457,10 +1530,17 @@ export class AiRuntime {
   // -------------------------------------------------------------------------
 
   /**
-   * A cada minuto: (a) sessão além do tempo máximo é encerrada com fallback;
-   * (b) sessão com mensagem recebida sem resposta há mais de 45s e sem turno
-   * em memória (reinício no meio do caminho, ou falha transitória) ganha um
-   * turno de novo.
+   * A cada minuto: (a) sessão de agente desativado ou de automação
+   * desligada é encerrada com fallback; (b) sessão além do tempo máximo,
+   * idem; (c) sessão com mensagem recebida sem resposta há mais de 45s e
+   * sem turno em memória (reinício no meio do caminho, ou falha
+   * transitória) ganha um turno de novo.
+   *
+   * O (a) é a REDE DE SEGURANÇA do desligamento: as rotas já encerram na
+   * hora, mas o desligamento pode ter acontecido com a API fora do ar, direto
+   * no banco, ou o encerramento pode ter falhado. Sem isto, a sessão sobrevive
+   * ao interruptor e só para na próxima mensagem do cliente — que é uma
+   * resposta da IA a mais depois de a casa achar que a desligou.
    */
   async sweep(): Promise<void> {
     const { prisma, logger } = this.deps;
@@ -1469,6 +1549,16 @@ export class AiRuntime {
         where: { status: "active" },
         include: { agent: true, agentVersion: true },
       });
+      // Quais automações que abriram estas sessões continuam ligadas — uma
+      // consulta para a varredura inteira, e não uma por sessão. Automação
+      // EXCLUÍDA não aparece aqui: o `SetNull` do banco já zerou o
+      // `automationId` da sessão, e por isso a rota de excluir encerra
+      // antes de apagar (depois não haveria mais como saber quais eram).
+      const automationIds = [...new Set(active.map((session) => session.automationId).filter((id): id is string => id != null))];
+      const liveAutomations = automationIds.length
+        ? await prisma.aiAutomation.findMany({ where: { id: { in: automationIds }, active: true }, select: { id: true } })
+        : [];
+      const ligadas = new Set(liveAutomations.map((row) => row.id));
       for (const session of active) {
         if (this.chains.has(session.conversationId) || this.timers.has(session.conversationId)) continue;
         const conversation = await prisma.conversation.findUnique({ where: { id: session.conversationId } });
@@ -1482,6 +1572,16 @@ export class AiRuntime {
             reason: "conversation_archived",
             historyNote: `Atendimento por IA (${session.agent.name}) encerrado: conversa arquivada.`,
           });
+          continue;
+        }
+        if (session.agent.status !== "active") {
+          logger.info({ event: "ai_sweep_agent_disabled", sessionId: session.id });
+          await this.enqueue(conversation.id, () => this.finishWithFallback(session, conversation, config, "agent_disabled", null));
+          continue;
+        }
+        if (session.automationId && !ligadas.has(session.automationId)) {
+          logger.info({ event: "ai_sweep_automation_disabled", sessionId: session.id, automationId: session.automationId });
+          await this.enqueue(conversation.id, () => this.finishWithFallback(session, conversation, config, "automation_disabled", null));
           continue;
         }
         if (config.limits.maxDurationMinutes != null) {
@@ -1646,6 +1746,8 @@ function reasonLabel(reason: AiSessionEndReason): string {
       return "Orçamento mensal de IA atingido";
     case "agent_disabled":
       return "Agente desativado durante o atendimento";
+    case "automation_disabled":
+      return "Automação de IA desligada durante o atendimento";
     case "attempt_limit":
       return "Limite de tentativas sem resolver";
     default:

@@ -21,7 +21,7 @@ import { Badge, Button, Card, Spinner } from "@/components/ui";
 import { useMyDepartments } from "@/components/department-picker";
 import { AgentForm, type AgentFormOptions } from "@/components/ai/agent-form";
 import { AgentTester } from "@/components/ai/agent-tester";
-import { Notice } from "@/components/ai/ai-ui";
+import { Notice, stoppedSessionsMessage } from "@/components/ai/ai-ui";
 
 /**
  * Tela do agente: formulário estruturado à esquerda, testador à direita.
@@ -133,8 +133,17 @@ export default function AgentPage() {
     setFeedback(null);
     try {
       const result = await aiApi.setAgentStatus(agent.id, next);
-      setAgent(result);
-      setFeedback({ ok: true, message: next === "active" ? "Agente ativo. Crie uma automação para colocá-lo em uma conversa." : "Agente desativado." });
+      setAgent(result.agent);
+      const stopped = stoppedSessionsMessage(result.stoppedSessions);
+      setFeedback({
+        ok: true,
+        message:
+          next === "active"
+            ? "Agente ativo. Crie uma automação para colocá-lo em uma conversa."
+            : stopped
+              ? `Agente desativado. ${stopped}`
+              : "Agente desativado. Nenhum atendimento estava em andamento.",
+      });
     } catch (err) {
       setFeedback({ ok: false, message: err instanceof ApiError ? err.message : "Não foi possível alterar o status" });
     } finally {

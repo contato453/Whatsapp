@@ -749,3 +749,135 @@ describe("AiRuntime — bloco 'Atendimento por IA' do construtor de fluxos (star
     expect(s.db.rows("aiSession")).toHaveLength(0);
   });
 });
+
+/**
+ * DESLIGAR TEM QUE ALCANÇAR A CONVERSA QUE JÁ ESTÁ SENDO ATENDIDA.
+ *
+ * O defeito que estes casos trancam: `handleInbound` carrega a sessão ativa
+ * ANTES de perguntar "alguma automação casa?", então desligar a automação
+ * fechava só a porta de entrada — a conversa que já estava com a IA seguia
+ * sendo respondida, e quem desligou concluía que o interruptor não funciona.
+ * É falha silenciosa e do lado do cliente: nada fica vermelho, a IA continua
+ * falando.
+ */
+describe("AiRuntime — desligar alcança quem já está sendo atendido", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  /** Uma sessão ativa, aberta pela automação, com o primeiro turno já respondido. */
+  async function comSessaoAtiva() {
+    const s = scenario({ config: (config) => (config.identity.sendGreeting = false) });
+    vi.stubGlobal("fetch", mockFetch([() => openAiResponse("Claro, posso ajudar.")], []));
+    const message = inbound(s.db, s.conversationId, "Oi");
+    await settle(s.runtime, s, message.id as string);
+    expect(s.db.rows("aiSession")[0]?.status).toBe("active");
+    return s;
+  }
+
+  function automacaoDe(s: Scenario) {
+    return s.db.rows("aiAutomation")[0] as Record<string, unknown>;
+  }
+
+  it("desligar a automação encerra o atendimento que ela abriu, avisando o cliente", async () => {
+    const s = await comSessaoAtiva();
+    const automation = automacaoDe(s);
+    automation.active = false;
+
+    const stopped = await s.runtime.stopSessionsForAutomation({ organizationId: ORG, automationId: automation.id as string });
+
+    expect(stopped).toBe(1);
+    const session = s.db.rows("aiSession")[0];
+    expect(session?.status).toBe("stopped");
+    expect(session?.endReason).toBe("automation_disabled");
+    // Cortar no meio sem avisar deixaria o cliente falando sozinho: o
+    // encerramento é o mesmo fallback + transferência de sempre.
+    expect(s.sent.at(-1)?.text).toContain("vou encaminhar você para um de nossos atendentes");
+  });
+
+  it("depois de desligada, a mensagem seguinte do cliente não é mais respondida pela IA", async () => {
+    const s = await comSessaoAtiva();
+    const automation = automacaoDe(s);
+    automation.active = false;
+    await s.runtime.stopSessionsForAutomation({ organizationId: ORG, automationId: automation.id as string });
+
+    const enviadasAntes = s.sent.length;
+    const fetchMock = mockFetch([], []);
+    vi.stubGlobal("fetch", fetchMock);
+    const outra = inbound(s.db, s.conversationId, "E aí, tem novidade?");
+    await settle(s.runtime, s, outra.id as string);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(s.sent).toHaveLength(enviadasAntes);
+    expect(s.db.rows("aiSession")).toHaveLength(1);
+  });
+
+  it("desligar o agente encerra os atendimentos dele na hora, sem esperar o cliente escrever", async () => {
+    const s = await comSessaoAtiva();
+    const agent = s.db.rows("aiAgent")[0] as Record<string, unknown>;
+    agent.status = "inactive";
+
+    const stopped = await s.runtime.stopSessionsForAgent({ organizationId: ORG, agentId: s.agentId });
+
+    expect(stopped).toBe(1);
+    const session = s.db.rows("aiSession")[0];
+    expect(session?.status).toBe("stopped");
+    expect(session?.endReason).toBe("agent_disabled");
+  });
+
+  it("sessão nascida de um bloco de fluxo NÃO é alcançada pelo interruptor da automação", async () => {
+    // Quem a abriu foi o fluxo (`automationId` nulo), e é lá que ela se
+    // desliga — o interruptor da automação não pode levar junto o que não
+    // é dele.
+    const s = scenario();
+    const flowSession = await s.runtime.startSessionForFlow({
+      conversationId: s.conversationId,
+      agentId: s.agentId,
+      automationExecutionId: "exec-1",
+    });
+    const automation = automacaoDe(s);
+    automation.active = false;
+
+    const stopped = await s.runtime.stopSessionsForAutomation({ organizationId: ORG, automationId: automation.id as string });
+
+    expect(stopped).toBe(0);
+    expect(s.db.rows("aiSession").find((row) => row.id === flowSession?.id)?.status).toBe("active");
+  });
+
+  it("a varredura é a rede de segurança: automação desligada fora da rota também encerra", async () => {
+    // Desligamento com a API fora do ar, ou mexido direto no banco: sem a
+    // varredura a sessão sobreviveria ao interruptor e só pararia na
+    // próxima mensagem do cliente — uma resposta da IA depois de a casa
+    // achar que a tinha desligado.
+    const s = await comSessaoAtiva();
+    automacaoDe(s).active = false;
+
+    await s.runtime.sweep();
+    await vi.runAllTimersAsync();
+
+    const session = s.db.rows("aiSession")[0];
+    expect(session?.status).toBe("stopped");
+    expect(session?.endReason).toBe("automation_disabled");
+  });
+
+  it("a varredura também pega o agente desativado", async () => {
+    const s = await comSessaoAtiva();
+    (s.db.rows("aiAgent")[0] as Record<string, unknown>).status = "inactive";
+
+    await s.runtime.sweep();
+    await vi.runAllTimersAsync();
+
+    expect(s.db.rows("aiSession")[0]?.endReason).toBe("agent_disabled");
+  });
+
+  it("nada em andamento: desligar não encerra nada e não manda mensagem nenhuma", async () => {
+    const s = scenario();
+    const stopped = await s.runtime.stopSessionsForAgent({ organizationId: ORG, agentId: s.agentId });
+    expect(stopped).toBe(0);
+    expect(s.sent).toHaveLength(0);
+  });
+});

@@ -2998,12 +2998,39 @@ válidos? alvo permitido para ESTA conversa?) → resposta pelo **mesmo** `provi
 com `Message.metadata.origem = "ai"` (+ agente, sessão, provedor, modelo) → consumo em
 `AiUsageLog` → `ai:session`. **`lastProcessedMessageId` avança só depois de o provedor
 responder**: falha antes disso reprocessa as mesmas mensagens; a varredura de 1 min
-(`sweep`) retoma turno pendente após reinício, encerra sessão além do tempo máximo e a de
-conversa arquivada. **Humano assumiu = IA para na hora**: `interruptAiSessionForHuman`
+(`sweep`) retoma turno pendente após reinício, encerra sessão além do tempo máximo, a de
+conversa arquivada, a de agente desativado e a de automação desligada. **Humano assumiu =
+IA para na hora**: `interruptAiSessionForHuman`
 (`session.ts`) é chamado por atribuir, transferir departamento e por TODO envio da equipe
 (`afterOutboundPersist` em `messages/routes.ts`), e o turno RELÊ a sessão antes de enviar —
 resposta gerada para sessão interrompida é descartada. "Devolver para IA" é ação explícita
 (`POST /conversations/:id/ai/resume`, chave própria) que reaproveita a memória.
+
+**DESLIGAR ALCANÇA A CONVERSA QUE JÁ ESTÁ SENDO ATENDIDA.** É a armadilha desta seção,
+e ela já mordeu em produção: `handleInbound` carrega a sessão ativa **antes** de perguntar
+"alguma automação casa?", então desligar a automação fechava só a porta de ENTRADA — a
+conversa que já estava com a IA seguia sendo respondida até bater em limite, tempo,
+orçamento ou alguém apertar "Encerrar IA". Falha silenciosa e do lado do cliente: nada fica
+vermelho, e quem administra conclui que o interruptor não funciona. Agora as duas chaves
+alcançam a sessão viva, pelas duas pontas: `POST /ai/agents/:id/status` (para inativo) chama
+`stopSessionsForAgent` e `PATCH|DELETE /ai/automations/:id` chama `stopSessionsForAutomation`,
+e a **varredura** confere `agent.status` e `automation.active` a cada minuto — a rede de
+segurança para desligamento com a API fora do ar, mexido direto no banco, ou cujo
+encerramento falhou. Consequências que valem para qualquer mexida aqui: (1) o encerramento é
+o MESMO `finishWithFallback` (aviso de contingência ao cliente + transferência para a fila
+humana), nunca um corte mudo: desligar a IA é decisão do escritório, e o cliente não tem
+nada com isso; (2) o motivo `automation_disabled` é separado de `agent_disabled` de
+propósito — o agente pode seguir no ar atendendo pelas outras portas, e quem lê o histórico
+precisa saber qual das duas chaves parou aquele atendimento; (3) sessão nascida de um **bloco
+de fluxo** tem `automationId` nulo e **não** é alcançada pelo interruptor da automação: quem
+a abriu foi o fluxo, e é lá que ela se desliga; (4) a exclusão da automação encerra **antes**
+do `delete`, porque `AiSession.automationId` é `SetNull` — depois de apagada não haveria mais
+como saber quais sessões eram dela, e elas ficariam indistinguíveis das de fluxo, rodando sem
+ninguém para desligá-las; (5) as rotas devolvem `stoppedSessions` e as três telas que
+desligam mostram o número (`stoppedSessionsMessage`, em `components/ai/ai-ui.tsx`): desligar
+sem dizer quantos atendimentos pararam deixa exatamente a dúvida que isto veio consertar.
+Coberto por `apps/api/test/ai-runtime.test.ts` ("desligar alcança quem já está sendo
+atendido").
 
 **`AiAgentConfig.advanced.responseDelaySeconds`** — espera, em segundos (0–60,
 padrão 0 = imediato, o comportamento de sempre), entre o modelo decidir o

@@ -354,6 +354,11 @@ export const AI_SESSION_END_REASONS = [
   "provider_error",
   "budget_exceeded",
   "agent_disabled",
+  // Desligar a AUTOMAÇÃO também alcança a sessão que ela abriu. Motivo
+  // separado de `agent_disabled` de propósito: o agente continua no ar
+  // atendendo pelas outras portas, e quem lê o histórico precisa saber qual
+  // das duas chaves parou este atendimento.
+  "automation_disabled",
   "conversation_archived",
 ] as const;
 export type AiSessionEndReason = (typeof AI_SESSION_END_REASONS)[number];
@@ -370,6 +375,7 @@ export const AI_SESSION_END_REASON_LABELS: Record<AiSessionEndReason, string> = 
   provider_error: "Falha do provedor de IA",
   budget_exceeded: "Orçamento mensal de IA atingido",
   agent_disabled: "O agente foi desativado",
+  automation_disabled: "A automação que iniciou o atendimento foi desligada",
   conversation_archived: "A conversa foi arquivada",
 };
 
