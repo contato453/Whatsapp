@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
-import { hasRole } from "@azvchat/shared";
+import { USER_ROLES, hasRole } from "@azvchat/shared";
 import { authenticate, requireRole } from "../../lib/auth.js";
 import { loadPermissions } from "../../lib/permissions.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
@@ -18,7 +18,7 @@ const createUserSchema = z.object({
   name: z.string().min(2).max(120),
   email: z.string().email(),
   password: z.string().min(6, "Senha deve ter no mínimo 6 caracteres").max(72),
-  role: z.enum(["admin", "supervisor", "agent"]).default("agent"),
+  role: z.enum(USER_ROLES).default("agent"),
   /** Prefixa as mensagens enviadas com o nome do atendente */
   signMessages: z.boolean().optional(),
   whatsappInstanceIds: instanceIdsSchema.optional(),
@@ -29,7 +29,7 @@ const updateUserSchema = z.object({
   name: z.string().min(2).max(120).optional(),
   email: z.string().email().optional(),
   password: z.string().min(6).max(72).optional(),
-  role: z.enum(["admin", "supervisor", "agent"]).optional(),
+  role: z.enum(USER_ROLES).optional(),
   status: z.enum(["active", "inactive"]).optional(),
   signMessages: z.boolean().optional(),
   whatsappInstanceIds: instanceIdsSchema.optional(),
@@ -147,6 +147,9 @@ export async function userRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
       action: "user.created",
       entityType: "User",
       entityId: user.id,
+      // O papel entra no registro: com quatro papéis, "quem foi criado como
+      // Gerente" é pergunta de auditoria, e o registro não a respondia.
+      metadata: { role: user.role },
     });
     return reply.status(201).send({ user: serializeUserWithAccess(user) });
   });
@@ -310,9 +313,14 @@ export async function userRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
       action: "user.updated",
       entityType: "User",
       entityId: id,
-      ...(instanceIds || departmentIds
+      ...(instanceIds || departmentIds || updated.role !== user.role
         ? {
             metadata: {
+              // Troca de papel registra o de antes e o de depois: promover a
+              // Gerente dá acesso ao Quality, e isso precisa ter autor e data.
+              ...(updated.role !== user.role
+                ? { previousRole: user.role, role: updated.role }
+                : {}),
               ...(instanceIds ? { whatsappInstanceIds: instanceIds } : {}),
               ...(departmentIds ? { departmentIds } : {}),
             },

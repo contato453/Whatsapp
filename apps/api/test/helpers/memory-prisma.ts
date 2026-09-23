@@ -356,6 +356,8 @@ export class MemoryPrisma {
           const children = this.rows(relation.table).filter((child) => child[relation.foreignKey as string] === row.id);
           const some = (condition as { some?: Row }).some;
           if (some && !children.some((child) => this.matches(relation.table, child, some))) return false;
+          const every = (condition as { every?: Row }).every;
+          if (every && !children.every((child) => this.matches(relation.table, child, every))) return false;
           continue;
         }
         const parent = this.rows(relation.table).find((candidate) => candidate.id === row[relation.localKey as string]);

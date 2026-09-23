@@ -1,0 +1,15 @@
+-- Papel Gerente ("manager"), entre Administrador e Supervisor na hierarquia.
+--
+-- Só ACRESCENTA um valor ao enum: nenhuma linha existente muda de papel, e o
+-- papel nasce vazio (quem atribui é o administrador, na tela de Usuários).
+-- `ADD VALUE` não reescreve a tabela nem toca nas linhas de `users` e de
+-- `role_permissions` que usam o tipo.
+--
+-- A posição (BEFORE 'supervisor') é só cosmética no Postgres: a hierarquia
+-- que vale é a de `hasRole`, em @azvchat/shared, e nenhuma consulta ordena
+-- ou compara pelo enum do banco.
+--
+-- O valor novo não é usado nesta mesma migration de propósito: no Postgres,
+-- valor acrescentado a um enum dentro de uma transação só pode ser usado
+-- depois que ela confirma.
+ALTER TYPE "UserRole" ADD VALUE IF NOT EXISTS 'manager' BEFORE 'supervisor';

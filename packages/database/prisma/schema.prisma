@@ -78,8 +78,12 @@ model Organization {
 // Usuários / Atendentes
 // ============================================================
 
+/// Hierarquia ORDINAL, do mais alto para o mais baixo (ver `hasRole` em
+/// @azvchat/shared). `manager` ("Gerente") tem o alcance do supervisor e
+/// ganha ações pelo catálogo de Permissões, hoje, o Quality.
 enum UserRole {
   admin
+  manager
   supervisor
   agent
 }

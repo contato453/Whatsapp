@@ -15,7 +15,10 @@ import {
   QUALITY_CRITERIA_KEYS,
 } from "@azvchat/shared";
 import { z } from "zod";
+import type { Prisma } from "@azvchat/database";
+import { conversationScope, loadConversationAccess } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
+import { loadPermissions } from "../../lib/permissions.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
 import { loadQualitySettings, serializeQualitySettings } from "../../lib/quality/settings.js";
 import {
@@ -34,38 +37,57 @@ import type { AppDeps } from "../../types.js";
 /**
  * MÓDULO QUALITY — rotas.
  *
- * SIGILO TOTAL PARA QUEM NÃO É ADMIN, e isso é o desenho, não um detalhe de
- * implementação: o atendente não vê a avaliação dele, não vê que ela existe, e
- * não tem como descobrir que o recurso existe. Por isso a guarda é
- * `apenasAdmin`, que responde **404**, e não 403: "sem permissão" confirmaria o
+ * SIGILO TOTAL PARA QUEM NÃO TEM A CHAVE, e isso é o desenho, não um detalhe
+ * de implementação: o atendente não vê a avaliação dele, não vê que ela
+ * existe, e não tem como descobrir que o recurso existe. Por isso a guarda
+ * (`guardaQuality`) responde **404**, e não 403: "sem permissão" confirmaria o
  * recurso, e a diferença entre as duas respostas é justamente o que uma pessoa
  * curiosa leria.
  *
- * A guarda é FIXA no código, fora do catálogo de `PERMISSION_ACTIONS` — como
- * criar usuário, excluir número e a tela de Permissões. Uma chave por papel aqui
- * transformaria "só o dono vê" numa configuração que alguém pode afrouxar sem
- * perceber, e o módulo inteiro existe justamente sob a promessa de que ninguém
- * mais vê.
+ * O módulo nasceu fixo em admin. Com o papel Gerente ele virou a chave
+ * `quality.use` do catálogo (padrão: Gerente sim, Supervisor e Usuário não),
+ * e a guarda continua sendo UMA só, na frente de toda rota daqui, esconder o
+ * menu e recusar a rota saem da mesma chave.
  *
- * Nada aqui encosta em `lib/access.ts`: visibilidade de conversa não mudou, e o
- * administrador já enxerga a organização inteira sem filtro.
+ * A CHAVE DÁ A AÇÃO, NUNCA O ALCANCE. O administrador enxerga a organização
+ * inteira; quem chega aqui pela chave só dispara análise e só lê disparo,
+ * avaliação e transcrição de conversa que `conversationScope` já lhe mostra.
+ * Sem isso o Quality viraria a porta dos fundos de `lib/access.ts`: as
+ * transcrições saem ÍNTEGRAS, e bastaria a chave para ler conversa de
+ * departamento que o gerente não tem.
  */
 
 /** Sem IA configurada o módulo fica DESLIGADO: o menu some e as rotas recusam. */
 const DISABLED_MESSAGE =
   "O módulo de qualidade depende da inteligência artificial, que ainda não está configurada nesta organização.";
 
-async function apenasAdmin(request: FastifyRequest, _reply: FastifyReply): Promise<void> {
-  await authenticate(request);
-  if (request.user.role !== "admin") {
-    // 404, nunca 403: a resposta não pode confirmar que o Quality existe.
-    throw new NotFoundError("Recurso");
-  }
+function guardaQuality(deps: AppDeps) {
+  return async (request: FastifyRequest, _reply: FastifyReply): Promise<void> => {
+    await authenticate(request);
+    const permissions = await loadPermissions(deps.prisma, request.user);
+    if (!permissions.can("quality.use")) {
+      // 404, nunca 403: a resposta não pode confirmar que o Quality existe.
+      throw new NotFoundError("Recurso");
+    }
+  };
+}
+
+/**
+ * O recorte de conversas de quem está pedindo, pela régua de sempre. Vazio
+ * para o administrador (que enxerga tudo), e o mesmo filtro da Inbox para os
+ * demais.
+ */
+async function escopoDeConversa(
+  deps: AppDeps,
+  request: FastifyRequest,
+): Promise<Prisma.ConversationWhereInput> {
+  return conversationScope(await loadConversationAccess(deps.prisma, request.user));
 }
 
 const uuid = z.string().uuid();
 
 export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
+  const guarda = guardaQuality(deps);
   const analyzer = new QualityAnalyzer({
     prisma: deps.prisma,
     logger: deps.logger.child({ module: "quality" }),
@@ -100,16 +122,16 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
     return config ? { enabled: true, reason: null } : { enabled: false, reason: DISABLED_MESSAGE };
   }
 
-  app.get("/quality/availability", { preHandler: apenasAdmin }, async (request) => ({
+  app.get("/quality/availability", { preHandler: guarda }, async (request) => ({
     availability: await availability(request.user.organizationId),
   }));
 
-  app.get("/quality/settings", { preHandler: apenasAdmin }, async (request) => {
+  app.get("/quality/settings", { preHandler: guarda }, async (request) => {
     const view = await loadQualitySettings(deps.prisma, request.user.organizationId);
     return { settings: serializeQualitySettings(view) };
   });
 
-  app.put("/quality/settings", { preHandler: apenasAdmin }, async (request) => {
+  app.put("/quality/settings", { preHandler: guarda }, async (request) => {
     const limits = QUALITY_SETTINGS_LIMITS;
     const body = z
       .object({
@@ -158,7 +180,7 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
    * sob controle. O teto de conversas é do banco, e acima dele a recusa diz o
    * número — mensagem clara, não um 400 genérico.
    */
-  app.post("/quality/runs", { preHandler: apenasAdmin }, async (request) => {
+  app.post("/quality/runs", { preHandler: guarda }, async (request) => {
     const body = z
       .object({
         conversationIds: z.array(uuid).min(1).max(QUALITY_SETTINGS_LIMITS.maxConversationsPerRun.max),
@@ -184,11 +206,17 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
       );
     }
 
-    // O administrador enxerga a organização inteira, então a conferência aqui é
-    // de EXISTÊNCIA na organização — não de alcance. Conversa de outra
-    // organização simplesmente não é encontrada.
+    // Existência na organização E alcance de quem pede. Para o administrador o
+    // escopo é vazio (ele enxerga tudo); para quem chega pela chave, conversa
+    // fora do recorte dele conta como não encontrada, a mesma resposta de
+    // conversa inexistente, para a recusa não confirmar o que ele não vê.
     const conversations = await deps.prisma.conversation.findMany({
-      where: { id: { in: ids }, organizationId: request.user.organizationId },
+      where: {
+        AND: [
+          { id: { in: ids }, organizationId: request.user.organizationId },
+          await escopoDeConversa(deps, request),
+        ],
+      },
       select: { id: true },
     });
     // Id que não existe é RECUSADO, nunca ignorado — a mesma regra dos filtros
@@ -251,10 +279,16 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
     return { run: serializeQualityRun(run) };
   });
 
-  app.get("/quality/runs", { preHandler: apenasAdmin }, async (request) => {
+  app.get("/quality/runs", { preHandler: guarda }, async (request) => {
     const query = z.object({ limit: z.coerce.number().int().min(1).max(100).default(30) }).parse(request.query);
     const runs = await deps.prisma.qualityRun.findMany({
-      where: { organizationId: request.user.organizationId },
+      where: {
+        organizationId: request.user.organizationId,
+        // Disparo aparece só quando TODAS as conversas dele estão no alcance:
+        // um disparo do administrador que misture uma conversa de fora mostraria
+        // o nome dela na linha, e o detalhe, a nota.
+        items: { every: { conversation: await escopoDeConversa(deps, request) } },
+      },
       orderBy: { createdAt: "desc" },
       take: query.limit,
       // O nome de cada conversa vem JUNTO: sem ele a lista só diria "1
@@ -286,10 +320,14 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
     };
   });
 
-  app.get("/quality/runs/:id", { preHandler: apenasAdmin }, async (request) => {
+  app.get("/quality/runs/:id", { preHandler: guarda }, async (request) => {
     const params = z.object({ id: uuid }).parse(request.params);
     const run = await deps.prisma.qualityRun.findFirst({
-      where: { id: params.id, organizationId: request.user.organizationId },
+      where: {
+        id: params.id,
+        organizationId: request.user.organizationId,
+        items: { every: { conversation: await escopoDeConversa(deps, request) } },
+      },
       include: {
         items: {
           orderBy: { createdAt: "asc" },
@@ -334,10 +372,16 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
    * ler abrindo o chat. A máscara existe para o que SAI para a IA, não para o
    * que o dono do escritório vê da própria operação.
    */
-  app.get("/quality/runs/:id/items/:itemId/transcripts", { preHandler: apenasAdmin }, async (request) => {
+  app.get("/quality/runs/:id/items/:itemId/transcripts", { preHandler: guarda }, async (request) => {
     const params = z.object({ id: uuid, itemId: uuid }).parse(request.params);
     const item = await deps.prisma.qualityRunItem.findFirst({
-      where: { id: params.itemId, runId: params.id, organizationId: request.user.organizationId },
+      where: {
+        id: params.itemId,
+        runId: params.id,
+        organizationId: request.user.organizationId,
+        // As transcrições saem ÍNTEGRAS: é aqui que o alcance mais importa.
+        conversation: await escopoDeConversa(deps, request),
+      },
       include: { run: { select: { periodFrom: true, periodTo: true } } },
     });
     if (!item) throw new NotFoundError("Conversa da análise");
@@ -367,7 +411,7 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
     return { transcripts };
   });
 
-  app.get("/quality/evaluations", { preHandler: apenasAdmin }, async (request) => {
+  app.get("/quality/evaluations", { preHandler: guarda }, async (request) => {
     const query = z
       .object({
         userId: uuid.optional(),
@@ -384,6 +428,7 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
     const evaluations = await deps.prisma.qualityEvaluation.findMany({
       where: {
         organizationId: request.user.organizationId,
+        conversation: await escopoDeConversa(deps, request),
         ...(query.userId ? { userId: query.userId } : {}),
         ...(query.subject ? { subject: query.subject } : {}),
         // O recorte de data é sobre o PERÍODO AVALIADO (o do disparo), e não
@@ -440,11 +485,15 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
    * nota: ela é da IA, por decisão do desenho. Comentário que mexesse na nota
    * transformaria o painel em opinião assinada por um número que a IA deu.
    */
-  app.post("/quality/evaluations/:id/discard", { preHandler: apenasAdmin }, async (request) => {
+  app.post("/quality/evaluations/:id/discard", { preHandler: guarda }, async (request) => {
     const params = z.object({ id: uuid }).parse(request.params);
     const body = z.object({ comment: z.string().trim().max(2000).optional() }).parse(request.body ?? {});
     const evaluation = await deps.prisma.qualityEvaluation.findFirst({
-      where: { id: params.id, organizationId: request.user.organizationId },
+      where: {
+        id: params.id,
+        organizationId: request.user.organizationId,
+        conversation: await escopoDeConversa(deps, request),
+      },
       select: { id: true, userId: true },
     });
     if (!evaluation) throw new NotFoundError("Avaliação");
@@ -479,10 +528,14 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
     };
   });
 
-  app.post("/quality/evaluations/:id/restore", { preHandler: apenasAdmin }, async (request) => {
+  app.post("/quality/evaluations/:id/restore", { preHandler: guarda }, async (request) => {
     const params = z.object({ id: uuid }).parse(request.params);
     const evaluation = await deps.prisma.qualityEvaluation.findFirst({
-      where: { id: params.id, organizationId: request.user.organizationId },
+      where: {
+        id: params.id,
+        organizationId: request.user.organizationId,
+        conversation: await escopoDeConversa(deps, request),
+      },
       select: { id: true },
     });
     if (!evaluation) throw new NotFoundError("Avaliação");
@@ -511,11 +564,15 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
     };
   });
 
-  app.patch("/quality/evaluations/:id/comment", { preHandler: apenasAdmin }, async (request) => {
+  app.patch("/quality/evaluations/:id/comment", { preHandler: guarda }, async (request) => {
     const params = z.object({ id: uuid }).parse(request.params);
     const body = z.object({ comment: z.string().trim().max(2000) }).parse(request.body);
     const evaluation = await deps.prisma.qualityEvaluation.findFirst({
-      where: { id: params.id, organizationId: request.user.organizationId },
+      where: {
+        id: params.id,
+        organizationId: request.user.organizationId,
+        conversation: await escopoDeConversa(deps, request),
+      },
       select: { id: true },
     });
     if (!evaluation) throw new NotFoundError("Avaliação");
@@ -545,7 +602,7 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
    * divergiriam por arredondamento, e "o total não bate" é como um painel perde
    * a confiança de quem o lê.
    */
-  app.get("/quality/agents", { preHandler: apenasAdmin }, async (request) => {
+  app.get("/quality/agents", { preHandler: guarda }, async (request) => {
     const query = z
       .object({ from: z.coerce.date().optional(), to: z.coerce.date().optional() })
       .parse(request.query);
@@ -553,6 +610,7 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
     const evaluations = await deps.prisma.qualityEvaluation.findMany({
       where: {
         organizationId: request.user.organizationId,
+        conversation: await escopoDeConversa(deps, request),
         discardedAt: null,
         // Mesmo recorte por PERÍODO AVALIADO da lista de avaliações.
         ...(query.from || query.to

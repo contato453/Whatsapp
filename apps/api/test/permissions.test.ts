@@ -34,7 +34,7 @@ describe("resolvePermission — padrão do catálogo", () => {
   it("sem configuração nenhuma, vale o padrão de cada ação", () => {
     for (const action of PERMISSION_ACTIONS) {
       for (const role of CONFIGURABLE_ROLES) {
-        expect(resolvePermission(role, action.key, new Map())).toBe(action.defaults[role]);
+        expect(resolvePermission(role, action.key, new Map())).toBe(defaultPermission(action.key, role));
       }
     }
   });
@@ -87,7 +87,12 @@ describe("admin passa por cima de tudo", () => {
 
   it("não existe chave de admin no catálogo", () => {
     for (const action of PERMISSION_ACTIONS) {
-      expect(Object.keys(action.defaults).sort()).toEqual([...CONFIGURABLE_ROLES].sort());
+      // Usuário e Supervisor sempre declarados; Gerente só quando diverge do
+      // Supervisor (o Quality). Admin nunca.
+      const papeis = Object.keys(action.defaults);
+      expect(papeis).toContain("agent");
+      expect(papeis).toContain("supervisor");
+      for (const papel of papeis) expect(isConfigurableRole(papel)).toBe(true);
     }
     expect(isConfigurableRole("admin")).toBe(false);
   });
@@ -194,10 +199,10 @@ describe("varredura das rotas", () => {
     // no código de propósito e não tem chave no catálogo.
     for (const { file, code } of fontes) {
       expect(code, `${file}: comparação de papel solta no handler`).not.toMatch(
-        /user\.role\s*===\s*"(agent|supervisor)"/,
+        /user\.role\s*===\s*"(agent|supervisor|manager)"/,
       );
       expect(code, `${file}: hasRole com papel configurável no handler`).not.toMatch(
-        /hasRole\([^)]*"(agent|supervisor)"\)/,
+        /hasRole\([^)]*"(agent|supervisor|manager)"\)/,
       );
     }
   });
@@ -212,64 +217,74 @@ describe("varredura das rotas", () => {
  * o que a equipe inteira pode fazer no próximo deploy, sem ninguém abrir a
  * tela de Permissões.
  */
-describe("padrões de fábrica (Usuário / Supervisor)", () => {
-  const esperado: Array<[PermissionAction, boolean, boolean]> = [
+describe("padrões de fábrica (Usuário / Supervisor / Gerente)", () => {
+  const esperado: Array<[PermissionAction, boolean, boolean, boolean]> = [
     // Atendimento
-    ["message.delete_sent", false, true],
-    ["message.edit_sent", false, true],
-    ["message.pin", true, true],
-    ["scheduled_message.cancel_other", false, true],
-    ["conversation.transfer_user", true, true],
-    ["conversation.unassign", true, true],
-    ["conversation.change_department", false, true],
-    ["conversation.assign_all", true, true],
-    ["conversation.archive", false, true],
-    ["note.delete_other", false, true],
-    ["conversation.rename", true, true],
-    ["group_participant.rename", true, true],
-    ["azevedo_os.link", true, true],
-    ["azevedo_os.relink", false, true],
-    ["follow_up.control", true, true],
+    ["message.delete_sent", false, true, true],
+    ["message.edit_sent", false, true, true],
+    ["message.pin", true, true, true],
+    ["scheduled_message.cancel_other", false, true, true],
+    ["conversation.transfer_user", true, true, true],
+    ["conversation.unassign", true, true, true],
+    ["conversation.change_department", false, true, true],
+    ["conversation.assign_all", true, true, true],
+    ["conversation.archive", false, true, true],
+    ["note.delete_other", false, true, true],
+    ["conversation.rename", true, true, true],
+    ["group_participant.rename", true, true, true],
+    ["azevedo_os.link", true, true, true],
+    ["azevedo_os.relink", false, true, true],
+    ["follow_up.control", true, true, true],
     // CRM
-    ["crm.view", true, true],
-    ["crm.opportunity.manage", true, true],
-    ["crm.opportunity.reopen", false, true],
-    ["crm.pipeline.manage", false, true],
-    ["crm.reports.view", false, true],
+    ["crm.view", true, true, true],
+    ["crm.opportunity.manage", true, true, true],
+    ["crm.opportunity.reopen", false, true, true],
+    ["crm.pipeline.manage", false, true, true],
+    ["crm.reports.view", false, true, true],
     // Cadastros
-    ["tag.manage", false, true],
-    ["tag.delete", false, true],
-    ["quick_reply.manage", true, true],
-    ["quick_reply.create_shared", false, true],
-    ["follow_up.manage", false, true],
-    ["user.deactivate", false, false],
-    ["department.manage", false, true],
-    ["whatsapp_instance.manage", false, true],
-    ["whatsapp_instance.connection", false, true],
-    ["whatsapp_instance.backup", false, true],
+    ["tag.manage", false, true, true],
+    ["tag.delete", false, true, true],
+    ["quick_reply.manage", true, true, true],
+    ["quick_reply.create_shared", false, true, true],
+    ["follow_up.manage", false, true, true],
+    ["user.deactivate", false, false, false],
+    ["department.manage", false, true, true],
+    ["whatsapp_instance.manage", false, true, true],
+    ["whatsapp_instance.connection", false, true, true],
+    ["whatsapp_instance.backup", false, true, true],
     // Visão e relatórios
-    ["reports.view", false, true],
-    ["dashboard.view_team", false, true],
-    ["audit.view", false, true],
-    ["attendance_settings.manage", false, true],
+    ["reports.view", false, true, true],
+    ["dashboard.view_team", false, true, true],
+    ["audit.view", false, true, true],
+    ["attendance_settings.manage", false, true, true],
     // Automações
-    ["automation.manage", false, true],
-    ["automation.view_history", false, true],
+    ["automation.manage", false, true, true],
+    ["automation.view_history", false, true, true],
     // Ligações
-    ["call.answer", true, true],
-    ["call.view", true, true],
-    ["call.recording.play", false, true],
-    ["call.recording.delete", false, false],
+    ["call.answer", true, true, true],
+    ["call.view", true, true, true],
+    ["call.recording.play", false, true, true],
+    ["call.recording.delete", false, false, false],
     // Inteligência artificial
-    ["ai.agent.manage", false, true],
-    ["ai.view_usage", false, true],
-    ["ai.session.stop", true, true],
-    ["ai.session.resume", false, true],
+    ["ai.agent.manage", false, true, true],
+    ["ai.view_usage", false, true, true],
+    ["ai.session.stop", true, true, true],
+    ["ai.session.resume", false, true, true],
+    // Quality: a única ação em que o Gerente difere do Supervisor.
+    ["quality.use", false, false, true],
   ];
 
-  it.each(esperado)("%s → Usuário %s, Supervisor %s", (action, agent, supervisor) => {
+  it.each(esperado)("%s → Usuário %s, Supervisor %s, Gerente %s", (action, agent, supervisor, manager) => {
     expect(defaultPermission(action, "agent")).toBe(agent);
     expect(defaultPermission(action, "supervisor")).toBe(supervisor);
+    expect(defaultPermission(action, "manager")).toBe(manager);
+  });
+
+  it("o Gerente herda o padrão do Supervisor em tudo, menos no Quality", () => {
+    const divergentes = PERMISSION_ACTION_KEYS.filter(
+      (action) => defaultPermission(action, "manager") !== defaultPermission(action, "supervisor"),
+    );
+    expect(divergentes).toEqual(["quality.use"]);
   });
 
   it("o catálogo não tem ação além das declaradas aqui", () => {

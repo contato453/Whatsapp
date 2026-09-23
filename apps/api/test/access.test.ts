@@ -20,7 +20,10 @@ import {
   loadConversationAccess,
   type ConversationAccess,
 } from "../src/lib/access.js";
-import type { AuthTokenPayload } from "../src/lib/auth.js";
+import { requireRole, type AuthTokenPayload } from "../src/lib/auth.js";
+import { ForbiddenError } from "../src/lib/errors.js";
+import { USER_ROLES, hasRole } from "@azvchat/shared";
+import type { FastifyReply, FastifyRequest } from "fastify";
 
 /** Permissões efetivas de um papel, sem nenhuma configuração gravada. */
 function permissoes(role: "admin" | ConfigurableRole) {
@@ -585,5 +588,98 @@ describe("canAssignBeyondConversationReach (quem escapa da regra)", () => {
 
   it("admin escapa", () => {
     expect(canAssignBeyondConversationReach("admin")).toBe(true);
+  });
+});
+
+/**
+ * O PAPEL GERENTE. Ele fica entre Supervisor e Administrador, e o que estes
+ * casos trancam é o desenho inteiro: no ALCANCE ele é exatamente um
+ * supervisor (nada de acesso total, nada de recorte de responsável), na
+ * HIERARQUIA ele passa onde o supervisor passa e é barrado onde só o admin
+ * passa, e na AÇÃO a única diferença de fábrica é o Quality.
+ */
+describe("papel Gerente", () => {
+  const vinculos = fakePrisma([{ whatsappInstanceId: "chip-a" }], [{ departmentId: "dep-1" }]);
+
+  it("tem EXATAMENTE o alcance do supervisor com os mesmos vínculos", async () => {
+    const gerente = await loadConversationAccess(vinculos, user("manager"));
+    const supervisor = await loadConversationAccess(vinculos, user("supervisor"));
+    expect(gerente).toEqual(supervisor);
+    expect(gerente.ownOnly).toBe(false);
+    expect(conversationScope(gerente)).toEqual(conversationScope(supervisor));
+  });
+
+  it("não é acesso total: continua preso ao número e ao departamento do login", async () => {
+    const gerente = await loadConversationAccess(vinculos, user("manager"));
+    expect(gerente.instanceIds).toEqual(["chip-a"]);
+    expect(gerente.departmentIds).toEqual(["dep-1"]);
+    expect(conversationScope(gerente)).not.toEqual({});
+  });
+
+  it("sem número ou sem departamento não enxerga conversa alguma, igual ao supervisor", async () => {
+    const semVinculo = await loadConversationAccess(fakePrisma([], []), user("manager"));
+    expect(semVinculo.instanceIds).toEqual([]);
+    expect(semVinculo.departmentIds).toEqual([]);
+    expect(conversationScope(semVinculo)).toEqual(
+      conversationScope(await loadConversationAccess(fakePrisma([], []), user("supervisor"))),
+    );
+  });
+
+  it("a hierarquia é ordinal e o gerente fica entre supervisor e admin", () => {
+    expect(USER_ROLES).toEqual(["admin", "manager", "supervisor", "agent"]);
+    expect(hasRole("manager", "agent")).toBe(true);
+    expect(hasRole("manager", "supervisor")).toBe(true);
+    expect(hasRole("manager", "manager")).toBe(true);
+    expect(hasRole("manager", "admin")).toBe(false);
+    expect(hasRole("supervisor", "manager")).toBe(false);
+    expect(hasRole("admin", "manager")).toBe(true);
+    expect(canAssignBeyondConversationReach("manager")).toBe(true);
+  });
+
+  /** Roda um preHandler de `requireRole` com a sessão já resolvida. */
+  async function passa(minimo: Parameters<typeof requireRole>[0], role: AuthTokenPayload["role"]) {
+    const request = {
+      user: user(role),
+      jwtVerify: async () => undefined,
+      server: { verifySession: async (payload: AuthTokenPayload) => payload },
+    } as unknown as FastifyRequest;
+    await requireRole(minimo)(request, {} as FastifyReply);
+  }
+
+  it("é aceito onde a rota exige supervisor", async () => {
+    await expect(passa("supervisor", "manager")).resolves.toBeUndefined();
+  });
+
+  it("é recusado com o erro padrão onde a rota exige admin", async () => {
+    // Excluir número, excluir departamento, criar e editar usuário, redefinir
+    // senha e a tela de Permissões são `requireRole("admin")`.
+    await expect(passa("admin", "manager")).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(passa("admin", "admin")).resolves.toBeUndefined();
+  });
+
+  it("é aceito no Quality e o supervisor é recusado, pelo padrão do catálogo", () => {
+    expect(permissoes("manager").can("quality.use")).toBe(true);
+    expect(permissoes("supervisor").can("quality.use")).toBe(false);
+    expect(permissoes("agent").can("quality.use")).toBe(false);
+    expect(permissoes("admin").can("quality.use")).toBe(true);
+  });
+
+  it("desligar a chave do Quality para o gerente fecha o módulo, sem mexer no alcance", async () => {
+    const semQuality = new Map([[permissionOverrideKey("manager", "quality.use"), false]]);
+    expect(buildPermissions({ role: "manager" }, semQuality).can("quality.use")).toBe(false);
+    const comTudo = buildPermissions({ role: "manager" }, todasAsChaves("manager", true));
+    expect(comTudo.can("quality.use")).toBe(true);
+    // Nenhuma chave muda o que ele enxerga.
+    expect(conversationScope(await loadConversationAccess(vinculos, user("manager")))).toEqual(
+      conversationScope(await loadConversationAccess(vinculos, user("supervisor"))),
+    );
+  });
+
+  it("com o padrão de fábrica, faz tudo o que o supervisor faz", () => {
+    const gerente = permissoes("manager");
+    const supervisor = permissoes("supervisor");
+    for (const action of PERMISSION_ACTION_KEYS) {
+      if (supervisor.can(action)) expect(gerente.can(action), action).toBe(true);
+    }
   });
 });

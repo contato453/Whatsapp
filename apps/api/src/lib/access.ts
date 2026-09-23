@@ -7,8 +7,10 @@ import type { AuthTokenPayload } from "./auth.js";
  * nenhuma rota monta filtro de acesso por conta própria.
  *
  * - admin: enxerga a organização inteira.
- * - supervisor: todas as conversas dos departamentos dele, dentro dos
- *   números vinculados ao login dele.
+ * - gerente e supervisor: todas as conversas dos departamentos dele, dentro
+ *   dos números vinculados ao login dele. O gerente tem EXATAMENTE o alcance
+ *   do supervisor; o que ele tem a mais é ação (catálogo de Permissões),
+ *   nunca conversa.
  * - usuário: dentro do mesmo recorte de número e departamento, só as
  *   conversas atribuídas a ele e as que ainda não têm responsável.
  *
@@ -48,7 +50,10 @@ export async function loadConversationAccess(
   return {
     instanceIds: instances.map((link) => link.whatsappInstanceId),
     departmentIds: departments.map((link) => link.departmentId),
-    ownOnly: user.role === "agent",
+    // Pela hierarquia, e não por `role === "agent"`: o recorte de responsável
+    // vale para quem está ABAIXO de supervisor. Comparar por igualdade foi o
+    // que quase deixou o Gerente com o alcance errado (ver `hasRole`).
+    ownOnly: !hasRole(user.role, "supervisor"),
     userId: user.sub,
   };
 }

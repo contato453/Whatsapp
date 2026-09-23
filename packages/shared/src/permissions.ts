@@ -22,8 +22,12 @@
 
 import type { UserRole } from "./enums.js";
 
-/** Os papéis configuráveis. `admin` fica de fora de propósito (ver acima). */
-export const CONFIGURABLE_ROLES = ["agent", "supervisor"] as const;
+/**
+ * Os papéis configuráveis, em ordem CRESCENTE de hierarquia, é a ordem das
+ * colunas da tela (Usuário, Supervisor, Gerente). `admin` fica de fora de
+ * propósito (ver acima).
+ */
+export const CONFIGURABLE_ROLES = ["agent", "supervisor", "manager"] as const;
 export type ConfigurableRole = (typeof CONFIGURABLE_ROLES)[number];
 
 export function isConfigurableRole(value: string): value is ConfigurableRole {
@@ -427,6 +431,20 @@ export const PERMISSION_ACTIONS = [
     area: "ia",
     defaults: { agent: false, supervisor: true },
   },
+  {
+    // O Quality nasceu fixo em admin. Virou chave para o Gerente poder usá-lo
+    // sem virar administrador, e o SIGILO continua: quem não tem a chave
+    // recebe 404 em toda rota do módulo (nem "sem permissão", que confirmaria
+    // que ele existe), e o item de menu não aparece. A chave dá a AÇÃO; o
+    // alcance continua o de `lib/access.ts`, então quem não é admin só analisa
+    // e só lê avaliação de conversa que já enxerga.
+    key: "quality.use",
+    label: "Usar o Quality (avaliação do atendimento pela IA)",
+    description:
+      "Dispara análises, lê as notas e o plano de ação de cada atendente e as transcrições, sempre dentro das conversas que o perfil já enxerga. Quem não tem a chave não vê nem que o módulo existe.",
+    area: "ia",
+    defaults: { agent: false, supervisor: false, manager: true },
+  },
 ] as const;
 
 export type PermissionAction = (typeof PERMISSION_ACTIONS)[number]["key"];
@@ -438,8 +456,12 @@ export interface PermissionActionDefinition {
   /** Frase curta com o efeito prático, para o admin decidir sem perguntar a ninguém. */
   description: string;
   area: PermissionArea;
-  /** Valor de fábrica por papel. Ausência de linha no banco significa exatamente isto. */
-  defaults: Record<ConfigurableRole, boolean>;
+  /**
+   * Valor de fábrica por papel. Ausência de linha no banco significa
+   * exatamente isto. `manager` é opcional: sem ele, o Gerente herda o padrão
+   * do Supervisor (ver `defaultPermission`).
+   */
+  defaults: { agent: boolean; supervisor: boolean; manager?: boolean };
 }
 
 export const PERMISSION_ACTION_KEYS = PERMISSION_ACTIONS.map(
@@ -479,9 +501,20 @@ export function permissionActionsByArea(
   ) as readonly PermissionActionDefinition[];
 }
 
-/** Valor de fábrica de um par (papel, ação). */
+/**
+ * Valor de fábrica de um par (papel, ação).
+ *
+ * O Gerente HERDA o padrão do Supervisor em toda ação que não declara o seu.
+ * É assim que o papel novo nasceu sem mudar o comportamento de nada além do
+ * pedido: repetir o valor em cada linha do catálogo seria uma segunda cópia
+ * para divergir no primeiro esquecimento, e só a exceção (o Quality) precisa
+ * dizer algo diferente.
+ */
 export function defaultPermission(action: PermissionAction, role: ConfigurableRole): boolean {
-  return ACTION_BY_KEY.get(action)?.defaults[role] ?? false;
+  const defaults = ACTION_BY_KEY.get(action)?.defaults;
+  if (!defaults) return false;
+  if (role === "manager") return defaults.manager ?? defaults.supervisor;
+  return defaults[role];
 }
 
 /** Chave do mapa de configuração — papel e ação sempre andam juntos. */
@@ -531,10 +564,16 @@ export function permissionDeniedMessage(action: string): string {
 export const PERMISSION_DENIED_CODE = "permission_denied";
 
 /**
- * Configuração invertida em relação à hierarquia: liberada para Usuário e
- * bloqueada para Supervisor. Não é proibida (o dono pode ter um motivo),
- * mas a tela avisa — quase sempre é engano de clique.
+ * Configuração invertida em relação à hierarquia: liberada para um papel e
+ * bloqueada para outro ACIMA dele (Usuário sim e Supervisor não; Supervisor
+ * sim e Gerente não). Não é proibida (o dono pode ter um motivo), mas a tela
+ * avisa, quase sempre é engano de clique. O contrário (o Quality: Gerente
+ * sim, Supervisor não) é o desenho normal e não avisa.
  */
-export function isInvertedHierarchy(agentAllowed: boolean, supervisorAllowed: boolean): boolean {
-  return agentAllowed && !supervisorAllowed;
+export function isInvertedHierarchy(values: Record<ConfigurableRole, boolean>): boolean {
+  // CONFIGURABLE_ROLES está em ordem crescente: basta achar um papel liberado
+  // com algum papel acima dele bloqueado.
+  return CONFIGURABLE_ROLES.some(
+    (role, index) => values[role] && CONFIGURABLE_ROLES.slice(index + 1).some((above) => !values[above]),
+  );
 }

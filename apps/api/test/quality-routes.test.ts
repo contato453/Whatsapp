@@ -26,6 +26,12 @@ const ANA = "22222222-2222-4222-8222-222222222222";
 const ADMIN: AuthTokenPayload = { sub: "admin-1", organizationId: ORG, role: "admin", name: "Admin", email: "a@x" };
 const SUPERVISOR: AuthTokenPayload = { sub: "sup-1", organizationId: ORG, role: "supervisor", name: "Sup", email: "s@x" };
 const AGENT: AuthTokenPayload = { sub: "ag-1", organizationId: ORG, role: "agent", name: "Ag", email: "g@x" };
+const GERENTE: AuthTokenPayload = { sub: "33333333-3333-4333-8333-333333333333", organizationId: ORG, role: "manager", name: "Gerente", email: "m@x" };
+/** Conversa num número que o gerente NÃO tem: o Quality não pode alcançá-la. */
+const CONVERSA_DE_FORA = "44444444-4444-4444-8444-444444444444";
+const CHIP = "55555555-5555-4555-8555-555555555555";
+const CHIP_DE_FORA = "66666666-6666-4666-8666-666666666666";
+const DEPARTAMENTO = "77777777-7777-4777-8777-777777777777";
 
 const auditoria: Array<{ action: string; metadata?: Record<string, unknown> }> = [];
 /** Salas em que o módulo emitiu, para provar que o socket foi alcançado. */
@@ -50,8 +56,8 @@ async function buildApp(db: MemoryPrisma): Promise<{ app: FastifyInstance; token
   } as unknown as AppDeps;
   await qualityRoutes(app, deps);
   deps.io = {
-    to: (room: string) => {
-      emissoes.push(room);
+    to: (room: string | string[]) => {
+      emissoes.push(...(Array.isArray(room) ? room : [room]));
       return { emit: () => undefined };
     },
   } as unknown as AppDeps["io"];
@@ -70,7 +76,26 @@ function seed(db: MemoryPrisma, options: { comIa?: boolean } = {}) {
     externalChatId: "5511999990000@s.whatsapp.net",
     title: "Cliente teste",
     customTitle: null,
+    whatsappInstanceId: CHIP,
+    departmentId: DEPARTAMENTO,
+    assignedUserId: null,
   });
+  db.seed("conversation", {
+    id: CONVERSA_DE_FORA,
+    organizationId: ORG,
+    type: "individual",
+    status: "open",
+    externalChatId: "5511888880000@s.whatsapp.net",
+    title: "Cliente de outro chip",
+    customTitle: null,
+    whatsappInstanceId: CHIP_DE_FORA,
+    departmentId: DEPARTAMENTO,
+    assignedUserId: null,
+  });
+  // O gerente tem o chip e o departamento da primeira conversa, e só isso.
+  db.seed("user", { id: GERENTE.sub, organizationId: ORG, name: "Gerente", role: "manager", status: "active" });
+  db.seed("userWhatsAppInstance", { userId: GERENTE.sub, whatsappInstanceId: CHIP });
+  db.seed("userDepartment", { userId: GERENTE.sub, departmentId: DEPARTAMENTO });
   if (options.comIa !== false) {
     db.seed("aiProviderConfig", {
       organizationId: ORG,
@@ -311,6 +336,111 @@ describe("rotas do Quality", () => {
     const comDescartadas = await chamar(ADMIN, "GET", "/quality/evaluations?includeDiscarded=true");
     expect(comDescartadas.json().evaluations).toHaveLength(1);
     expect(comDescartadas.json().evaluations[0].overallScore).toBe(7.5);
+  });
+});
+
+describe("Quality pela chave quality.use (papel Gerente)", () => {
+  let db: MemoryPrisma;
+  let app: FastifyInstance;
+  let token: (user: AuthTokenPayload) => string;
+
+  beforeEach(async () => {
+    db = new MemoryPrisma();
+    auditoria.length = 0;
+    emissoes.length = 0;
+    seed(db);
+    ({ app, token } = await buildApp(db));
+  });
+
+  function chamar(user: AuthTokenPayload, method: "GET" | "POST", url: string, payload?: unknown) {
+    const options: InjectOptions = { method, url, headers: { authorization: `Bearer ${token(user)}` } };
+    if (payload !== undefined) options.payload = payload as InjectOptions["payload"];
+    return app.inject(options);
+  }
+
+  function semearAvaliacao(conversationId: string) {
+    const run = db.seed("qualityRun", {
+      organizationId: ORG,
+      periodFrom: new Date("2026-09-01T00:00:00Z"),
+      periodTo: new Date("2026-09-02T00:00:00Z"),
+      status: "completed",
+      requestedById: ADMIN.sub,
+      requestedByName: "Admin",
+      model: "gpt-4.1-mini",
+      conversationCount: 1,
+    });
+    const item = db.seed("qualityRunItem", { organizationId: ORG, runId: run.id as string, conversationId, status: "completed" });
+    const evaluation = db.seed("qualityEvaluation", {
+      organizationId: ORG,
+      runId: run.id as string,
+      itemId: item.id as string,
+      conversationId,
+      userId: ANA,
+      userName: "Ana",
+      overallScore: 6,
+      discardedAt: null,
+      criteria: [],
+      subject: "fiscal",
+      actionPlan: { improvements: [], strengths: [] },
+      confidence: "high",
+      conversationOutcome: "resolved",
+    });
+    return { run, item, evaluation };
+  }
+
+  it("o gerente abre o módulo pelo padrão do catálogo", async () => {
+    const response = await chamar(GERENTE, "GET", "/quality/availability");
+    expect(response.statusCode).toBe(200);
+    expect(response.json().availability.enabled).toBe(true);
+  });
+
+  it("o supervisor continua recebendo 404, e a chave desligada fecha o gerente do mesmo jeito", async () => {
+    const supervisor = await chamar(SUPERVISOR, "GET", "/quality/runs");
+    expect(supervisor.statusCode).toBe(404);
+
+    db.seed("rolePermission", { organizationId: ORG, role: "manager", action: "quality.use", allowed: false });
+    const { clearPermissionCache } = await import("../src/lib/permissions.js");
+    clearPermissionCache();
+    const gerente = await chamar(GERENTE, "GET", "/quality/runs");
+    expect(gerente.statusCode).toBe(404);
+    expect(gerente.json().error).toBe("not_found");
+    clearPermissionCache();
+  });
+
+  it("a chave dá a AÇÃO, nunca o alcance: conversa de outro chip não é analisada", async () => {
+    const response = await chamar(GERENTE, "POST", "/quality/runs", {
+      conversationIds: [CONVERSA_DE_FORA],
+      from: "2026-09-01T00:00:00Z",
+      to: "2026-09-02T00:00:00Z",
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toBe("quality_conversation_not_found");
+  });
+
+  it("o gerente só lê avaliação, disparo e transcrição de conversa que já enxerga", async () => {
+    const minha = semearAvaliacao(CONVERSATION);
+    const deFora = semearAvaliacao(CONVERSA_DE_FORA);
+
+    const avaliacoes = await chamar(GERENTE, "GET", "/quality/evaluations");
+    expect(avaliacoes.json().evaluations.map((row: { id: string }) => row.id)).toEqual([minha.evaluation.id]);
+
+    const disparos = await chamar(GERENTE, "GET", "/quality/runs");
+    expect(disparos.json().runs.map((row: { id: string }) => row.id)).toEqual([minha.run.id]);
+
+    expect((await chamar(GERENTE, "GET", `/quality/runs/${deFora.run.id}`)).statusCode).toBe(404);
+    expect(
+      (await chamar(GERENTE, "GET", `/quality/runs/${deFora.run.id}/items/${deFora.item.id}/transcripts`)).statusCode,
+    ).toBe(404);
+    expect(
+      (await chamar(GERENTE, "POST", `/quality/evaluations/${deFora.evaluation.id}/discard`, {})).statusCode,
+    ).toBe(404);
+
+    const agentes = await chamar(GERENTE, "GET", "/quality/agents");
+    expect(agentes.json().agents[0].evaluations).toBe(1);
+
+    // O admin continua vendo a organização inteira.
+    const admin = await chamar(ADMIN, "GET", "/quality/evaluations");
+    expect(admin.json().evaluations).toHaveLength(2);
   });
 });
 
