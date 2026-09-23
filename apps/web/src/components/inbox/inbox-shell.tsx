@@ -41,6 +41,7 @@ import {
   type AzevedoOsFacetsDto,
   type ConversationStatus,
   type ComposerFormat,
+  hasRole,
 } from "@azvchat/shared";
 import {
   api,
@@ -173,7 +174,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   const [filters, setFilters] = useState<InboxFilters>(() => {
     if (!me) return EMPTY_INBOX_FILTERS;
     const stored = readInboxFilters(me.id);
-    if (me.role === "admin" || me.role === "supervisor") return stored;
+    if (hasRole(me.role, "supervisor")) return stored;
     // O usuário comum não tem os seletores de número e departamento:
     // reidratar esses dois seria filtro invisível, lista curta sem
     // explicação — mesma regra dos parâmetros vindos da URL.
@@ -287,8 +288,11 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
    */
   const [unresolvedVariables, setUnresolvedVariables] = useState<QuickReplyUnresolved[]>([]);
 
-  /** Supervisor e admin enxergam vários números/departamentos; usuário, não. */
-  const canFilterScope = me?.role === "admin" || me?.role === "supervisor";
+  /**
+   * Supervisor para cima (gerente e admin inclusos) enxerga vários
+   * números/departamentos; usuário, não. Pela hierarquia, nunca por igualdade.
+   */
+  const canFilterScope = me ? hasRole(me.role, "supervisor") : false;
 
   /**
    * Filtro vindo da URL — é assim que os cards do dashboard abrem a Inbox já

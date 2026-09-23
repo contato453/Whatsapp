@@ -1,5 +1,6 @@
 "use client";
 
+import { hasRole } from "@azvchat/shared";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Building2, ChevronDown, Info, Pencil, Plus, Trash2, UserRound } from "lucide-react";
 import { api } from "@/lib/api";
@@ -131,8 +132,10 @@ function DepartmentTeam({
       </p>
     );
   }
-  const supervisors = members.filter((member) => member.role === "supervisor");
-  const team = members.filter((member) => member.role !== "supervisor");
+  // Supervisão é "supervisor para cima" (o Gerente entra aqui), pela
+  // hierarquia: com igualdade o Gerente apareceria misturado ao time.
+  const supervisors = members.filter((member) => hasRole(member.role, "supervisor"));
+  const team = members.filter((member) => !hasRole(member.role, "supervisor"));
   return (
     <div className="mt-2 space-y-1.5">
       {supervisors.length > 0 && (

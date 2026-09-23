@@ -3,6 +3,7 @@ import {
   AI_DEFAULT_TRANSCRIPTION_MODEL,
   RealtimeEvents,
   estimateCostMicros,
+  resolvePermission,
   readAiAttachmentInsightOf,
   type AiPricingOverrides,
   type AttendanceSettings,
@@ -26,7 +27,8 @@ import { parseQualityAiResponse } from "../../lib/quality/response.js";
 import { QUALITY_CONVERSATION_SELECT, resolveQualityTitles } from "../../lib/quality/title.js";
 import { loadQualitySettings, type QualitySettingsView } from "../../lib/quality/settings.js";
 import { serializeQualityRun } from "../../lib/serialize.js";
-import { orgRoom } from "../../realtime/socket.js";
+import { orgRoom, userRoom } from "../../realtime/socket.js";
+import { loadOrganizationPermissions } from "../../lib/permissions.js";
 import { ensureAttachmentInsights } from "../ai/attachments.js";
 import { loadBudgetState, loadAiSettings, type AiSettingsView } from "../ai/budget.js";
 import { resolveCredentials, type ResolvedCredentials } from "../ai/credentials.js";
@@ -660,7 +662,16 @@ export class QualityAnalyzer {
     // ao provedor) por causa do aviso, que foi a forma que este defeito tomou
     // em produção.
     try {
-      this.deps.io().to(orgRoom(updated.organizationId)).emit(RealtimeEvents.QualityRun, {
+      const rooms = [orgRoom(updated.organizationId)];
+      // Quem disparou sem ser admin (o Gerente, pela chave `quality.use`) não
+      // está na sala da organização: o aviso vai também para a sala PESSOAL
+      // dele, e só enquanto ele ainda tiver a chave, rebaixado no meio da
+      // análise, deixa de receber. Nunca para a audiência da conversa, que
+      // contaria ao atendente que a avaliação existe.
+      if (await this.requesterStillAllowed(updated.requestedById, updated.organizationId)) {
+        rooms.push(userRoom(updated.requestedById as string));
+      }
+      this.deps.io().to(rooms).emit(RealtimeEvents.QualityRun, {
         run: serializeQualityRun(
           updated,
           updated.items
@@ -674,6 +685,31 @@ export class QualityAnalyzer {
         runId,
         error: String(err),
       });
+    }
+  }
+
+  /**
+   * O pedinte (não admin) ainda pode usar o Quality? Relido do banco a cada
+   * aviso, pela mesma regra das rotas: papel atual, conta ativa e a chave.
+   * Admin fica de fora porque já recebe pela sala da organização.
+   */
+  private async requesterStillAllowed(
+    requestedById: string | null,
+    organizationId: string,
+  ): Promise<boolean> {
+    if (!requestedById) return false;
+    try {
+      const requester = await this.deps.prisma.user.findFirst({
+        where: { id: requestedById, organizationId, status: "active" },
+        select: { role: true },
+      });
+      if (!requester || requester.role === "admin") return false;
+      const overrides = await loadOrganizationPermissions(this.deps.prisma, organizationId);
+      return resolvePermission(requester.role, "quality.use", overrides);
+    } catch {
+      // Na dúvida, não entrega: o lado seguro do sigilo é o aviso não sair,
+      // e a tela do pedinte acompanha pelo "Atualizar".
+      return false;
     }
   }
 

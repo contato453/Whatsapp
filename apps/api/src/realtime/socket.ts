@@ -2,6 +2,7 @@ import type { Server as HttpServer } from "node:http";
 import { Server, type Socket } from "socket.io";
 import type { Logger } from "pino";
 import type { AuthTokenPayload, SessionVerifier } from "../lib/auth.js";
+import { hasRole } from "@azvchat/shared";
 
 export interface VerifyToken {
   (token: string): AuthTokenPayload;
@@ -133,7 +134,10 @@ function joinInstanceRooms(socket: Socket, instanceId: string): void {
   // departamento nem de responsável.
   void socket.join(instanceRoom(instanceId));
   for (const departmentKey of [...access.departmentIds, NO_DEPARTMENT]) {
-    if (user.role === "supervisor") {
+    // Pela hierarquia: o Gerente vê o time todo, como o supervisor. Com
+    // `role === "supervisor"` ele cairia nas salas de atendente e deixaria de
+    // receber, sem erro nenhum, os eventos das conversas atribuídas a outros.
+    if (hasRole(user.role, "supervisor")) {
       void socket.join(supervisorRoom(instanceId, departmentKey));
     } else {
       void socket.join(unassignedRoom(instanceId, departmentKey));

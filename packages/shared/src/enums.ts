@@ -100,22 +100,56 @@ export const MESSAGE_STATUSES = [
 ] as const;
 export type MessageStatus = (typeof MESSAGE_STATUSES)[number];
 
-export const USER_ROLES = ["admin", "supervisor", "agent"] as const;
+/**
+ * Papéis do sistema, EM ORDEM DE HIERARQUIA (do mais alto para o mais baixo).
+ * A ordem aqui é a ordem dos seletores da tela, então não é detalhe.
+ *
+ * `manager` ("Gerente") fica entre `admin` e `supervisor`: no ALCANCE ele é
+ * um supervisor (mesmos vínculos de número e departamento, sem recorte de
+ * responsável), e no que ele pode FAZER quem decide é o catálogo de
+ * Permissões, que parte dos padrões do supervisor mais o Quality.
+ */
+export const USER_ROLES = ["admin", "manager", "supervisor", "agent"] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
 /** Rótulos exibidos na interface — o papel `agent` chama-se "Usuário" para o operador. */
 export const USER_ROLE_LABELS: Record<UserRole, string> = {
   admin: "Administrador",
+  manager: "Gerente",
   supervisor: "Supervisor",
   agent: "Usuário",
 };
 
 /**
- * Hierarquia dos papéis. Fonte única: a API usa para proteger rota e o
- * frontend para montar o menu, então os dois nunca divergem.
+ * Cor do selo de papel (lista de Usuários). Tons frios e escurecendo com a
+ * hierarquia, de propósito longe do verde de ESTADO e do verde de marca:
+ * papel não é "como está o atendimento".
+ */
+export const USER_ROLE_COLORS: Record<UserRole, string> = {
+  admin: "#1e293b",
+  manager: "#4338ca",
+  supervisor: "#0369a1",
+  agent: "#64748b",
+};
+
+/**
+ * HIERARQUIA ORDINAL. Fonte única: a API usa para proteger rota
+ * (`requireRole`) e o frontend para montar o menu (`NAV`), então os dois
+ * nunca divergem.
+ *
+ * PAPEL NUNCA SE COMPARA POR IGUALDADE quando a pergunta é "tem pelo menos
+ * este nível?". `role === "supervisor"` parece equivalente a
+ * `hasRole(role, "supervisor")` enquanto não existe papel acima dele, e deixa
+ * de ser no dia em que um nasce: foi exatamente o que a chegada do Gerente
+ * expôs, ele seria barrado em lugares aleatórios (entraria nas salas de
+ * tempo real de atendente, perderia filtros de supervisão), sem erro nenhum
+ * na tela. Igualdade só vale para a pergunta "é EXATAMENTE este papel?", e o
+ * único caso legítimo hoje é `admin`, que é o topo e passa por cima do
+ * catálogo.
  */
 const ROLE_LEVEL: Record<UserRole, number> = {
-  admin: 3,
+  admin: 4,
+  manager: 3,
   supervisor: 2,
   agent: 1,
 };

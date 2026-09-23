@@ -8,23 +8,23 @@ import { useAuth } from "@/lib/auth-context";
  * O módulo Quality está de pé para este escritório?
  *
  * Ele depende da IA já configurada: sem chave de provedor, o menu não aparece e
- * a tela não abre. A resposta vem de uma rota de ADMINISTRADOR, e por isso o
- * hook só pergunta quando quem está logado é admin — perguntar por todos
- * revelaria ao atendente que existe um módulo chamado Quality, que é
- * exatamente o que o sigilo desta entrega proíbe. Para os demais papéis a
- * resposta é `false` sem nenhuma requisição.
+ * a tela não abre. A resposta vem de uma rota do módulo, e por isso o hook só
+ * pergunta quando a sessão tem a chave `quality.use` (admin sempre tem),
+ * perguntar por todos revelaria ao atendente que existe um módulo chamado
+ * Quality, que é exatamente o que o sigilo desta entrega proíbe. Sem a chave
+ * a resposta é `false` sem nenhuma requisição.
  *
  * Fica num hook, e não dentro do `layout.tsx`, pelo mesmo motivo do hook de não
  * lidas: aquele arquivo já decide menu, barra recolhida e área bloqueada.
  */
 export function useQualityAvailability(): { enabled: boolean; loading: boolean } {
-  const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  const { user, can } = useAuth();
+  const podeUsar = Boolean(user) && can("quality.use");
   const [enabled, setEnabled] = useState(false);
-  const [loading, setLoading] = useState(isAdmin);
+  const [loading, setLoading] = useState(podeUsar);
 
   useEffect(() => {
-    if (!isAdmin) {
+    if (!podeUsar) {
       setEnabled(false);
       setLoading(false);
       return;
@@ -47,7 +47,7 @@ export function useQualityAvailability(): { enabled: boolean; loading: boolean }
     return () => {
       ativo = false;
     };
-  }, [isAdmin]);
+  }, [podeUsar]);
 
   return { enabled, loading };
 }

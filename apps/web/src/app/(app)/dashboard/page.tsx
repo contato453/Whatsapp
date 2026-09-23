@@ -51,6 +51,7 @@ import {
   type ConnectionStatus,
   type ConversationStatus,
   type DashboardPeriod,
+  hasRole,
 } from "@azvchat/shared";
 import { api, dashboardApi } from "@/lib/api";
 import {
@@ -730,7 +731,7 @@ export default function DashboardPage() {
    * listas de número e de departamento já vêm recortadas pela API, então elas
    * aparecem para todo mundo sem revelar nada.
    */
-  const canFilterOtherUsers = user?.role === "admin" || user?.role === "supervisor";
+  const canFilterOtherUsers = user ? hasRole(user.role, "supervisor") : false;
   const assigneeOptions = (canFilterOtherUsers ? users : users.filter((row) => row.id === userId))
     // Inativo não aparece: ele não recebe conversa nova, e a lista existe
     // para recortar atendimento, não para consultar quem já saiu.

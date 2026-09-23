@@ -8,6 +8,7 @@ import {
   DASHBOARD_NO_DEPARTMENT_LABEL,
   FILTER_NONE,
   type ConversationStatus,
+  hasRole,
 } from "@azvchat/shared";
 import { api, reportsApi, type ReportFilters } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -255,12 +256,12 @@ export default function ReportsPage() {
     };
   }, [report]);
 
-  if (me && me.role !== "admin" && me.role !== "supervisor") {
+  if (me && !hasRole(me.role, "supervisor")) {
     return (
       <div className="p-8">
         <EmptyState
           title="Relatório restrito"
-          description="Apenas supervisores e administradores acessam os números da equipe."
+          description="Apenas supervisores, gerentes e administradores acessam os números da equipe."
         />
       </div>
     );

@@ -37,7 +37,9 @@ const ABAS: Array<{ id: Aba; label: string }> = [
 ];
 
 export default function QualityPage() {
-  const { user } = useAuth();
+  const { user, can } = useAuth();
+  // A chave, e não o papel: é ela que a API confere (ver `guardaQuality`).
+  const podeUsar = Boolean(user) && can("quality.use");
   const [aba, setAba] = useState<Aba>("nova");
   const [settings, setSettings] = useState<QualitySettingsDto | null>(null);
   const [users, setUsers] = useState<UserDirectoryDto[]>([]);
@@ -47,19 +49,19 @@ export default function QualityPage() {
   const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
-    if (user?.role !== "admin") return;
+    if (!podeUsar) return;
     void qualityApi.availability().then(setDisponivel).catch(() => setDisponivel({ enabled: false, reason: null }));
     void qualityApi.settings().then(setSettings).catch(() => undefined);
     void api
       .get<{ users: UserDirectoryDto[] }>("/users")
       .then((data) => setUsers(data.users))
       .catch(() => undefined);
-  }, [user?.role]);
+  }, [podeUsar]);
 
-  if (user && user.role !== "admin") {
+  if (user && !podeUsar) {
     return (
       <div className="p-6">
-        <EmptyState title="Área restrita" description="Esta tela é de administração do sistema." />
+        <EmptyState title="Área restrita" description="Seu perfil não tem acesso a esta tela." />
       </div>
     );
   }

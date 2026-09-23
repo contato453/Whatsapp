@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { USER_ROLES } from "@azvchat/shared";
 import { accessibleDepartmentIds } from "../../lib/access.js";
 import { authenticate, requireRole } from "../../lib/auth.js";
 import { requirePermission } from "../../lib/permissions.js";
@@ -73,12 +74,14 @@ export async function departmentRoutes(app: FastifyInstance, deps: AppDeps): Pro
     return {
       departments: departments.map((department) => ({
         ...serializeDepartment(department),
-        // Quem atua no departamento. Supervisores primeiro: é a informação
-        // que se procura primeiro ao olhar uma equipe.
+        // Quem atua no departamento, do papel mais alto para o mais baixo
+        // (gerentes, depois supervisores): é a informação que se procura
+        // primeiro ao olhar uma equipe. A ordem é a de USER_ROLES, que é a
+        // hierarquia, nunca uma comparação com um papel só.
         members: department.userAccess
           .map((link) => link.user)
           .sort((a, b) => {
-            if (a.role !== b.role) return a.role === "supervisor" ? -1 : 1;
+            if (a.role !== b.role) return USER_ROLES.indexOf(a.role) - USER_ROLES.indexOf(b.role);
             return a.name.localeCompare(b.name, "pt-BR");
           }),
       })),

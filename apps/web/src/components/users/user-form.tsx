@@ -1,5 +1,6 @@
 "use client";
 
+import { USER_ROLES, USER_ROLE_LABELS } from "@azvchat/shared";
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Building2, Save, Smartphone, UserRound } from "lucide-react";
@@ -203,9 +204,12 @@ export function UserFormPage({ userId }: { userId?: string }) {
               disabled={editingSelf}
               onChange={(event) => setForm({ ...form, role: event.target.value })}
             >
-              <option value="agent">Usuário</option>
-              <option value="supervisor">Supervisor</option>
-              <option value="admin">Administrador</option>
+              {/* Na ordem da hierarquia, de baixo para cima, como sempre foi. */}
+              {[...USER_ROLES].reverse().map((role) => (
+                <option key={role} value={role}>
+                  {USER_ROLE_LABELS[role]}
+                </option>
+              ))}
             </select>
           </Field>
           {editing && (
@@ -365,9 +369,11 @@ export function UserFormPage({ userId }: { userId?: string }) {
                 </p>
               )}
               <p className="text-xs text-slate-400">
-                {form.role === "supervisor"
-                  ? "Supervisor vê todas as conversas dos departamentos marcados, dentro dos números marcados."
-                  : "Usuário vê, dentro dos números e departamentos marcados, as conversas atribuídas a ele e as que ainda não têm responsável."}
+                {form.role === "manager"
+                  ? "Gerente vê o mesmo que um supervisor: todas as conversas dos departamentos marcados, dentro dos números marcados. O que ele pode fazer a mais sai da tela de Permissões."
+                  : form.role === "supervisor"
+                    ? "Supervisor vê todas as conversas dos departamentos marcados, dentro dos números marcados."
+                    : "Usuário vê, dentro dos números e departamentos marcados, as conversas atribuídas a ele e as que ainda não têm responsável."}
               </p>
             </>
           )}

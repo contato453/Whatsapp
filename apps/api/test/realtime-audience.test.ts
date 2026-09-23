@@ -89,7 +89,7 @@ describe("instanceAudience (evento do número, não da conversa)", () => {
 });
 
 /** Socket mínimo: só o que grantInstanceAccess usa. */
-function fakeSocket(role: "admin" | "supervisor" | "agent", departmentIds: string[] | null) {
+function fakeSocket(role: "admin" | "manager" | "supervisor" | "agent", departmentIds: string[] | null) {
   const rooms: string[] = [];
   return {
     rooms,
@@ -114,6 +114,18 @@ describe("grantInstanceAccess (número criado no meio da sessão)", () => {
     const sup = fakeSocket("supervisor", ["dep-1"]);
     grantInstanceAccess(fakeIo([sup]), "user-9", CHIP);
     expect(sup.rooms).toEqual(["instance:chip-a", "sup:chip-a:dep-1", "sup:chip-a:none"]);
+  });
+
+  it("o gerente entra nas MESMAS salas do supervisor, e não nas de atendente", () => {
+    // REGRESSÃO que o papel novo expôs: a escolha de sala era
+    // `role === "supervisor"`, e o gerente caía nas salas de atendente,
+    // deixava de receber, sem erro nenhum, os eventos das conversas
+    // atribuídas a outras pessoas, que a API continua lhe mostrando.
+    const gerente = fakeSocket("manager", ["dep-1"]);
+    const sup = fakeSocket("supervisor", ["dep-1"]);
+    grantInstanceAccess(fakeIo([gerente]), "user-9", CHIP);
+    grantInstanceAccess(fakeIo([sup]), "user-9", CHIP);
+    expect(gerente.rooms).toEqual(sup.rooms);
   });
 
   it("usuário comum entra separado entre livres e as próprias conversas", () => {

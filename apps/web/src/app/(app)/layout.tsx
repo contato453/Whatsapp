@@ -77,14 +77,15 @@ interface NavLeaf {
    */
   feature?: keyof OrganizationFeaturesDto;
   /**
-   * Módulo de ADMINISTRADOR cuja existência depende de configuração, e cuja
+   * Módulo sigiloso cuja existência depende de configuração, e cuja
    * disponibilidade não pode viajar na sessão de todo mundo.
    *
    * O Quality é o caso: ele depende da IA configurada, e um `features.quality`
    * em `/auth/me` contaria ao atendente que existe um módulo que avalia o
    * atendimento dele — exatamente o que o sigilo do módulo proíbe. Por isso a
-   * resposta vem de uma rota de admin (`useQualityAvailability`) e chega aqui
-   * como booleano já resolvido.
+   * resposta vem de uma rota do próprio módulo (`useQualityAvailability`), que
+   * só é consultada por quem tem a chave `quality.use`, e chega aqui como
+   * booleano já resolvido.
    */
   adminModule?: "quality";
   /**
@@ -224,15 +225,16 @@ const NAV: NavEntry[] = [
   // Só admin abre e só admin grava, sem chave: uma chave "editar permissões"
   // deixaria um supervisor se promover sozinho, e o menu inteiro deixaria de
   // valer alguma coisa.
-  // Quality: avaliação do atendimento pela IA. Só admin executa e só admin lê,
-  // fixo no código e fora do catálogo de Permissões — a promessa do módulo é
-  // que o atendente não vê nem que ele existe, e uma chave por papel faria
-  // dessa promessa uma configuração que alguém afrouxa sem perceber.
+  // Quality: avaliação do atendimento pela IA. Era fixo em admin; com o papel
+  // Gerente virou a chave `quality.use` (padrão: Gerente sim, Supervisor e
+  // Usuário não). A MESMA chave esconde o menu aqui e recusa a rota lá, com
+  // 404 para não confirmar que o módulo existe.
   {
     href: "/quality",
     label: "Quality",
     icon: Gauge,
-    minRole: "admin",
+    minRole: "manager",
+    permission: "quality.use",
     adminModule: "quality",
   },
   { href: "/permissions", label: "Permissões", icon: ShieldCheck, minRole: "admin" },

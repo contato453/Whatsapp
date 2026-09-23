@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Pencil, Plus, Users as UsersIcon } from "lucide-react";
-import { USER_ROLE_LABELS } from "@azvchat/shared";
+import { USER_ROLE_COLORS, USER_ROLE_LABELS } from "@azvchat/shared";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { formatDateTime } from "@/lib/utils";
@@ -238,9 +238,7 @@ export default function UsersPage() {
                       assina
                     </Badge>
                   )}
-                  <Badge className="bg-slate-100 text-slate-600">
-                    {USER_ROLE_LABELS[user.role]}
-                  </Badge>
+                  <Badge color={USER_ROLE_COLORS[user.role]}>{USER_ROLE_LABELS[user.role]}</Badge>
                   <Badge color={user.status === "active" ? "#16a34a" : "#94a3b8"}>
                     {user.status === "active" ? "Ativo" : "Inativo"}
                   </Badge>

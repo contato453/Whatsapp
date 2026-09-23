@@ -46,12 +46,12 @@ export function PermissionRow({ action, values, saved, onToggle, onReset }: Prop
   );
   // Configuração estranha, mas não proibida: o dono pode ter um motivo. A
   // tela só avisa, porque quase sempre é engano de clique.
-  const invertida = isInvertedHierarchy(values.agent, values.supervisor);
+  const invertida = isInvertedHierarchy(values);
 
   return (
     <div
       className={cn(
-        "grid grid-cols-[1fr_5rem_5rem_2rem] items-start gap-3 border-t border-slate-100 px-4 py-3",
+        "grid grid-cols-[1fr_5rem_5rem_5rem_2rem] items-start gap-3 border-t border-slate-100 px-4 py-3",
         alterada && "bg-amber-50/40",
       )}
     >
@@ -83,8 +83,8 @@ export function PermissionRow({ action, values, saved, onToggle, onReset }: Prop
         {invertida && (
           <p className="mt-1 flex items-start gap-1 text-[11px] text-orange-600">
             <TriangleAlert className="mt-px h-3 w-3 shrink-0" />
-            Liberado para Usuário e bloqueado para Supervisor — invertido em relação à
-            hierarquia. Não é proibido, mas confira se é isso mesmo.
+            Liberado para um perfil e bloqueado para outro acima dele: invertido em
+            relação à hierarquia. Não é proibido, mas confira se é isso mesmo.
           </p>
         )}
       </div>

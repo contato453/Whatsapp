@@ -44,7 +44,7 @@ projeto — este aqui é Fastify + Prisma + Postgres em VPS.
 | Banco | PostgreSQL 16 + Prisma (migrations versionadas em SQL) |
 | Tempo real | Socket.IO (salas por organização / número / departamento / responsável) |
 | WhatsApp | Baileys, isolado atrás da interface `WhatsAppProvider` |
-| Auth | JWT (`@fastify/jwt`) + bcrypt, papéis admin / supervisor / agent |
+| Auth | JWT (`@fastify/jwt`) + bcrypt, papéis admin / manager / supervisor / agent |
 | Testes | Vitest (unitários) |
 | Deploy | Docker Compose + Caddy (HTTPS automático) em VPS, via GitHub Actions por SSH |
 | Gerenciador | pnpm 10 workspaces |
@@ -99,7 +99,8 @@ snake_case e id `uuid`.
 
 **Organização e pessoas**
 - `Organization` — raiz do tenant.
-- `User` — `role` (`admin|supervisor|agent`), `status` (`active|inactive`), `avatarUrl`,
+- `User`, `role` (`admin|manager|supervisor|agent`, em ordem de hierarquia; `manager` é o
+  "Gerente", migration `20260923120000_manager_role`), `status` (`active|inactive`), `avatarUrl`,
   `signMessages`, `notificationSound`, `notificationVolume`, `lastLoginAt`.
 - `User.notificationSound` (`NotificationSound`: `none|sound_1|sound_2|sound_3`, padrão
   `sound_1`) e `User.notificationVolume` (`NotificationVolume`: `low|medium|high`, padrão
@@ -250,7 +251,8 @@ snake_case e id `uuid`.
   (`packages/shared/src/permissions.ts`) — semear as 26 ações por papel congelaria os padrões
   no banco, e mudar um padrão no código deixaria de valer para quem já existe. `action` é
   **texto**, não enum: ação removida do código não exige migration, e a linha órfã é ignorada
-  em silêncio pela leitura. Constraint `role_permissions_role_not_admin` impede linha de
+  em silêncio pela leitura. `role` aceita `agent`, `supervisor` e `manager` (as três colunas
+  da tela). Constraint `role_permissions_role_not_admin` impede linha de
   `admin` — administrador passa por cima de tudo, senão a organização se trancaria do lado de
   fora sem ninguém para religar. `updatedById` é quem mexeu por último, exibido na tela.
 
@@ -291,6 +293,7 @@ e para o tempo real. O que não pode ser buscado por API também não chega pelo
 | Papel | Enxerga |
 | --- | --- |
 | `admin` | a organização inteira, sem filtro |
+| `manager` ("Gerente") | **exatamente o mesmo que o supervisor**: todas as conversas dos departamentos marcados, dentro dos números marcados. Não é acesso total e não é `ownOnly` |
 | `supervisor` | todas as conversas dos **departamentos marcados**, dentro dos **números marcados** |
 | `agent` ("Usuário" na tela) | mesmo recorte, mas só as conversas **atribuídas a ele** e as **sem responsável** |
 
@@ -335,6 +338,17 @@ responsável padrão não divergir do seletor.
 **Papel ≠ visibilidade.** Visibilidade responde "quais conversas"; permissão responde "quais
 ações" — e desde o menu de Permissões **a segunda não é mais tabela de papel: é o catálogo**.
 
+**Hierarquia: admin > manager (Gerente) > supervisor > agent (Usuário), e ela é ORDINAL.**
+`USER_ROLES` está nessa ordem e `hasRole(papel, minimo)` compara o NÍVEL (`ROLE_LEVEL`), nunca
+igualdade. O Gerente passa em tudo que exige supervisor, é barrado em tudo que exige admin
+(`requireRole("admin")` continua valendo só para admin, e a trava de "nunca sem admin ativo"
+segue contando só administradores), tem o alcance do supervisor em `access.ts` (`ownOnly` é
+`!hasRole(role, "supervisor")`) e entra nas salas `sup:` do socket. No catálogo ele é a
+**terceira coluna** (`CONFIGURABLE_ROLES = agent, supervisor, manager`), e o padrão dele é
+**herdado do supervisor** em toda ação que não declara o próprio (`defaultPermission`): hoje a
+única divergência de fábrica é `quality.use` (Gerente sim, Supervisor não). A tela de
+Permissões continua só do admin.
+
 A fonte única é `packages/shared/src/permissions.ts` (`PERMISSION_ACTIONS`): 26 ações com nome
 técnico, rótulo, explicação, área e o **padrão por papel**. A API decide por
 `apps/api/src/lib/permissions.ts` (`requirePermission` / `loadPermissions().can()`), a tela de
@@ -349,6 +363,7 @@ O que **não** tem chave, e é fixo no código de propósito:
 | **Exceção única no cadastro de usuário**: o campo `status` tem chave (`user.deactivate`, padrão não/não) — recusa de CAMPO dentro do `PATCH /users/:id`, e nunca alcança um administrador | catálogo |
 | Nunca deixar a organização sem admin ativo | transação com linhas travadas |
 | Ler conversa, enviar mensagem, mudar status, escrever e editar a **própria** nota | sempre liberado — não existe caminho para trancar o atendente fora do próprio trabalho |
+| Quality | **NÃO é mais fixo**: virou a chave `quality.use` (padrão Admin e Gerente sim, Supervisor e Usuário não), com 404 para quem não a tem e sempre DENTRO do `conversationScope` de quem pede, ver a seção 22 |
 | Etiqueta **geral** (`isGeneral`) | `admin` (resposta rápida geral, sim, tem chave: `quick_reply.create_shared`) |
 
 **Departamento da conversa é escrita de supervisão.** É o campo que decide *quem enxerga*
@@ -562,14 +577,16 @@ GET    /conversations/:id/ai           (sessão de IA mais recente da conversa)
 POST   /conversations/:id/ai/stop      (ai.session.stop)   POST /conversations/:id/ai/resume (ai.session.resume)
        (ver a seção 20)
 
-GET    /quality/availability   (admin; o módulo está de pé? sem IA configurada, não)
-GET|PUT /quality/settings      (admin; tetos: conversas por disparo, duração de áudio, cobertura, modelo)
+GET    /quality/availability   (quality.use; o módulo está de pé? sem IA configurada, não)
+GET|PUT /quality/settings      (quality.use; tetos: conversas por disparo, duração de áudio, cobertura, modelo)
 POST   /quality/runs           GET /quality/runs   GET /quality/runs/:id
 GET    /quality/runs/:id/items/:itemId/transcripts   (transcrições ÍNTEGRAS, sem máscara)
 GET    /quality/evaluations    POST /quality/evaluations/:id/discard|/restore
 PATCH  /quality/evaluations/:id/comment              GET /quality/agents
-       (TUDO isso é de ADMIN e responde 404 para qualquer outro papel — "sem permissão"
-        confirmaria que existe um módulo que avalia o atendimento. Ver a seção 22)
+       (TUDO isso exige a chave `quality.use` (padrão: admin e gerente) e responde 404 para
+        quem não a tem, "sem permissão" confirmaria que existe um módulo que avalia o
+        atendimento. Quem não é admin só alcança disparo, avaliação e transcrição de conversa
+        que `conversationScope` já lhe mostra. Ver a seção 22)
 
 GET    /permissions          (admin; o que a organização gravou por cima do catálogo —
        o catálogo em si NÃO vem por aqui, a tela o importa de @azvchat/shared)
@@ -627,9 +644,10 @@ sempre `RealtimeEvents.X`:
 `session:closing`, `session:closed`, `ai:session`, `ai:budget-alert`, `quality:run`.
 
 `quality:run` (`{ run }`) carrega o estado de um disparo de análise do Quality (na fila →
-transcrevendo → analisando → concluída/falhou) e vai SÓ para `org:<organizationId>`, a sala de
-administrador. Nenhum atendente pode saber que a avaliação existe, e mandá-lo para a audiência
-da conversa entregaria exatamente isso. Ver a seção 22.
+transcrevendo → analisando → concluída/falhou) e vai para `org:<organizationId>`, a sala de
+administrador, e para `user:<id>` de quem disparou quando ele não é admin e ainda tem a chave
+`quality.use` (o Gerente não está na sala da organização). Nunca para a audiência da conversa:
+nenhum atendente pode saber que a avaliação existe. Ver a seção 22.
 
 `ai:session` (`{ conversationId, session }`) sai para a `conversationAudience()` sempre que o
 atendimento por IA da conversa muda (começou, respondeu, transferiu, foi assumido/encerrado)
@@ -906,7 +924,7 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
 
 Rotas em `apps/web/src/app/(app)/`: `dashboard`, `inbox` (+ `inbox/[conversationId]`),
 `whatsapp`, `users` (+ `new`, `[id]`), `departments`, `reports`, `tags`, `quick-replies`,
-`quality` (só admin, e só com a IA configurada), `settings`, `settings/ai` (+ `settings/ai/agents/[id]`, com `new`). Fora do grupo: `login`. **Os rótulos do menu não seguem os nomes das rotas**:
+`quality` (chave `quality.use`, padrão admin e gerente, e só com a IA configurada), `settings`, `settings/ai` (+ `settings/ai/agents/[id]`, com `new`). Fora do grupo: `login`. **Os rótulos do menu não seguem os nomes das rotas**:
 `/inbox` aparece como "Conversas" e `/whatsapp` como "Conexões" — as rotas ficaram como
 estão para não quebrar favoritos nem os links dos cards do dashboard. Nos textos da
 interface, a tela se chama "Conversas" (ou "lista de conversas"); "Inbox" segue sendo o
@@ -1390,8 +1408,11 @@ testes de `apps/api/test/access.test.ts`. **Não** existe chave de permissão pa
 uma seria entender o desenho errado.
 
 **Mudança na hierarquia de papéis** (o que continua fixo em `admin`)
-Atualizar `enums.ts`, os `requireRole("admin")` das rotas, o `NAV` do frontend e os testes —
-sempre juntos.
+Atualizar `enums.ts` (`USER_ROLES` em ordem, `ROLE_LEVEL`, rótulo e cor), o enum do Prisma com
+migration `ALTER TYPE ... ADD VALUE`, `CONFIGURABLE_ROLES` se o papel for configurável, os
+`requireRole("admin")` das rotas, o `NAV` do frontend e os testes, sempre juntos. Antes de
+tudo, procure `role === "<papel>"` no código: todo ponto que pergunta "tem pelo menos este
+nível?" por igualdade é um lugar onde o papel novo perde acesso em silêncio (ver a seção 13).
 
 ---
 
@@ -2177,14 +2198,31 @@ sempre juntos.
   tudo que é dígito, CNPJ antes de CPF, CPF cru (11 dígitos, validado pelo dígito verificador)
   antes de telefone. Invertida, o dado continua protegido mas o MARCADOR sai trocado, e a IA lê
   a conversa errada.
-- **QUALITY: SIGILO TOTAL PARA QUEM NÃO É ADMIN, E 404 É PARTE DA REGRA.** Todas as rotas
-  respondem **404**, não 403: "sem permissão" confirmaria que existe um módulo que avalia o
-  atendimento. Pelo mesmo motivo a disponibilidade do módulo **não entra em `features` de
-  `/auth/me`** (que viaja para todo mundo) — quem responde é `GET /quality/availability`, de
-  admin, consumida pelo hook `useQualityAvailability`. Nada do Quality sai em
-  `serializeUserDirectory` nem em endpoint de fora do módulo, e a guarda é FIXA no código, fora
-  do catálogo de Permissões: uma chave por papel transformaria "só o dono vê" numa configuração
-  que alguém afrouxa sem perceber.
+- **PAPEL NUNCA SE COMPARA POR IGUALDADE quando a pergunta é de NÍVEL.** A hierarquia é
+  ordinal (`hasRole`, em `@azvchat/shared`), e `role === "supervisor"` só parece equivalente a
+  `hasRole(role, "supervisor")` enquanto não existe papel acima do supervisor. Quando o Gerente
+  nasceu, havia OITO pontos assim, e cada um o barraria em silêncio: a escolha de sala do
+  socket (`realtime/socket.ts`, ele cairia nas salas de atendente e deixaria de receber os
+  eventos das conversas atribuídas a outros), o `ownOnly` de `access.ts` (correto por acaso, na
+  forma `=== "agent"`), os filtros de número/departamento da Inbox (dois pontos no
+  `inbox-shell`), o filtro de responsável do Dashboard, a trava da tela de Relatórios, o bloco
+  "Supervisão" da tela de Departamentos e a ordenação dos membros em `GET /departments`
+  (a guarda do Quality, que era `role === "admin"` na rota, na tela e no hook, virou chave). Igualdade só vale para a pergunta "é EXATAMENTE este
+  papel?", e o caso legítimo hoje é `admin` (o topo, que passa por cima do catálogo) e o
+  seletor de papel da tela de Usuários. `apps/api/test/permissions.test.ts` reprova
+  `user.role === "agent|supervisor|manager"` nos módulos de rota.
+- **QUALITY: SIGILO TOTAL PARA QUEM NÃO TEM A CHAVE, E 404 É PARTE DA REGRA.** O módulo nasceu
+  fixo em admin e virou a chave `quality.use` do catálogo (padrão: Gerente sim, Supervisor e
+  Usuário não; admin sempre). Toda rota passa pela MESMA guarda (`guardaQuality`), que responde
+  **404**, não 403: "sem permissão" confirmaria que existe um módulo que avalia o atendimento.
+  Pelo mesmo motivo a disponibilidade do módulo **não entra em `features` de `/auth/me`** (que
+  viaja para todo mundo), quem responde é `GET /quality/availability`, consumida pelo hook
+  `useQualityAvailability`, que só pergunta quando `can("quality.use")`. **A chave dá a AÇÃO,
+  nunca o ALCANCE**: quem não é admin só dispara análise de conversa que `conversationScope`
+  já lhe mostra (conversa fora dele conta como não encontrada), e só lê disparo cujas conversas
+  estão TODAS no alcance, avaliação e transcrição (que sai íntegra) de conversa dentro dele.
+  Sem isso o Quality viraria a porta dos fundos de `lib/access.ts`. Nada do Quality sai em
+  `serializeUserDirectory` nem em endpoint de fora do módulo.
 - **QUALITY: O CUSTO DA AVALIAÇÃO ENTRA COMO `quality`, NUNCA COMO `chat`.** É o mesmo motivo
   que já separou `transcription` e `vision`: somar a avaliação ao atendimento faz o custo por
   turno de conversa deixar de fechar, e ninguém descobre olhando a tela. A transcrição que o
@@ -3588,7 +3626,7 @@ oportunidades abertas do cliente e traz o "+ Criar oportunidade" que aproveita a
 
 ---
 
-## 22. QUALITY — avaliação do atendimento pela IA (só administrador)
+## 22. QUALITY, avaliação do atendimento pela IA (chave `quality.use`: admin e gerente)
 
 O dono do escritório quer saber como cada atendente está tratando o cliente sem ler conversa
 por conversa. O QUALITY é isso: o administrador seleciona conversas e um período, dispara, e a
@@ -3729,7 +3767,8 @@ GET  /quality/agents            (visão por atendente: média no tempo, assuntos
 
 A análise roda **assíncrona** (`void analyzer.run(...)` depois de a rota responder), com estado
 visível: na fila, transcrevendo, analisando, concluída, falhou. O evento
-`RealtimeEvents.QualityRun` leva o disparo inteiro para `orgRoom()` — a sala de **administrador**,
+`RealtimeEvents.QualityRun` leva o disparo inteiro para `orgRoom()`, a sala de **administrador**,
+e para a sala pessoal de quem disparou, se não for admin e ainda tiver a chave,
 e só ela. Tela em `/quality` (abas Nova análise, Análises, Avaliações, Por atendente,
 Configurações), componentes em `components/quality/`. **Nada disso encosta no `inbox-shell.tsx`.**
 
@@ -3788,14 +3827,19 @@ conversas virariam dezenas de páginas do que o administrador já lê no chat.
 
 ### Sigilo
 
-Execução e leitura são de **admin, fixo no código e fora do catálogo de Permissões** — como criar
-usuário, excluir número e a tela de Permissões. Uma chave por papel transformaria "só o dono vê"
-numa configuração que alguém afrouxa sem perceber. Para qualquer outro papel **toda rota responde
-404**, e não 403: "sem permissão" confirmaria o recurso. Nada do Quality sai em
+Execução e leitura exigem a chave **`quality.use`** do catálogo de Permissões (padrão: Admin e
+Gerente sim, Supervisor e Usuário não). O módulo nasceu fixo em admin; virou chave quando o papel
+Gerente foi criado, para ele usar o Quality sem virar administrador. Para quem não tem a chave
+**toda rota responde 404**, e não 403: "sem permissão" confirmaria o recurso. Quem chega pela
+chave sem ser admin fica **dentro do próprio `conversationScope`**: dispara só sobre conversa
+que já enxerga e lê só disparo, avaliação e transcrição de conversa no alcance dele (o admin
+continua vendo a organização inteira). O aviso `quality:run` vai para `orgRoom()` e, quando
+quem disparou não é admin e ainda tem a chave, também para a sala pessoal dele. Nada do Quality sai em
 `serializeUserDirectory` nem em endpoint fora do módulo, e a disponibilidade do módulo **não
 viaja em `/auth/me`** (um `features.quality` contaria ao atendente que existe um módulo que o
-avalia) — quem responde é `GET /quality/availability`, de admin. **Nada aqui encosta em
-`lib/access.ts`**: visibilidade de conversa não mudou. Auditoria em
+avalia), quem responde é `GET /quality/availability`, pela mesma chave. **Nada aqui muda
+`lib/access.ts`**: o módulo só CONSOME `conversationScope`, e a visibilidade de conversa não
+mudou para ninguém. Auditoria em
 `quality.analysis_requested` (com as conversas e o período), `quality.evaluation_discarded`,
 `quality.evaluation_restored` e `quality.settings_updated`.
 
