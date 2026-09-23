@@ -262,7 +262,10 @@ describe("visão por atendente", () => {
         userName: "Ana",
         overallScore: 8,
         actionPlan: { improvements: [{ point: "Confirmar prazo", action: "diga a data" }], strengths: ["Cordial"] },
-        createdAt: "2026-08-10T12:00:00.000Z",
+        // Período de AGOSTO, analisado só em setembro: é o período que manda.
+        periodFrom: "2026-08-01T00:00:00.000Z",
+        periodTo: "2026-08-31T23:59:59.000Z",
+        createdAt: "2026-09-20T12:00:00.000Z",
       },
       {
         ...base,
@@ -271,7 +274,9 @@ describe("visão por atendente", () => {
         userName: "Ana",
         overallScore: 6,
         actionPlan: { improvements: [{ point: "confirmar prazo.", action: "diga a data" }], strengths: [] },
-        createdAt: "2026-09-10T12:00:00.000Z",
+        periodFrom: "2026-09-01T00:00:00.000Z",
+        periodTo: "2026-09-30T23:59:59.000Z",
+        createdAt: "2026-09-20T12:00:00.000Z",
       },
     ]);
 
@@ -280,6 +285,8 @@ describe("visão por atendente", () => {
     expect(agents[0]?.averageScore).toBe(7);
     // "Confirmar prazo" e "confirmar prazo." são o mesmo ponto.
     expect(agents[0]?.recurringImprovements[0]).toEqual({ point: "confirmar prazo", total: 2 });
+    // As duas foram analisadas no MESMO dia (20/09), e mesmo assim a linha do
+    // tempo tem dois meses: ela segue o período avaliado, não a data da análise.
     expect(agents[0]?.timeline.map((point) => point.month)).toEqual(["2026-08", "2026-09"]);
     expect(agents[0]?.averageByCriterion.find((c) => c.key === "clarity")?.score).toBe(6);
   });

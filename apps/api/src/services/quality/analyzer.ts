@@ -27,7 +27,7 @@ import { loadQualitySettings, type QualitySettingsView } from "../../lib/quality
 import { serializeQualityRun } from "../../lib/serialize.js";
 import { orgRoom } from "../../realtime/socket.js";
 import { ensureAttachmentInsights } from "../ai/attachments.js";
-import { loadBudgetState, loadAiSettings } from "../ai/budget.js";
+import { loadBudgetState, loadAiSettings, type AiSettingsView } from "../ai/budget.js";
 import { resolveCredentials, type ResolvedCredentials } from "../ai/credentials.js";
 import { AiProviderError } from "../ai/provider.js";
 
@@ -76,6 +76,24 @@ interface PeriodMessage extends QualityMaterialMessage {
   mediaUrl: string | null;
   mimeType: string | null;
   filename: string | null;
+}
+
+/**
+ * LIGAÇÃO NÃO É MENSAGEM, e aqui isso importa duas vezes.
+ *
+ * `Message.type = "call"` é o registro de uma chamada, não uma resposta escrita
+ * ao cliente (é a mesma régua que o Dashboard já aplica, onde ligação tem card
+ * próprio e sai da conta de mensagens). Contá-la como envio do atendente faria
+ * duas coisas erradas de uma vez: criaria avaliação para quem só ligou e não
+ * escreveu nada, e zeraria o tempo de resposta de uma pergunta que ninguém
+ * respondeu por escrito.
+ *
+ * Ela CONTINUA no material, como marcador: "houve uma ligação aqui" explica um
+ * silêncio no chat, e esconder isso faria a IA cobrar uma resposta que existiu
+ * por outro canal.
+ */
+function isCall(message: { type: string }): boolean {
+  return message.type === "call";
 }
 
 export class QualityAnalyzer {
@@ -149,7 +167,7 @@ export class QualityAnalyzer {
           messages,
           settings,
           credentials,
-          aiSettings.pricingOverrides,
+          aiSettings,
         );
 
         // PASSO 2 — AVALIAÇÃO, sobre TEXTO já mascarado.
@@ -163,7 +181,7 @@ export class QualityAnalyzer {
         const agentIds = [
           ...new Set(
             withTranscripts
-              .filter((message) => message.direction === "outbound" && message.sentByUserId)
+              .filter((message) => message.direction === "outbound" && message.sentByUserId && !isCall(message))
               .map((message) => message.sentByUserId as string),
           ),
         ];
@@ -279,7 +297,7 @@ export class QualityAnalyzer {
     messages: PeriodMessage[],
     settings: QualitySettingsView,
     credentials: ResolvedCredentials,
-    pricing: AiPricingOverrides,
+    aiSettings: AiSettingsView,
   ): Promise<PeriodMessage[]> {
     const conversation = await this.deps.prisma.conversation.findUnique({ where: { id: conversationId } });
     if (!conversation) return messages;
@@ -293,7 +311,6 @@ export class QualityAnalyzer {
     });
     if (candidates.length === 0) return messages;
 
-    const aiSettings = await loadAiSettings(this.deps.prisma, organizationId);
     const updated = await ensureAttachmentInsights(
       { prisma: this.deps.prisma, io: this.deps.io, logger: this.deps.logger, media: this.deps.storage },
       {
@@ -305,7 +322,7 @@ export class QualityAnalyzer {
         // atendimento nenhum, e o consumo entra na organização.
         sessionId: null,
         agent: null,
-        pricingOverrides: pricing,
+        pricingOverrides: aiSettings.pricingOverrides,
         audio: {
           enabled: true,
           model: aiSettings.transcriptionModel ?? AI_DEFAULT_TRANSCRIPTION_MODEL,
@@ -367,7 +384,7 @@ export class QualityAnalyzer {
     });
     const nameById = new Map(users.map((user) => [user.id, user.name]));
 
-    const lastMessage = input.messages[input.messages.length - 1];
+    const lastMessage = input.messages.filter((message) => !isCall(message)).slice(-1)[0];
     const outcome = resolveQualityOutcome({
       historyActions: history.map((row) => row.action),
       lastMessageInbound: lastMessage?.direction === "inbound",
@@ -382,8 +399,11 @@ export class QualityAnalyzer {
     let providerFailed = false;
     let promptChars = 0;
 
+    // As métricas ignoram ligação (ver `isCall`); o material, não.
+    const messagesForMetrics = input.messages.filter((message) => !isCall(message));
+
     for (const userId of input.agentIds) {
-      const measured = computeQualityMetrics(input.messages, userId, input.attendance);
+      const measured = computeQualityMetrics(messagesForMetrics, userId, input.attendance);
       const metrics: QualityMetricsDto = { ...measured, outcome };
       const material = buildQualityMaterial(input.messages, userId);
       promptChars = Math.max(promptChars, material.text.length);

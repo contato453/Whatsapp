@@ -6,12 +6,14 @@ import Link from "next/link";
 import { qualityApi } from "@/lib/api";
 import type { QualityEvaluationDto, QualityTranscriptDto } from "@/lib/types";
 import { Badge, Button, Card, Spinner, Textarea, Tooltip } from "@/components/ui";
+import { cn } from "@/lib/utils";
 import {
   QUALITY_CONFIDENCE_LABELS,
   QUALITY_OUTCOME_LABELS,
   QUALITY_SUBJECT_LABELS,
   criterionDescription,
   criterionLabel,
+  formatDate,
   formatDateTime,
   formatMinutes,
   formatScore,
@@ -66,7 +68,7 @@ export function EvaluationDetail({
   }
 
   return (
-    <Card className={evaluation.discardedAt ? "opacity-70" : undefined}>
+    <Card className={cn("p-5", evaluation.discardedAt && "opacity-70")}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -88,7 +90,8 @@ export function EvaluationDetail({
             ) : null}
           </div>
           <p className="mt-1 text-xs text-slate-500">
-            {evaluation.conversationTitle ?? "Conversa sem título"} · analisada em{" "}
+            {evaluation.conversationTitle ?? "Conversa sem título"} · período avaliado de{" "}
+            {formatDate(evaluation.periodFrom)} a {formatDate(evaluation.periodTo)} · analisada em{" "}
             {formatDateTime(evaluation.createdAt)} · cobertura {evaluation.coveragePercent}% · confiança da
             análise: {QUALITY_CONFIDENCE_LABELS[evaluation.confidence]}
           </p>

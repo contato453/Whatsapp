@@ -323,6 +323,17 @@ export interface QualityEvaluationDto {
   runId: string;
   itemId: string;
   conversationId: string;
+  /**
+   * O período que foi AVALIADO, copiado do disparo.
+   *
+   * Ele existe aqui porque a data da análise não serve para acompanhar a
+   * evolução de ninguém: analisar seis meses de conversas numa tarde jogaria
+   * tudo no mês corrente, e a linha do tempo por atendente viraria uma barra
+   * só. Quem responde "de quando é este atendimento" é o período, não o
+   * carimbo de quando a IA leu.
+   */
+  periodFrom: string;
+  periodTo: string;
   conversationTitle: string | null;
   userId: string | null;
   userName: string;
