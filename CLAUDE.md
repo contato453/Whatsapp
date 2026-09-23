@@ -3721,6 +3721,21 @@ visível: na fila, transcrevendo, analisando, concluída, falhou. O evento
 e só ela. Tela em `/quality` (abas Nova análise, Análises, Avaliações, Por atendente,
 Configurações), componentes em `components/quality/`. **Nada disso encosta no `inbox-shell.tsx`.**
 
+**O NOME DA CONVERSA aparece na linha da análise, pela MESMA cadeia da lista de conversas.**
+`QualityRunDto.conversationTitles` traz os nomes do disparo, resolvidos por
+`lib/quality/title.ts` (`resolveQualityTitles`): `customTitle` vence
+`PersonProfile.customName`, que vence o `title` do WhatsApp. Sem isso a lista dizia só "1
+conversa", e os quatro grupos "Demandas CS" de clientes diferentes viravam quatro linhas
+idênticas — o mesmo motivo que deu chips ao seletor de conversas. O degrau do meio não é
+enfeite: quem corrigiu um cliente pelo lápis esperaria vê-lo corrigido aqui, e o relatório
+mostrando o pushName antigo mandaria o administrador procurar no chat alguém que já não se
+chama assim. Três consequências: (1) o `select` das seis respostas do módulo é fonte única
+(`QUALITY_CONVERSATION_SELECT`), senão a sétima escolheria campos diferentes e a mesma conversa
+teria dois nomes dentro do próprio módulo; (2) a resolução é **em lote, uma consulta por
+página** — `resolveConversationPersonNames` já só olha as individuais, então lista de grupo não
+paga nada; (3) o evento `quality:run` carrega os nomes também, senão a linha perderia o título
+no primeiro aviso de estado e voltaria a dizer "1 conversa" no meio da análise.
+
 **A escolha das conversas é a lista da Inbox, não uma caixa de busca**
 (`components/quality/conversation-picker.tsx`): filtros de **conexão**, **departamento** e
 **atendente**, e cada linha com o chip do número, o departamento, o responsável e a última

@@ -790,7 +790,16 @@ export function serializePinnedItems(
  * e de mais ninguém — o atendente não vê nem a existência delas.
  */
 
-export function serializeQualityRun(run: QualityRun): QualityRunDto {
+export function serializeQualityRun(
+  run: QualityRun,
+  /**
+   * Os nomes das conversas do disparo. Vem de fora porque quem os resolve
+   * precisa do banco (o nome da pessoa mora em `PersonProfile`), e serializer
+   * da casa não consulta — lista vazia é disparo cujo chamador não os carregou,
+   * e a tela cai no contador de sempre em vez de mostrar linha em branco.
+   */
+  conversationTitles: string[] = [],
+): QualityRunDto {
   return {
     id: run.id,
     status: run.status,
@@ -799,6 +808,7 @@ export function serializeQualityRun(run: QualityRun): QualityRunDto {
     requestedByName: run.requestedByName,
     model: run.model,
     conversationCount: run.conversationCount,
+    conversationTitles,
     failureReason: asFailureReason(run.failureReason),
     startedAt: run.startedAt ? run.startedAt.toISOString() : null,
     finishedAt: run.finishedAt ? run.finishedAt.toISOString() : null,

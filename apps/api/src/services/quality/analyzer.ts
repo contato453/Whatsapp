@@ -23,6 +23,7 @@ import {
   formatQualityMetricsForPrompt,
 } from "../../lib/quality/prompt.js";
 import { parseQualityAiResponse } from "../../lib/quality/response.js";
+import { QUALITY_CONVERSATION_SELECT, resolveQualityTitles } from "../../lib/quality/title.js";
 import { loadQualitySettings, type QualitySettingsView } from "../../lib/quality/settings.js";
 import { serializeQualityRun } from "../../lib/serialize.js";
 import { orgRoom } from "../../realtime/socket.js";
@@ -636,7 +637,21 @@ export class QualityAnalyzer {
     const updated = await this.deps.prisma.qualityRun.update({
       where: { id: runId },
       data: data as Prisma.QualityRunUpdateInput,
+      include: {
+        items: {
+          orderBy: { createdAt: "asc" },
+          select: { conversation: { select: QUALITY_CONVERSATION_SELECT } },
+        },
+      },
     });
+    // O evento carrega o disparo INTEIRO, e o nome das conversas faz parte
+    // dele: sem isso a linha da tela perderia o título no primeiro aviso de
+    // estado, voltando a dizer só "1 conversa" enquanto a análise anda.
+    const titulos = await resolveQualityTitles(
+      this.deps.prisma,
+      updated.organizationId,
+      updated.items.map((item) => item.conversation),
+    );
     // O AVISO DE TELA NÃO DERRUBA A ANÁLISE. O estado já está gravado na linha
     // acima, e o que vem aqui é só o tempo real. Falhando a emissão, o pior
     // caso é a tela demorar um "Atualizar" para acompanhar; deixar a exceção
@@ -645,7 +660,12 @@ export class QualityAnalyzer {
     // em produção.
     try {
       this.deps.io().to(orgRoom(updated.organizationId)).emit(RealtimeEvents.QualityRun, {
-        run: serializeQualityRun(updated),
+        run: serializeQualityRun(
+          updated,
+          updated.items
+            .map((item) => (item.conversation ? titulos.get(item.conversation.id) : null))
+            .filter((titulo): titulo is string => Boolean(titulo)),
+        ),
       });
     } catch (err) {
       this.deps.logger.error({

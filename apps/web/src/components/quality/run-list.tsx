@@ -106,7 +106,30 @@ export function RunList({ refreshToken }: { refreshToken: number }) {
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge className={TONE_CLASSES[RUN_STATUS_TONE[run.status]]}>{runStatusLabel(run.status)}</Badge>
-                <span className="text-sm font-medium text-slate-800">
+                {/* O NOME DA CONVERSA vem antes do contador: o escritório tem
+                    quatro grupos "Demandas CS" de clientes diferentes, e sem o
+                    nome as linhas ficavam indistinguíveis. O `title` leva a
+                    lista inteira, porque o cartão só mostra o primeiro. */}
+                {run.conversationTitles.length > 0 ? (
+                  <span
+                    className="max-w-[18rem] truncate text-sm font-medium text-slate-800"
+                    title={run.conversationTitles.join(", ")}
+                  >
+                    {run.conversationTitles[0]}
+                  </span>
+                ) : null}
+                {run.conversationTitles.length > 1 ? (
+                  <Badge className="bg-slate-100 text-slate-600" title={run.conversationTitles.join(", ")}>
+                    +{run.conversationTitles.length - 1}
+                  </Badge>
+                ) : null}
+                <span
+                  className={
+                    run.conversationTitles.length > 0
+                      ? "text-xs text-slate-500"
+                      : "text-sm font-medium text-slate-800"
+                  }
+                >
                   {run.conversationCount} {run.conversationCount === 1 ? "conversa" : "conversas"}
                 </span>
                 <span className="text-xs text-slate-500">

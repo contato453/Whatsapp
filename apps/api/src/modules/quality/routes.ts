@@ -23,7 +23,11 @@ import {
   serializeQualityRun,
   serializeQualityRunItem,
 } from "../../lib/serialize.js";
-import { conversationDisplayTitle } from "../../lib/quality/title.js";
+import {
+  QUALITY_CONVERSATION_SELECT,
+  type QualityConversationRef,
+  resolveQualityTitles,
+} from "../../lib/quality/title.js";
 import { QualityAnalyzer } from "../../services/quality/analyzer.js";
 import type { AppDeps } from "../../types.js";
 
@@ -71,6 +75,21 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
     storage: deps.storage,
     aiCipher: deps.aiCipher,
   });
+
+  /**
+   * O nome de UMA conversa, para as três rotas que devolvem uma avaliação só
+   * (descartar, restaurar, comentar). Passa pelo mesmo resolvedor das listas em
+   * vez de recortar a cadeia: são ações raras de administrador, e uma régua
+   * própria aqui faria a mesma conversa trocar de nome ao ser descartada.
+   */
+  async function tituloDaConversa(
+    organizationId: string,
+    conversation: QualityConversationRef | null,
+  ): Promise<string | null> {
+    if (!conversation) return null;
+    const titulos = await resolveQualityTitles(deps.prisma, organizationId, [conversation]);
+    return titulos.get(conversation.id) ?? null;
+  }
 
   /** O módulo está de pé? É esta rota que decide o item de menu. */
   async function availability(organizationId: string): Promise<QualityAvailabilityDto> {
@@ -238,8 +257,33 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
       where: { organizationId: request.user.organizationId },
       orderBy: { createdAt: "desc" },
       take: query.limit,
+      // O nome de cada conversa vem JUNTO: sem ele a lista só diria "1
+      // conversa", e os quatro grupos "Demandas CS" do escritório seriam
+      // quatro linhas idênticas. É uma junção, nunca uma consulta por linha.
+      include: {
+        items: {
+          orderBy: { createdAt: "asc" },
+          select: { conversation: { select: QUALITY_CONVERSATION_SELECT } },
+        },
+      },
     });
-    return { runs: runs.map(serializeQualityRun) };
+    const titulos = await resolveQualityTitles(
+      deps.prisma,
+      request.user.organizationId,
+      runs.flatMap((run) => run.items.map((item) => item.conversation)),
+    );
+    return {
+      runs: runs.map((run) =>
+        serializeQualityRun(
+          run,
+          // Conversa excluída do cadastro sai da lista de nomes em vez de virar
+          // um buraco: o contador continua dizendo quantas foram analisadas.
+          run.items
+            .map((item) => (item.conversation ? titulos.get(item.conversation.id) : null))
+            .filter((titulo): titulo is string => Boolean(titulo)),
+        ),
+      ),
+    };
   });
 
   app.get("/quality/runs/:id", { preHandler: apenasAdmin }, async (request) => {
@@ -250,7 +294,7 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
         items: {
           orderBy: { createdAt: "asc" },
           include: {
-            conversation: { select: { id: true, title: true, customTitle: true } },
+            conversation: { select: QUALITY_CONVERSATION_SELECT },
             evaluations: { orderBy: { createdAt: "asc" } },
           },
         },
@@ -258,10 +302,21 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
     });
     if (!run) throw new NotFoundError("Análise");
 
+    const titulos = await resolveQualityTitles(
+      deps.prisma,
+      request.user.organizationId,
+      run.items.map((item) => item.conversation),
+    );
+    const nomeDe = (item: (typeof run.items)[number]): string | null =>
+      item.conversation ? (titulos.get(item.conversation.id) ?? null) : null;
+
     const detail: QualityRunDetailDto = {
-      ...serializeQualityRun(run),
+      ...serializeQualityRun(
+        run,
+        run.items.map(nomeDe).filter((titulo): titulo is string => Boolean(titulo)),
+      ),
       items: run.items.map((item) => {
-        const titulo = conversationDisplayTitle(item.conversation);
+        const titulo = nomeDe(item);
         return serializeQualityRunItem(
           item,
           titulo,
@@ -359,14 +414,23 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
       orderBy: { createdAt: "desc" },
       take: query.limit,
       include: {
-        conversation: { select: { id: true, title: true, customTitle: true } },
+        conversation: { select: QUALITY_CONVERSATION_SELECT },
         run: { select: { periodFrom: true, periodTo: true } },
       },
     });
 
+    const titulos = await resolveQualityTitles(
+      deps.prisma,
+      request.user.organizationId,
+      evaluations.map((evaluation) => evaluation.conversation),
+    );
     return {
       evaluations: evaluations.map((evaluation) =>
-        serializeQualityEvaluation(evaluation, conversationDisplayTitle(evaluation.conversation), evaluation.run),
+        serializeQualityEvaluation(
+          evaluation,
+          evaluation.conversation ? (titulos.get(evaluation.conversation.id) ?? null) : null,
+          evaluation.run,
+        ),
       ),
     };
   });
@@ -393,7 +457,7 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
         ...(body.comment !== undefined ? { adminComment: body.comment || null } : {}),
       },
       include: {
-        conversation: { select: { id: true, title: true, customTitle: true } },
+        conversation: { select: QUALITY_CONVERSATION_SELECT },
         run: { select: { periodFrom: true, periodTo: true } },
       },
     });
@@ -407,7 +471,11 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
       ip: request.ip,
     });
     return {
-      evaluation: serializeQualityEvaluation(saved, conversationDisplayTitle(saved.conversation), saved.run),
+      evaluation: serializeQualityEvaluation(
+        saved,
+        await tituloDaConversa(request.user.organizationId, saved.conversation),
+        saved.run,
+      ),
     };
   });
 
@@ -422,7 +490,7 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
       where: { id: evaluation.id },
       data: { discardedAt: null, discardedByUserId: null },
       include: {
-        conversation: { select: { id: true, title: true, customTitle: true } },
+        conversation: { select: QUALITY_CONVERSATION_SELECT },
         run: { select: { periodFrom: true, periodTo: true } },
       },
     });
@@ -435,7 +503,11 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
       ip: request.ip,
     });
     return {
-      evaluation: serializeQualityEvaluation(saved, conversationDisplayTitle(saved.conversation), saved.run),
+      evaluation: serializeQualityEvaluation(
+        saved,
+        await tituloDaConversa(request.user.organizationId, saved.conversation),
+        saved.run,
+      ),
     };
   });
 
@@ -453,12 +525,16 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
       // do administrador ao lado da avaliação, nunca por cima dela.
       data: { adminComment: body.comment || null },
       include: {
-        conversation: { select: { id: true, title: true, customTitle: true } },
+        conversation: { select: QUALITY_CONVERSATION_SELECT },
         run: { select: { periodFrom: true, periodTo: true } },
       },
     });
     return {
-      evaluation: serializeQualityEvaluation(saved, conversationDisplayTitle(saved.conversation), saved.run),
+      evaluation: serializeQualityEvaluation(
+        saved,
+        await tituloDaConversa(request.user.organizationId, saved.conversation),
+        saved.run,
+      ),
     };
   });
 
@@ -492,15 +568,24 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
       },
       orderBy: { createdAt: "asc" },
       include: {
-        conversation: { select: { id: true, title: true, customTitle: true } },
+        conversation: { select: QUALITY_CONVERSATION_SELECT },
         run: { select: { periodFrom: true, periodTo: true } },
       },
     });
 
+    const titulos = await resolveQualityTitles(
+      deps.prisma,
+      request.user.organizationId,
+      evaluations.map((row) => row.conversation),
+    );
     return {
       agents: foldQualityAgents(
         evaluations.map((row) =>
-          serializeQualityEvaluation(row, conversationDisplayTitle(row.conversation), row.run),
+          serializeQualityEvaluation(
+            row,
+            row.conversation ? (titulos.get(row.conversation.id) ?? null) : null,
+            row.run,
+          ),
         ),
       ),
     };
