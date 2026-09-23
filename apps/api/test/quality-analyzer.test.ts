@@ -106,6 +106,7 @@ function seedRun(db: MemoryPrisma, options: { audioTranscript?: unknown; withAge
     type: "individual",
     status: "open",
     departmentId: null,
+    externalChatId: "5511999990000@s.whatsapp.net",
     title: "Cliente teste",
     customTitle: null,
     archivedAt: null,

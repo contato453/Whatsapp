@@ -388,6 +388,14 @@ export interface QualityRunDto {
   requestedByName: string;
   model: string;
   conversationCount: number;
+  /**
+   * O nome de cada conversa do disparo, na ORDEM em que entraram, já resolvido
+   * pela mesma cadeia da lista de conversas. Sem ele a lista de análises só
+   * dizia "1 conversa", e o administrador com quatro grupos "Demandas CS" de
+   * clientes diferentes não tinha como saber qual linha era qual sem abrir uma
+   * por uma. Vem do disparo, e não de uma consulta por linha na tela.
+   */
+  conversationTitles: string[];
   failureReason: QualityFailureReason | null;
   startedAt: string | null;
   finishedAt: string | null;

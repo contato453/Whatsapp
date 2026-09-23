@@ -1,8 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronRight, FileText, RefreshCw } from "lucide-react";
-import Link from "next/link";
 import { RealtimeEvents } from "@azvchat/shared";
 import { qualityApi } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
@@ -41,6 +40,17 @@ export function RunList({ refreshToken }: { refreshToken: number }) {
   const socket = useSocket();
   const [runs, setRuns] = useState<QualityRunDto[] | null>(null);
   const [aberta, setAberta] = useState<string | null>(null);
+  /**
+   * A análise que está indo para o papel. O botão PDF a ABRE e a marca; quem
+   * chama `window.print()` é o detalhe, quando termina de carregar — imprimir
+   * antes mandaria uma folha com o spinner no meio.
+   */
+  const [imprimindo, setImprimindo] = useState<string | null>(null);
+
+  function imprimir(runId: string): void {
+    setAberta(runId);
+    setImprimindo(runId);
+  }
 
   const carregar = useCallback(() => {
     qualityApi
@@ -86,7 +96,7 @@ export function RunList({ refreshToken }: { refreshToken: number }) {
         </Button>
       </div>
       {runs.map((run) => (
-        <Card key={run.id} className="p-4">
+        <Card key={run.id} className="p-4" {...(imprimindo === run.id ? { "data-imprimir": "true" } : {})}>
           <div className="flex items-start gap-3">
           <button
             type="button"
@@ -96,7 +106,30 @@ export function RunList({ refreshToken }: { refreshToken: number }) {
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge className={TONE_CLASSES[RUN_STATUS_TONE[run.status]]}>{runStatusLabel(run.status)}</Badge>
-                <span className="text-sm font-medium text-slate-800">
+                {/* O NOME DA CONVERSA vem antes do contador: o escritório tem
+                    quatro grupos "Demandas CS" de clientes diferentes, e sem o
+                    nome as linhas ficavam indistinguíveis. O `title` leva a
+                    lista inteira, porque o cartão só mostra o primeiro. */}
+                {run.conversationTitles.length > 0 ? (
+                  <span
+                    className="max-w-[18rem] truncate text-sm font-medium text-slate-800"
+                    title={run.conversationTitles.join(", ")}
+                  >
+                    {run.conversationTitles[0]}
+                  </span>
+                ) : null}
+                {run.conversationTitles.length > 1 ? (
+                  <Badge className="bg-slate-100 text-slate-600" title={run.conversationTitles.join(", ")}>
+                    +{run.conversationTitles.length - 1}
+                  </Badge>
+                ) : null}
+                <span
+                  className={
+                    run.conversationTitles.length > 0
+                      ? "text-xs text-slate-500"
+                      : "text-sm font-medium text-slate-800"
+                  }
+                >
                   {run.conversationCount} {run.conversationCount === 1 ? "conversa" : "conversas"}
                 </span>
                 <span className="text-xs text-slate-500">
@@ -111,28 +144,47 @@ export function RunList({ refreshToken }: { refreshToken: number }) {
               ) : null}
             </div>
             <ChevronRight
-              className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${aberta === run.id ? "rotate-90" : ""}`}
+              className={`h-4 w-4 shrink-0 text-slate-400 transition-transform print:hidden ${aberta === run.id ? "rotate-90" : ""}`}
             />
           </button>
           {/* O PDF só faz sentido quando há resultado: análise ainda rodando
               geraria um papel pela metade. */}
           {run.status === "completed" ? (
-            <Link href={`/quality/runs/${run.id}/imprimir`} className="shrink-0">
-              <Button variant="outline" size="sm">
-                <FileText className="h-3.5 w-3.5" /> PDF
-              </Button>
-            </Link>
+            <Button
+              variant="outline"
+              size="sm"
+              className="shrink-0 print:hidden"
+              onClick={() => imprimir(run.id)}
+            >
+              <FileText className="h-3.5 w-3.5" /> PDF
+            </Button>
           ) : null}
           </div>
-          {aberta === run.id ? <RunDetail runId={run.id} status={run.status} /> : null}
+          {aberta === run.id ? (
+            <RunDetail
+              runId={run.id}
+              status={run.status}
+              aoFicarPronta={imprimindo === run.id ? () => setImprimindo(null) : undefined}
+            />
+          ) : null}
         </Card>
       ))}
     </div>
   );
 }
 
-function RunDetail({ runId, status }: { runId: string; status: QualityRunDto["status"] }) {
+function RunDetail({
+  runId,
+  status,
+  aoFicarPronta,
+}: {
+  runId: string;
+  status: QualityRunDto["status"];
+  /** Vem preenchido só quando esta análise foi aberta para virar PDF. */
+  aoFicarPronta?: () => void;
+}) {
   const [detail, setDetail] = useState<QualityRunDetailDto | null>(null);
+  const jaImprimiu = useRef(false);
 
   const carregar = useCallback(() => {
     qualityApi
@@ -165,6 +217,29 @@ function RunDetail({ runId, status }: { runId: string; status: QualityRunDto["st
         : atual,
     );
   }
+
+  // A IMPRESSÃO ESPERA O DETALHE, e acontece UMA vez. `window.print()` trava o
+  // navegador até a caixa fechar, então dispará-lo antes do conteúdo chegar
+  // mandaria ao papel um cartão com o spinner no meio; e sem a trava do ref ele
+  // voltaria a cada re-render enquanto a marca não fosse limpa, abrindo a caixa
+  // de impressão em série. O quadro extra antes de imprimir existe porque a
+  // marca `data-imprimir` e o conteúdo entram na MESMA passada do React: sem
+  // ele, o navegador ainda não aplicou o CSS que esconde o resto da página.
+  useEffect(() => {
+    // Marca limpa = pedido terminado; destravar aqui é o que permite imprimir a
+    // MESMA análise de novo sem fechar e reabrir o cartão.
+    if (!aoFicarPronta) {
+      jaImprimiu.current = false;
+      return;
+    }
+    if (!detail || jaImprimiu.current) return;
+    jaImprimiu.current = true;
+    const quadro = requestAnimationFrame(() => {
+      window.print();
+      aoFicarPronta();
+    });
+    return () => cancelAnimationFrame(quadro);
+  }, [detail, aoFicarPronta]);
 
   if (!detail) return <Spinner className="mx-auto mt-4 h-5 w-5" />;
 

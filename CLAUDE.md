@@ -3721,6 +3721,21 @@ visível: na fila, transcrevendo, analisando, concluída, falhou. O evento
 e só ela. Tela em `/quality` (abas Nova análise, Análises, Avaliações, Por atendente,
 Configurações), componentes em `components/quality/`. **Nada disso encosta no `inbox-shell.tsx`.**
 
+**O NOME DA CONVERSA aparece na linha da análise, pela MESMA cadeia da lista de conversas.**
+`QualityRunDto.conversationTitles` traz os nomes do disparo, resolvidos por
+`lib/quality/title.ts` (`resolveQualityTitles`): `customTitle` vence
+`PersonProfile.customName`, que vence o `title` do WhatsApp. Sem isso a lista dizia só "1
+conversa", e os quatro grupos "Demandas CS" de clientes diferentes viravam quatro linhas
+idênticas — o mesmo motivo que deu chips ao seletor de conversas. O degrau do meio não é
+enfeite: quem corrigiu um cliente pelo lápis esperaria vê-lo corrigido aqui, e o relatório
+mostrando o pushName antigo mandaria o administrador procurar no chat alguém que já não se
+chama assim. Três consequências: (1) o `select` das seis respostas do módulo é fonte única
+(`QUALITY_CONVERSATION_SELECT`), senão a sétima escolheria campos diferentes e a mesma conversa
+teria dois nomes dentro do próprio módulo; (2) a resolução é **em lote, uma consulta por
+página** — `resolveConversationPersonNames` já só olha as individuais, então lista de grupo não
+paga nada; (3) o evento `quality:run` carrega os nomes também, senão a linha perderia o título
+no primeiro aviso de estado e voltaria a dizer "1 conversa" no meio da análise.
+
 **A escolha das conversas é a lista da Inbox, não uma caixa de busca**
 (`components/quality/conversation-picker.tsx`): filtros de **conexão**, **departamento** e
 **atendente**, e cada linha com o chip do número, o departamento, o responsável e a última
@@ -3732,13 +3747,31 @@ uma segunda régua de filtro divergiria da primeira. A busca por texto filtra o 
 carregado, e o rótulo diz isso: aqui a pergunta é "dentro deste recorte, qual delas?", e trazer
 conversa de fora contradiria o filtro que a pessoa acabou de marcar.
 
-**O PDF é impressão do navegador, e isso é decisão** (`/quality/runs/[id]/imprimir`). Gerar PDF
-no servidor traria uma dependência pesada (navegador headless ou montador de PDF) para produzir
-o que o Chrome já produz, e cada mudança de layout passaria a ser feita duas vezes — uma na tela
-e outra no gerador. Aqui a tela É o layout, então ela nunca diverge do papel. O que viabiliza
-isso é uma linha no `layout.tsx`: `print:hidden` na barra lateral, que vale para qualquer tela do
-sistema. O relatório leva cabeçalho, métricas, notas com justificativa, assunto e plano de ação;
-**as transcrições ficam de fora** — são o conteúdo bruto da conversa, e num relatório de dez
+**O PDF é impressão do navegador, e o papel é A PRÓPRIA TELA.** Gerar PDF no servidor traria
+uma dependência pesada (navegador headless ou montador de PDF) para produzir o que o Chrome já
+produz, então o botão PDF só abre a análise e manda o navegador imprimir o cartão dela.
+
+O primeiro desenho tinha uma página separada, `/quality/runs/[id]/imprimir`, que REDESENHAVA o
+resultado — e o comentário dela já prometia "a tela é o layout" sem ser verdade: eram dois
+layouts, e a divergência começaria no primeiro ajuste que alguém esquecesse de repetir do outro
+lado. A página foi removida. Quem recorta a folha é o CSS de `globals.css`: o React marca o
+cartão da análise escolhida com `data-imprimir`, e a regra `body:has([data-imprimir])` esconde o
+resto. É `visibility`, e não `display`, porque esconder por display levaria junto os pais que
+levam até o cartão; e o `position: absolute` traz o cartão para o topo da folha, senão ele
+imprimiria na altura da rolagem, com páginas em branco antes. Sem nada marcado a regra não vale,
+então Ctrl+P nas outras telas segue como era.
+
+Três detalhes que não são opcionais: (1) **a impressão espera o detalhe carregar** e acontece
+UMA vez por pedido — `window.print()` trava o navegador até a caixa fechar, então disparar antes
+mandaria ao papel um cartão com o spinner no meio, e sem a trava a caixa reabriria a cada
+re-render; a trava é destravada quando a marca sai, senão imprimir a mesma análise de novo não
+funcionaria; (2) **o que é controle não vai ao papel** (`print:hidden` no botão PDF, na seta de
+expandir, no "Descartar" e no editor de comentário) — campo de digitação impresso sai como caixa
+vazia; (3) **o comentário do administrador vira TEXTO** num bloco `hidden print:block`: é a única
+linha dele num documento que o resto é da IA, e o editor não serve no papel. A barra lateral já
+tinha `print:hidden` no `layout.tsx`, o que vale para qualquer tela do sistema.
+
+**As transcrições ficam de fora** — são o conteúdo bruto da conversa, e num relatório de dez
 conversas virariam dezenas de páginas do que o administrador já lê no chat.
 
 ### Sigilo

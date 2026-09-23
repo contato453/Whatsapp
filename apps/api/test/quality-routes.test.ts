@@ -67,6 +67,7 @@ function seed(db: MemoryPrisma, options: { comIa?: boolean } = {}) {
     organizationId: ORG,
     type: "individual",
     status: "open",
+    externalChatId: "5511999990000@s.whatsapp.net",
     title: "Cliente teste",
     customTitle: null,
   });
@@ -223,6 +224,46 @@ describe("rotas do Quality", () => {
     expect(emissoes).toContain(`org:${ORG}`);
     const run = await db.client().qualityRun.findUnique({ where: { id: runId } });
     expect(run?.failureReason).not.toBe("unexpected");
+  });
+
+  it("a lista de análises leva o nome da conversa, pela mesma cadeia da Inbox", async () => {
+    // O escritório tem quatro grupos "Demandas CS - <cliente>", um por
+    // departamento: sem o nome na linha, as análises deles são indistinguíveis.
+    // E o nome tem de ser o EFETIVO — quem corrigiu um cliente pelo lápis
+    // espera vê-lo corrigido aqui também, não o pushName antigo do WhatsApp.
+    const run = db.seed("qualityRun", {
+      organizationId: ORG,
+      periodFrom: new Date("2026-09-01T00:00:00Z"),
+      periodTo: new Date("2026-09-02T00:00:00Z"),
+      requestedById: ADMIN.sub,
+      requestedByName: "Admin",
+      model: "gpt-4.1-mini",
+      conversationCount: 1,
+      status: "completed",
+    });
+    db.seed("qualityRunItem", {
+      organizationId: ORG,
+      runId: run.id as string,
+      conversationId: CONVERSATION,
+      status: "completed",
+    });
+
+    const semPerfil = await chamar(ADMIN, "GET", "/quality/runs");
+    expect(semPerfil.statusCode).toBe(200);
+    const linha = semPerfil.json().runs.find((item: { id: string }) => item.id === run.id);
+    expect(linha.conversationTitles).toEqual(["Cliente teste"]);
+
+    // Com o nome da PESSOA gravado, ele vence o título que veio do WhatsApp.
+    db.seed("personProfile", {
+      organizationId: ORG,
+      externalId: "5511999990000@s.whatsapp.net",
+      customName: "Kosa Contabilidade",
+      phoneNumber: null,
+      clientRole: null,
+    });
+    const comPerfil = await chamar(ADMIN, "GET", "/quality/runs");
+    const corrigida = comPerfil.json().runs.find((item: { id: string }) => item.id === run.id);
+    expect(corrigida.conversationTitles).toEqual(["Kosa Contabilidade"]);
   });
 
   it("descartar uma avaliação não altera a nota, que é da IA", async () => {
