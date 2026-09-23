@@ -61,7 +61,22 @@ import { AiProviderError } from "../ai/provider.js";
 export interface QualityAnalyzerDeps {
   prisma: PrismaClient;
   logger: Logger;
-  io: Server;
+  /**
+   * O SOCKET VEM POR FUNÇÃO, E NÃO PRONTO, PORQUE ELE AINDA NÃO EXISTE QUANDO
+   * AS ROTAS SÃO REGISTRADAS.
+   *
+   * `deps.io` só é preenchido em `index.ts` DEPOIS de `buildApp()`, porque o
+   * Socket.IO precisa do servidor HTTP que o Fastify só cria ali (é o late
+   * binding que o comentário de `app.ts` descreve). As outras rotas convivem
+   * com isso sem perceber, porque leem `deps.io` dentro do handler, já em
+   * tempo de requisição; esta era a única que o copiava no REGISTRO, e por
+   * isso o analisador nascia com `undefined` e todo disparo morria no primeiro
+   * aviso de tela com "Cannot read properties of undefined (reading 'to')" —
+   * motivo genérico "Erro inesperado" para quem administra, e nenhuma pista do
+   * que era. Guardar a FUNÇÃO adia a leitura para a hora de emitir, que é
+   * sempre depois do boot. Teste em `quality-routes.test.ts` prende a ordem.
+   */
+  io: () => Server;
   storage: MediaStorage;
   aiCipher: SecretCipher;
 }
@@ -312,7 +327,7 @@ export class QualityAnalyzer {
     if (candidates.length === 0) return messages;
 
     const updated = await ensureAttachmentInsights(
-      { prisma: this.deps.prisma, io: this.deps.io, logger: this.deps.logger, media: this.deps.storage },
+      { prisma: this.deps.prisma, io: this.deps.io(), logger: this.deps.logger, media: this.deps.storage },
       {
         organizationId,
         conversation,
@@ -622,9 +637,23 @@ export class QualityAnalyzer {
       where: { id: runId },
       data: data as Prisma.QualityRunUpdateInput,
     });
-    this.deps.io.to(orgRoom(updated.organizationId)).emit(RealtimeEvents.QualityRun, {
-      run: serializeQualityRun(updated),
-    });
+    // O AVISO DE TELA NÃO DERRUBA A ANÁLISE. O estado já está gravado na linha
+    // acima, e o que vem aqui é só o tempo real. Falhando a emissão, o pior
+    // caso é a tela demorar um "Atualizar" para acompanhar; deixar a exceção
+    // subir mataria um disparo inteiro (com transcrição e avaliação já PAGAS
+    // ao provedor) por causa do aviso, que foi a forma que este defeito tomou
+    // em produção.
+    try {
+      this.deps.io().to(orgRoom(updated.organizationId)).emit(RealtimeEvents.QualityRun, {
+        run: serializeQualityRun(updated),
+      });
+    } catch (err) {
+      this.deps.logger.error({
+        event: "quality_run_emit_failed",
+        runId,
+        error: String(err),
+      });
+    }
   }
 
   private async finishRun(

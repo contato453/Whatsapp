@@ -90,7 +90,7 @@ async function buildAnalyzer(db: MemoryPrisma) {
   return new QualityAnalyzer({
     prisma: db.client(),
     logger: pino({ level: "silent" }),
-    io: { to: () => ({ emit: () => undefined }) } as never,
+    io: () => ({ to: () => ({ emit: () => undefined }) }) as never,
     storage: { read: async () => Buffer.from("audio-falso") } as never,
     aiCipher: { encrypt: (v: string) => v, decrypt: (v: string) => v } as never,
   });

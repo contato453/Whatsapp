@@ -65,7 +65,9 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
   const analyzer = new QualityAnalyzer({
     prisma: deps.prisma,
     logger: deps.logger.child({ module: "quality" }),
-    io: deps.io,
+    // `deps.io` ainda é undefined aqui (ver o comentário em QualityAnalyzerDeps):
+    // o socket nasce depois de buildApp. A função adia a leitura para a emissão.
+    io: () => deps.io,
     storage: deps.storage,
     aiCipher: deps.aiCipher,
   });
