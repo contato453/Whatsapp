@@ -236,8 +236,9 @@ snake_case e id `uuid`.
 - `QualityRunItem` — uma conversa dentro do disparo, com o estado que a tela mostra e a
   COBERTURA. Motivos de recusa e de falha são CÓDIGO, nunca frase montada no banco.
 - `QualityEvaluation` — a avaliação de UM atendente numa conversa e período (mais de um
-  atendente no período rende uma linha por pessoa). Métricas objetivas em coluna, critérios e
-  plano de ação em JSON, `subject` em texto validado contra o catálogo fechado do shared.
+  atendente no período rende uma linha por pessoa). Métricas objetivas em coluna
+  (`messagesReceived` é a exceção que confirma a regra: ela é da CONVERSA, não da pessoa —
+  ver a seção 22), critérios e plano de ação em JSON, `subject` em texto validado contra o catálogo fechado do shared.
   Descarte não apaga a linha, e o comentário do administrador **nunca** altera a nota.
   **Não há tabela de transcrição aqui**: ela vive em `Message.metadata.audioTranscript`, a mesma
   do atendimento por IA. Ver a seção 22.
@@ -3659,7 +3660,18 @@ jogaria tudo no mês corrente e a evolução de cada pessoa viraria uma barra s�
 (`modules/dashboard/metrics.ts`), a MESMA régua do card "Atrasados agora" e do follow-up. **Não
 existe segunda definição de expediente no sistema.** São quatro: tempo até a primeira resposta,
 tempo médio no período, quantas vezes o limite de `AttendanceSettings.responseLimitMinutes` foi
-estourado e o desfecho (concluída, reaberta, sem resposta, em atendimento). O pareamento
+estourado e o desfecho (concluída, reaberta, sem resposta, em atendimento), mais os dois
+contadores de volume.
+
+**As mensagens ENVIADAS e as RECEBIDAS andam juntas, e só uma delas é da pessoa.**
+`messagesSent` são os envios do atendente avaliado; `messagesReceived` são as mensagens do
+cliente no período, **iguais para todos os atendentes avaliados naquela conversa** — mensagem
+de entrada não tem autor do nosso lado, e ratear o volume entre quem passou pela conversa
+produziria número sem significado (é a mesma leitura do `received` do relatório por atendente
+no Dashboard). A recebida existe porque a enviada sozinha não diz nada: "43 envios" tanto é
+cliente com muita pergunta quanto atendente prolixo, e as duas leituras puxam a nota de
+agilidade e de clareza em direções opostas — por isso o número entra também no material da
+IA, com o rótulo dizendo que é de todos. Ligação fica fora das duas, pela régua de sempre. O pareamento
 pergunta→resposta é o mesmo do relatório por atendente; a diferença é que aqui o tempo é útil e
 a resposta de OUTRO atendente **fecha** a pergunta sem ser creditada a ninguém. As quatro entram
 no material como **contexto factual**, para a nota não contradizer o que foi medido.

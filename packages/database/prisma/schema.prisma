@@ -2621,6 +2621,12 @@ model QualityEvaluation {
   responsesMeasured    Int       @default(0)
   limitBreaches        Int       @default(0)
   messagesSent         Int       @default(0)
+  /// Mensagens do CLIENTE no período. Não tem dono do nosso lado (mensagem de
+  /// entrada não tem autor), então é a mesma para todos os atendentes avaliados
+  /// naquela conversa — é o volume que chegou, não trabalho de alguém. Fica ao
+  /// lado das enviadas porque "43 enviadas" sozinho não diz se foi conversa
+  /// difícil ou atendente prolixo.
+  messagesReceived     Int       @default(0)
   conversationOutcome  String
   /// Descarte é do administrador e não apaga a linha; o comentário dele NUNCA
   /// altera a nota — a nota é da IA, por decisão do desenho.

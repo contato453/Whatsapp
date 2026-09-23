@@ -343,6 +343,9 @@ describe("motor do Quality", { timeout: 20_000 }, () => {
     // contando como resposta, o tempo medido seria 1 minuto.
     expect(evaluation?.firstResponseMinutes).toBe(10);
     expect(evaluation?.messagesSent).toBe(1);
+    // A ligação também não entra nas RECEBIDAS: ela é registro de chamada, não
+    // mensagem do cliente, e contá-la inflaria o volume que dá escala ao resto.
+    expect(evaluation?.messagesReceived).toBe(1);
     // E o material continua mostrando que a ligação existiu.
     const material = calls.chats[0]?.messages.find((message) => message.role === "user");
     expect(typeof material?.content === "string" ? material.content : "").toContain("[call]");

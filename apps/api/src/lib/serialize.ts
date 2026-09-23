@@ -848,6 +848,7 @@ export function serializeQualityEvaluation(
       responsesMeasured: evaluation.responsesMeasured,
       limitBreaches: evaluation.limitBreaches,
       messagesSent: evaluation.messagesSent,
+      messagesReceived: evaluation.messagesReceived,
       outcome: readQualityOutcome(evaluation.conversationOutcome),
     },
     discardedAt: evaluation.discardedAt ? evaluation.discardedAt.toISOString() : null,

@@ -50,6 +50,28 @@ describe("métricas objetivas do Quality", () => {
     expect(metrics.messagesSent).toBe(2);
   });
 
+  it("conta as mensagens RECEBIDAS do cliente, iguais para todos os atendentes", () => {
+    // O número que dá escala às enviadas: "43 enviadas" sozinho não separa
+    // cliente com muita pergunta de atendente prolixo. Como mensagem de entrada
+    // não tem autor do nosso lado, o valor é o MESMO para quem quer que esteja
+    // sendo avaliado — é da conversa, não da pessoa.
+    const mensagens = [
+      { id: "m1", direction: "inbound" as const, sentByUserId: null, timestamp: at(0) },
+      { id: "m2", direction: "outbound" as const, sentByUserId: "ana", timestamp: at(5) },
+      { id: "m3", direction: "inbound" as const, sentByUserId: null, timestamp: at(10) },
+      { id: "m4", direction: "inbound" as const, sentByUserId: null, timestamp: at(11) },
+      { id: "m5", direction: "outbound" as const, sentByUserId: "bruno", timestamp: at(20) },
+    ];
+    const ana = computeQualityMetrics(mensagens, "ana", SETTINGS);
+    const bruno = computeQualityMetrics(mensagens, "bruno", SETTINGS);
+
+    expect(ana.messagesReceived).toBe(3);
+    expect(bruno.messagesReceived).toBe(3);
+    // As enviadas, essas sim, são de cada um.
+    expect(ana.messagesSent).toBe(1);
+    expect(bruno.messagesSent).toBe(1);
+  });
+
   it("não cobra do atendente o tempo fora do expediente", () => {
     // Cliente escreve às 17h50 de quarta; a resposta sai às 8h10 de quinta.
     const quarta1750 = new Date("2026-09-02T20:50:00Z");

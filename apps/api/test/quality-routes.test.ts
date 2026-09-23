@@ -335,6 +335,7 @@ describe("visão por atendente", () => {
         responsesMeasured: 1,
         limitBreaches: 0,
         messagesSent: 2,
+        messagesReceived: 3,
         outcome: "resolved" as const,
       },
       discardedAt: null,

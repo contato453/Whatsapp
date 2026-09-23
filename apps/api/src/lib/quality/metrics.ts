@@ -34,6 +34,15 @@ export interface QualityMetricsResult {
   /** Respostas dele que passaram do limite configurado nos Parâmetros. */
   limitBreaches: number;
   messagesSent: number;
+  /**
+   * Mensagens do CLIENTE no período. É a MESMA para todos os atendentes
+   * avaliados na conversa — mensagem de entrada não tem autor do nosso lado, e
+   * inventar um rateio entre quem passou pela conversa seria número sem
+   * significado. Ela existe para dar escala às enviadas: 43 envios podem ser um
+   * cliente com muita pergunta ou um atendente prolixo, e só as duas juntas
+   * separam os dois casos.
+   */
+  messagesReceived: number;
 }
 
 /**
@@ -69,9 +78,11 @@ export function computeQualityMetrics(
   let measured = 0;
   let breaches = 0;
   let sent = 0;
+  let received = 0;
 
   for (const message of ordered) {
     if (message.direction === "inbound") {
+      received += 1;
       if (pendingInbound === null) pendingInbound = message.timestamp;
       continue;
     }
@@ -100,6 +111,7 @@ export function computeQualityMetrics(
     responsesMeasured: measured,
     limitBreaches: breaches,
     messagesSent: sent,
+    messagesReceived: received,
   };
 }
 
