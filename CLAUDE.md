@@ -2188,6 +2188,22 @@ sempre juntos.
   que já separou `transcription` e `vision`: somar a avaliação ao atendimento faz o custo por
   turno de conversa deixar de fechar, e ninguém descobre olhando a tela. A transcrição que o
   Quality dispara continua entrando como `transcription`, com sessão nula.
+- **`deps.io` AINDA NÃO EXISTE QUANDO AS ROTAS SÃO REGISTRADAS — copiá-lo ali entrega
+  `undefined`.** O Socket.IO precisa do servidor HTTP, que só nasce dentro de `buildApp()`,
+  então `index.ts` preenche `deps.io` (e `instanceManager`, e `aiRuntime`) DEPOIS. O
+  comentário do `app.ts` sempre disse isso, e todas as rotas conviviam com a regra sem
+  perceber, porque leem `deps.*` **dentro do handler**, já em tempo de requisição. O Quality
+  foi o primeiro módulo a construir um serviço de vida longa no corpo da função de registro
+  (`new QualityAnalyzer({ io: deps.io })`) e caiu direto na armadilha: em produção, todo
+  disparo morria no primeiro aviso de tela com `Cannot read properties of undefined (reading
+  'to')`, que a tela mostrava como o motivo genérico "Erro inesperado durante a análise" — sem
+  pista nenhuma para quem administra. O teste da rota não pegou porque montava `io` pronto no
+  `deps`, e não na ordem real do boot. Consequências para qualquer serviço novo montado no
+  registro: (1) o socket entra por **função** (`io: () => deps.io`), lida na hora de emitir, e
+  não por valor; (2) o teste da rota atribui `deps.io` **depois** de chamar a função de
+  registro, senão ele prova o contrário do que precisa provar; (3) a emissão de tempo real vem
+  **depois** da gravação e dentro de `try/catch` — aviso de tela não pode derrubar trabalho já
+  pago ao provedor de IA.
 - Baileys é integração não oficial: risco de banimento do número. Use números dedicados.
 
 ---

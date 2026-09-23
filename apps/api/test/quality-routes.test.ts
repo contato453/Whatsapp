@@ -28,6 +28,8 @@ const SUPERVISOR: AuthTokenPayload = { sub: "sup-1", organizationId: ORG, role: 
 const AGENT: AuthTokenPayload = { sub: "ag-1", organizationId: ORG, role: "agent", name: "Ag", email: "g@x" };
 
 const auditoria: Array<{ action: string; metadata?: Record<string, unknown> }> = [];
+/** Salas em que o módulo emitiu, para provar que o socket foi alcançado. */
+const emissoes: string[] = [];
 
 async function buildApp(db: MemoryPrisma): Promise<{ app: FastifyInstance; token: (user: AuthTokenPayload) => string }> {
   const app = Fastify();
@@ -38,11 +40,21 @@ async function buildApp(db: MemoryPrisma): Promise<{ app: FastifyInstance; token
     prisma: db.client(),
     logger: pino({ level: "silent" }),
     audit: { record: (entry: { action: string; metadata?: Record<string, unknown> }) => auditoria.push(entry) },
-    io: { to: () => ({ emit: () => undefined }) },
+    // `io` NÃO entra aqui de propósito: em produção ele só existe depois de
+    // buildApp (o Socket.IO precisa do servidor HTTP), e é exatamente essa
+    // ordem que fazia o analisador nascer com undefined. O teste reproduz o
+    // boot real; montá-lo já pronto esconderia a falha, que foi o que
+    // aconteceu na primeira entrega.
     storage: { read: async () => Buffer.from("") },
     aiCipher: { encrypt: (v: string) => v, decrypt: (v: string) => v },
   } as unknown as AppDeps;
   await qualityRoutes(app, deps);
+  deps.io = {
+    to: (room: string) => {
+      emissoes.push(room);
+      return { emit: () => undefined };
+    },
+  } as unknown as AppDeps["io"];
   await app.ready();
   return { app, token: (user) => app.jwt.sign(user) };
 }
@@ -76,6 +88,7 @@ describe("rotas do Quality", () => {
   beforeEach(async () => {
     db = new MemoryPrisma();
     auditoria.length = 0;
+    emissoes.length = 0;
     seed(db);
     ({ app, token } = await buildApp(db));
   });
@@ -178,6 +191,38 @@ describe("rotas do Quality", () => {
     expect(registro).toBeDefined();
     expect(registro?.metadata?.conversationIds).toEqual([CONVERSATION]);
     expect(registro?.metadata?.periodFrom).toBe("2026-09-01T00:00:00.000Z");
+  });
+
+  it("o disparo alcança o socket, que só nasce depois das rotas", async () => {
+    // REGRESSÃO (produção, 23/09/2026): o analisador copiava `deps.io` no
+    // REGISTRO das rotas, quando ele ainda é undefined, e todo disparo morria
+    // no primeiro aviso de tela com "Cannot read properties of undefined
+    // (reading 'to')". Na tela isso virava o motivo genérico "Erro inesperado
+    // durante a análise", sem nenhuma pista de causa para quem administra.
+    //
+    // O que prende a regra são as duas asserções juntas: houve emissão para a
+    // sala da organização (o socket foi alcançado de verdade) e o disparo não
+    // terminou no motivo genérico. Sem a primeira, um disparo que falhasse
+    // cedo por outro motivo passaria; sem a segunda, o `unexpected` voltaria
+    // sem ninguém notar.
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const response = await chamar(ADMIN, "POST", "/quality/runs", {
+      conversationIds: [CONVERSATION],
+      from: "2026-09-01T00:00:00Z",
+      to: "2026-09-02T00:00:00Z",
+    });
+    expect(response.statusCode).toBe(200);
+    const runId = response.json().run.id as string;
+
+    // A análise roda em segundo plano (a rota já respondeu): espera ela parar.
+    await vi.waitFor(async () => {
+      const run = await db.client().qualityRun.findUnique({ where: { id: runId } });
+      expect(["completed", "failed"]).toContain(run?.status);
+    });
+
+    expect(emissoes).toContain(`org:${ORG}`);
+    const run = await db.client().qualityRun.findUnique({ where: { id: runId } });
+    expect(run?.failureReason).not.toBe("unexpected");
   });
 
   it("descartar uma avaliação não altera a nota, que é da IA", async () => {
