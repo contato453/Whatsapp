@@ -49,7 +49,7 @@ export function EvaluationList({ users }: { users: UserDirectoryDto[] }) {
 
   return (
     <div className="space-y-4">
-      <Card>
+      <Card className="p-5">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <label className="block">
             <span className="mb-1 block text-xs font-medium text-slate-600">Atendente</span>
@@ -82,7 +82,7 @@ export function EvaluationList({ users }: { users: UserDirectoryDto[] }) {
             </select>
           </label>
           <label className="block">
-            <span className="mb-1 block text-xs font-medium text-slate-600">De</span>
+            <span className="mb-1 block text-xs font-medium text-slate-600">Período avaliado de</span>
             <Input type="date" value={de} max={ate} onChange={(event) => setDe(event.target.value)} />
           </label>
           <label className="block">

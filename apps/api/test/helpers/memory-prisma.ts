@@ -67,7 +67,11 @@ const RELATIONS: Record<string, Record<string, Relation>> = {
     conversation: { localKey: "conversationId", table: "conversation" },
     evaluations: { foreignKey: "itemId", table: "qualityEvaluation", many: true },
   },
-  qualityEvaluation: { conversation: { localKey: "conversationId", table: "conversation" } },
+  qualityEvaluation: {
+    conversation: { localKey: "conversationId", table: "conversation" },
+    run: { localKey: "runId", table: "qualityRun" },
+    item: { localKey: "itemId", table: "qualityRunItem" },
+  },
   attendanceSettings: {
     businessHours: { foreignKey: "settingsId", table: "attendanceBusinessHours", many: true },
     loginHours: { foreignKey: "settingsId", table: "attendanceLoginHours", many: true },

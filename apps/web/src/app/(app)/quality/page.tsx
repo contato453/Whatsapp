@@ -75,7 +75,7 @@ export default function QualityPage() {
   if (!disponivel.enabled) {
     return (
       <div className="p-6">
-        <Card>
+        <Card className="p-5">
           <EmptyState
             icon={<Gauge className="h-8 w-8" />}
             title="Módulo de qualidade desligado"

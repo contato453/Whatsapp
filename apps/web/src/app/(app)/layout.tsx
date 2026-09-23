@@ -400,7 +400,14 @@ function Sidebar({
 
   return (
     <div
-      className={cn("relative shrink-0", transition, collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH)}
+      // `print:hidden`: a barra lateral não entra em papel nenhum. É o que
+      // permite a qualquer tela do sistema virar PDF pelo próprio navegador,
+      // sem biblioteca de geração de PDF no projeto.
+      className={cn(
+        "relative shrink-0 print:hidden",
+        transition,
+        collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH,
+      )}
       onMouseEnter={() => {
         if (collapsed) schedule(true, HOVER_OPEN_DELAY_MS);
       }}
@@ -665,7 +672,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   return (
     <CallProvider>
-    <div className="flex h-screen overflow-hidden bg-slate-50">
+    <div className="flex h-screen overflow-hidden bg-slate-50 print:block print:h-auto print:overflow-visible">
       <Sidebar
         user={user}
         logout={logout}
@@ -673,7 +680,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         hasFeature={hasFeature}
         qualityEnabled={qualityEnabled}
       />
-      <main className="min-w-0 flex-1 overflow-hidden">
+      <main className="min-w-0 flex-1 overflow-hidden print:overflow-visible">
         {aguardandoQuality ? (
           <div className="flex h-full items-center justify-center">
             <Spinner className="h-8 w-8" />

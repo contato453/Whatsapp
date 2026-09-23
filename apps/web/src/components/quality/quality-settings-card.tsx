@@ -45,7 +45,7 @@ export function QualitySettingsCard({
   }
 
   return (
-    <Card>
+    <Card className="p-5">
       <h2 className="text-sm font-semibold text-slate-900">Limites do módulo</h2>
       <p className="mt-1 text-xs text-slate-500">
         Cada análise é uma chamada paga ao provedor de inteligência artificial. Estes limites existem para

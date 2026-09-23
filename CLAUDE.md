@@ -3627,6 +3627,18 @@ pessoas do lado do cliente aparecendo como "Cliente".
 
 ### Métricas objetivas, medidas antes da IA
 
+**LIGAÇÃO NÃO É MENSAGEM, e aqui isso vale duas vezes.** `Message.type = "call"` é registro de
+chamada, não resposta escrita — a mesma régua que o Dashboard já aplica, onde ligação tem card
+próprio e sai da conta de mensagens. Contá-la como envio do atendente criaria avaliação para quem
+só ligou e não escreveu, e zeraria o tempo de resposta de uma pergunta que ninguém respondeu por
+escrito. Ela **continua no material** como marcador: "houve uma ligação aqui" explica um silêncio
+no chat, e escondê-la faria a IA cobrar uma resposta que existiu por outro canal.
+
+**O recorte de data das avaliações é o PERÍODO AVALIADO, nunca a data da análise.** O DTO carrega
+`periodFrom`/`periodTo` copiados do disparo, os filtros comparam contra eles e a linha do tempo
+por atendente agrupa pelo mês do período. Sem isso, analisar seis meses de conversas numa tarde
+jogaria tudo no mês corrente e a evolução de cada pessoa viraria uma barra só.
+
 `lib/quality/metrics.ts`, em **minutos de expediente** — reusa `businessMinutesBetween`
 (`modules/dashboard/metrics.ts`), a MESMA régua do card "Atrasados agora" e do follow-up. **Não
 existe segunda definição de expediente no sistema.** São quatro: tempo até a primeira resposta,
@@ -3692,6 +3704,26 @@ visível: na fila, transcrevendo, analisando, concluída, falhou. O evento
 `RealtimeEvents.QualityRun` leva o disparo inteiro para `orgRoom()` — a sala de **administrador**,
 e só ela. Tela em `/quality` (abas Nova análise, Análises, Avaliações, Por atendente,
 Configurações), componentes em `components/quality/`. **Nada disso encosta no `inbox-shell.tsx`.**
+
+**A escolha das conversas é a lista da Inbox, não uma caixa de busca**
+(`components/quality/conversation-picker.tsx`): filtros de **conexão**, **departamento** e
+**atendente**, e cada linha com o chip do número, o departamento, o responsável e a última
+mensagem. O motivo é concreto: o escritório tem quatro grupos "Demandas CS - <cliente>", um por
+departamento, e sem esses chips eles aparecem como quatro linhas idênticas — escolher qual
+analisar viraria adivinhação. Os filtros são os MESMOS da Inbox, pelo mesmo contrato
+(`instanceId` cruza; departamento e responsável vão juntos no `assignment`, onde somam), porque
+uma segunda régua de filtro divergiria da primeira. A busca por texto filtra o que já está
+carregado, e o rótulo diz isso: aqui a pergunta é "dentro deste recorte, qual delas?", e trazer
+conversa de fora contradiria o filtro que a pessoa acabou de marcar.
+
+**O PDF é impressão do navegador, e isso é decisão** (`/quality/runs/[id]/imprimir`). Gerar PDF
+no servidor traria uma dependência pesada (navegador headless ou montador de PDF) para produzir
+o que o Chrome já produz, e cada mudança de layout passaria a ser feita duas vezes — uma na tela
+e outra no gerador. Aqui a tela É o layout, então ela nunca diverge do papel. O que viabiliza
+isso é uma linha no `layout.tsx`: `print:hidden` na barra lateral, que vale para qualquer tela do
+sistema. O relatório leva cabeçalho, métricas, notas com justificativa, assunto e plano de ação;
+**as transcrições ficam de fora** — são o conteúdo bruto da conversa, e num relatório de dez
+conversas virariam dezenas de páginas do que o administrador já lê no chat.
 
 ### Sigilo
 

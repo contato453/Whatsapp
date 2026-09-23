@@ -119,6 +119,11 @@ export function formatCostMicros(costMicros: number | null): string {
   return `US$ ${dollars.toFixed(2).replace(".", ",")}`;
 }
 
+/** Só o dia, para as pontas de um período. */
+export function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("pt-BR", { dateStyle: "short" });
+}
+
 export function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
 }

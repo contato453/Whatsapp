@@ -70,10 +70,10 @@ export function AgentView() {
 
   return (
     <div className="space-y-4">
-      <Card>
+      <Card className="p-5">
         <div className="flex flex-wrap items-end gap-3">
           <label className="block">
-            <span className="mb-1 block text-xs font-medium text-slate-600">De</span>
+            <span className="mb-1 block text-xs font-medium text-slate-600">Período avaliado de</span>
             <Input type="date" value={de} max={ate} onChange={(event) => setDe(event.target.value)} />
           </label>
           <label className="block">
@@ -85,7 +85,8 @@ export function AgentView() {
           </Button>
         </div>
         <p className="mt-2 text-xs text-slate-500">
-          Avaliações descartadas ficam fora destes números.
+          O recorte é pelo período que foi avaliado, e não pela data em que a análise rodou. Avaliações
+          descartadas ficam fora destes números.
         </p>
       </Card>
 
@@ -98,7 +99,7 @@ export function AgentView() {
       ) : null}
 
       {agents?.map((agent) => (
-        <Card key={agent.userId ?? agent.userName}>
+        <Card key={agent.userId ?? agent.userName} className="p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold text-slate-900">{agent.userName}</h3>

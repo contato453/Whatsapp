@@ -809,12 +809,16 @@ export function serializeQualityRun(run: QualityRun): QualityRunDto {
 export function serializeQualityEvaluation(
   evaluation: QualityEvaluation,
   conversationTitle: string | null,
+  /** O período do disparo. Ver o porquê em `QualityEvaluationDto`. */
+  period: { periodFrom: Date; periodTo: Date },
 ): QualityEvaluationDto {
   return {
     id: evaluation.id,
     runId: evaluation.runId,
     itemId: evaluation.itemId,
     conversationId: evaluation.conversationId,
+    periodFrom: period.periodFrom.toISOString(),
+    periodTo: period.periodTo.toISOString(),
     conversationTitle,
     userId: evaluation.userId,
     userName: evaluation.userName,

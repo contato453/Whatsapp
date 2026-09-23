@@ -1,22 +1,29 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Loader2, Play, Search, X } from "lucide-react";
-import { qualityApi, searchApi } from "@/lib/api";
+import { useState } from "react";
+import { Play, X } from "lucide-react";
+import { qualityApi } from "@/lib/api";
 import type { ConversationDto, QualityRunDto, QualitySettingsDto } from "@/lib/types";
 import { Button, Card, Input, Spinner } from "@/components/ui";
+import { ConversationPicker, conversationLabel } from "./conversation-picker";
 import { dateInputValue } from "./quality-ui";
 
 /**
- * DISPARO DA ANÁLISE: escolher conversas, escolher o período, disparar.
- *
- * O seletor usa a MESMA busca de conversas do resto do sistema (`GET /search`),
- * em vez de uma busca própria: duas buscas divergiriam no que encontram, e a
- * equipe sentiria sem saber nomear.
+ * DISPARO DA ANÁLISE: escolher o período, escolher as conversas, disparar.
  *
  * Nada roda sozinho, e é isso que mantém o custo sob controle: quem dispara é o
- * administrador, com a seleção na frente dele.
+ * administrador, com a seleção inteira na frente dele. A escolha das conversas
+ * mora em `ConversationPicker`, que mostra a lista com o chip do número, o
+ * departamento e o responsável — ver o comentário de lá.
  */
+
+/** Atalhos de período. Dias corridos, contando hoje. */
+const ATALHOS = [
+  { dias: 7, label: "7 dias" },
+  { dias: 15, label: "15 dias" },
+  { dias: 30, label: "30 dias" },
+] as const;
+
 export function NewAnalysis({
   settings,
   onStarted,
@@ -24,9 +31,6 @@ export function NewAnalysis({
   settings: QualitySettingsDto | null;
   onStarted: (run: QualityRunDto) => void;
 }) {
-  const [termo, setTermo] = useState("");
-  const [buscando, setBuscando] = useState(false);
-  const [resultados, setResultados] = useState<ConversationDto[]>([]);
   const [selecionadas, setSelecionadas] = useState<ConversationDto[]>([]);
   const [de, setDe] = useState(() => dateInputValue(new Date(Date.now() - 6 * 86_400_000)));
   const [ate, setAte] = useState(() => dateInputValue(new Date()));
@@ -34,49 +38,6 @@ export function NewAnalysis({
   const [erro, setErro] = useState<string | null>(null);
 
   const teto = settings?.maxConversationsPerRun ?? 20;
-
-  // Busca com espera curta: o campo é de digitação, e uma requisição por tecla
-  // castigaria o banco para mostrar resultado que já vai mudar.
-  useEffect(() => {
-    const consulta = termo.trim();
-    if (consulta.length < 2) {
-      setResultados([]);
-      return;
-    }
-    let ativo = true;
-    setBuscando(true);
-    const timer = setTimeout(() => {
-      searchApi
-        .query(consulta, 20)
-        .then((data) => {
-          if (ativo) setResultados(data.conversations);
-        })
-        .catch(() => {
-          if (ativo) setResultados([]);
-        })
-        .finally(() => {
-          if (ativo) setBuscando(false);
-        });
-    }, 350);
-    return () => {
-      ativo = false;
-      clearTimeout(timer);
-    };
-  }, [termo]);
-
-  const selecionadasIds = useMemo(
-    () => new Set(selecionadas.map((conversation) => conversation.id)),
-    [selecionadas],
-  );
-
-  function alternar(conversation: ConversationDto): void {
-    setErro(null);
-    setSelecionadas((atual) =>
-      atual.some((item) => item.id === conversation.id)
-        ? atual.filter((item) => item.id !== conversation.id)
-        : [...atual, conversation],
-    );
-  }
 
   async function disparar(): Promise<void> {
     setErro(null);
@@ -110,7 +71,7 @@ export function NewAnalysis({
 
   return (
     <div className="space-y-4">
-      <Card>
+      <Card className="p-5">
         <h2 className="text-sm font-semibold text-slate-900">Período avaliado</h2>
         <p className="mt-1 text-xs text-slate-500">
           Só as mensagens dentro deste período entram na avaliação. Mensagens apagadas e notas internas
@@ -125,42 +86,55 @@ export function NewAnalysis({
             <span className="mb-1 block text-xs font-medium text-slate-600">Até</span>
             <Input type="date" value={ate} min={de} onChange={(event) => setAte(event.target.value)} />
           </label>
+          {/* Atalhos: o período quase sempre é "a semana" ou "o mês", e digitar
+              duas datas para isso é trabalho que a tela pode poupar. */}
+          <div className="flex flex-wrap gap-1 pb-0.5">
+            {ATALHOS.map((atalho) => (
+              <Button
+                key={atalho.dias}
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setDe(dateInputValue(new Date(Date.now() - (atalho.dias - 1) * 86_400_000)));
+                  setAte(dateInputValue(new Date()));
+                }}
+              >
+                {atalho.label}
+              </Button>
+            ))}
+          </div>
         </div>
       </Card>
 
-      <Card>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold text-slate-900">Conversas</h2>
-          <span className="text-xs text-slate-500">
-            {selecionadas.length} de no máximo {teto} selecionadas
+      <Card className="p-5">
+        {/* `min-w-0` no título e `shrink-0` no contador: sem os dois, o contador
+            é empurrado para fora do card quando a coluna estreita. */}
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <h2 className="min-w-0 text-sm font-semibold text-slate-900">Conversas</h2>
+          <span className="shrink-0 text-xs text-slate-500">
+            {selecionadas.length} de {teto} selecionadas
           </span>
         </div>
-        <div className="relative mt-3">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <Input
-            className="pl-9"
-            placeholder="Buscar conversa por nome, telefone ou código do cadastro"
-            value={termo}
-            onChange={(event) => setTermo(event.target.value)}
-          />
-          {buscando ? (
-            <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-slate-400" />
-          ) : null}
-        </div>
+        <p className="mt-1 text-xs text-slate-500">
+          Filtre por conexão, departamento ou atendente e marque as conversas que entram na análise.
+        </p>
 
         {selecionadas.length > 0 ? (
           <div className="mt-3 flex flex-wrap gap-2">
             {selecionadas.map((conversation) => (
               <span
                 key={conversation.id}
-                className="inline-flex items-center gap-1 rounded-full bg-brand-50 px-3 py-1 text-xs text-brand-700 ring-1 ring-brand-400"
+                className="inline-flex max-w-full items-center gap-1 rounded-full bg-brand-50 px-3 py-1 text-xs text-brand-700 ring-1 ring-brand-400"
               >
-                {conversationLabel(conversation)}
+                <span className="min-w-0 truncate">{conversationLabel(conversation)}</span>
                 <button
                   type="button"
                   aria-label={`Remover ${conversationLabel(conversation)} da seleção`}
-                  className="rounded-full p-0.5 hover:bg-brand-100"
-                  onClick={() => alternar(conversation)}
+                  className="shrink-0 rounded-full p-0.5 hover:bg-brand-100"
+                  onClick={() =>
+                    setSelecionadas((atual) => atual.filter((item) => item.id !== conversation.id))
+                  }
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -169,30 +143,15 @@ export function NewAnalysis({
           </div>
         ) : null}
 
-        <div className="mt-3 max-h-72 space-y-1 overflow-y-auto">
-          {termo.trim().length >= 2 && !buscando && resultados.length === 0 ? (
-            <p className="py-6 text-center text-sm text-slate-500">Nenhuma conversa encontrada.</p>
-          ) : null}
-          {resultados.map((conversation) => {
-            const marcada = selecionadasIds.has(conversation.id);
-            return (
-              <button
-                key={conversation.id}
-                type="button"
-                onClick={() => alternar(conversation)}
-                className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left text-sm transition ${
-                  marcada
-                    ? "border-brand-400 bg-brand-50 text-brand-700"
-                    : "border-slate-200 bg-white hover:bg-slate-50"
-                }`}
-              >
-                <span className="min-w-0 truncate">{conversationLabel(conversation)}</span>
-                <span className="shrink-0 text-xs text-slate-500">
-                  {conversation.type === "group" ? "Grupo" : "Individual"}
-                </span>
-              </button>
-            );
-          })}
+        <div className="mt-3">
+          <ConversationPicker
+            selecionadas={selecionadas}
+            onChange={(conversas) => {
+              setErro(null);
+              setSelecionadas(conversas);
+            }}
+            teto={teto}
+          />
         </div>
       </Card>
 
@@ -211,8 +170,4 @@ export function NewAnalysis({
       </div>
     </div>
   );
-}
-
-function conversationLabel(conversation: ConversationDto): string {
-  return conversation.customTitle || conversation.title || "Conversa sem título";
 }

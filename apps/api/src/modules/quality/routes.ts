@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
+  AI_DEFAULT_MODEL,
   QUALITY_SETTINGS_LIMITS,
   QUALITY_SUBJECTS,
   isQualitySubject,
@@ -169,13 +170,23 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
       where: { id: { in: ids }, organizationId: request.user.organizationId },
       select: { id: true },
     });
-    if (conversations.length === 0) throw new NotFoundError("Conversa");
+    // Id que não existe é RECUSADO, nunca ignorado — a mesma regra dos filtros
+    // da Inbox. Descartar em silêncio analisaria um conjunto menor do que o que
+    // a pessoa marcou, e o relatório sairia plausível e errado.
+    if (conversations.length !== ids.length) {
+      const faltando = ids.length - conversations.length;
+      throw new AppError(
+        `${faltando} ${faltando === 1 ? "conversa selecionada não foi encontrada" : "conversas selecionadas não foram encontradas"}. Recarregue a tela e escolha de novo.`,
+        400,
+        "quality_conversation_not_found",
+      );
+    }
 
     const provider = await deps.prisma.aiProviderConfig.findFirst({
       where: { organizationId: request.user.organizationId, apiKeyEncrypted: { not: null } },
       select: { defaultModel: true },
     });
-    const model = settings.model ?? provider?.defaultModel ?? "gpt-4.1-mini";
+    const model = settings.model ?? provider?.defaultModel ?? AI_DEFAULT_MODEL;
 
     const run = await deps.prisma.qualityRun.create({
       data: {
@@ -252,7 +263,7 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
         return serializeQualityRunItem(
           item,
           titulo,
-          item.evaluations.map((evaluation) => serializeQualityEvaluation(evaluation, titulo)),
+          item.evaluations.map((evaluation) => serializeQualityEvaluation(evaluation, titulo, run)),
         );
       }),
     };
@@ -318,8 +329,18 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
         organizationId: request.user.organizationId,
         ...(query.userId ? { userId: query.userId } : {}),
         ...(query.subject ? { subject: query.subject } : {}),
+        // O recorte de data é sobre o PERÍODO AVALIADO (o do disparo), e não
+        // sobre quando a IA leu: perguntar "como foi o atendimento em agosto"
+        // não pode depender do dia em que alguém clicou em analisar.
         ...(query.from || query.to
-          ? { createdAt: { ...(query.from ? { gte: query.from } : {}), ...(query.to ? { lte: query.to } : {}) } }
+          ? {
+              run: {
+                is: {
+                  ...(query.from ? { periodTo: { gte: query.from } } : {}),
+                  ...(query.to ? { periodFrom: { lte: query.to } } : {}),
+                },
+              },
+            }
           : {}),
         ...(query.minScore != null || query.maxScore != null
           ? {
@@ -335,12 +356,15 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
       },
       orderBy: { createdAt: "desc" },
       take: query.limit,
-      include: { conversation: { select: { id: true, title: true, customTitle: true } } },
+      include: {
+        conversation: { select: { id: true, title: true, customTitle: true } },
+        run: { select: { periodFrom: true, periodTo: true } },
+      },
     });
 
     return {
       evaluations: evaluations.map((evaluation) =>
-        serializeQualityEvaluation(evaluation, conversationDisplayTitle(evaluation.conversation)),
+        serializeQualityEvaluation(evaluation, conversationDisplayTitle(evaluation.conversation), evaluation.run),
       ),
     };
   });
@@ -366,7 +390,10 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
         discardedByUserId: request.user.sub,
         ...(body.comment !== undefined ? { adminComment: body.comment || null } : {}),
       },
-      include: { conversation: { select: { id: true, title: true, customTitle: true } } },
+      include: {
+        conversation: { select: { id: true, title: true, customTitle: true } },
+        run: { select: { periodFrom: true, periodTo: true } },
+      },
     });
     deps.audit.record({
       organizationId: request.user.organizationId,
@@ -377,7 +404,9 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
       metadata: { conversationId: saved.conversationId, evaluatedUserId: evaluation.userId },
       ip: request.ip,
     });
-    return { evaluation: serializeQualityEvaluation(saved, conversationDisplayTitle(saved.conversation)) };
+    return {
+      evaluation: serializeQualityEvaluation(saved, conversationDisplayTitle(saved.conversation), saved.run),
+    };
   });
 
   app.post("/quality/evaluations/:id/restore", { preHandler: apenasAdmin }, async (request) => {
@@ -390,7 +419,10 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
     const saved = await deps.prisma.qualityEvaluation.update({
       where: { id: evaluation.id },
       data: { discardedAt: null, discardedByUserId: null },
-      include: { conversation: { select: { id: true, title: true, customTitle: true } } },
+      include: {
+        conversation: { select: { id: true, title: true, customTitle: true } },
+        run: { select: { periodFrom: true, periodTo: true } },
+      },
     });
     deps.audit.record({
       organizationId: request.user.organizationId,
@@ -400,7 +432,9 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
       entityId: saved.id,
       ip: request.ip,
     });
-    return { evaluation: serializeQualityEvaluation(saved, conversationDisplayTitle(saved.conversation)) };
+    return {
+      evaluation: serializeQualityEvaluation(saved, conversationDisplayTitle(saved.conversation), saved.run),
+    };
   });
 
   app.patch("/quality/evaluations/:id/comment", { preHandler: apenasAdmin }, async (request) => {
@@ -416,9 +450,14 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
       // A nota NÃO entra neste update, e é de propósito: o comentário é registro
       // do administrador ao lado da avaliação, nunca por cima dela.
       data: { adminComment: body.comment || null },
-      include: { conversation: { select: { id: true, title: true, customTitle: true } } },
+      include: {
+        conversation: { select: { id: true, title: true, customTitle: true } },
+        run: { select: { periodFrom: true, periodTo: true } },
+      },
     });
-    return { evaluation: serializeQualityEvaluation(saved, conversationDisplayTitle(saved.conversation)) };
+    return {
+      evaluation: serializeQualityEvaluation(saved, conversationDisplayTitle(saved.conversation), saved.run),
+    };
   });
 
   /**
@@ -437,15 +476,32 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
       where: {
         organizationId: request.user.organizationId,
         discardedAt: null,
+        // Mesmo recorte por PERÍODO AVALIADO da lista de avaliações.
         ...(query.from || query.to
-          ? { createdAt: { ...(query.from ? { gte: query.from } : {}), ...(query.to ? { lte: query.to } : {}) } }
+          ? {
+              run: {
+                is: {
+                  ...(query.from ? { periodTo: { gte: query.from } } : {}),
+                  ...(query.to ? { periodFrom: { lte: query.to } } : {}),
+                },
+              },
+            }
           : {}),
       },
       orderBy: { createdAt: "asc" },
-      include: { conversation: { select: { id: true, title: true, customTitle: true } } },
+      include: {
+        conversation: { select: { id: true, title: true, customTitle: true } },
+        run: { select: { periodFrom: true, periodTo: true } },
+      },
     });
 
-    return { agents: foldQualityAgents(evaluations.map((row) => serializeQualityEvaluation(row, conversationDisplayTitle(row.conversation)))) };
+    return {
+      agents: foldQualityAgents(
+        evaluations.map((row) =>
+          serializeQualityEvaluation(row, conversationDisplayTitle(row.conversation), row.run),
+        ),
+      ),
+    };
   });
 }
 
@@ -501,7 +557,9 @@ export function foldQualityAgents(evaluations: QualityEvaluationDto[]): QualityA
       bucket.byCriterion.set(criterion.key, current);
     }
 
-    const month = evaluation.createdAt.slice(0, 7);
+    // O mês é o do FIM DO PERÍODO AVALIADO, não o da análise: ver o comentário
+    // de `periodFrom`/`periodTo` em `QualityEvaluationDto`.
+    const month = evaluation.periodTo.slice(0, 7);
     const monthly = bucket.byMonth.get(month) ?? { sum: 0, total: 0 };
     monthly.sum += evaluation.overallScore;
     monthly.total += 1;

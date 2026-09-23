@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ChevronRight, RefreshCw } from "lucide-react";
+import { ChevronRight, FileText, RefreshCw } from "lucide-react";
+import Link from "next/link";
 import { RealtimeEvents } from "@azvchat/shared";
 import { qualityApi } from "@/lib/api";
 import { useSocket } from "@/lib/socket-context";
@@ -85,10 +86,11 @@ export function RunList({ refreshToken }: { refreshToken: number }) {
         </Button>
       </div>
       {runs.map((run) => (
-        <Card key={run.id}>
+        <Card key={run.id} className="p-4">
+          <div className="flex items-start gap-3">
           <button
             type="button"
-            className="flex w-full items-center justify-between gap-3 text-left"
+            className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left"
             onClick={() => setAberta((atual) => (atual === run.id ? null : run.id))}
           >
             <div className="min-w-0">
@@ -112,6 +114,16 @@ export function RunList({ refreshToken }: { refreshToken: number }) {
               className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${aberta === run.id ? "rotate-90" : ""}`}
             />
           </button>
+          {/* O PDF só faz sentido quando há resultado: análise ainda rodando
+              geraria um papel pela metade. */}
+          {run.status === "completed" ? (
+            <Link href={`/quality/runs/${run.id}/imprimir`} className="shrink-0">
+              <Button variant="outline" size="sm">
+                <FileText className="h-3.5 w-3.5" /> PDF
+              </Button>
+            </Link>
+          ) : null}
+          </div>
           {aberta === run.id ? <RunDetail runId={run.id} status={run.status} /> : null}
         </Card>
       ))}

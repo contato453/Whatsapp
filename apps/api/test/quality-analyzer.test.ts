@@ -288,6 +288,65 @@ describe("motor do Quality", { timeout: 20_000 }, () => {
     expect(item?.skipReason).toBe("no_readable_content");
   });
 
+  it("LIGAÇÃO não conta como mensagem do atendente, mas continua no material", async () => {
+    const runId = seedRun(db, { withAgentMessage: false });
+    // O atendente só LIGOU no período: nenhuma mensagem escrita.
+    db.seed("message", {
+      id: "msg-ligacao",
+      organizationId: ORG,
+      conversationId: CONVERSATION,
+      direction: "outbound",
+      type: "call",
+      content: null,
+      sentByUserId: ANA,
+      timestamp: new Date("2026-09-02T13:05:00Z"),
+      deletedAt: null,
+      mediaUrl: null,
+      mimeType: null,
+      filename: null,
+      metadata: null,
+    });
+    const analyzer = await buildAnalyzer(db);
+    await analyzer.run(runId);
+
+    // Ninguém a avaliar: ligação não é atendimento escrito.
+    expect(calls.chats).toHaveLength(0);
+    const item = db.rows("qualityRunItem")[0];
+    expect(item?.status).toBe("skipped");
+    expect(item?.skipReason).toBe("no_agent_messages");
+  });
+
+  it("a ligação não zera o tempo de resposta de quem respondeu por escrito", async () => {
+    const runId = seedRun(db);
+    // Ligação ENTRE a pergunta do cliente e a resposta escrita da atendente.
+    db.seed("message", {
+      id: "msg-ligacao",
+      organizationId: ORG,
+      conversationId: CONVERSATION,
+      direction: "outbound",
+      type: "call",
+      content: null,
+      sentByUserId: ANA,
+      timestamp: new Date("2026-09-02T13:01:00Z"),
+      deletedAt: null,
+      mediaUrl: null,
+      mimeType: null,
+      filename: null,
+      metadata: null,
+    });
+    const analyzer = await buildAnalyzer(db);
+    await analyzer.run(runId);
+
+    const evaluation = db.rows("qualityEvaluation")[0];
+    // A resposta escrita saiu 10 minutos depois da pergunta; com a ligação
+    // contando como resposta, o tempo medido seria 1 minuto.
+    expect(evaluation?.firstResponseMinutes).toBe(10);
+    expect(evaluation?.messagesSent).toBe(1);
+    // E o material continua mostrando que a ligação existiu.
+    const material = calls.chats[0]?.messages.find((message) => message.role === "user");
+    expect(typeof material?.content === "string" ? material.content : "").toContain("[call]");
+  });
+
   it("registra modelo, tamanho do material e custo estimado da análise", async () => {
     const runId = seedRun(db);
     const analyzer = await buildAnalyzer(db);
