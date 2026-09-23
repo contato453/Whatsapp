@@ -91,6 +91,10 @@ export function formatQualityMetricsForPrompt(
   const linhas = [
     `- limite de resposta configurado pelo escritório: ${responseLimitMinutes} minutos de expediente`,
     `- mensagens enviadas pela pessoa avaliada no período: ${metrics.messagesSent}`,
+    // O volume que CHEGOU dá escala ao que saiu: sem ele, o modelo não separa
+    // "atendente prolixo" de "cliente com muita pergunta", e as duas leituras
+    // mudam a nota de agilidade e de clareza em direções opostas.
+    `- mensagens recebidas do cliente no período (de todos, não só desta pessoa): ${metrics.messagesReceived}`,
     `- tempo até a primeira resposta dela: ${
       metrics.firstResponseMinutes == null ? "não houve resposta a medir" : `${metrics.firstResponseMinutes} minutos de expediente`
     }`,

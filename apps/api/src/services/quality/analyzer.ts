@@ -511,6 +511,7 @@ export class QualityAnalyzer {
           responsesMeasured: metrics.responsesMeasured,
           limitBreaches: metrics.limitBreaches,
           messagesSent: metrics.messagesSent,
+          messagesReceived: metrics.messagesReceived,
           conversationOutcome: outcome,
         },
       });

@@ -224,11 +224,27 @@ function Metricas({ evaluation }: { evaluation: QualityEvaluationDto }) {
     },
     { label: "Tempo médio", value: formatMinutes(metrics.avgResponseMinutes), hint: `${metrics.responsesMeasured} respostas medidas` },
     { label: "Limite estourado", value: `${metrics.limitBreaches}x` },
-    { label: "Mensagens enviadas", value: String(metrics.messagesSent) },
+    {
+      label: "Mensagens enviadas",
+      value: String(metrics.messagesSent),
+      hint: "Enviadas por esta pessoa no período.",
+    },
+    {
+      // Sem a contrapartida, "43 enviadas" não diz se foi cliente com muita
+      // pergunta ou atendente prolixo. Ela é da CONVERSA, não da pessoa:
+      // mensagem de entrada não tem autor do nosso lado, então o número é o
+      // mesmo em todas as avaliações daquela conversa, e o `title` diz isso
+      // para ninguém ler como trabalho de alguém.
+      label: "Mensagens recebidas",
+      value: String(metrics.messagesReceived),
+      hint: "Recebidas do cliente no período, na conversa inteira.",
+    },
     { label: "Desfecho", value: QUALITY_OUTCOME_LABELS[metrics.outcome] },
   ];
   return (
-    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+    // Seis células: em telas grandes, três por linha em vez de uma fileira
+    // apertada de seis, que espremeria "Concluída no período" em três linhas.
+    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
       {celulas.map((celula) => (
         <div key={celula.label} className="rounded-lg bg-slate-50 p-2">
           <p className="text-[11px] text-slate-500">{celula.label}</p>

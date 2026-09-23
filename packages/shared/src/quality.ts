@@ -315,6 +315,8 @@ export interface QualityMetricsDto {
   responsesMeasured: number;
   limitBreaches: number;
   messagesSent: number;
+  /** Mensagens do cliente no período. Ver o porquê em `QualityMetricsResult`. */
+  messagesReceived: number;
   outcome: QualityOutcome;
 }
 
