@@ -1015,6 +1015,133 @@ export const AI_USAGE_KIND_LABELS: Record<AiUsageKind, string> = {
   quality: "Avaliação de qualidade",
 };
 
+// ---------------------------------------------------------------------------
+// Saldo estimado do crédito
+// ---------------------------------------------------------------------------
+
+/**
+ * A OpenAI não expõe saldo pré-pago pela API, então o saldo da tela é uma
+ * CONTA feita aqui: o último saldo informado por quem administra, mais as
+ * recargas lançadas depois dele, menos o consumo que o AZVCHAT registra por
+ * chamada. Só vale porque a chave é usada apenas pelo AZVCHAT — outro sistema
+ * na mesma conta gastaria sem aparecer aqui.
+ */
+export const AI_CREDIT_ENTRY_KINDS = ["balance", "top_up"] as const;
+export type AiCreditEntryKind = (typeof AI_CREDIT_ENTRY_KINDS)[number];
+export const AI_CREDIT_ENTRY_KIND_LABELS: Record<AiCreditEntryKind, string> = {
+  balance: "Saldo informado",
+  top_up: "Recarga",
+};
+export const AI_CREDIT_ENTRY_KIND_HINTS: Record<AiCreditEntryKind, string> = {
+  balance: "O valor que a OpenAI mostra agora. Recomeça a conta a partir daqui, e é assim que a estimativa volta a bater com o real.",
+  top_up: "Crédito comprado na OpenAI. Soma ao saldo.",
+};
+
+/**
+ * Para ONDE foi o crédito. Não é o `AiUsageKind` cru: o atendimento pelo
+ * gatilho de automação e o do bloco de fluxo são o mesmo `chat`, e o
+ * escritório pergunta por eles separados ("quanto as automações gastam?").
+ */
+export const AI_SPEND_USES = ["attendance", "flows", "quality", "transcription", "vision", "test", "other"] as const;
+export type AiSpendUse = (typeof AI_SPEND_USES)[number];
+export const AI_SPEND_USE_LABELS: Record<AiSpendUse, string> = {
+  attendance: "Atendimento por IA",
+  flows: "Automações (fluxos)",
+  quality: "Quality",
+  transcription: "Transcrição de áudio",
+  vision: "Leitura de imagem",
+  test: "Testador de agente",
+  other: "Outros",
+};
+export const AI_SPEND_USE_HINTS: Record<AiSpendUse, string> = {
+  attendance: "Agentes acionados pelas automações de IA",
+  flows: 'Agentes acionados pelo bloco "Atendimento por IA" dos fluxos',
+  quality: "Avaliações do atendimento",
+  transcription: "Áudios do cliente ouvidos pela IA ou pelo Quality",
+  vision: "Fotos e comprovantes lidos pela IA",
+  test: "Conversas de teste na tela do agente",
+  other: "Teste de conexão e lista de modelos",
+};
+
+/** O tipo de chamada que vira cada uso, fora o `chat` (que depende da origem). */
+export function aiSpendUseOf(kind: AiUsageKind, fromFlow: boolean): AiSpendUse {
+  switch (kind) {
+    case "chat":
+      return fromFlow ? "flows" : "attendance";
+    case "quality":
+    case "transcription":
+    case "vision":
+    case "test":
+      return kind;
+    default:
+      return "other";
+  }
+}
+
+export interface AiCreditEntryDto {
+  id: string;
+  kind: AiCreditEntryKind;
+  amountCents: number;
+  effectiveAt: string;
+  note: string | null;
+  createdBy: { id: string; name: string } | null;
+  createdAt: string;
+}
+
+export interface AiSpendUseDto {
+  use: AiSpendUse;
+  label: string;
+  requests: number;
+  costMicros: number;
+}
+
+export interface AiBalanceDto {
+  /** Sem nenhum lançamento, não há saldo a estimar: a tela pede o primeiro. */
+  configured: boolean;
+  /** De quando a conta parte: o último saldo informado ou a primeira recarga. */
+  since: string | null;
+  /** Saldo de partida + recargas depois dele, em micro-dólares. */
+  creditedMicros: number;
+  /** Consumo registrado desde `since`. */
+  spentMicros: number;
+  /** Pode ficar negativo: é estimativa, e o sinal diz que passou da conta. */
+  balanceMicros: number | null;
+  /** Chamadas sem preço conhecido desde `since`: o gasto real é maior. */
+  unpricedRequests: number;
+  byUse: AiSpendUseDto[];
+  /** Média diária dos últimos 30 dias (ou desde `since`, se for mais curto). */
+  dailyAverageMicros: number | null;
+  /** Dias até zerar no ritmo da média; nulo sem consumo ou sem saldo. */
+  estimatedDaysLeft: number | null;
+  lowBalanceAlertCents: number | null;
+  low: boolean;
+  /** Última vez que a OpenAI recusou por falta de crédito — o sinal REAL. */
+  lastQuotaErrorAt: string | null;
+  entries: AiCreditEntryDto[];
+}
+
+/** A conta do saldo, pura: a rota junta os números e esta função decide. */
+export function computeAiBalance(
+  entries: Array<{ kind: AiCreditEntryKind; amountCents: number; effectiveAt: Date; createdAt: Date }>,
+): { since: Date | null; creditedMicros: number } {
+  // Mesmo instante: vale a ordem em que foram lançados.
+  const sorted = [...entries].sort(
+    (a, b) => a.effectiveAt.getTime() - b.effectiveAt.getTime() || a.createdAt.getTime() - b.createdAt.getTime(),
+  );
+  const first = sorted[0];
+  if (!first) return { since: null, creditedMicros: 0 };
+  let anchorIndex = -1;
+  sorted.forEach((entry, index) => {
+    if (entry.kind === "balance") anchorIndex = index;
+  });
+  // Sem saldo informado, a conta parte da primeira recarga, com zero; com
+  // ele, tudo o que veio ANTES já está dentro do valor lido na OpenAI.
+  const start = anchorIndex >= 0 ? anchorIndex : 0;
+  const since = (sorted[start] ?? first).effectiveAt;
+  const cents = sorted.slice(start).reduce((total, entry) => total + entry.amountCents, 0);
+  return { since, creditedMicros: cents * (AI_USD_MICROS / 100) };
+}
+
 export const AI_USAGE_OUTCOMES = ["ok", "error", "timeout", "blocked"] as const;
 export type AiUsageOutcome = (typeof AI_USAGE_OUTCOMES)[number];
 export const AI_USAGE_OUTCOME_LABELS: Record<AiUsageOutcome, string> = {

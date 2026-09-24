@@ -226,7 +226,7 @@ snake_case e id `uuid`.
 
 **Inteligência artificial** — `AiProviderConfig`, `AiSettings`, `AiAgent` (+ `AiAgentDepartment`,
 `AiAgentVersion`, `AiAgentKnowledgeSource`), `AiKnowledgeSource`, `AiAutomation`, `AiSession`,
-`AiUsageLog`. Ver a seção 20.
+`AiUsageLog`, `AiCreditEntry` (lançamentos do saldo estimado do crédito). Ver a seção 20.
 
 **Qualidade do atendimento (Quality)**
 - `QualitySettings` — tetos por organização: conversas por disparo (padrão 20), duração máxima
@@ -568,6 +568,8 @@ GET    /ai/settings (ai.view_usage|ai.agent.manage)  PUT /ai/settings (admin; or
        timeout, contexto, tabela de preço, leitura de anexo — transcrição de áudio
        (ligar/desligar e o modelo) e descrição de imagem; ver a seção 20)
 GET    /ai/usage?period=   GET /ai/stats?period=   GET /ai/logs   (ai.view_usage)
+GET    /ai/balance (ai.view_usage; saldo ESTIMADO do crédito, por uso)
+POST   /ai/credit-entries   DELETE /ai/credit-entries/:id   PUT /ai/balance/alert   (admin)
 GET    /ai/agents (manage|view_usage)  GET|POST /ai/agents  PATCH|DELETE /ai/agents/:id
 POST   /ai/agents/:id/status  POST /ai/agents/:id/duplicate  GET /ai/agents/:id/versions
 POST   /ai/agents/:id/test   (testador: nada sai pelo WhatsApp; consumo entra como `test`)
@@ -3342,6 +3344,26 @@ Decisões que não são opcionais:
   (`AI_TRANSCRIPTION_LIMITS`, `AI_VISION_LIMITS`, `AI_DOCUMENT_LIMITS`) barram o arquivo grande
   antes de ele estourar contexto e custo. Nada disso encosta em `lib/access.ts` nem em
   `media-storage.ts`.
+
+**Saldo ESTIMADO do crédito** (`services/ai/balance.ts`, card no topo da aba Visão geral).
+A OpenAI não tem consulta de saldo pré-pago para chave de API (o `fetchBilling` só dá custo
+faturado, e só com Admin key), então o saldo é uma CONTA: o último "saldo informado" que o
+admin leu na OpenAI (`AiCreditEntry.kind = balance`, que recomeça a conta e absorve tudo o que
+veio antes) + as recargas lançadas depois (`top_up`) − a soma de `AiUsageLog.costMicros` desde
+então. É a MESMA fonte do orçamento mensal e da aba Consumo — três somas diferentes de gasto
+discordariam entre si. **Só fecha porque a chave é usada apenas pelo AZVCHAT** (decisão do
+escritório em 24/09/2026); se um dia outro sistema usar a mesma conta, o card passa a mentir.
+Consequências: (1) todo consumo desconta do MESMO crédito — atendimento pelo gatilho de IA,
+bloco de fluxo, Quality, transcrição, visão e testador —, e o card separa por USO
+(`AI_SPEND_USES`, shared), distinguindo o `chat` de fluxo pela sessão
+(`AiSession.automationExecutionId`); (2) chamada sem preço fica fora da conta e o card avisa
+quantas, porque o saldo real é menor; (3) a última recusa `insufficient_quota` da OpenAI é o
+único sinal REAL de crédito, e aparece em vermelho quando é posterior ao início da conta;
+(4) lançamento não se edita, se exclui (o histórico diz o que foi informado); data no futuro é
+recusada, porque faria o consumo até lá sumir; (5) o aviso de saldo baixo
+(`AiSettings.lowBalanceAlertCents`) só pinta o card, sem bloquear nada e sem evento de tempo
+real — quem bloqueia é o orçamento mensal. Ver é `ai.view_usage`; lançar, excluir e o aviso são
+`requireRole("admin")`, como o orçamento. Migration `20260924120000_ai_credit_balance`.
 
 **Ferramentas** (`AI_TOOL_NAMES`): `save_collected_data`, `update_contact_name`, `add_tag`,
 `remove_tag`, `add_internal_note`, `set_conversation_status`, `schedule_followup`,

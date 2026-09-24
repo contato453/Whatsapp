@@ -5,6 +5,7 @@ import {
   AI_AGENT_STATUSES,
   AI_AUTOMATION_CONVERSATION_TYPES,
   AI_BUDGET_POLICIES,
+  AI_CREDIT_ENTRY_KINDS,
   AI_KNOWLEDGE_KINDS,
   AI_KNOWLEDGE_MAX_CHARS,
   AI_MODEL_CATALOG,
@@ -30,6 +31,7 @@ import { assertCanManageResource, auditDepartmentSnapshot, resolveDepartmentTarg
 import { AppError, NotFoundError } from "../../lib/errors.js";
 import { requireAnyPermission, requirePermission } from "../../lib/permissions.js";
 import { serializeUserDirectory } from "../../lib/serialize.js";
+import { loadAiBalance } from "../../services/ai/balance.js";
 import { loadAiSettings, loadBudgetState, monthStart } from "../../services/ai/budget.js";
 import { aiAgentConfigSchema, parseStoredAgentConfig } from "../../services/ai/config-schema.js";
 import { createAiProvider, resolveCredentials } from "../../services/ai/credentials.js";
@@ -361,6 +363,96 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
       },
     });
     return { settings: await settingsDto(organizationId) };
+  });
+
+  // =========================================================================
+  // Saldo estimado do crédito — ver `services/ai/balance.ts`
+  // =========================================================================
+
+  // Ver o saldo é ver consumo: mesma chave da aba Consumo.
+  app.get("/ai/balance", { preHandler: requirePermission(deps, "ai.view_usage") }, async (request) => ({
+    balance: await loadAiBalance(prisma, request.user.organizationId),
+  }));
+
+  const creditEntrySchema = z.object({
+    kind: z.enum(AI_CREDIT_ENTRY_KINDS),
+    // Até US$ 1 milhão: o teto só barra dígito a mais digitado por engano.
+    amountCents: z.number().int().min(0).max(100_000_000),
+    effectiveAt: z.coerce.date().optional(),
+    note: z.string().trim().max(200).optional(),
+  });
+
+  // Lançar crédito é mexer em dinheiro: só admin, como o orçamento.
+  app.post("/ai/credit-entries", { preHandler: requireRole("admin") }, async (request, reply) => {
+    const body = creditEntrySchema.parse(request.body);
+    const organizationId = request.user.organizationId;
+    const now = new Date();
+    const effectiveAt = body.effectiveAt ?? now;
+    // Data no futuro faria o consumo de hoje até lá sumir da conta.
+    if (effectiveAt.getTime() > now.getTime() + 60_000) {
+      throw new AppError("A data do lançamento não pode estar no futuro", 400, "credit_entry_future");
+    }
+    if (body.kind === "top_up" && body.amountCents === 0) {
+      throw new AppError("Informe o valor da recarga", 400, "credit_entry_empty");
+    }
+    const entry = await prisma.aiCreditEntry.create({
+      data: {
+        organizationId,
+        kind: body.kind,
+        amountCents: body.amountCents,
+        effectiveAt,
+        note: body.note ? body.note : null,
+        createdById: request.user.sub,
+      },
+    });
+    deps.audit.record({
+      organizationId,
+      userId: request.user.sub,
+      action: "ai.credit_entry_created",
+      entityType: "AiCreditEntry",
+      entityId: entry.id,
+      metadata: { kind: body.kind, amountCents: body.amountCents, effectiveAt: effectiveAt.toISOString() },
+    });
+    reply.code(201);
+    return { balance: await loadAiBalance(prisma, organizationId) };
+  });
+
+  app.delete("/ai/credit-entries/:id", { preHandler: requireRole("admin") }, async (request) => {
+    const { id } = idParams.parse(request.params);
+    const organizationId = request.user.organizationId;
+    const entry = await prisma.aiCreditEntry.findFirst({ where: { id, organizationId } });
+    if (!entry) throw new NotFoundError("Lançamento não encontrado");
+    await prisma.aiCreditEntry.delete({ where: { id } });
+    deps.audit.record({
+      organizationId,
+      userId: request.user.sub,
+      action: "ai.credit_entry_deleted",
+      entityType: "AiCreditEntry",
+      entityId: id,
+      metadata: { kind: entry.kind, amountCents: entry.amountCents, effectiveAt: entry.effectiveAt.toISOString() },
+    });
+    return { balance: await loadAiBalance(prisma, organizationId) };
+  });
+
+  // Rota própria, e não um campo a mais no PUT /ai/settings: aquele grava a
+  // tela de Configurações gerais INTEIRA, e o aviso mora no card do saldo.
+  app.put("/ai/balance/alert", { preHandler: requireRole("admin") }, async (request) => {
+    const body = z.object({ lowBalanceAlertCents: z.number().int().min(0).max(100_000_000).nullable() }).parse(request.body);
+    const organizationId = request.user.organizationId;
+    const saved = await prisma.aiSettings.upsert({
+      where: { organizationId },
+      update: { lowBalanceAlertCents: body.lowBalanceAlertCents, updatedById: request.user.sub },
+      create: { organizationId, lowBalanceAlertCents: body.lowBalanceAlertCents, updatedById: request.user.sub },
+    });
+    deps.audit.record({
+      organizationId,
+      userId: request.user.sub,
+      action: "ai.balance_alert_updated",
+      entityType: "AiSettings",
+      entityId: saved.id,
+      metadata: { lowBalanceAlertCents: body.lowBalanceAlertCents },
+    });
+    return { balance: await loadAiBalance(prisma, organizationId) };
   });
 
   // =========================================================================
