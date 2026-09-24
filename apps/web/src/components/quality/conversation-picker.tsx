@@ -39,6 +39,22 @@ import { formatDateTime } from "./quality-ui";
  * não é a busca global: aqui a pergunta é "dentro deste recorte, qual delas?",
  * e uma busca que trouxesse conversa de fora do filtro contradiria o filtro
  * que a pessoa acabou de marcar.
+ *
+ * SELECIONAR TODAS PAGINA NO SERVIDOR, e não marca só o que está na tela. O
+ * caso que trouxe isto é filtrar por um atendente e querer as conversas dele:
+ * o recorte tem 83, a lista carregou 50, e marcar "as visíveis" deixava de
+ * fora 33 que a pessoa acreditava ter marcado. O botão agora busca página por
+ * página até encher o teto ou acabar o recorte. Com termo de busca digitado
+ * ele volta a ser local, e o rótulo muda junto: o termo filtra o que já veio,
+ * então prometer "todas" ali seria mentira.
+ *
+ * "SÓ AS ATRASADAS" É A MESMA CONTA DO CARD DO DASHBOARD, e não uma régua
+ * nova: manda `overdue=true` para `GET /conversations`, que resolve por
+ * `lib/overdue.ts`. Existe porque o teto por análise é pequeno de propósito
+ * (cada conversa é uma chamada paga), então a pergunta útil não é "quais são
+ * as 83", é "quais destas 83 mais pedem revisão". Inventar aqui um segundo
+ * critério de criticidade produziria duas listas de "conversa crítica" no
+ * sistema, discordando entre si.
  */
 
 const PAGINA = 50;
@@ -54,7 +70,9 @@ export function ConversationPicker({
 }) {
   const [instanceIds, setInstanceIds] = useState<string[]>([]);
   const [assignment, setAssignment] = useState<string[]>([]);
+  const [somenteAtrasadas, setSomenteAtrasadas] = useState(false);
   const [termo, setTermo] = useState("");
+  const [marcandoTodas, setMarcandoTodas] = useState(false);
 
   const [conversas, setConversas] = useState<ConversationDto[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -87,11 +105,14 @@ export function ConversationPicker({
       // Parâmetro REPETIDO, como a Inbox e o Dashboard já fazem.
       for (const id of instanceIds) params.append("instanceId", id);
       for (const token of assignment) params.append("assignment", token);
+      // `z.coerce.boolean()` do lado da API transforma qualquer texto em true,
+      // inclusive "false": quem não quer o recorte OMITE o parâmetro.
+      if (somenteAtrasadas) params.set("overdue", "true");
       return api.get<{ conversations: ConversationDto[]; total: number }>(
         `/conversations?${params.toString()}`,
       );
     },
-    [instanceIds, assignment],
+    [instanceIds, assignment, somenteAtrasadas],
   );
 
   useEffect(() => {
@@ -185,20 +206,61 @@ export function ConversationPicker({
   }
 
   /**
-   * Marca as conversas visíveis até o teto. Vai até o limite e para: recusar
-   * tudo porque a lista tem mais do que cabe seria pior do que marcar o que
-   * cabe e dizer quantas entraram.
+   * Marca até o teto. Vai até o limite e para: recusar tudo porque o recorte
+   * tem mais do que cabe seria pior do que marcar o que cabe e dizer quantas
+   * entraram.
+   *
+   * Sem termo de busca, PAGINA NO SERVIDOR até encher — marcar só o que está
+   * na tela deixava de fora a parte do recorte que ainda não tinha sido
+   * carregada, e a pessoa saía acreditando ter marcado as 83. Com termo
+   * digitado fica no que já veio, porque o termo filtra local.
    */
-  function marcarVisiveis(): void {
+  async function marcarTodas(): Promise<void> {
     const novas = [...selecionadas];
-    for (const conversation of visiveis) {
-      if (novas.length >= teto) break;
-      if (!novas.some((item) => item.id === conversation.id)) novas.push(conversation);
+    const juntar = (lista: ConversationDto[]): void => {
+      for (const conversation of lista) {
+        if (novas.length >= teto) return;
+        if (!novas.some((item) => item.id === conversation.id)) novas.push(conversation);
+      }
+    };
+
+    if (busca || !conversas) {
+      juntar(visiveis);
+      onChange(novas);
+      return;
     }
-    onChange(novas);
+
+    setMarcandoTodas(true);
+    try {
+      juntar(conversas);
+      // As já carregadas podem não encher o teto: continua de onde a lista
+      // parou, sem refazer as páginas que já estão na tela.
+      let offset = conversas.length;
+      let conhecidas = conversas;
+      let restante = total;
+      while (novas.length < teto && offset < restante) {
+        const data = await buscarPagina(offset);
+        if (data.conversations.length === 0) break;
+        conhecidas = [...conhecidas, ...data.conversations];
+        restante = data.total;
+        offset += data.conversations.length;
+        juntar(data.conversations);
+      }
+      // O que foi buscado para marcar fica na lista: some-lo de volta faria a
+      // tela mostrar menos linhas do que as que acabaram de ser marcadas.
+      setConversas(conhecidas);
+      setTotal(restante);
+    } catch {
+      // Falhar no meio não desfaz o que já entrou: marcar parte e dizer
+      // quantas é melhor do que voltar a zero sem explicação.
+    } finally {
+      setMarcandoTodas(false);
+      onChange(novas);
+    }
   }
 
   const cheio = selecionadas.length >= teto;
+  const naoCabe = conversas !== null && total > teto;
 
   return (
     <div className="space-y-3">
@@ -230,6 +292,22 @@ export function ConversationPicker({
             onChange={(event) => setTermo(event.target.value)}
           />
         </div>
+        <label
+          className={`flex shrink-0 cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm transition ${
+            somenteAtrasadas
+              ? "border-amber-300 bg-amber-50 text-amber-800"
+              : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+          }`}
+          title="Não resolvidas, com a última mensagem do cliente, esperando além do limite em tempo de expediente. É a mesma conta do card Atrasados agora."
+        >
+          <input
+            type="checkbox"
+            checked={somenteAtrasadas}
+            onChange={(event) => setSomenteAtrasadas(event.target.checked)}
+            className="h-4 w-4 rounded border-slate-300"
+          />
+          Só as atrasadas
+        </label>
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -239,8 +317,18 @@ export function ConversationPicker({
             : `${visiveis.length} de ${total} ${total === 1 ? "conversa" : "conversas"} no recorte`}
         </p>
         <div className="flex shrink-0 gap-1">
-          <Button variant="ghost" size="sm" onClick={marcarVisiveis} disabled={cheio || visiveis.length === 0}>
-            <CheckCheck className="h-3.5 w-3.5" /> Selecionar as visíveis
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void marcarTodas()}
+            disabled={cheio || marcandoTodas || visiveis.length === 0}
+          >
+            {marcandoTodas ? (
+              <Spinner className="h-3.5 w-3.5" />
+            ) : (
+              <CheckCheck className="h-3.5 w-3.5" />
+            )}
+            {busca ? "Selecionar as visíveis" : "Selecionar todas"}
           </Button>
           <Button
             variant="ghost"
@@ -257,13 +345,23 @@ export function ConversationPicker({
         <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-amber-200">
           Você chegou ao limite de {teto} conversas por análise. Para aumentar, use a aba Configurações.
         </p>
+      ) : naoCabe ? (
+        <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600 ring-1 ring-slate-200">
+          O recorte tem {total} conversas e cabem {teto} por análise. &quot;Selecionar todas&quot; marca as{" "}
+          {teto} mais recentes; para revisar as que mais pedem atenção, ligue &quot;Só as atrasadas&quot;. O
+          limite por análise fica na aba Configurações.
+        </p>
       ) : null}
 
       <div className="max-h-96 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
         {conversas === null ? <Spinner className="mx-auto my-8 h-5 w-5" /> : null}
         {conversas !== null && visiveis.length === 0 ? (
           <p className="py-8 text-center text-sm text-slate-500">
-            {busca ? "Nenhuma conversa com esse nome no recorte." : "Nenhuma conversa neste recorte."}
+            {busca
+              ? "Nenhuma conversa com esse nome no recorte."
+              : somenteAtrasadas
+                ? "Nenhuma conversa atrasada neste recorte."
+                : "Nenhuma conversa neste recorte."}
           </p>
         ) : null}
         {visiveis.map((conversation) => {

@@ -3820,6 +3820,31 @@ uma segunda régua de filtro divergiria da primeira. A busca por texto filtra o 
 carregado, e o rótulo diz isso: aqui a pergunta é "dentro deste recorte, qual delas?", e trazer
 conversa de fora contradiria o filtro que a pessoa acabou de marcar.
 
+**"Selecionar todas" PAGINA NO SERVIDOR, e o teto por análise é pequeno de propósito.** O caso
+que trouxe isto é filtrar por um atendente e querer as conversas dele: o recorte tinha 83, a
+lista havia carregado 50, e o botão marcava só o que estava na tela — a pessoa saía acreditando
+ter marcado as 83. Agora ele busca página por página até encher o teto ou acabar o recorte, e
+com termo de busca digitado volta a ser local (o termo filtra o que já veio, então prometer
+"todas" ali seria mentira) com o rótulo mudando junto. Acima do teto a tela **diz o número
+antes** de a pessoa marcar, em vez de deixá-la descobrir no aviso de limite: o recorte tem 83,
+cabem 20, e "Selecionar todas" pega as 20 mais recentes.
+
+**"Só as atrasadas" é a MESMA conta do card do dashboard** (`overdue=true` em
+`GET /conversations`, resolvido por `lib/overdue.ts`), e não um critério de criticidade novo.
+Existe porque cada conversa da análise é uma chamada paga: com o teto em 20 e o recorte em 83, a
+pergunta útil deixa de ser "quais são as 83" e passa a ser "quais destas mais pedem revisão".
+Inventar aqui uma segunda régua de "conversa crítica" produziria duas listas discordando entre
+si, que é o defeito que a régua única do atraso já veio consertar uma vez.
+
+**A LEITURA DE UM ATENDENTE VEM DA REPETIÇÃO ENTRE DISPAROS, NÃO DE UM DISPARO GIGANTE.** O teto
+sobe até 100 na aba Configurações, então analisar as 83 de uma pessoa é possível — mas é uma
+análise cara, longa e que ninguém lê inteira. A aba "Por atendente" já agrega média no tempo,
+assuntos e pontos repetidos ENTRE análises, e é ela que responde "como a fulana está indo": uma
+amostra recorrente de conversas críticas, disparada toda semana, diz mais do que 83 avaliações
+de uma vez. **E a avaliação nunca é genérica**: uma linha por atendente por conversa, citando
+mensagem — juntar tudo numa chamada só perderia a citação, estouraria o contexto e ainda pularia
+a máscara e a cobertura, que são por conversa.
+
 **O PDF é impressão do navegador, e o papel é A PRÓPRIA TELA.** Gerar PDF no servidor traria
 uma dependência pesada (navegador headless ou montador de PDF) para produzir o que o Chrome já
 produz, então o botão PDF só abre a análise e manda o navegador imprimir o cartão dela.
