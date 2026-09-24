@@ -141,6 +141,8 @@ describe("rotas do Quality", () => {
       ["GET", "/quality/runs"],
       ["GET", "/quality/evaluations"],
       ["GET", "/quality/agents"],
+      ["GET", "/quality/departments"],
+      ["GET", "/quality/candidates"],
       ["POST", "/quality/runs"],
     ];
     for (const user of [SUPERVISOR, AGENT]) {
@@ -451,6 +453,8 @@ describe("visão por atendente", () => {
       itemId: "i1",
       conversationId: CONVERSATION,
       conversationTitle: "Cliente",
+      departmentId: null,
+      departmentName: null,
       criteria: [
         { key: "cordiality" as const, score: 8, justification: "x", messageIds: [] },
         { key: "clarity" as const, score: 6, justification: "x", messageIds: [] },

@@ -218,6 +218,7 @@ model Department {
   crmOpportunities  CrmOpportunity[]
   crmStageActions   CrmStageAction[]         @relation("CrmStageActionDepartment")
   automationFlows   AutomationFlow[]
+  qualityEvaluations QualityEvaluation[]     @relation("QualityEvaluationDepartment")
 
   @@unique([organizationId, name])
   @@map("departments")
@@ -2685,6 +2686,20 @@ model QualityEvaluation {
   /// lado das enviadas porque "43 enviadas" sozinho não diz se foi conversa
   /// difícil ou atendente prolixo.
   messagesReceived     Int       @default(0)
+  /// Departamento da conversa NO MOMENTO DA AVALIAÇÃO, copiado de propósito.
+  /// Cruzar ao vivo com `Conversation.departmentId` faria a conversa do CS
+  /// transferida para o Fiscal em outubro levar consigo a nota de setembro: o
+  /// relatório do mês passado mudaria sozinho, sem ninguém mexer nele. Mesma
+  /// razão de `userName` e `QualityRun.requestedByName` serem cópia.
+  ///
+  /// NULO É ESTADO VÁLIDO, e não ausência de dado: conversa sem departamento
+  /// existe (o número não tem departamento padrão) e precisa continuar contando
+  /// — some-la do painel esconderia justamente o atendimento que ninguém
+  /// classificou.
+  departmentId         String?
+  /// Nome copiado, como o do atendente: departamento excluído do cadastro não
+  /// apaga o histórico de avaliação dele.
+  departmentName       String?
   conversationOutcome  String
   /// Descarte é do administrador e não apaga a linha; o comentário dele NUNCA
   /// altera a nota — a nota é da IA, por decisão do desenho.
@@ -2700,9 +2715,11 @@ model QualityEvaluation {
   conversation Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   user         User?          @relation("QualityEvaluationUser", fields: [userId], references: [id], onDelete: SetNull)
   discardedBy  User?          @relation("QualityEvaluationDiscardedBy", fields: [discardedByUserId], references: [id], onDelete: SetNull)
+  department   Department?    @relation("QualityEvaluationDepartment", fields: [departmentId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, userId, createdAt])
   @@index([organizationId, subject])
+  @@index([organizationId, departmentId])
   @@index([itemId])
   @@map("quality_evaluations")
 }

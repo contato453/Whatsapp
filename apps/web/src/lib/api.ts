@@ -36,6 +36,8 @@ import type {
   ParticipantClientRole,
   PermissionAction,
   QualityAgentSummaryDto,
+  QualityAggregateDto,
+  QualityDepartmentSummaryDto,
   QualityAvailabilityDto,
   QualityEvaluationDto,
   QualityRunDetailDto,
@@ -1399,6 +1401,8 @@ export const qualityApi = {
   evaluations: (
     query: {
       userId?: string;
+      /** `none` é "sem departamento", nunca a ausência do filtro. */
+      departmentId?: string;
       subject?: QualitySubject;
       from?: string;
       to?: string;
@@ -1427,13 +1431,58 @@ export const qualityApi = {
       .patch<{ evaluation: QualityEvaluationDto }>(`/quality/evaluations/${id}/comment`, { comment })
       .then((d) => d.evaluation),
 
-  agents: (query: { from?: string; to?: string } = {}) => {
-    const search = new URLSearchParams();
-    if (query.from) search.set("from", query.from);
-    if (query.to) search.set("to", query.to);
-    const suffix = search.toString();
+  agents: (query: { from?: string; to?: string; departmentId?: string } = {}) => {
+    const suffix = buscaQuality(query);
     return api
-      .get<{ agents: QualityAgentSummaryDto[] }>(`/quality/agents${suffix ? `?${suffix}` : ""}`)
+      .get<{ agents: QualityAgentSummaryDto[] }>(`/quality/agents${suffix}`)
       .then((d) => d.agents);
   },
+
+  /** A leitura por setor, com a linha do escritório inteiro junto. */
+  departments: (query: { from?: string; to?: string } = {}) =>
+    api.get<{
+      departments: QualityDepartmentSummaryDto[];
+      overall: QualityAggregateDto;
+    }>(`/quality/departments${buscaQuality(query)}`),
+
+  /**
+   * As conversas que ENTRARIAM numa análise do setor no período — as que têm
+   * mensagem de atendente ali dentro, que é a condição que o analisador aplica.
+   * Só lista; quem dispara continua sendo `runs.create`.
+   */
+  candidates: (query: {
+    from: string;
+    to: string;
+    departmentId?: string;
+    instanceId?: string[];
+    userId?: string;
+    onlyOverdue?: boolean;
+    limit?: number;
+  }) => {
+    const search = new URLSearchParams();
+    search.set("from", query.from);
+    search.set("to", query.to);
+    if (query.departmentId) search.set("departmentId", query.departmentId);
+    // Parâmetro REPETIDO, como a Inbox e o Dashboard já fazem.
+    for (const id of query.instanceId ?? []) search.append("instanceId", id);
+    if (query.userId) search.set("userId", query.userId);
+    if (query.onlyOverdue) search.set("onlyOverdue", "true");
+    if (query.limit) search.set("limit", String(query.limit));
+    return api.get<{
+      conversations: ConversationDto[];
+      total: number;
+      omitted: number;
+      limit: number;
+    }>(`/quality/candidates?${search.toString()}`);
+  },
 };
+
+/** Monta a query das leituras do Quality, que compartilham período e setor. */
+function buscaQuality(query: Record<string, string | undefined>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== "") search.set(key, value);
+  }
+  const suffix = search.toString();
+  return suffix ? `?${suffix}` : "";
+}
