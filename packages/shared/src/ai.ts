@@ -1289,6 +1289,12 @@ export interface AiAutomationDto {
   resolvedTagId: string | null;
   priority: number;
   sessionsCount: number;
+  /**
+   * Quem pede pode gravar nela? Decidido no servidor pela régua da
+   * configuração de automação (`canWriteAutomationConfig`): a tela esconde o
+   * botão pelo mesmo critério que a API recusa.
+   */
+  canEdit: boolean;
   createdAt: string;
 }
 

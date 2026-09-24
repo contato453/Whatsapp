@@ -56,7 +56,9 @@ export function AutomationsPanel() {
         aiApi.automations(),
         aiApi.agents(),
         api.get<{ instances: InstanceDto[] }>("/whatsapp-instances"),
-        api.get<{ departments: DepartmentDto[] }>("/departments"),
+        // Só os departamentos da pessoa: é neles que ela pode gravar, e a
+        // lista já recortada pela API só traz automação deles (ou geral).
+        api.get<{ departments: DepartmentDto[] }>("/departments/mine"),
         api.get<{ tags: TagDto[] }>("/tags"),
       ]);
       setAutomations(list);
@@ -190,7 +192,15 @@ export function AutomationsPanel() {
                 </p>
                 <p className="text-[11px] text-slate-400">{automation.sessionsCount} atendimento(s) iniciados por esta automação</p>
               </div>
-              <div className="flex gap-1">
+              {!automation.canEdit && (
+                <span
+                  className="text-[11px] text-slate-400"
+                  title="Automação geral (sem departamento ou para todos os números): editar exige a permissão de automações gerais."
+                >
+                  Somente leitura
+                </span>
+              )}
+              <div className={`flex gap-1 ${automation.canEdit ? "" : "hidden"}`}>
                 <Button size="sm" variant="ghost" onClick={() => open(automation)}>
                   <Pencil className="h-3.5 w-3.5" />
                 </Button>

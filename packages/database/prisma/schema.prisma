@@ -217,6 +217,7 @@ model Department {
   crmPipelineLinks  CrmPipelineDepartment[]
   crmOpportunities  CrmOpportunity[]
   crmStageActions   CrmStageAction[]         @relation("CrmStageActionDepartment")
+  automationFlows   AutomationFlow[]
 
   @@unique([organizationId, name])
   @@map("departments")
@@ -1946,6 +1947,14 @@ model AutomationFlow {
   triggerConfig      Json?
   /// Número específico, ou null = todos os números conectados da organização.
   whatsappInstanceId String?
+  /// Departamento DONO da configuração, ou null = GERAL (visível a todos que
+  /// têm o número). Governa quem VÊ e quem EDITA o fluxo
+  /// (`automationConfigScope`, em `lib/access.ts`) e NUNCA se ele roda: o
+  /// motor escolhe o fluxo sem usuário nenhum, e filtrar a execução por aqui
+  /// faria o fluxo parar de responder em silêncio. Excluir o departamento
+  /// devolve o fluxo a geral (`SetNull`), e ele reaparece no aviso de não
+  /// classificados em vez de sumir.
+  departmentId       String?
   /// Ordem de disputa entre fluxos cujo gatilho combina ao mesmo tempo
   /// (seção 27) — MENOR NÚMERO VENCE. Fluxo específico de palavra-chave nasce
   /// com prioridade menor (mais forte) que o atendimento geral, por padrão.
@@ -1971,11 +1980,14 @@ model AutomationFlow {
 
   organization     Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   whatsappInstance WhatsAppInstance?       @relation(fields: [whatsappInstanceId], references: [id], onDelete: SetNull)
+  department       Department?             @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   versions         AutomationFlowVersion[] @relation("AutomationFlowVersions")
   publishedVersion AutomationFlowVersion?  @relation("AutomationFlowPublished", fields: [publishedVersionId], references: [id], onDelete: SetNull)
   executions       AutomationExecution[]
 
   @@index([organizationId, status])
+  @@index([organizationId, departmentId])
+  @@index([organizationId, whatsappInstanceId])
   @@map("automation_flows")
 }
 

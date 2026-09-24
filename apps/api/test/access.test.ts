@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { PrismaClient } from "@azvchat/database";
 import {
   PERMISSION_ACTION_KEYS,
@@ -6,8 +6,20 @@ import {
   type ConfigurableRole,
 } from "@azvchat/shared";
 import { buildPermissions } from "../src/lib/permissions.js";
+import Fastify, { type FastifyInstance } from "fastify";
+import jwt from "@fastify/jwt";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { registerErrorHandler } from "../src/lib/errors.js";
+import { clearPermissionCache } from "../src/lib/permissions.js";
+import { automationRoutes } from "../src/modules/automation/routes.js";
+import type { AppDeps } from "../src/types.js";
 import {
   accessibleInstanceIds,
+  automationConfigScope,
+  canSeeAutomationConfig,
+  canWriteAutomationConfig,
+  configInstanceScope,
   canAssignBeyondConversationReach,
   conversationAssigneeWhere,
   canWriteGeneralResource,
@@ -680,6 +692,482 @@ describe("papel Gerente", () => {
     const supervisor = permissoes("supervisor");
     for (const action of PERMISSION_ACTION_KEYS) {
       if (supervisor.can(action)) expect(gerente.can(action), action).toBe(true);
+    }
+  });
+});
+
+/* ====================================================================== *
+ * CONFIGURAÇÃO DE AUTOMAÇÃO: quem vê e quem edita o fluxo.
+ *
+ * O cenário decisivo do vazamento: fluxo do departamento A, usuário que só
+ * tem o departamento B. Ele não vê na lista, e chamar a rota direto com o id
+ * é recusado. E a outra metade, que não pode quebrar: o departamento do fluxo
+ * é VISUALIZAÇÃO, nunca execução — ver o bloco do motor no fim.
+ * ====================================================================== */
+
+const DEPT_A = "aaaaaaaa-0000-4000-8000-00000000000a";
+const DEPT_B = "bbbbbbbb-0000-4000-8000-00000000000b";
+const INST_1 = "11111111-0000-4000-8000-000000000001";
+const INST_2 = "22222222-0000-4000-8000-000000000002";
+const FLOW_A = "f0000000-0000-4000-8000-00000000000a"; // dept A, chip 1
+const FLOW_B = "f0000000-0000-4000-8000-00000000000b"; // dept B, chip 1
+const FLOW_GERAL = "f0000000-0000-4000-8000-000000000009"; // sem departamento, chip 1
+const FLOW_CHIP2 = "f0000000-0000-4000-8000-000000000002"; // dept B, chip 2
+const FLOW_TODOS = "f0000000-0000-4000-8000-000000000007"; // sem departamento, todos os chips
+const CONV_B = "c0000000-0000-4000-8000-00000000000b";
+
+describe("automationConfigScope / canSeeAutomationConfig (regra pura)", () => {
+  const soB = { instanceIds: [INST_1], departmentIds: [DEPT_B] };
+
+  it("as duas condições valem juntas: departamento (ou geral) E número (ou todos)", () => {
+    expect(canSeeAutomationConfig(soB, { departmentId: DEPT_B, whatsappInstanceId: INST_1 })).toBe(true);
+    expect(canSeeAutomationConfig(soB, { departmentId: null, whatsappInstanceId: INST_1 })).toBe(true);
+    expect(canSeeAutomationConfig(soB, { departmentId: DEPT_B, whatsappInstanceId: null })).toBe(true);
+    // Departamento de outra área: não vê.
+    expect(canSeeAutomationConfig(soB, { departmentId: DEPT_A, whatsappInstanceId: INST_1 })).toBe(false);
+    // Departamento dele, mas chip que ele não atende: não vê. Sem esta
+    // condição continuaria vazando o fluxo do chip alheio.
+    expect(canSeeAutomationConfig(soB, { departmentId: DEPT_B, whatsappInstanceId: INST_2 })).toBe(false);
+    expect(canSeeAutomationConfig(soB, { departmentId: null, whatsappInstanceId: INST_2 })).toBe(false);
+  });
+
+  it("sem número nenhum, nem o fluxo de todos os números aparece", () => {
+    const semChip = { instanceIds: [], departmentIds: [DEPT_B] };
+    expect(canSeeAutomationConfig(semChip, { departmentId: null, whatsappInstanceId: null })).toBe(false);
+    expect(automationConfigScope(semChip)).toEqual({
+      AND: [
+        { OR: [{ departmentId: null }, { departmentId: { in: [DEPT_B] } }] },
+        { OR: [{ whatsappInstanceId: { in: [] } }] },
+      ],
+    });
+  });
+
+  it("admin (listas nulas) enxerga tudo, sem filtro", () => {
+    const admin = { instanceIds: null, departmentIds: null };
+    expect(automationConfigScope(admin)).toEqual({});
+    expect(canSeeAutomationConfig(admin, { departmentId: DEPT_A, whatsappInstanceId: INST_2 })).toBe(true);
+  });
+
+  it("o filtro Prisma é o mesmo recorte da função pura", () => {
+    expect(automationConfigScope(soB)).toEqual({
+      AND: [
+        { OR: [{ departmentId: null }, { departmentId: { in: [DEPT_B] } }] },
+        { OR: [{ whatsappInstanceId: null }, { whatsappInstanceId: { in: [INST_1] } }] },
+      ],
+    });
+    expect(configInstanceScope([INST_1])).toEqual({
+      OR: [{ whatsappInstanceId: null }, { whatsappInstanceId: { in: [INST_1] } }],
+    });
+    expect(configInstanceScope(null)).toEqual({});
+  });
+
+  it("gravar em fluxo geral exige a chave de alcance geral; o do próprio departamento, não", () => {
+    expect(canWriteAutomationConfig(soB, { departmentId: DEPT_B, whatsappInstanceId: INST_1 }, false)).toBe(true);
+    expect(canWriteAutomationConfig(soB, { departmentId: null, whatsappInstanceId: INST_1 }, false)).toBe(false);
+    expect(canWriteAutomationConfig(soB, { departmentId: DEPT_B, whatsappInstanceId: null }, false)).toBe(false);
+    expect(canWriteAutomationConfig(soB, { departmentId: null, whatsappInstanceId: INST_1 }, true)).toBe(true);
+    // A chave de alcance geral nunca amplia o que a pessoa enxerga.
+    expect(canWriteAutomationConfig(soB, { departmentId: DEPT_A, whatsappInstanceId: INST_1 }, true)).toBe(false);
+  });
+
+  it("a chave de alcance geral é do Gerente para cima, por padrão", () => {
+    expect(permissoes("agent").can("automation.manage_general")).toBe(false);
+    expect(permissoes("supervisor").can("automation.manage_general")).toBe(false);
+    expect(permissoes("manager").can("automation.manage_general")).toBe(true);
+    expect(permissoes("admin").can("automation.manage_general")).toBe(true);
+  });
+});
+
+/** Casador mínimo de `where` do Prisma: AND, OR, in, is, null e igualdade. */
+function casa(row: Record<string, unknown>, where: Record<string, unknown> | undefined): boolean {
+  if (!where) return true;
+  return Object.entries(where).every(([key, cond]) => {
+    if (key === "AND") return (cond as Record<string, unknown>[]).every((sub) => casa(row, sub));
+    if (key === "OR") return (cond as Record<string, unknown>[]).some((sub) => casa(row, sub));
+    if (cond === null) return row[key] === null || row[key] === undefined;
+    if (typeof cond === "object" && !(cond instanceof Date)) {
+      const obj = cond as Record<string, unknown>;
+      if ("in" in obj) return (obj.in as unknown[]).includes(row[key]);
+      if ("is" in obj) return casa((row[key] ?? {}) as Record<string, unknown>, obj.is as Record<string, unknown>);
+      return casa((row[key] ?? {}) as Record<string, unknown>, obj);
+    }
+    return row[key] === cond;
+  });
+}
+
+interface Pessoa {
+  role: AuthTokenPayload["role"];
+  instances: string[];
+  departments: string[];
+}
+
+const PESSOAS: Record<string, Pessoa> = {
+  "sup-b": { role: "supervisor", instances: [INST_1], departments: [DEPT_B] },
+  "sup-sem-chip-1": { role: "supervisor", instances: [INST_2], departments: [DEPT_A, DEPT_B] },
+  gerente: { role: "manager", instances: [INST_1, INST_2], departments: [DEPT_A, DEPT_B] },
+  admin: { role: "admin", instances: [], departments: [] },
+  agente: { role: "agent", instances: [INST_1], departments: [DEPT_B] },
+};
+
+function fluxos(): Map<string, Record<string, unknown>> {
+  const base = (id: string, name: string, departmentId: string | null, whatsappInstanceId: string | null) => ({
+    id,
+    organizationId: "org-1",
+    name,
+    description: null,
+    status: "active",
+    triggerType: "new_message",
+    triggerConfig: null,
+    whatsappInstanceId,
+    departmentId,
+    priority: 100,
+    cooldownMinutes: 0,
+    scheduleMode: "always",
+    draftGraph: { nodes: [], edges: [] },
+    publishedVersionId: null,
+    createdById: null,
+    updatedById: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  return new Map([
+    [FLOW_A, base(FLOW_A, "Comercial (A)", DEPT_A, INST_1)],
+    [FLOW_B, base(FLOW_B, "Fiscal (B)", DEPT_B, INST_1)],
+    [FLOW_GERAL, base(FLOW_GERAL, "Geral do chip 1", null, INST_1)],
+    [FLOW_CHIP2, base(FLOW_CHIP2, "Fiscal no chip 2", DEPT_B, INST_2)],
+    [FLOW_TODOS, base(FLOW_TODOS, "Saudação de todos os chips", null, null)],
+  ]);
+}
+
+interface Registro {
+  flows: Map<string, Record<string, unknown>>;
+  audit: Array<{ action: string; metadata?: Record<string, unknown> }>;
+}
+let registro: Registro;
+
+function automationPrisma(): PrismaClient {
+  const withRelations = (row: Record<string, unknown>) => ({
+    ...row,
+    whatsappInstance: row.whatsappInstanceId ? { name: `Chip ${String(row.whatsappInstanceId).slice(0, 1)}` } : null,
+    department: row.departmentId ? { id: row.departmentId, name: "Dept", color: null } : null,
+    publishedVersion: null,
+    _count: { executions: 0 },
+  });
+  const executions = [FLOW_A, FLOW_B].map((flowId, index) => ({
+    id: `e0000000-0000-4000-8000-00000000000${index}`,
+    organizationId: "org-1",
+    flowId,
+    flowVersionId: "v",
+    conversationId: CONV_B,
+    whatsappInstanceId: INST_1,
+    status: "completed",
+    currentNodeId: "n1",
+    waitingReason: null,
+    waitingUntil: null,
+    context: { protocolo: "AZV-1" },
+    triggerType: "new_message",
+    resultSummary: "Encaminhado para Comercial",
+    error: null,
+    startedAt: new Date(),
+    updatedAt: new Date(),
+    finishedAt: new Date(),
+    logs: [],
+  }));
+  const conversaB = { id: CONV_B, whatsappInstanceId: INST_1, departmentId: DEPT_B, assignedUserId: null, title: "Cliente", customTitle: null };
+  const execRow = (execution: (typeof executions)[number]) => ({
+    ...execution,
+    flow: registro.flows.get(execution.flowId),
+    conversation: conversaB,
+  });
+  return {
+    rolePermission: { findMany: async () => [] },
+    userWhatsAppInstance: {
+      findMany: async ({ where }: { where: { userId: string } }) =>
+        (PESSOAS[where.userId]?.instances ?? []).map((whatsappInstanceId) => ({ whatsappInstanceId })),
+    },
+    userDepartment: {
+      findMany: async ({ where }: { where: { userId: string } }) =>
+        (PESSOAS[where.userId]?.departments ?? []).map((departmentId) => ({ departmentId })),
+    },
+    whatsAppInstance: {
+      findFirst: async ({ where }: { where: { id: string } }) =>
+        [INST_1, INST_2].includes(where.id) ? { id: where.id } : null,
+    },
+    department: {
+      findFirst: async ({ where }: { where: { id: string } }) =>
+        [DEPT_A, DEPT_B].includes(where.id) ? { id: where.id } : null,
+    },
+    automationFlow: {
+      findMany: async ({ where }: { where: Record<string, unknown> }) =>
+        [...registro.flows.values()].filter((row) => casa(row, where)).map(withRelations),
+      findFirst: async ({ where }: { where: Record<string, unknown> }) => {
+        const row = [...registro.flows.values()].find((candidate) => casa(candidate, where));
+        return row ? withRelations(row) : null;
+      },
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        const id = `f1000000-0000-4000-8000-${String(registro.flows.size).padStart(12, "0")}`;
+        const row = { ...fluxos().get(FLOW_B), ...data, id, status: "draft" };
+        registro.flows.set(id, row);
+        return withRelations(row);
+      },
+      update: async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        const row = registro.flows.get(where.id)!;
+        Object.assign(row, data);
+        return withRelations(row);
+      },
+      delete: async ({ where }: { where: { id: string } }) => registro.flows.delete(where.id),
+    },
+    automationExecution: {
+      findMany: async ({ where }: { where: Record<string, unknown> }) =>
+        executions.map(execRow).filter((row) => casa(row, where)),
+      findFirst: async ({ where }: { where: Record<string, unknown> }) =>
+        executions.map(execRow).find((row) => casa(row, where)) ?? null,
+    },
+  } as unknown as PrismaClient;
+}
+
+async function automationApp(): Promise<FastifyInstance> {
+  const app = Fastify();
+  await app.register(jwt, { secret: "segredo-de-teste" });
+  app.decorate("verifySession", async (payload: AuthTokenPayload) => payload);
+  registerErrorHandler(app);
+  await automationRoutes(app, {
+    prisma: automationPrisma(),
+    audit: { record: (entry: { action: string; metadata?: Record<string, unknown> }) => registro.audit.push(entry) },
+    automation: { stopExecutionsForFlow: async () => 0 },
+  } as unknown as AppDeps);
+  await app.ready();
+  return app;
+}
+
+function bearer(app: FastifyInstance, sub: keyof typeof PESSOAS): Record<string, string> {
+  const token = app.jwt.sign({
+    sub,
+    organizationId: "org-1",
+    role: PESSOAS[sub]!.role,
+    name: sub,
+    email: `${sub}@example.com`,
+  });
+  return { authorization: `Bearer ${token}` };
+}
+
+describe("rotas de fluxo: quem vê e quem edita", () => {
+  beforeEach(() => {
+    clearPermissionCache();
+    registro = { flows: fluxos(), audit: [] };
+  });
+
+  it("usuário só do departamento B não vê o fluxo do departamento A na lista", async () => {
+    const app = await automationApp();
+    const response = await app.inject({ method: "GET", url: "/automation-flows", headers: bearer(app, "sup-b") });
+    expect(response.statusCode).toBe(200);
+    const ids = (response.json().flows as Array<{ id: string }>).map((flow) => flow.id).sort();
+    // Vê o do B, o geral do chip dele e o de todos os chips. Não vê o do A
+    // nem o do B num chip que ele não atende.
+    expect(ids).toEqual([FLOW_B, FLOW_GERAL, FLOW_TODOS].sort());
+    await app.close();
+  });
+
+  it("usuário sem o chip não vê os fluxos daquele chip, mesmo com o departamento", async () => {
+    const app = await automationApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/automation-flows",
+      headers: bearer(app, "sup-sem-chip-1"),
+    });
+    const ids = (response.json().flows as Array<{ id: string }>).map((flow) => flow.id).sort();
+    expect(ids).toEqual([FLOW_CHIP2, FLOW_TODOS].sort());
+    await app.close();
+  });
+
+  it("administrador vê todos", async () => {
+    const app = await automationApp();
+    const response = await app.inject({ method: "GET", url: "/automation-flows", headers: bearer(app, "admin") });
+    expect(response.json().flows).toHaveLength(5);
+    await app.close();
+  });
+
+  it("filtro por departamento só estreita o que a pessoa já vê", async () => {
+    const app = await automationApp();
+    const soA = await app.inject({
+      method: "GET",
+      url: `/automation-flows?departmentId=${DEPT_A}`,
+      headers: bearer(app, "sup-b"),
+    });
+    expect(soA.json().flows).toHaveLength(0);
+    const naoClassificados = await app.inject({
+      method: "GET",
+      url: "/automation-flows?departmentId=none",
+      headers: bearer(app, "admin"),
+    });
+    expect((naoClassificados.json().flows as Array<{ id: string }>).map((flow) => flow.id).sort()).toEqual(
+      [FLOW_GERAL, FLOW_TODOS].sort(),
+    );
+    await app.close();
+  });
+
+  it("chamar a rota direto com o id do fluxo de outro departamento é recusado com 403", async () => {
+    const app = await automationApp();
+    const headers = bearer(app, "sup-b");
+    const leitura = await app.inject({ method: "GET", url: `/automation-flows/${FLOW_A}`, headers });
+    expect(leitura.statusCode).toBe(403);
+    expect(leitura.json().error).toBe("forbidden");
+    for (const [method, url] of [
+      ["PATCH", `/automation-flows/${FLOW_A}`],
+      ["POST", `/automation-flows/${FLOW_A}/deactivate`],
+      ["POST", `/automation-flows/${FLOW_A}/activate`],
+      ["POST", `/automation-flows/${FLOW_A}/duplicate`],
+      ["POST", `/automation-flows/${FLOW_A}/publish`],
+      ["DELETE", `/automation-flows/${FLOW_A}`],
+      ["GET", `/automation-flows/${FLOW_CHIP2}`],
+    ] as const) {
+      const response = await app.inject({ method, url, headers, payload: method === "PATCH" ? { name: "Tomado" } : undefined });
+      expect(response.statusCode, `${method} ${url}`).toBe(403);
+    }
+    // Nada foi gravado no fluxo alheio.
+    expect(registro.flows.get(FLOW_A)?.name).toBe("Comercial (A)");
+    expect(registro.flows.has(FLOW_A)).toBe(true);
+    await app.close();
+  });
+
+  it("fluxo geral: o supervisor vê, mas só lê; o gerente edita", async () => {
+    const app = await automationApp();
+    const supervisor = await app.inject({ method: "GET", url: `/automation-flows/${FLOW_GERAL}`, headers: bearer(app, "sup-b") });
+    expect(supervisor.statusCode).toBe(200);
+    expect(supervisor.json().flow.canEdit).toBe(false);
+    const gravar = await app.inject({
+      method: "PATCH",
+      url: `/automation-flows/${FLOW_GERAL}`,
+      headers: bearer(app, "sup-b"),
+      payload: { name: "Mudou" },
+    });
+    expect(gravar.statusCode).toBe(403);
+    const gerente = await app.inject({
+      method: "PATCH",
+      url: `/automation-flows/${FLOW_GERAL}`,
+      headers: bearer(app, "gerente"),
+      payload: { departmentId: DEPT_B },
+    });
+    expect(gerente.statusCode).toBe(200);
+    // Classificado: sai dos não classificados e a auditoria registra de onde veio.
+    expect(gerente.json().flow.departmentId).toBe(DEPT_B);
+    const auditoria = registro.audit.find((entry) => entry.action === "automation_flow.updated");
+    expect(auditoria?.metadata).toMatchObject({ departmentId: DEPT_B, previousDepartmentId: null });
+    await app.close();
+  });
+
+  it("criar: só nos departamentos e números dele; geral pede a chave de alcance geral", async () => {
+    const app = await automationApp();
+    const headers = bearer(app, "sup-b");
+    const noB = await app.inject({
+      method: "POST",
+      url: "/automation-flows",
+      headers,
+      payload: { name: "Novo do B", departmentId: DEPT_B, whatsappInstanceId: INST_1 },
+    });
+    expect(noB.statusCode).toBe(201);
+    expect(registro.audit.at(-1)).toMatchObject({ action: "automation_flow.created", metadata: { departmentId: DEPT_B } });
+    const noA = await app.inject({
+      method: "POST",
+      url: "/automation-flows",
+      headers,
+      payload: { name: "Invasão", departmentId: DEPT_A, whatsappInstanceId: INST_1 },
+    });
+    expect(noA.statusCode).toBe(403);
+    const geral = await app.inject({
+      method: "POST",
+      url: "/automation-flows",
+      headers,
+      payload: { name: "Geral", departmentId: null, whatsappInstanceId: INST_1 },
+    });
+    expect(geral.statusCode).toBe(403);
+    // O departamento é obrigatório de informar: esquecer não vira geral.
+    const semCampo = await app.inject({ method: "POST", url: "/automation-flows", headers, payload: { name: "Sem" } });
+    expect(semCampo.statusCode).toBe(400);
+    const gerente = await app.inject({
+      method: "POST",
+      url: "/automation-flows",
+      headers: bearer(app, "gerente"),
+      payload: { name: "Geral", departmentId: null },
+    });
+    expect(gerente.statusCode).toBe(201);
+    await app.close();
+  });
+
+  it("mover o próprio fluxo para outro departamento é recusado", async () => {
+    const app = await automationApp();
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/automation-flows/${FLOW_B}`,
+      headers: bearer(app, "sup-b"),
+      payload: { departmentId: DEPT_A },
+    });
+    expect(response.statusCode).toBe(403);
+    expect(registro.flows.get(FLOW_B)?.departmentId).toBe(DEPT_B);
+    await app.close();
+  });
+
+  it("duplicar: a cópia nasce no mesmo departamento do original", async () => {
+    const app = await automationApp();
+    const response = await app.inject({
+      method: "POST",
+      url: `/automation-flows/${FLOW_B}/duplicate`,
+      headers: bearer(app, "sup-b"),
+    });
+    expect(response.statusCode).toBe(201);
+    expect(response.json().flow.departmentId).toBe(DEPT_B);
+    expect(response.json().flow.whatsappInstanceId).toBe(INST_1);
+    await app.close();
+  });
+
+  it("usuário sem a chave automation.manage não entra (padrão: Usuário não mexe em fluxo)", async () => {
+    const app = await automationApp();
+    const response = await app.inject({ method: "GET", url: "/automation-flows", headers: bearer(app, "agente") });
+    expect(response.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it("histórico: execução de fluxo de outro departamento não aparece na lista geral", async () => {
+    const app = await automationApp();
+    const response = await app.inject({ method: "GET", url: "/automation-executions", headers: bearer(app, "sup-b") });
+    const flows = (response.json().executions as Array<{ flowId: string }>).map((execution) => execution.flowId);
+    expect(flows).toEqual([FLOW_B]);
+    await app.close();
+  });
+
+  it("histórico da conversa: mostra que houve automação, sem revelar o fluxo alheio", async () => {
+    const app = await automationApp();
+    const response = await app.inject({
+      method: "GET",
+      url: `/automation-executions?conversationId=${CONV_B}`,
+      headers: bearer(app, "sup-b"),
+    });
+    const executions = response.json().executions as Array<Record<string, unknown>>;
+    expect(executions).toHaveLength(2);
+    const alheia = executions.find((execution) => execution.flowHidden === true);
+    expect(alheia).toMatchObject({ flowId: null, flowName: "Automação de outra área", resultSummary: null });
+    const detalhe = await app.inject({
+      method: "GET",
+      url: `/automation-executions/${String(alheia?.id)}`,
+      headers: bearer(app, "sup-b"),
+    });
+    expect(detalhe.json().execution).toMatchObject({ flowHidden: true, logs: [], context: {}, currentNodeId: null });
+    await app.close();
+  });
+});
+
+describe("o departamento do fluxo NUNCA decide execução", () => {
+  it("o motor não importa a régua de visualização de configuração", () => {
+    // Quando a mensagem do cliente chega não há usuário logado. Se esta
+    // régua entrar no motor, os fluxos param de rodar em silêncio. O teste de
+    // comportamento está em `automation-engine.test.ts` ("fluxo de um
+    // departamento continua disparando").
+    const engine = readFileSync(
+      fileURLToPath(new URL("../src/services/automation/engine.ts", import.meta.url)),
+      "utf8",
+    );
+    for (const proibido of ["automationConfigScope", "canSeeAutomationConfig", "canWriteAutomationConfig", "loadConversationAccess", "conversationScope"]) {
+      expect(engine.includes(proibido), proibido).toBe(false);
     }
   });
 });

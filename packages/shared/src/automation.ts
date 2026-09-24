@@ -438,6 +438,20 @@ export interface TagAddedTriggerConfig {
 export const AUTOMATION_FLOW_STATUSES = ["draft", "active", "inactive"] as const;
 export type AutomationFlowStatus = (typeof AUTOMATION_FLOW_STATUSES)[number];
 
+/**
+ * Onde a CONFIGURAÇÃO de automação mora (fluxo do construtor, automação de
+ * IA): um departamento, ou GERAL; um número, ou TODOS. Governa quem vê e
+ * quem edita, nunca se a automação roda — o motor decide sem usuário logado.
+ * Os rótulos vivem aqui para a lista, o formulário e o aviso dizerem a
+ * mesma coisa.
+ */
+export const AUTOMATION_GENERAL_DEPARTMENT_LABEL = "Geral";
+export const AUTOMATION_GENERAL_DEPARTMENT_HINT =
+  "Geral aparece para todos que têm o número. Com um departamento, só quem atua nele vê e edita o fluxo.";
+export const AUTOMATION_ALL_INSTANCES_LABEL = "Todos os números";
+export const AUTOMATION_SCOPE_EXECUTION_NOTE =
+  "O departamento decide quem vê e edita o fluxo. Ele não muda em quais conversas o fluxo roda.";
+
 export const AUTOMATION_FLOW_STATUS_LABELS: Record<AutomationFlowStatus, string> = {
   draft: "Rascunho",
   active: "Ativo",

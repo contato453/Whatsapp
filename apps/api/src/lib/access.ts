@@ -267,3 +267,128 @@ export function conversationAssigneeWhere(
 export function canAssignBeyondConversationReach(role: UserRole): boolean {
   return hasRole(role, "supervisor");
 }
+
+/**
+ * CONFIGURAÇÃO DE AUTOMAÇÃO (fluxo do construtor, automação de IA): quem
+ * ENXERGA e quem EDITA. É uma pergunta diferente de `conversationScope`, e
+ * ela NUNCA decide execução: o departamento de um fluxo governa quem vê e
+ * quem mexe na configuração, jamais se o fluxo roda. O motor
+ * (`services/automation/engine.ts`) e o runtime de IA escolhem o que disparar
+ * sem usuário nenhum — quando a mensagem do cliente chega, não há sessão
+ * logada —, e aplicar este recorte lá faria o fluxo parar de responder em
+ * silêncio, sem nada vermelho, até o cliente reclamar.
+ *
+ * As duas condições valem JUNTAS, como na conversa:
+ * - departamento: o do item está entre os do usuário, ou o item é GERAL
+ *   (`departmentId` nulo — mesma convenção de "sem departamento = visível a
+ *   quem tem o número" da conversa);
+ * - número: o do item está entre os números do usuário, ou o item vale para
+ *   TODOS os números (`whatsappInstanceId` nulo). Esse segundo caso só
+ *   aparece para quem tem pelo menos um número: sem chip nenhum, o item não
+ *   toca em nada que a pessoa atende.
+ *
+ * A do número não é detalhe: sem ela, continuaria vazando a configuração de
+ * um chip que a pessoa não atende.
+ *
+ * Admin (`null` nas duas listas) enxerga tudo, inclusive o que ficou sem
+ * classificação e precisa ser arrumado.
+ */
+export interface AutomationConfigAccess {
+  /** `null` = admin, sem restrição. */
+  instanceIds: string[] | null;
+  /** `null` = admin, sem restrição. */
+  departmentIds: string[] | null;
+}
+
+/** O item de configuração, na medida em que ele decide quem o enxerga. */
+export interface AutomationConfigTarget {
+  /** `null` = geral (todos os departamentos). */
+  departmentId: string | null;
+  /** `null` = todos os números da organização. */
+  whatsappInstanceId: string | null;
+}
+
+type NullableIn<K extends string> = { [P in K]: null } | { [P in K]: { in: string[] } };
+
+/**
+ * Filtro Prisma para tabelas de configuração com `departmentId` e
+ * `whatsappInstanceId` opcionais (hoje `AutomationFlow` e `AiAutomation`).
+ * Vai SEMPRE acrescentado ao `where` de quem lista, nunca no motor.
+ */
+export interface AutomationConfigScope {
+  AND?: Array<{ OR: Array<NullableIn<"departmentId"> | NullableIn<"whatsappInstanceId">> }>;
+}
+
+export function automationConfigScope(access: AutomationConfigAccess): AutomationConfigScope {
+  const filters: NonNullable<AutomationConfigScope["AND"]> = [];
+  if (access.departmentIds) {
+    filters.push({ OR: [{ departmentId: null }, { departmentId: { in: access.departmentIds } }] });
+  }
+  if (access.instanceIds) {
+    filters.push({
+      OR:
+        access.instanceIds.length > 0
+          ? [{ whatsappInstanceId: null }, { whatsappInstanceId: { in: access.instanceIds } }]
+          : // `in: []` não casa nada: sem número nenhum, nem o item de todos
+            // os números aparece.
+            [{ whatsappInstanceId: { in: [] } }],
+    });
+  }
+  return filters.length > 0 ? { AND: filters } : {};
+}
+
+/** A mesma régua de `automationConfigScope`, para um item já carregado. */
+export function canSeeAutomationConfig(access: AutomationConfigAccess, target: AutomationConfigTarget): boolean {
+  if (access.departmentIds && target.departmentId && !access.departmentIds.includes(target.departmentId)) {
+    return false;
+  }
+  if (access.instanceIds) {
+    if (target.whatsappInstanceId) return access.instanceIds.includes(target.whatsappInstanceId);
+    return access.instanceIds.length > 0;
+  }
+  return true;
+}
+
+/**
+ * Item de configuração de alcance GERAL: sem departamento ou valendo para
+ * todos os números. Ele afeta a organização inteira (ou todos os chips), e
+ * por isso gravar nele pede a chave `automation.manage_general` — quem decide
+ * a chave é o catálogo; aqui só se diz QUAL item é geral.
+ */
+export function isGeneralAutomationConfig(target: AutomationConfigTarget): boolean {
+  return target.departmentId === null || target.whatsappInstanceId === null;
+}
+
+/**
+ * Pode GRAVAR este estado? Exige enxergá-lo pela mesma régua da leitura e,
+ * quando ele é geral, a chave de alcance geral. Na edição vale para o estado
+ * ATUAL e para o NOVO: sem conferir os dois, bastaria mover um fluxo de
+ * outro departamento para o próprio para tomá-lo de quem o mantém.
+ */
+export function canWriteAutomationConfig(
+  access: AutomationConfigAccess,
+  target: AutomationConfigTarget,
+  canManageGeneral: boolean,
+): boolean {
+  if (!canSeeAutomationConfig(access, target)) return false;
+  if (isGeneralAutomationConfig(target) && !canManageGeneral) return false;
+  return true;
+}
+
+/**
+ * Só o eixo do NÚMERO, para configuração cujo departamento já é recortado
+ * de outro jeito (a regra de follow-up usa `isGeneral` + N:N, lida por
+ * `departmentResourceScope`). Mesma regra: número do usuário, ou todos os
+ * números para quem tem pelo menos um.
+ */
+export function configInstanceScope(
+  instanceIds: string[] | null,
+): { OR?: Array<NullableIn<"whatsappInstanceId">> } {
+  if (!instanceIds) return {};
+  return {
+    OR:
+      instanceIds.length > 0
+        ? [{ whatsappInstanceId: null }, { whatsappInstanceId: { in: instanceIds } }]
+        : [{ whatsappInstanceId: { in: [] } }],
+  };
+}

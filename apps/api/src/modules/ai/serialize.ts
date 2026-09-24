@@ -137,6 +137,7 @@ export function serializeAiKnowledgeSource(
 
 export function serializeAiAutomation(
   automation: AiAutomation & { agent: { name: string; status: string }; _count?: { sessions: number } },
+  viewer: { canEdit: boolean },
 ): AiAutomationDto {
   return {
     id: automation.id,
@@ -154,6 +155,7 @@ export function serializeAiAutomation(
     resolvedTagId: automation.resolvedTagId,
     priority: automation.priority,
     sessionsCount: automation._count?.sessions ?? 0,
+    canEdit: viewer.canEdit,
     createdAt: automation.createdAt.toISOString(),
   };
 }

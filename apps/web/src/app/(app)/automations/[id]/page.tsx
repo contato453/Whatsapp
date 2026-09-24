@@ -25,6 +25,9 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import {
+  AUTOMATION_ALL_INSTANCES_LABEL,
+  AUTOMATION_GENERAL_DEPARTMENT_HINT,
+  AUTOMATION_GENERAL_DEPARTMENT_LABEL,
   AUTOMATION_TRIGGER_LABELS,
   AUTOMATION_TRIGGER_TYPES,
   SCHEDULE_MODES,
@@ -47,6 +50,8 @@ import type {
 import { Button, Spinner } from "@/components/ui";
 import { FlowNode, FLOW_NODE_TYPE, type FlowNodeData } from "@/components/automations/flow-node";
 import { stoppedExecutionsMessage } from "@/components/automations/automation-ui";
+import { useMyDepartments } from "@/components/department-picker";
+import { useAuth } from "@/lib/auth-context";
 import { NodeInspector } from "@/components/automations/node-inspector";
 import { NodePalette } from "@/components/automations/node-palette";
 
@@ -140,6 +145,12 @@ export default function AutomationFlowBuilderPage() {
   const [triggerType, setTriggerType] = useState<AutomationTriggerType>("new_message");
   const [triggerConfigText, setTriggerConfigText] = useState("");
   const [whatsappInstanceId, setWhatsappInstanceId] = useState<string>("");
+  /** "" = geral. Governa quem vê e edita o fluxo, nunca onde ele roda. */
+  const [departmentId, setDepartmentId] = useState<string>("");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const { can } = useAuth();
+  const canManageGeneral = can("automation.manage_general");
+  const myDepartments = useMyDepartments();
   const [priority, setPriority] = useState(100);
   const [cooldownMinutes, setCooldownMinutes] = useState(0);
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>("always");
@@ -150,6 +161,10 @@ export default function AutomationFlowBuilderPage() {
   const [stoppedNotice, setStoppedNotice] = useState<string | null>(null);
 
   const loadedRef = useRef(false);
+  // Quem só enxerga (fluxo geral sem a chave de alcance geral) abre o
+  // construtor para LER: o autosave fica desligado, senão cada clique viraria
+  // uma gravação recusada pela API.
+  const canEditRef = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -167,6 +182,8 @@ export default function AutomationFlowBuilderPage() {
         setTriggerType(loadedFlow.triggerType);
         setTriggerConfigText(triggerConfigToText(loadedFlow.triggerType, loadedFlow.triggerConfig));
         setWhatsappInstanceId(loadedFlow.whatsappInstanceId ?? "");
+        setDepartmentId(loadedFlow.departmentId ?? "");
+        canEditRef.current = loadedFlow.canEdit;
         setPriority(loadedFlow.priority);
         setCooldownMinutes(loadedFlow.cooldownMinutes);
         setScheduleMode(loadedFlow.scheduleMode);
@@ -187,25 +204,29 @@ export default function AutomationFlowBuilderPage() {
   }, [flowId]);
 
   const save = useCallback(async () => {
-    if (!loadedRef.current) return;
+    if (!loadedRef.current || !canEditRef.current) return;
     setSaveState("saving");
+    setSaveError(null);
     try {
       const updated = await automationApi.updateFlow(flowId, {
         name,
         triggerType,
         triggerConfig: triggerConfigFromText(triggerType, triggerConfigText),
         whatsappInstanceId: whatsappInstanceId || null,
+        departmentId: departmentId || null,
         priority,
         cooldownMinutes,
         scheduleMode,
         draftGraph: fromReactFlow(nodes, edges),
       });
       setFlow(updated);
+      canEditRef.current = updated.canEdit;
       setSaveState("saved");
-    } catch {
+    } catch (err) {
       setSaveState("error");
+      setSaveError(err instanceof Error ? err.message : null);
     }
-  }, [flowId, name, triggerType, triggerConfigText, whatsappInstanceId, priority, cooldownMinutes, scheduleMode, nodes, edges]);
+  }, [flowId, name, triggerType, triggerConfigText, whatsappInstanceId, departmentId, priority, cooldownMinutes, scheduleMode, nodes, edges]);
 
   // Autosave: qualquer mudança agenda uma gravação daqui a 1s, cancelando a
   // anterior — mesmo espírito do rascunho do composer da Inbox, só que
@@ -218,7 +239,7 @@ export default function AutomationFlowBuilderPage() {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [name, triggerType, triggerConfigText, whatsappInstanceId, priority, cooldownMinutes, scheduleMode, nodes, edges]);
+  }, [name, triggerType, triggerConfigText, whatsappInstanceId, departmentId, priority, cooldownMinutes, scheduleMode, nodes, edges]);
 
   const onConnect = useCallback(
     (connection: Connection) => setEdges((eds) => addEdge(connection, eds)),
@@ -295,6 +316,17 @@ export default function AutomationFlowBuilderPage() {
 
   const selectedNode = useMemo(() => nodes.find((node) => node.id === selectedNodeId) ?? null, [nodes, selectedNodeId]);
 
+  // Departamentos do seletor: os da pessoa, mais o atual do fluxo (para ele
+  // não sumir do campo). A lista completa de /departments só alimenta os
+  // blocos de encaminhamento, que é outra pergunta.
+  const departmentOptions = useMemo(() => {
+    const options = myDepartments.map((department) => ({ id: department.id, name: department.name }));
+    if (flow?.departmentId && !options.some((option) => option.id === flow.departmentId)) {
+      options.push({ id: flow.departmentId, name: flow.departmentName ?? "Departamento atual" });
+    }
+    return options;
+  }, [myDepartments, flow?.departmentId, flow?.departmentName]);
+
   if (loadError) return <p className="p-8 text-sm text-red-600">{loadError}</p>;
   if (!flow) {
     return (
@@ -304,8 +336,16 @@ export default function AutomationFlowBuilderPage() {
     );
   }
 
+  const readOnly = !flow.canEdit;
+
   return (
     <div className="flex h-full flex-col">
+      {readOnly && (
+        <p className="border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs text-slate-600">
+          Somente leitura: este fluxo é geral (sem departamento ou para todos os números), e editá-lo exige a
+          permissão de automações gerais.
+        </p>
+      )}
       {stoppedNotice && (
         <p className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-800">{stoppedNotice}</p>
       )}
@@ -343,10 +383,28 @@ export default function AutomationFlowBuilderPage() {
 
         <select
           className={SELECT_CLASS}
+          value={departmentId}
+          onChange={(event) => setDepartmentId(event.target.value)}
+          title={AUTOMATION_GENERAL_DEPARTMENT_HINT}
+          aria-label="Departamento do fluxo"
+        >
+          {(canManageGeneral || !departmentId) && (
+            <option value="">{AUTOMATION_GENERAL_DEPARTMENT_LABEL} (todos os departamentos)</option>
+          )}
+          {departmentOptions.map((department) => (
+            <option key={department.id} value={department.id}>
+              {department.name}
+            </option>
+          ))}
+        </select>
+
+        <select
+          className={SELECT_CLASS}
           value={whatsappInstanceId}
           onChange={(event) => setWhatsappInstanceId(event.target.value)}
+          aria-label="Número do fluxo"
         >
-          <option value="">Todos os números</option>
+          {(canManageGeneral || !whatsappInstanceId) && <option value="">{AUTOMATION_ALL_INSTANCES_LABEL}</option>}
           {instances.map((instance) => (
             <option key={instance.id} value={instance.id}>
               {instance.name}
@@ -388,15 +446,17 @@ export default function AutomationFlowBuilderPage() {
         </label>
 
         <div className="ml-auto flex items-center gap-2">
-          <SaveIndicator state={saveState} />
+          <SaveIndicator state={saveState} message={saveError} />
           <Button variant="outline" size="sm" onClick={() => void handleValidate()}>
             Validar
           </Button>
-          <Button variant="outline" size="sm" onClick={() => void handlePublish()} disabled={busy}>
-            <Save className="h-3.5 w-3.5" />
-            Publicar
-          </Button>
-          {flow.hasPublishedVersion && (
+          {!readOnly && (
+            <Button variant="outline" size="sm" onClick={() => void handlePublish()} disabled={busy}>
+              <Save className="h-3.5 w-3.5" />
+              Publicar
+            </Button>
+          )}
+          {flow.hasPublishedVersion && !readOnly && (
             <Button variant={flow.status === "active" ? "secondary" : "primary"} size="sm" onClick={() => void handleToggleActive()} disabled={busy}>
               {flow.status === "active" ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
               {flow.status === "active" ? "Desativar" : "Ativar"}
@@ -460,10 +520,14 @@ export default function AutomationFlowBuilderPage() {
   );
 }
 
-function SaveIndicator({ state }: { state: "idle" | "saving" | "saved" | "error" }) {
+function SaveIndicator({ state, message }: { state: "idle" | "saving" | "saved" | "error"; message: string | null }) {
   if (state === "saving") return <span className="text-xs text-slate-400">Salvando...</span>;
   if (state === "saved") return <span className="text-xs text-emerald-600">Salvo</span>;
-  if (state === "error") return <span className="text-xs text-red-600">Falha ao salvar</span>;
+  if (state === "error") {
+    // A recusa de alcance diz o motivo; "falhou" sozinho faria a pessoa
+    // tentar de novo sem saber que precisa escolher outro departamento.
+    return <span className="max-w-xs text-xs text-red-600">{message ?? "Falha ao salvar"}</span>;
+  }
   return null;
 }
 

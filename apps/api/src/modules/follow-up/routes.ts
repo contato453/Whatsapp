@@ -6,7 +6,14 @@ import {
   FOLLOW_UP_TRIGGERS,
   CONVERSATION_STATUSES,
 } from "@azvchat/shared";
-import { accessibleDepartmentIds, departmentResourceScope } from "../../lib/access.js";
+import {
+  accessibleDepartmentIds,
+  accessibleInstanceIds,
+  configInstanceScope,
+  conversationScope,
+  departmentResourceScope,
+  loadConversationAccess,
+} from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
 import { requirePermission } from "../../lib/permissions.js";
 import {
@@ -23,7 +30,7 @@ import {
   reconcileConversation,
   resumeExecution,
 } from "../../lib/follow-up-engine.js";
-import { AppError, NotFoundError } from "../../lib/errors.js";
+import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import {
   serializeFollowUpExecution,
   serializeFollowUpRule,
@@ -101,6 +108,8 @@ const WRITE_LABELS = {
   foreign: "Você não tem acesso a todos os departamentos selecionados",
 };
 
+const INSTANCE_WRITE_MESSAGE = "Você só pode gravar regras dos números que atende";
+
 const MANAGE_LABELS = {
   general: "Apenas quem tem a chave de regra geral pode mexer nesta regra",
   foreign: "Esta regra está em departamentos que você não acessa",
@@ -108,6 +117,25 @@ const MANAGE_LABELS = {
 };
 
 export async function followUpRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
+  /**
+   * O eixo do NÚMERO da regra. O departamento já era recortado
+   * (`departmentResourceScope`), mas a regra de um chip que a pessoa não
+   * atende aparecia inteira na lista. Mesma régua da configuração de
+   * automação: número dela entre os de quem pede, ou todos os números para
+   * quem tem pelo menos um. Só visualização e edição — o motor de follow-up
+   * decide sem usuário, e continua decidindo igual.
+   */
+  async function assertInstanceInReach(
+    whatsappInstanceId: string | null,
+    user: FastifyRequest["user"],
+    message: string,
+  ): Promise<void> {
+    const instanceIds = await accessibleInstanceIds(deps.prisma, user);
+    if (!instanceIds) return;
+    const visible = whatsappInstanceId ? instanceIds.includes(whatsappInstanceId) : instanceIds.length > 0;
+    if (!visible) throw new ForbiddenError(message);
+  }
+
   async function validateReferences(body: z.infer<typeof ruleFieldsSchema>, organizationId: string) {
     if (body.whatsappInstanceId) {
       const instance = await deps.prisma.whatsAppInstance.findFirst({
@@ -159,11 +187,16 @@ export async function followUpRoutes(app: FastifyInstance, deps: AppDeps): Promi
     "/follow-up-rules",
     { preHandler: requirePermission(deps, "follow_up.manage") },
     async (request) => {
-      const departmentIds = await accessibleDepartmentIds(deps.prisma, request.user);
+      const [departmentIds, instanceIds] = await Promise.all([
+        accessibleDepartmentIds(deps.prisma, request.user),
+        accessibleInstanceIds(deps.prisma, request.user),
+      ]);
       const rules = await deps.prisma.followUpRule.findMany({
         where: {
           organizationId: request.user.organizationId,
-          ...departmentResourceScope(departmentIds),
+          // Dois `OR` (departamento e número) precisam de `AND`: espalhados
+          // no mesmo objeto, o segundo apagaria o primeiro.
+          AND: [departmentResourceScope(departmentIds), configInstanceScope(instanceIds)],
         },
         include: withRuleRelations,
         orderBy: [{ status: "asc" }, { name: "asc" }],
@@ -185,6 +218,7 @@ export async function followUpRoutes(app: FastifyInstance, deps: AppDeps): Promi
     async (request, reply) => {
       const body = ruleFieldsSchema.parse(request.body);
       await validateReferences(body, request.user.organizationId);
+      await assertInstanceInReach(body.whatsappInstanceId, request.user, INSTANCE_WRITE_MESSAGE);
       const accessible = await accessibleDepartmentIds(deps.prisma, request.user);
       const target = await resolveDepartmentTarget(
         deps.prisma,
@@ -247,6 +281,7 @@ export async function followUpRoutes(app: FastifyInstance, deps: AppDeps): Promi
       include: withRuleRelations,
     });
     if (!existing) throw new NotFoundError("Regra de follow-up");
+    await assertInstanceInReach(existing.whatsappInstanceId, user, "Esta regra é de um número que você não atende");
     assertCanManageResource(
       accessible,
       { isGeneral: existing.isGeneral, departmentIds: existing.departments.map((link) => link.departmentId) },
@@ -263,6 +298,7 @@ export async function followUpRoutes(app: FastifyInstance, deps: AppDeps): Promi
       const existing = await findManageableOr404(id, request.user);
       const body = ruleFieldsSchema.parse(request.body);
       await validateReferences(body, request.user.organizationId);
+      await assertInstanceInReach(body.whatsappInstanceId, request.user, INSTANCE_WRITE_MESSAGE);
       const accessible = await accessibleDepartmentIds(deps.prisma, request.user);
       const target = await resolveDepartmentTarget(deps.prisma, request.user, accessible, body, WRITE_LABELS);
 
@@ -533,10 +569,32 @@ export async function followUpRoutes(app: FastifyInstance, deps: AppDeps): Promi
     { preHandler: requirePermission(deps, "follow_up.manage") },
     async (request) => {
       const query = historyQuerySchema.parse(request.query);
-      const departmentIds = await accessibleDepartmentIds(deps.prisma, request.user);
+      const access = await loadConversationAccess(deps.prisma, request.user);
       const executions = await deps.prisma.followUpExecution.findMany({
         where: {
           organizationId: request.user.organizationId,
+          // Dois recortes, os dois obrigatórios. A conversa pela régua de
+          // sempre (antes só o departamento era conferido, e o número não:
+          // vazava execução de chip que a pessoa não atende). E a REGRA pela
+          // régua da configuração: execução de regra que a pessoa não
+          // enxerga não aparece no histórico geral.
+          AND: [
+            { conversation: { is: conversationScope(access) } },
+            {
+              rule: {
+                is: {
+                  AND: [
+                    departmentResourceScope(access.departmentIds),
+                    configInstanceScope(access.instanceIds),
+                  ],
+                },
+              },
+            },
+            // O filtro por departamento só ESTREITA: antes ele substituía o
+            // recorte de acesso, e pedir o id de outro departamento devolvia o
+            // histórico dele inteiro.
+            ...(query.departmentId ? [{ conversation: { is: { departmentId: query.departmentId } } }] : []),
+          ],
           ...(query.ruleId ? { ruleId: query.ruleId } : {}),
           ...(query.status ? { status: query.status } : {}),
           ...(query.from || query.to
@@ -547,11 +605,6 @@ export async function followUpRoutes(app: FastifyInstance, deps: AppDeps): Promi
                 },
               }
             : {}),
-          ...(query.departmentId
-            ? { conversation: { is: { departmentId: query.departmentId } } }
-            : departmentIds
-              ? { conversation: { is: { departmentId: { in: departmentIds } } } }
-              : {}),
         },
         include: {
           rule: { select: { id: true, name: true } },

@@ -738,6 +738,12 @@ export interface AutomationFlowSummaryDto {
   triggerType: AutomationTriggerType;
   whatsappInstanceId: string | null;
   instanceName: string | null;
+  /** `null` = fluxo GERAL (sem classificação de departamento). */
+  departmentId: string | null;
+  departmentName: string | null;
+  departmentColor: string | null;
+  /** Decidido pela API (`canWriteAutomationConfig`) — a tela nunca deduz pelo papel. */
+  canEdit: boolean;
   priority: number;
   cooldownMinutes: number;
   scheduleMode: ScheduleMode;
@@ -779,8 +785,11 @@ export interface AutomationExecutionLogDto {
 
 export interface AutomationExecutionSummaryDto {
   id: string;
-  flowId: string;
+  /** `null` quando o fluxo é de uma área que a pessoa não enxerga. */
+  flowId: string | null;
   flowName: string;
+  /** Houve automação de outra área: sem nome, passos nem contexto. */
+  flowHidden: boolean;
   conversationId: string;
   conversationTitle: string;
   whatsappInstanceId: string;

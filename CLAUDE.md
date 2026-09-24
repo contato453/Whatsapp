@@ -320,7 +320,19 @@ groupScope(access)                     // consultas que partem do grupo (usa `is
 
 conversationAssigneeWhere(orgId, conversa)   // quem pode RECEBER esta conversa
 canAssignBeyondConversationReach(role)       // quem transfere para fora do alcance
+
+automationConfigScope(access)                // CONFIGURAÇÃO de automação (fluxo, automação de IA):
+canSeeAutomationConfig(access, item)         //   departamento dela (ou geral) E número dela (ou todos)
+canWriteAutomationConfig(access, item, geral)//   gravar: enxergar + chave automation.manage_general se geral
+isGeneralAutomationConfig(item)              //   geral = sem departamento OU para todos os números
+configInstanceScope(instanceIds)             // só o eixo do número (regra de follow-up, que já tem N:N)
 ```
+
+As cinco últimas respondem QUEM VÊ E QUEM EDITA uma configuração de automação, e
+**nunca decidem execução**: o motor de fluxos, o runtime de IA e o de follow-up
+escolhem o que disparar sem usuário logado, e não importam nenhuma delas (há teste
+varrendo `engine.ts`). Fluxo de outro departamento, ou de um chip que a pessoa não
+atende, some da lista e responde **403** quando chamado direto pelo id.
 
 As duas últimas são o **avesso** de `conversationScope`: em vez de "quais conversas esta
 pessoa enxerga", "quais pessoas enxergam esta conversa". Elas decidem a ESCRITA do
@@ -598,6 +610,16 @@ PUT    /permissions          (admin; grava em bloco, apaga a linha quando o valo
 GET    /attendance-settings  (qualquer papel — o dashboard depende dela)
 PUT    /attendance-settings  (supervisor; grava SLA + expediente + janela de login,
        a semana inteira de uma vez, e vai para o AuditLog)
+
+GET    /automation-flows[?departmentId=<uuid|none>]   (automation.manage; só os fluxos que a
+       pessoa enxerga: departamento dela ou geral E número dela ou todos. `none` = gerais)
+POST   /automation-flows    (departmentId OBRIGATÓRIO no corpo, nulo = geral; geral ou todos os
+       números exige automation.manage_general)
+GET|PATCH|DELETE /automation-flows/:id   POST .../publish|activate|deactivate|duplicate
+       (fluxo fora do alcance: 403; gravar exige poder gravar no estado atual E no novo)
+POST   /automation-templates/:key/use   { departmentId, whatsappInstanceId }
+GET    /automation-executions[?conversationId=]   GET /automation-executions/:id
+       (lista geral: só fluxos visíveis; por conversa: execução de fluxo alheio sai redigida)
 
 GET    /search              GET /audit-logs
 GET    /reports/agents?from=&to=[&departmentId=<uuid|none>][&instanceId=<uuid>]
@@ -1420,6 +1442,20 @@ nível?" por igualdade é um lugar onde o papel novo perde acesso em silêncio (
 
 ## 13. Armadilhas conhecidas
 
+- **DEPARTAMENTO DE FLUXO (E DE AUTOMAÇÃO DE IA) É VISUALIZAÇÃO, NUNCA EXECUÇÃO.** O
+  recorte de `automationConfigScope` responde "quem vê e quem edita esta
+  configuração". Ele não pode entrar no motor (`services/automation/engine.ts`), no
+  runtime de IA nem no de follow-up: quando a mensagem do cliente chega não existe
+  usuário logado, e o filtro faria os fluxos pararem de responder em silêncio, sem
+  nada vermelho, até o cliente reclamar. O fluxo ativo que a pessoa não enxerga
+  continua rodando; ela só não o vê. `access.test.ts` reprova o motor importando a
+  régua, e `automation-engine.test.ts` prova que o fluxo de um departamento dispara em
+  conversa de outro. A mesma régua vale para `AiAutomation` (a lista antes devolvia as
+  da organização inteira) e o eixo do número para a regra de follow-up
+  (`configInstanceScope`); o histórico de follow-up também passou a respeitar
+  `conversationScope`, e o filtro `departmentId` dele só estreita (antes substituía o
+  recorte e devolvia o histórico de qualquer departamento). A base de conhecimento da
+  IA segue da organização inteira: não tem departamento nem número.
 - **PERMISSÃO É AÇÃO, VISIBILIDADE É ALCANCE — e os dois nunca se misturam.** O menu de
   Permissões (`packages/shared/src/permissions.ts` + `apps/api/src/lib/permissions.ts`) decide
   o que cada perfil pode FAZER. Ele **não** decide, e não pode passar a decidir, QUAIS
@@ -2696,6 +2732,33 @@ automation-tabs.tsx`), e `automations/[id]/page.tsx` é o construtor visual
 (React Flow / `@xyflow/react`), com paleta de blocos
 (`node-palette.tsx`), nó customizado (`flow-node.tsx`) e o painel de
 configuração por tipo (`node-inspector.tsx`).
+
+**DEPARTAMENTO DO FLUXO: VISUALIZAÇÃO E EDIÇÃO, NUNCA EXECUÇÃO.**
+`AutomationFlow.departmentId` (migration `20260924150000_automation_flow_department`,
+nulo = GERAL) diz de qual área é a CONFIGURAÇÃO. Junto com o número
+(`whatsappInstanceId`, nulo = todos), decide quem enxerga o fluxo na lista, no
+construtor e no Histórico (`automationConfigScope`/`canSeeAutomationConfig`, em
+`lib/access.ts`) e quem grava nele (`canWriteAutomationConfig`). As duas condições
+valem juntas: departamento da pessoa (ou geral) **e** número da pessoa (ou todos,
+para quem tem pelo menos um). Admin vê tudo. Gravar em fluxo geral (sem departamento
+ou para todos os números) exige a chave `automation.manage_general` (padrão: Gerente
+para cima); sem ela, a pessoa cria só nos próprios departamentos e números, e vê o
+geral em somente leitura (`canEdit` no DTO, decidido pela API). Na edição, o estado
+ATUAL e o NOVO são conferidos, senão bastaria mover um fluxo alheio para o próprio
+departamento. Duplicar nasce no mesmo departamento e número do original; usar
+template exige escolher onde a cópia nasce (o template em si é catálogo, sem
+departamento). A migration **não classificou nada**: todo fluxo antigo ficou geral, e
+a lista mostra o aviso de não classificados para quem pode editá-los. **Departamento
+excluído devolve o fluxo a geral** (`ON DELETE SET NULL`): ele não some nem quebra a
+tela, e volta ao aviso. **Histórico**: a lista geral mostra só execuções de fluxos
+visíveis; quando a pergunta é sobre UMA conversa (`conversationId`) que a pessoa
+enxerga, a execução de um fluxo alheio aparece redigida (`flowHidden`: "Automação de
+outra área", sem nome, passos, contexto, resumo nem erro), porque esconder que houve
+automação faria a conversa parecer ter respondido sozinha. Auditoria em criar, editar
+(só campos de cadastro, não o desenho do autosave), publicar, ativar, desativar,
+duplicar e excluir, sempre com `departmentId`. **O motor não mudou uma linha**: o
+fluxo do departamento A continua disparando numa conversa de qualquer departamento,
+e `automation-engine.test.ts` fixa isso.
 
 **O GRAFO (nós + arestas) é um valor JSON, não tabelas `automation_nodes`/
 `automation_edges`.** Ver o comentário do bloco "Automações" em

@@ -22,14 +22,24 @@ import {
   type AiUsagePeriod,
   type AiUsageTotalsDto,
 } from "@azvchat/shared";
-import { accessibleDepartmentIds, departmentResourceScope } from "../../lib/access.js";
+import {
+  accessibleDepartmentIds,
+  automationConfigScope,
+  canSeeAutomationConfig,
+  canWriteAutomationConfig,
+  departmentResourceScope,
+  isGeneralAutomationConfig,
+  loadConversationAccess,
+  type AutomationConfigAccess,
+  type AutomationConfigTarget,
+} from "../../lib/access.js";
 import { maskApiKey } from "../../lib/ai-secrets.js";
 import { loadAttendanceSettings } from "../../lib/attendance-settings.js";
 import { authenticate, requireRole } from "../../lib/auth.js";
 import { findAccessibleConversation } from "../../lib/conversation-access.js";
 import { assertCanManageResource, auditDepartmentSnapshot, resolveDepartmentTarget } from "../../lib/department-resource.js";
-import { AppError, NotFoundError } from "../../lib/errors.js";
-import { requireAnyPermission, requirePermission } from "../../lib/permissions.js";
+import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
+import { loadPermissions, requireAnyPermission, requirePermission } from "../../lib/permissions.js";
 import { serializeUserDirectory } from "../../lib/serialize.js";
 import { loadAiBalance } from "../../services/ai/balance.js";
 import { loadAiSettings, loadBudgetState, monthStart } from "../../services/ai/budget.js";
@@ -76,6 +86,22 @@ const agentLabels = {
   foreign: "Você só pode gravar agentes nos seus departamentos",
   orphan: "Este agente ficou sem departamento; fale com um administrador",
 };
+
+/**
+ * Onde a automação de IA mora, na régua de configuração. "Só conversa sem
+ * departamento" grava departamento nulo, e por isso conta como geral: ela
+ * age sobre conversa que todo mundo do número enxerga.
+ */
+function aiAutomationTarget(body: {
+  departmentId: string | null;
+  onlyWithoutDepartment: boolean;
+  whatsappInstanceId: string | null;
+}): AutomationConfigTarget {
+  return {
+    departmentId: body.onlyWithoutDepartment ? null : body.departmentId,
+    whatsappInstanceId: body.whatsappInstanceId,
+  };
+}
 
 export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
   const { prisma } = deps;
@@ -1055,13 +1081,65 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
 
   const automationInclude = { agent: { select: { name: true, status: true } }, _count: { select: { sessions: true } } } satisfies Prisma.AiAutomationInclude;
 
+  /**
+   * A automação de IA é CONFIGURAÇÃO, e segue a mesma régua do fluxo do
+   * construtor (`automationConfigScope`): departamento dela entre os de quem
+   * pede (ou nenhum = geral) E número dela entre os de quem pede (ou nenhum =
+   * todos). Antes, a lista devolvia as automações da organização inteira,
+   * inclusive as de chips e departamentos que a pessoa não atende.
+   *
+   * Isto é só VISUALIZAÇÃO E EDIÇÃO. O runtime escolhe a automação que casa
+   * com a mensagem sem usuário nenhum (`automationMatches`), e continua
+   * escolhendo exatamente como antes.
+   */
+  async function loadAiAutomationAccess(user: FastifyRequest["user"]) {
+    const [conversationAccess, permissions] = await Promise.all([
+      loadConversationAccess(prisma, user),
+      loadPermissions(prisma, user),
+    ]);
+    const access: AutomationConfigAccess = {
+      instanceIds: conversationAccess.instanceIds,
+      departmentIds: conversationAccess.departmentIds,
+    };
+    return { access, canManageGeneral: permissions.can("automation.manage_general") };
+  }
+  type AiAutomationAccess = Awaited<ReturnType<typeof loadAiAutomationAccess>>;
+
+  function assertCanWriteAiAutomation(scope: AiAutomationAccess, target: AutomationConfigTarget): void {
+    if (canWriteAutomationConfig(scope.access, target, scope.canManageGeneral)) return;
+    if (!canSeeAutomationConfig(scope.access, target)) {
+      throw new ForbiddenError("Você só pode gravar automações dos seus departamentos e dos números que atende.");
+    }
+    throw new ForbiddenError(
+      "Automação geral (sem departamento ou para todos os números) exige a permissão de automações gerais. Escolha um departamento e um número.",
+    );
+  }
+
+  async function findVisibleAiAutomation(id: string, user: FastifyRequest["user"]) {
+    const existing = await prisma.aiAutomation.findFirst({ where: { id, organizationId: user.organizationId } });
+    if (!existing) throw new NotFoundError("Automação");
+    const scope = await loadAiAutomationAccess(user);
+    if (!canSeeAutomationConfig(scope.access, existing)) {
+      throw new ForbiddenError("Esta automação é de um departamento ou de um número que você não atende.");
+    }
+    assertCanWriteAiAutomation(scope, existing);
+    return { existing, scope };
+  }
+
   app.get("/ai/automations", { preHandler: requirePermission(deps, "ai.agent.manage") }, async (request) => {
+    const scope = await loadAiAutomationAccess(request.user);
     const automations = await prisma.aiAutomation.findMany({
-      where: { organizationId: request.user.organizationId },
+      where: { organizationId: request.user.organizationId, ...automationConfigScope(scope.access) },
       orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
       include: automationInclude,
     });
-    return { automations: automations.map(serializeAiAutomation) };
+    return {
+      automations: automations.map((automation) =>
+        serializeAiAutomation(automation, {
+          canEdit: canWriteAutomationConfig(scope.access, automation, scope.canManageGeneral),
+        }),
+      ),
+    };
   });
 
   const automationSchema = z.object({
@@ -1078,8 +1156,16 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
     priority: z.number().int().min(1).max(1000).default(100),
   });
 
-  async function validateAutomation(organizationId: string, body: z.infer<typeof automationSchema>) {
-    const agent = await prisma.aiAgent.findFirst({ where: { id: body.agentId, organizationId }, select: { id: true } });
+  async function validateAutomation(user: FastifyRequest["user"], body: z.infer<typeof automationSchema>) {
+    const organizationId = user.organizationId;
+    // O agente também precisa estar no alcance de quem grava: apontar a
+    // automação para um agente de outra área seria usar configuração que a
+    // pessoa nem consegue abrir.
+    const accessible = await accessibleDepartmentIds(prisma, user);
+    const agent = await prisma.aiAgent.findFirst({
+      where: { id: body.agentId, organizationId, ...departmentResourceScope(accessible) },
+      select: { id: true },
+    });
     if (!agent) throw new AppError("Agente inválido", 400, "invalid_agent");
     if (body.whatsappInstanceId) {
       const instance = await prisma.whatsAppInstance.findFirst({ where: { id: body.whatsappInstanceId, organizationId }, select: { id: true } });
@@ -1097,28 +1183,29 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
 
   app.post("/ai/automations", { preHandler: requirePermission(deps, "ai.agent.manage") }, async (request, reply) => {
     const body = automationSchema.parse(request.body);
-    await validateAutomation(request.user.organizationId, body);
+    await validateAutomation(request.user, body);
+    const target = aiAutomationTarget(body);
+    const scope = await loadAiAutomationAccess(request.user);
+    assertCanWriteAiAutomation(scope, target);
     const created = await prisma.aiAutomation.create({
-      data: {
-        organizationId: request.user.organizationId,
-        ...body,
-        departmentId: body.onlyWithoutDepartment ? null : body.departmentId,
-      },
+      data: { organizationId: request.user.organizationId, ...body, departmentId: target.departmentId },
       include: automationInclude,
     });
-    deps.audit.record({ organizationId: request.user.organizationId, userId: request.user.sub, action: "ai.automation_created", entityType: "AiAutomation", entityId: created.id, metadata: { name: created.name, agentId: created.agentId } });
-    return reply.status(201).send({ automation: serializeAiAutomation(created) });
+    deps.audit.record({ organizationId: request.user.organizationId, userId: request.user.sub, action: "ai.automation_created", entityType: "AiAutomation", entityId: created.id, metadata: { name: created.name, agentId: created.agentId, departmentId: created.departmentId, whatsappInstanceId: created.whatsappInstanceId, general: isGeneralAutomationConfig(created) } });
+    return reply.status(201).send({ automation: serializeAiAutomation(created, { canEdit: true }) });
   });
 
   app.patch("/ai/automations/:id", { preHandler: requirePermission(deps, "ai.agent.manage") }, async (request) => {
     const { id } = idParams.parse(request.params);
     const body = automationSchema.parse(request.body);
-    const existing = await prisma.aiAutomation.findFirst({ where: { id, organizationId: request.user.organizationId } });
-    if (!existing) throw new NotFoundError("Automação");
-    await validateAutomation(request.user.organizationId, body);
+    const { existing, scope } = await findVisibleAiAutomation(id, request.user);
+    await validateAutomation(request.user, body);
+    const target = aiAutomationTarget(body);
+    // O estado NOVO também precisa caber no alcance de quem grava.
+    assertCanWriteAiAutomation(scope, target);
     const updated = await prisma.aiAutomation.update({
       where: { id },
-      data: { ...body, departmentId: body.onlyWithoutDepartment ? null : body.departmentId },
+      data: { ...body, departmentId: target.departmentId },
       include: automationInclude,
     });
     // Desligar a automação alcança as sessões que ELA abriu. Sem isto,
@@ -1130,14 +1217,13 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
     const stoppedSessions = updated.active
       ? 0
       : await deps.aiRuntime.stopSessionsForAutomation({ organizationId: request.user.organizationId, automationId: id });
-    deps.audit.record({ organizationId: request.user.organizationId, userId: request.user.sub, action: "ai.automation_updated", entityType: "AiAutomation", entityId: id, metadata: { name: updated.name, active: updated.active, stoppedSessions } });
-    return { automation: serializeAiAutomation(updated), stoppedSessions };
+    deps.audit.record({ organizationId: request.user.organizationId, userId: request.user.sub, action: "ai.automation_updated", entityType: "AiAutomation", entityId: id, metadata: { name: updated.name, active: updated.active, stoppedSessions, departmentId: updated.departmentId, previousDepartmentId: existing.departmentId, whatsappInstanceId: updated.whatsappInstanceId, general: isGeneralAutomationConfig(updated) } });
+    return { automation: serializeAiAutomation(updated, { canEdit: true }), stoppedSessions };
   });
 
   app.delete("/ai/automations/:id", { preHandler: requirePermission(deps, "ai.agent.manage") }, async (request) => {
     const { id } = idParams.parse(request.params);
-    const existing = await prisma.aiAutomation.findFirst({ where: { id, organizationId: request.user.organizationId } });
-    if (!existing) throw new NotFoundError("Automação");
+    const { existing } = await findVisibleAiAutomation(id, request.user);
     // ANTES do delete, sempre: `AiSession.automationId` é `SetNull`, então
     // depois da exclusão não há mais como saber quais sessões nasceram desta
     // automação — elas ficariam indistinguíveis das que vieram de um bloco de
@@ -1149,7 +1235,7 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
       automationId: id,
     });
     await prisma.aiAutomation.delete({ where: { id } });
-    deps.audit.record({ organizationId: request.user.organizationId, userId: request.user.sub, action: "ai.automation_deleted", entityType: "AiAutomation", entityId: id, metadata: { name: existing.name, stoppedSessions } });
+    deps.audit.record({ organizationId: request.user.organizationId, userId: request.user.sub, action: "ai.automation_deleted", entityType: "AiAutomation", entityId: id, metadata: { name: existing.name, stoppedSessions, departmentId: existing.departmentId, whatsappInstanceId: existing.whatsappInstanceId } });
     return { ok: true, stoppedSessions };
   });
 
