@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronRight, FileText, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { ChevronRight, Download, RefreshCw } from "lucide-react";
 import { RealtimeEvents } from "@azvchat/shared";
 import { qualityApi } from "@/lib/api";
+import { downloadQualityRunPdf } from "@/lib/quality-pdf";
 import { useSocket } from "@/lib/socket-context";
 import type { QualityEvaluationDto, QualityRunDetailDto, QualityRunDto } from "@/lib/types";
 import { Badge, Button, Card, EmptyState, Spinner } from "@/components/ui";
@@ -41,15 +42,28 @@ export function RunList({ refreshToken }: { refreshToken: number }) {
   const [runs, setRuns] = useState<QualityRunDto[] | null>(null);
   const [aberta, setAberta] = useState<string | null>(null);
   /**
-   * A análise que está indo para o papel. O botão PDF a ABRE e a marca; quem
-   * chama `window.print()` é o detalhe, quando termina de carregar — imprimir
-   * antes mandaria uma folha com o spinner no meio.
+   * A análise cujo PDF está sendo montado. O botão trava enquanto isso: o
+   * detalhe vem da API antes de o documento existir, e dois cliques baixariam
+   * dois arquivos iguais.
    */
-  const [imprimindo, setImprimindo] = useState<string | null>(null);
+  const [baixando, setBaixando] = useState<string | null>(null);
+  const [erroPdf, setErroPdf] = useState<string | null>(null);
 
-  function imprimir(runId: string): void {
-    setAberta(runId);
-    setImprimindo(runId);
+  /**
+   * O PDF NÃO DEPENDE DE O CARTÃO ESTAR ABERTO. Ele busca o detalhe da análise
+   * e monta o documento — abrir a linha na tela é outra coisa, e amarrar as
+   * duas faria o download esperar uma renderização que ninguém pediu.
+   */
+  async function baixarPdf(runId: string): Promise<void> {
+    setErroPdf(null);
+    setBaixando(runId);
+    try {
+      await downloadQualityRunPdf(await qualityApi.run(runId));
+    } catch {
+      setErroPdf("Não foi possível gerar o PDF desta análise. Tente de novo.");
+    } finally {
+      setBaixando(null);
+    }
   }
 
   const carregar = useCallback(() => {
@@ -90,13 +104,14 @@ export function RunList({ refreshToken }: { refreshToken: number }) {
 
   return (
     <div className="space-y-3">
-      <div className="flex justify-end">
+      <div className="flex items-center justify-end gap-3">
+        {erroPdf ? <span className="text-xs text-red-600">{erroPdf}</span> : null}
         <Button variant="ghost" size="sm" onClick={carregar}>
           <RefreshCw className="h-3.5 w-3.5" /> Atualizar
         </Button>
       </div>
       {runs.map((run) => (
-        <Card key={run.id} className="p-4" {...(imprimindo === run.id ? { "data-imprimir": "true" } : {})}>
+        <Card key={run.id} className="p-4">
           <div className="flex items-start gap-3">
           <button
             type="button"
@@ -144,7 +159,7 @@ export function RunList({ refreshToken }: { refreshToken: number }) {
               ) : null}
             </div>
             <ChevronRight
-              className={`h-4 w-4 shrink-0 text-slate-400 transition-transform print:hidden ${aberta === run.id ? "rotate-90" : ""}`}
+              className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${aberta === run.id ? "rotate-90" : ""}`}
             />
           </button>
           {/* O PDF só faz sentido quando há resultado: análise ainda rodando
@@ -153,38 +168,29 @@ export function RunList({ refreshToken }: { refreshToken: number }) {
             <Button
               variant="outline"
               size="sm"
-              className="shrink-0 print:hidden"
-              onClick={() => imprimir(run.id)}
+              className="shrink-0"
+              onClick={() => void baixarPdf(run.id)}
+              disabled={baixando === run.id}
+              title="Baixa o relatório em PDF, A4 retrato"
             >
-              <FileText className="h-3.5 w-3.5" /> PDF
+              {baixando === run.id ? (
+                <Spinner className="h-3.5 w-3.5" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
+              Baixar PDF
             </Button>
           ) : null}
           </div>
-          {aberta === run.id ? (
-            <RunDetail
-              runId={run.id}
-              status={run.status}
-              aoFicarPronta={imprimindo === run.id ? () => setImprimindo(null) : undefined}
-            />
-          ) : null}
+          {aberta === run.id ? <RunDetail runId={run.id} status={run.status} /> : null}
         </Card>
       ))}
     </div>
   );
 }
 
-function RunDetail({
-  runId,
-  status,
-  aoFicarPronta,
-}: {
-  runId: string;
-  status: QualityRunDto["status"];
-  /** Vem preenchido só quando esta análise foi aberta para virar PDF. */
-  aoFicarPronta?: () => void;
-}) {
+function RunDetail({ runId, status }: { runId: string; status: QualityRunDto["status"] }) {
   const [detail, setDetail] = useState<QualityRunDetailDto | null>(null);
-  const jaImprimiu = useRef(false);
 
   const carregar = useCallback(() => {
     qualityApi
@@ -217,29 +223,6 @@ function RunDetail({
         : atual,
     );
   }
-
-  // A IMPRESSÃO ESPERA O DETALHE, e acontece UMA vez. `window.print()` trava o
-  // navegador até a caixa fechar, então dispará-lo antes do conteúdo chegar
-  // mandaria ao papel um cartão com o spinner no meio; e sem a trava do ref ele
-  // voltaria a cada re-render enquanto a marca não fosse limpa, abrindo a caixa
-  // de impressão em série. O quadro extra antes de imprimir existe porque a
-  // marca `data-imprimir` e o conteúdo entram na MESMA passada do React: sem
-  // ele, o navegador ainda não aplicou o CSS que esconde o resto da página.
-  useEffect(() => {
-    // Marca limpa = pedido terminado; destravar aqui é o que permite imprimir a
-    // MESMA análise de novo sem fechar e reabrir o cartão.
-    if (!aoFicarPronta) {
-      jaImprimiu.current = false;
-      return;
-    }
-    if (!detail || jaImprimiu.current) return;
-    jaImprimiu.current = true;
-    const quadro = requestAnimationFrame(() => {
-      window.print();
-      aoFicarPronta();
-    });
-    return () => cancelAnimationFrame(quadro);
-  }, [detail, aoFicarPronta]);
 
   if (!detail) return <Spinner className="mx-auto mt-4 h-5 w-5" />;
 

@@ -2373,7 +2373,9 @@ tempo de primeira resposta, tempo médio e estouro do limite em minutos de exped
 cobertura e marca a avaliação como parcial quando parte da conversa não chegou legível. Lê também **por SETOR e por período**: a aba Por departamento soma as mesmas avaliações por
 departamento (copiado na avaliação, então transferir a conversa depois não muda o passado) e traz a
 linha do escritório inteiro, com as notas ao lado das métricas objetivas; e o disparo pode ser
-montado pelo setor, trazendo as conversas do período em que algum atendente respondeu. Execução
+montado pelo setor, trazendo as conversas do período em que algum atendente respondeu. O relatório
+sai em PDF A4 retrato para BAIXAR (documento com cabeçalho, rodapé e paginação, gerado em vetor no
+navegador, sem caixa de impressão e sem navegador headless no servidor). Execução
 e leitura exclusivas do administrador, com as rotas respondendo como se o módulo não existisse
 para os demais papéis.
 
@@ -3920,32 +3922,64 @@ de uma vez. **E a avaliação nunca é genérica**: uma linha por atendente por 
 mensagem — juntar tudo numa chamada só perderia a citação, estouraria o contexto e ainda pularia
 a máscara e a cobertura, que são por conversa.
 
-**O PDF é impressão do navegador, e o papel é A PRÓPRIA TELA.** Gerar PDF no servidor traria
-uma dependência pesada (navegador headless ou montador de PDF) para produzir o que o Chrome já
-produz, então o botão PDF só abre a análise e manda o navegador imprimir o cartão dela.
+**O PDF É UM DOCUMENTO A4 GERADO NO NAVEGADOR, PARA BAIXAR — não é a tela impressa.**
+`apps/web/src/lib/quality-pdf.ts` monta o arquivo em vetor com `jspdf` e o salva; o botão
+"Baixar PDF" busca o detalhe da análise, monta e entrega o arquivo, sem caixa de impressão no
+caminho.
 
-O primeiro desenho tinha uma página separada, `/quality/runs/[id]/imprimir`, que REDESENHAVA o
-resultado — e o comentário dela já prometia "a tela é o layout" sem ser verdade: eram dois
-layouts, e a divergência começaria no primeiro ajuste que alguém esquecesse de repetir do outro
-lado. A página foi removida. Quem recorta a folha é o CSS de `globals.css`: o React marca o
-cartão da análise escolhida com `data-imprimir`, e a regra `body:has([data-imprimir])` esconde o
-resto. É `visibility`, e não `display`, porque esconder por display levaria junto os pais que
-levam até o cartão; e o `position: absolute` traz o cartão para o topo da folha, senão ele
-imprimiria na altura da rolagem, com páginas em branco antes. Sem nada marcado a regra não vale,
-então Ctrl+P nas outras telas segue como era.
+O desenho anterior era a tela impressa: o botão chamava `window.print()` e um
+`body:has([data-imprimir])` no `globals.css` escondia o resto da página. Funcionava e não custava
+dependência, mas o que saía era uma página web espremida em papel — largura de tela, cartão
+cortado no fim da folha, sem cabeçalho nem número de página — e ainda exigia escolher "Salvar
+como PDF" na caixa. Quem baixa este relatório anexa num e-mail ou guarda numa pasta, e para isso
+ele precisa ser um documento. O aparato de impressão foi REMOVIDO junto (o CSS, a marca
+`data-imprimir` e os `print:hidden` do módulo): manter os dois caminhos deixaria um deles
+apodrecendo sem ninguém notar.
 
-Três detalhes que não são opcionais: (1) **a impressão espera o detalhe carregar** e acontece
-UMA vez por pedido — `window.print()` trava o navegador até a caixa fechar, então disparar antes
-mandaria ao papel um cartão com o spinner no meio, e sem a trava a caixa reabriria a cada
-re-render; a trava é destravada quando a marca sai, senão imprimir a mesma análise de novo não
-funcionaria; (2) **o que é controle não vai ao papel** (`print:hidden` no botão PDF, na seta de
-expandir, no "Descartar" e no editor de comentário) — campo de digitação impresso sai como caixa
-vazia; (3) **o comentário do administrador vira TEXTO** num bloco `hidden print:block`: é a única
-linha dele num documento que o resto é da IA, e o editor não serve no papel. A barra lateral já
-tinha `print:hidden` no `layout.tsx`, o que vale para qualquer tela do sistema.
+**Gerado no NAVEGADOR, nunca no servidor.** Renderizar no servidor pediria um navegador headless
+dentro da imagem da API — centenas de megabytes numa VPS pequena, reconstruídos a cada deploy —
+para produzir o que a própria aba já produz. O custo daqui é uma dependência de frontend,
+carregada **sob demanda**: o `import("jspdf")` mora dentro da função de download, então nem a tela
+de Quality nem nenhuma outra paga por ele até alguém clicar (o build confirma: `/quality` não
+mudou de tamanho).
+
+**É VETOR, e não uma foto da tela** — nada de `html2canvas`. Rasterizar daria texto borrado,
+arquivo grande e conteúdo que não dá para copiar nem pesquisar, que é o contrário do que se espera
+de um relatório que vai para o e-mail de alguém. Um disparo de duas conversas sai em ~11 KB.
+
+**O layout é ESCRITO ali, e isso é deliberado** (é a mesma "divergência" que derrubou a página
+`/quality/runs/[id]/imprimir`, agora aceita de olhos abertos): um documento tem margem, cabeçalho,
+rodapé com "Página X de Y" e paginação que a tela não tem, e as duas coisas nunca seriam o mesmo
+desenho. O que **não pode** divergir tem fonte única: rótulo de critério, de assunto, de desfecho
+e formato de nota saem de `quality-ui.ts`/`@azvchat/shared`, os mesmos da tela; só a disposição é
+local.
+
+**AS FONTES PADRÃO DO PDF NÃO ESCREVEM SETA NEM EMOJI, e o escritório põe os dois em nome de
+grupo.** Helvetica escreve WinAnsi, que cobre o português inteiro (á, ã, ç, é, ê, ó, ú passam sem
+nada); fora dele, o jsPDF reescreve a string INTEIRA numa codificação que a fonte não tem, e
+"Deck ⇄ Contabilidade" sai como "D e c k !Ä C o n t a b i l i d a d e" — ilegível, no lugar mais
+visível do documento. Embutir uma fonte Unicode resolveria ao custo de centenas de kilobytes para
+desenhar uma seta, então `paraPapel()` troca o que tem equivalente (setas viram `-` e `>`, aspas
+curvas viram retas) e REMOVE o que não tem (emoji), colapsando o espaço que sobra. Ele é aplicado
+num ponto só, dentro da escrita da folha, senão o texto novo de amanhã escaparia dele.
+
+**QUEBRA DE PÁGINA: `reservar(altura)` ANTES de cada bloco.** É a regra que impede o defeito
+clássico daqui, e as duas formas dele já apareceram na verificação: o nome da conversa sozinho na
+última linha de uma folha com a avaliação inteira na seguinte, e o nome do atendente com a nota no
+pé de uma página e as seis métricas no topo da outra — quem lê procura de quem é aquela nota na
+página errada. Por isso o cabeçalho da avaliação reserva 50mm (ele mais as duas fileiras de
+métrica) e o título da conversa reserva 65mm quando há avaliação embaixo. Parágrafo longo é a
+exceção que confirma a regra: ele pagina LINHA A LINHA, porque empurrá-lo inteiro deixaria meia
+folha em branco.
+
+O rodapé é escrito no fim, num laço por página: o total só existe depois de o conteúdo inteiro
+estar desenhado. Ele leva o período, "Página X de Y" e a nota de que o documento é interno e
+contém avaliação de desempenho — quem receber o arquivo por e-mail precisa saber disso.
 
 **As transcrições ficam de fora** — são o conteúdo bruto da conversa, e num relatório de dez
-conversas virariam dezenas de páginas do que o administrador já lê no chat.
+conversas virariam dezenas de páginas do que o administrador já lê no chat. O comentário do
+administrador, ao contrário, entra sempre que existir: é a única linha humana num documento que o
+resto é da IA.
 
 ### Por departamento, e o disparo por setor
 
