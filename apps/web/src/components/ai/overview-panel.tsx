@@ -3,11 +3,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { AI_USAGE_PERIODS, AI_USAGE_PERIOD_LABELS, type AiStatsDto, type AiUsagePeriod } from "@azvchat/shared";
 import { ApiError, aiApi } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import { Card, Spinner } from "@/components/ui";
+import { AiBalanceCard } from "./balance-card";
 import { formatCost, formatPercent, Notice, Section, Select, StatTile } from "./ai-ui";
 
 /** Indicadores do atendimento por IA: gerais e por agente. */
 export function OverviewPanel() {
+  const { can } = useAuth();
   const [period, setPeriod] = useState<AiUsagePeriod>("30d");
   const [stats, setStats] = useState<AiStatsDto | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -21,17 +24,32 @@ export function OverviewPanel() {
   }, [period]);
   useEffect(() => void load(), [load]);
 
-  if (error) return <Notice tone="error">{error}</Notice>;
+  // O saldo segue a mesma chave da API (`ai.view_usage`); sem ela o card
+  // só mostraria o 403.
+  const balance = can("ai.view_usage") ? <AiBalanceCard /> : null;
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        {balance}
+        <Notice tone="error">{error}</Notice>
+      </div>
+    );
+  }
   if (!stats) {
     return (
-      <div className="flex justify-center py-8">
-        <Spinner />
+      <div className="space-y-6">
+        {balance}
+        <div className="flex justify-center py-8">
+          <Spinner />
+        </div>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
+      {balance}
       <div className="flex items-center justify-between">
         <p className="text-sm text-slate-500">Atendimentos iniciados no período; resolvidos e transferidos são estados finais.</p>
         <Select className="w-auto" value={period} onChange={(event) => setPeriod(event.target.value as AiUsagePeriod)}>

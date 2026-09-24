@@ -3,6 +3,8 @@
 import { AZEVEDO_OS_SOURCE } from "@azvchat/shared";
 import type {
   AiAgentDirectoryDto,
+  AiBalanceDto,
+  AiCreditEntryKind,
   AiAgentDto,
   AiAgentSummaryDto,
   AiAgentVersionDto,
@@ -538,6 +540,16 @@ export const aiApi = {
   settings: () => api.get<{ settings: AiSettingsDto }>("/ai/settings").then((data) => data.settings),
   saveSettings: (input: Omit<AiSettingsDto, "updatedAt">) =>
     api.put<{ settings: AiSettingsDto }>("/ai/settings", input).then((data) => data.settings),
+
+  // Saldo ESTIMADO: a OpenAI não expõe o saldo pré-pago, então a API soma os
+  // lançamentos do admin e desconta o consumo registrado.
+  balance: () => api.get<{ balance: AiBalanceDto }>("/ai/balance").then((data) => data.balance),
+  addCreditEntry: (input: { kind: AiCreditEntryKind; amountCents: number; effectiveAt?: string; note?: string }) =>
+    api.post<{ balance: AiBalanceDto }>("/ai/credit-entries", input).then((data) => data.balance),
+  deleteCreditEntry: (id: string) =>
+    api.delete<{ balance: AiBalanceDto }>(`/ai/credit-entries/${id}`).then((data) => data.balance),
+  saveBalanceAlert: (lowBalanceAlertCents: number | null) =>
+    api.put<{ balance: AiBalanceDto }>("/ai/balance/alert", { lowBalanceAlertCents }).then((data) => data.balance),
 
   usage: (period: AiUsagePeriod) => api.get<{ usage: AiUsageDto }>(`/ai/usage?period=${period}`).then((data) => data.usage),
   stats: (period: AiUsagePeriod) => api.get<{ stats: AiStatsDto }>(`/ai/stats?period=${period}`).then((data) => data.stats),

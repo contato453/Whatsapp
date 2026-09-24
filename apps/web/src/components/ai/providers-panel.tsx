@@ -259,7 +259,7 @@ function ProviderCard({ provider, onChanged }: { provider: AiProviderDto; onChan
         ) : (
           <p className="text-xs text-slate-400">
             A OpenAI não expõe saldo pré-pago por API. O custo faturado só é informado para chave de administrador; o
-            consumo registrado pelo AZVCHAT está em Consumo e limites.
+            saldo estimado (lançado por você e descontado pelo consumo registrado) fica na Visão geral.
           </p>
         )}
       </div>

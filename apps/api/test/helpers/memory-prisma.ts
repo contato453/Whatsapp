@@ -49,7 +49,11 @@ const RELATIONS: Record<string, Record<string, Relation>> = {
   },
   conversationTag: { tag: { localKey: "tagId", table: "tag" } },
   tag: { departments: { foreignKey: "tagId", table: "tagDepartment", many: true } },
-  aiUsageLog: { conversation: { localKey: "conversationId", table: "conversation" } },
+  aiUsageLog: {
+    conversation: { localKey: "conversationId", table: "conversation" },
+    session: { localKey: "sessionId", table: "aiSession" },
+  },
+  aiCreditEntry: { createdBy: { localKey: "createdById", table: "user" } },
   // O chip de atendimento automático da lista lê o nome do fluxo pela execução.
   automationExecution: { flow: { localKey: "flowId", table: "automationFlow" } },
   followUpExecution: { rule: { localKey: "ruleId", table: "followUpRule" } },
@@ -95,7 +99,7 @@ export class MemoryPrisma {
       "attendanceSettings", "attendanceBusinessHours", "attendanceLoginHours", "quickReply", "rolePermission",
       "userWhatsAppInstance", "userDepartment", "auditLog",
       "aiProviderConfig", "aiSettings", "aiAgent", "aiAgentDepartment", "aiAgentVersion", "aiKnowledgeSource",
-      "aiAgentKnowledgeSource", "aiAutomation", "aiSession", "aiUsageLog",
+      "aiAgentKnowledgeSource", "aiAutomation", "aiSession", "aiUsageLog", "aiCreditEntry",
       "followUpRule", "followUpRuleDepartment", "followUpRuleStep", "followUpExecution", "followUpExecutionLog",
       "automationFlow", "automationExecution",
       "qualitySettings", "qualityRun", "qualityRunItem", "qualityEvaluation",

@@ -54,6 +54,7 @@ model Organization {
   followUpExecutions   FollowUpExecution[]
   aiProviderConfigs    AiProviderConfig[]
   aiSettings           AiSettings?
+  aiCreditEntries      AiCreditEntry[]
   aiAgents             AiAgent[]
   aiKnowledgeSources   AiKnowledgeSource[]
   aiAutomations        AiAutomation[]
@@ -155,6 +156,7 @@ model User {
   aiHandoffTargets            AiAgent[]                       @relation("AiAgentHandoffAssignee")
   aiSessionsEnded             AiSession[]                     @relation("AiSessionEndedBy")
   aiSettingsUpdated           AiSettings[]                    @relation("AiSettingsUpdatedBy")
+  aiCreditEntries             AiCreditEntry[]                 @relation("AiCreditEntryCreatedBy")
   aiKnowledgeCreated          AiKnowledgeSource[]             @relation("AiKnowledgeCreatedBy")
   crmPipelinesCreated         CrmPipeline[]                   @relation("CrmPipelineCreatedBy")
   crmPipelinesFixedFor        CrmPipeline[]                   @relation("CrmPipelineFixedAssignee")
@@ -2133,6 +2135,15 @@ enum AiBudgetPolicy {
   transfer_human
 }
 
+/// Tipo de lançamento do saldo de crédito da IA (ver `AiCreditEntry`).
+enum AiCreditEntryKind {
+  /// Saldo informado: "a OpenAI mostra US$ 37,20 agora". Zera a conta a
+  /// partir dali — é assim que a estimativa volta a bater com o real.
+  balance
+  /// Recarga: soma ao saldo.
+  top_up
+}
+
 enum AiUsageKind {
   chat
   transcription
@@ -2240,6 +2251,10 @@ model AiSettings {
   /// equivalente para DOCUMENTO: o texto de PDF/DOCX/TXT é extraído aqui
   /// dentro, sem chamada paga, então só a capacidade do agente decide.
   describeImages      Boolean        @default(true)
+  /// Abaixo deste saldo ESTIMADO (centavos de dólar) o card de saldo fica em
+  /// alerta. Nulo = sem aviso. Não bloqueia nada: quem bloqueia é o
+  /// orçamento mensal; isto só avisa que está na hora de recarregar.
+  lowBalanceAlertCents Int?
   /// Mês (AAAA-MM) e degraus já avisados nele — para o alerta de 80% não
   /// repetir a cada chamada.
   alertedMonth        String?
@@ -2459,6 +2474,33 @@ model AiSession {
 
 /// Uma chamada ao provedor: tokens, custo estimado, duração, ferramentas
 /// pedidas/executadas/bloqueadas. NUNCA o conteúdo da conversa nem a chave.
+/// Lançamento do saldo de crédito da IA. A OpenAI NÃO expõe saldo pré-pago
+/// pela API (só custo faturado, e só para Admin key), então o saldo que a
+/// tela mostra é ESTIMADO aqui: o último "saldo informado" + as recargas
+/// depois dele − o consumo registrado (`AiUsageLog.costMicros`) desde então.
+/// Lançamento errado se exclui; não há edição, para o histórico dizer o que
+/// foi informado de fato.
+model AiCreditEntry {
+  id             String            @id @default(uuid())
+  organizationId String
+  kind           AiCreditEntryKind
+  /// Centavos de dólar (a moeda do provedor), sempre positivo.
+  amountCents    Int
+  /// Quando a recarga caiu ou quando o saldo foi lido na OpenAI — é a partir
+  /// daqui que o consumo passa a ser descontado.
+  effectiveAt    DateTime
+  note           String?
+  /// Nulo = quem lançou saiu do cadastro; o lançamento continua valendo.
+  createdById    String?
+  createdAt      DateTime          @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("AiCreditEntryCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, effectiveAt])
+  @@map("ai_credit_entries")
+}
+
 model AiUsageLog {
   id             String         @id @default(uuid())
   organizationId String
