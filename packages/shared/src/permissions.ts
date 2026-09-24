@@ -387,6 +387,14 @@ export const PERMISSION_ACTIONS = [
     defaults: { agent: false, supervisor: true },
   },
   {
+    key: "automation.manage_general",
+    label: "Criar e editar automações gerais",
+    description:
+      "Fluxo ou automação de IA sem departamento, ou valendo para todos os números, afeta todo mundo. Sem a chave, a pessoa só grava automação do próprio departamento e do próprio número.",
+    area: "automacoes",
+    defaults: { agent: false, supervisor: false, manager: true },
+  },
+  {
     key: "automation.view_history",
     label: "Ver histórico e métricas das automações",
     description: "Consulta as execuções dos fluxos: por onde passaram, o que responderam, onde pararam.",

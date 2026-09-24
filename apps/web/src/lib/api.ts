@@ -943,17 +943,34 @@ export interface AutomationFlowUpdateInput {
   triggerType?: AutomationTriggerType;
   triggerConfig?: Record<string, unknown> | null;
   whatsappInstanceId?: string | null;
+  departmentId?: string | null;
   priority?: number;
   cooldownMinutes?: number;
   scheduleMode?: ScheduleMode;
   draftGraph?: AutomationGraph;
 }
 
+/**
+ * Onde o fluxo mora. `departmentId: null` é GERAL e `whatsappInstanceId:
+ * null` é todos os números — os dois pedem a chave de alcance geral.
+ */
+export interface AutomationFlowScopeInput {
+  departmentId: string | null;
+  whatsappInstanceId: string | null;
+}
+
 /** Construtor de fluxos, templates e histórico de execução — ver `modules/automation`. */
 export const automationApi = {
-  listFlows: () =>
-    api.get<{ flows: AutomationFlowSummaryDto[] }>("/automation-flows").then((data) => data.flows),
-  createFlow: (input: { name: string; description?: string; triggerType?: AutomationTriggerType; whatsappInstanceId?: string; templateKey?: string }) =>
+  /** `departmentId` só estreita o que a pessoa já vê; `none` = os gerais. */
+  listFlows: (filters: { departmentId?: string } = {}) =>
+    api
+      .get<{ flows: AutomationFlowSummaryDto[] }>(
+        `/automation-flows${filters.departmentId ? `?departmentId=${encodeURIComponent(filters.departmentId)}` : ""}`,
+      )
+      .then((data) => data.flows),
+  createFlow: (
+    input: AutomationFlowScopeInput & { name: string; description?: string; triggerType?: AutomationTriggerType; templateKey?: string },
+  ) =>
     api.post<{ flow: AutomationFlowDetailDto }>("/automation-flows", input).then((data) => data.flow),
   getFlow: (id: string) =>
     api.get<{ flow: AutomationFlowDetailDto }>(`/automation-flows/${id}`).then((data) => data.flow),
@@ -977,8 +994,8 @@ export const automationApi = {
   deleteFlow: (id: string) => api.delete<{ ok: boolean; stoppedExecutions: number }>(`/automation-flows/${id}`),
   listTemplates: () =>
     api.get<{ templates: AutomationTemplateSummaryDto[] }>("/automation-templates").then((data) => data.templates),
-  useTemplate: (key: string) =>
-    api.post<{ flow: AutomationFlowDetailDto }>(`/automation-templates/${key}/use`).then((data) => data.flow),
+  useTemplate: (key: string, scope: AutomationFlowScopeInput) =>
+    api.post<{ flow: AutomationFlowDetailDto }>(`/automation-templates/${key}/use`, scope).then((data) => data.flow),
   listExecutions: (filters: { flowId?: string; conversationId?: string; status?: string } = {}) => {
     const params = new URLSearchParams();
     if (filters.flowId) params.set("flowId", filters.flowId);

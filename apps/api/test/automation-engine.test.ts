@@ -360,6 +360,7 @@ function buildFakeEnvironment(opts?: {
     priority?: number;
     cooldownMinutes?: number;
     scheduleMode?: string;
+    departmentId?: string | null;
     graph: AutomationGraph;
     status?: string;
   }) {
@@ -375,6 +376,7 @@ function buildFakeEnvironment(opts?: {
       triggerType: input.triggerType,
       triggerConfig: input.triggerConfig ?? null,
       whatsappInstanceId: input.whatsappInstanceId ?? null,
+      departmentId: input.departmentId ?? null,
       priority: input.priority ?? 100,
       cooldownMinutes: input.cooldownMinutes ?? 0,
       // Mesmo padrão da coluna real: NOT NULL DEFAULT 'always'.
@@ -763,6 +765,39 @@ describe("AutomationEngine", () => {
       expect(env.sentMessages).toHaveLength(1);
       expect(env.sentMessages[0]?.text).toBe("A");
       expect(env.executions.size).toBe(1);
+  });
+
+  it("fluxo de um departamento continua disparando: o departamento é visualização, nunca execução", async () => {
+      // Se o filtro de acesso de usuário entrar no motor por engano, este é
+      // o teste que fica vermelho: o fluxo é do departamento A, a conversa é
+      // de OUTRO departamento, e não existe usuário logado nenhum — mesmo
+      // assim o fluxo tem de rodar, exatamente como antes do campo existir.
+      const env = buildFakeEnvironment();
+      vi.setSystemTime(new Date("2026-03-05T10:00:00-03:00"));
+      const deptA = env.addDepartment("Comercial");
+      const deptB = env.addDepartment("Fiscal");
+      const conversation = env.createConversation({ departmentId: deptB });
+      env.createFlow({
+        name: "Fluxo do Comercial",
+        triggerType: "new_message",
+        departmentId: deptA,
+        graph: {
+          nodes: [
+            { id: "trigger", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+            { id: "send", type: "send_message", position: { x: 100, y: 0 }, data: { messageType: "text", text: "Olá!" } },
+            { id: "finish", type: "finish", position: { x: 200, y: 0 }, data: {} },
+          ],
+          edges: [
+            { id: "e1", source: "trigger", target: "send" },
+            { id: "e2", source: "send", target: "finish" },
+          ],
+        },
+      });
+
+      await env.inbound(conversation.id as string, "Oi");
+
+      expect(env.sentMessages.map((message) => message.text)).toEqual(["Olá!"]);
+      expect([...env.executions.values()][0]?.status).toBe("completed");
   });
 
   describe("bloco 'Atendimento por IA'", () => {

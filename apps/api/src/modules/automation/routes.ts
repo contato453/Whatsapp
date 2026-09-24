@@ -10,9 +10,19 @@ import {
   SCHEDULE_MODES,
   type AutomationGraph,
 } from "@azvchat/shared";
-import { requirePermission } from "../../lib/permissions.js";
-import { AppError, NotFoundError } from "../../lib/errors.js";
-import { conversationScope, loadConversationAccess } from "../../lib/access.js";
+import type { FastifyRequest } from "fastify";
+import { loadPermissions, requirePermission } from "../../lib/permissions.js";
+import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
+import {
+  automationConfigScope,
+  canSeeAutomationConfig,
+  canWriteAutomationConfig,
+  conversationScope,
+  isGeneralAutomationConfig,
+  loadConversationAccess,
+  type AutomationConfigAccess,
+  type AutomationConfigTarget,
+} from "../../lib/access.js";
 import { validateAutomationFlowForPublish } from "../../lib/automation/validate.js";
 import {
   serializeAutomationExecutionDetail,
@@ -41,13 +51,27 @@ const graphSchema = z.object({
   ),
 });
 
-const flowCreateSchema = z.object({
+/**
+ * Onde o fluxo mora: departamento (nulo = geral) e número (nulo = todos).
+ * O departamento é OBRIGATÓRIO de informar na criação — escolher "geral" é
+ * decisão explícita, e não o que sobra quando alguém esquece o campo.
+ */
+const flowScopeSchema = z.object({
+  departmentId: z.string().uuid().nullable(),
+  whatsappInstanceId: z.string().uuid().nullable().optional(),
+});
+
+const flowCreateSchema = flowScopeSchema.extend({
   name: z.string().min(2).max(120),
   description: z.string().max(500).optional(),
   triggerType: z.enum(AUTOMATION_TRIGGER_TYPES).optional(),
-  whatsappInstanceId: z.string().uuid().optional(),
   /** Cria já a partir de um template do catálogo (seção 21/22). */
   templateKey: z.string().optional(),
+});
+
+const flowListQuerySchema = z.object({
+  /** Um departamento, ou `none` para os gerais (sem classificação). */
+  departmentId: z.union([z.string().uuid(), z.literal("none")]).optional(),
 });
 
 const flowUpdateSchema = z.object({
@@ -56,6 +80,7 @@ const flowUpdateSchema = z.object({
   triggerType: z.enum(AUTOMATION_TRIGGER_TYPES).optional(),
   triggerConfig: z.record(z.string(), z.unknown()).nullable().optional(),
   whatsappInstanceId: z.string().uuid().nullable().optional(),
+  departmentId: z.string().uuid().nullable().optional(),
   priority: z.coerce.number().int().min(1).max(1000).optional(),
   cooldownMinutes: z.coerce.number().int().min(0).max(10_080).optional(),
   scheduleMode: z.enum(SCHEDULE_MODES).optional(),
@@ -70,6 +95,32 @@ const executionListQuerySchema = z.object({
     .optional(),
   limit: z.coerce.number().min(1).max(200).default(50),
 });
+
+const executionInclude = {
+  flow: { select: { name: true, departmentId: true, whatsappInstanceId: true } },
+  conversation: { select: { title: true, customTitle: true } },
+} satisfies Prisma.AutomationExecutionInclude;
+
+/** Campos de cadastro cuja mudança entra no `AuditLog` (o desenho não entra). */
+const AUDITED_FLOW_FIELDS = [
+  "name",
+  "description",
+  "triggerType",
+  "whatsappInstanceId",
+  "departmentId",
+  "priority",
+  "cooldownMinutes",
+  "scheduleMode",
+] as const;
+
+/** Onde o fluxo mora, como a auditoria registra: ids, nunca nomes que mudam. */
+function flowScopeAudit(flow: AutomationConfigTarget): Record<string, unknown> {
+  return {
+    departmentId: flow.departmentId,
+    whatsappInstanceId: flow.whatsappInstanceId,
+    general: isGeneralAutomationConfig(flow),
+  };
+}
 
 /**
  * Módulo AUTOMAÇÕES: construtor de fluxos (`automation.manage`) e histórico
@@ -87,22 +138,106 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
     if (!instance) throw new NotFoundError("Número de WhatsApp");
   }
 
-  async function findFlowOr404(id: string, organizationId: string) {
+  async function assertDepartmentInOrg(id: string | null | undefined, organizationId: string): Promise<void> {
+    if (!id) return;
+    const department = await deps.prisma.department.findFirst({ where: { id, organizationId }, select: { id: true } });
+    if (!department) throw new NotFoundError("Departamento");
+  }
+
+  /**
+   * O alcance de quem pede, para a CONFIGURAÇÃO de automação: os mesmos
+   * vínculos de número e departamento da conversa, mais a chave de alcance
+   * geral. Nada disto é usado pelo motor — ver `automationConfigScope`.
+   */
+  async function loadFlowAccess(user: FastifyRequest["user"]) {
+    const [conversationAccess, permissions] = await Promise.all([
+      loadConversationAccess(deps.prisma, user),
+      loadPermissions(deps.prisma, user),
+    ]);
+    const access: AutomationConfigAccess = {
+      instanceIds: conversationAccess.instanceIds,
+      departmentIds: conversationAccess.departmentIds,
+    };
+    return { access, canManageGeneral: permissions.can("automation.manage_general") };
+  }
+  type FlowAccess = Awaited<ReturnType<typeof loadFlowAccess>>;
+
+  /**
+   * Recusa a gravação de um estado que esta pessoa não pode ter nas mãos.
+   * Duas mensagens, porque os dois motivos pedem ações diferentes de quem lê:
+   * um é "este fluxo não é da sua área", o outro é "fluxo geral pede a chave".
+   */
+  function assertCanWriteFlow(flowAccess: FlowAccess, target: AutomationConfigTarget): void {
+    if (canWriteAutomationConfig(flowAccess.access, target, flowAccess.canManageGeneral)) return;
+    if (!canSeeAutomationConfig(flowAccess.access, target)) {
+      throw new ForbiddenError("Você só pode gravar fluxos dos seus departamentos e dos números que atende.");
+    }
+    throw new ForbiddenError(
+      "Fluxo geral (sem departamento ou para todos os números) exige a permissão de automações gerais. Escolha um departamento e um número.",
+    );
+  }
+
+  const flowInclude = {
+    whatsappInstance: true,
+    department: { select: { id: true, name: true, color: true } },
+    publishedVersion: true,
+    _count: { select: { executions: true } },
+  } satisfies Prisma.AutomationFlowInclude;
+
+  /**
+   * Carrega o fluxo e confere que quem pede o ENXERGA. Fluxo de outra
+   * organização não existe (404); fluxo desta organização fora do alcance é
+   * recusado (403) — esconder na tela não é controle de acesso, e chamar a
+   * rota direto com o id tem que dar na mesma parede.
+   */
+  async function findVisibleFlow(id: string, user: FastifyRequest["user"]) {
     const flow = await deps.prisma.automationFlow.findFirst({
-      where: { id, organizationId },
-      include: { whatsappInstance: true, publishedVersion: true, _count: { select: { executions: true } } },
+      where: { id, organizationId: user.organizationId },
+      include: flowInclude,
     });
     if (!flow) throw new NotFoundError("Fluxo de automação");
-    return flow;
+    const flowAccess = await loadFlowAccess(user);
+    if (!canSeeAutomationConfig(flowAccess.access, flow)) {
+      throw new ForbiddenError("Este fluxo é de um departamento ou de um número que você não atende.");
+    }
+    return { flow, flowAccess };
+  }
+
+  /** O mesmo, exigindo também poder GRAVAR no estado atual do fluxo. */
+  async function findWritableFlow(id: string, user: FastifyRequest["user"]) {
+    const found = await findVisibleFlow(id, user);
+    assertCanWriteFlow(found.flowAccess, found.flow);
+    return found;
+  }
+
+  function serializeFor(flowAccess: FlowAccess) {
+    return <T extends Parameters<typeof serializeAutomationFlowDetail>[0]>(flow: T) =>
+      serializeAutomationFlowDetail(flow, {
+        canEdit: canWriteAutomationConfig(flowAccess.access, flow, flowAccess.canManageGeneral),
+      });
   }
 
   app.get("/automation-flows", { preHandler: requirePermission(deps, "automation.manage") }, async (request) => {
+    const query = flowListQuerySchema.parse(request.query);
+    const flowAccess = await loadFlowAccess(request.user);
     const flows = await deps.prisma.automationFlow.findMany({
-      where: { organizationId: request.user.organizationId },
-      include: { whatsappInstance: true, _count: { select: { executions: true } } },
+      where: {
+        organizationId: request.user.organizationId,
+        // Recorte de VISUALIZAÇÃO. O motor lista os fluxos sem ele, e tem
+        // de continuar assim: quando a mensagem chega não há usuário logado.
+        ...automationConfigScope(flowAccess.access),
+        ...(query.departmentId ? { departmentId: query.departmentId === "none" ? null : query.departmentId } : {}),
+      },
+      include: flowInclude,
       orderBy: { updatedAt: "desc" },
     });
-    return { flows: flows.map(serializeAutomationFlowSummary) };
+    return {
+      flows: flows.map((flow) =>
+        serializeAutomationFlowSummary(flow, {
+          canEdit: canWriteAutomationConfig(flowAccess.access, flow, flowAccess.canManageGeneral),
+        }),
+      ),
+    };
   });
 
   app.get("/automation-templates", { preHandler: requirePermission(deps, "automation.manage") }, async () => {
@@ -122,11 +257,22 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
     { preHandler: requirePermission(deps, "automation.manage") },
     async (request, reply) => {
       const { key } = z.object({ key: z.string() }).parse(request.params);
+      const scope = flowScopeSchema.parse(request.body ?? {});
       const template = automationTemplate(key);
       if (!template) throw new NotFoundError("Template de automação");
+      // O template é catálogo do sistema, igual para toda a organização, e
+      // não carrega departamento. A CÓPIA carrega: ela nasce onde quem a
+      // criou escolheu, pela mesma régua de criar do zero.
+      await assertDepartmentInOrg(scope.departmentId, request.user.organizationId);
+      await assertInstanceInOrg(scope.whatsappInstanceId, request.user.organizationId);
+      const target = { departmentId: scope.departmentId, whatsappInstanceId: scope.whatsappInstanceId ?? null };
+      const flowAccess = await loadFlowAccess(request.user);
+      assertCanWriteFlow(flowAccess, target);
       const flow = await deps.prisma.automationFlow.create({
         data: {
           organizationId: request.user.organizationId,
+          departmentId: target.departmentId,
+          whatsappInstanceId: target.whatsappInstanceId,
           name: template.name,
           description: template.description,
           triggerType: template.triggerType,
@@ -134,7 +280,7 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
           draftGraph: template.graph as unknown as Prisma.InputJsonValue,
           createdById: request.user.sub,
         },
-        include: { whatsappInstance: true, _count: { select: { executions: true } } },
+        include: flowInclude,
       });
       deps.audit.record({
         organizationId: request.user.organizationId,
@@ -142,15 +288,19 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
         action: "automation_flow.created_from_template",
         entityType: "AutomationFlow",
         entityId: flow.id,
-        metadata: { templateKey: key },
+        metadata: { templateKey: key, ...flowScopeAudit(flow) },
       });
-      return reply.status(201).send({ flow: serializeAutomationFlowDetail(flow) });
+      return reply.status(201).send({ flow: serializeFor(flowAccess)(flow) });
     },
   );
 
   app.post("/automation-flows", { preHandler: requirePermission(deps, "automation.manage") }, async (request, reply) => {
     const body = flowCreateSchema.parse(request.body);
     await assertInstanceInOrg(body.whatsappInstanceId, request.user.organizationId);
+    await assertDepartmentInOrg(body.departmentId, request.user.organizationId);
+    const target = { departmentId: body.departmentId, whatsappInstanceId: body.whatsappInstanceId ?? null };
+    const flowAccess = await loadFlowAccess(request.user);
+    assertCanWriteFlow(flowAccess, target);
     const template = body.templateKey ? automationTemplate(body.templateKey) : null;
     const flow = await deps.prisma.automationFlow.create({
       data: {
@@ -158,11 +308,12 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
         name: body.name,
         description: body.description ?? null,
         triggerType: template?.triggerType ?? body.triggerType ?? "new_message",
-        whatsappInstanceId: body.whatsappInstanceId ?? null,
+        whatsappInstanceId: target.whatsappInstanceId,
+        departmentId: target.departmentId,
         draftGraph: (template?.graph ?? emptyAutomationGraph()) as unknown as object,
         createdById: request.user.sub,
       },
-      include: { whatsappInstance: true, _count: { select: { executions: true } } },
+      include: flowInclude,
     });
     deps.audit.record({
       organizationId: request.user.organizationId,
@@ -170,8 +321,9 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
       action: "automation_flow.created",
       entityType: "AutomationFlow",
       entityId: flow.id,
+      metadata: flowScopeAudit(flow),
     });
-    return reply.status(201).send({ flow: serializeAutomationFlowDetail(flow) });
+    return reply.status(201).send({ flow: serializeFor(flowAccess)(flow) });
   });
 
   app.get(
@@ -179,8 +331,8 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
     { preHandler: requirePermission(deps, "automation.manage") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-      const flow = await findFlowOr404(id, request.user.organizationId);
-      return { flow: serializeAutomationFlowDetail(flow) };
+      const { flow, flowAccess } = await findVisibleFlow(id, request.user);
+      return { flow: serializeFor(flowAccess)(flow) };
     },
   );
 
@@ -195,8 +347,18 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       const body = flowUpdateSchema.parse(request.body);
-      await findFlowOr404(id, request.user.organizationId);
+      const { flow: current, flowAccess } = await findWritableFlow(id, request.user);
       if (body.whatsappInstanceId) await assertInstanceInOrg(body.whatsappInstanceId, request.user.organizationId);
+      if (body.departmentId) await assertDepartmentInOrg(body.departmentId, request.user.organizationId);
+      // O estado NOVO também precisa caber no alcance de quem grava: sem isto
+      // bastaria mover o fluxo para outro departamento (ou para "geral") e
+      // entregá-lo, ou tomá-lo, de outra equipe.
+      const nextTarget: AutomationConfigTarget = {
+        departmentId: body.departmentId !== undefined ? body.departmentId : current.departmentId,
+        whatsappInstanceId:
+          body.whatsappInstanceId !== undefined ? body.whatsappInstanceId : current.whatsappInstanceId,
+      };
+      assertCanWriteFlow(flowAccess, nextTarget);
 
       const data: Prisma.AutomationFlowUncheckedUpdateInput = {
         ...(body.name !== undefined ? { name: body.name } : {}),
@@ -206,18 +368,36 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
           ? { triggerConfig: (body.triggerConfig ?? undefined) as Prisma.InputJsonValue | undefined }
           : {}),
         ...(body.whatsappInstanceId !== undefined ? { whatsappInstanceId: body.whatsappInstanceId } : {}),
+        ...(body.departmentId !== undefined ? { departmentId: body.departmentId } : {}),
         ...(body.priority !== undefined ? { priority: body.priority } : {}),
         ...(body.cooldownMinutes !== undefined ? { cooldownMinutes: body.cooldownMinutes } : {}),
         ...(body.scheduleMode !== undefined ? { scheduleMode: body.scheduleMode } : {}),
         ...(body.draftGraph !== undefined ? { draftGraph: body.draftGraph as unknown as Prisma.InputJsonValue } : {}),
         updatedById: request.user.sub,
       };
-      const flow = await deps.prisma.automationFlow.update({
-        where: { id },
-        data,
-        include: { whatsappInstance: true, publishedVersion: true, _count: { select: { executions: true } } },
+      const flow = await deps.prisma.automationFlow.update({ where: { id }, data, include: flowInclude });
+      // O autosave grava o desenho a cada pausa de digitação, e auditar cada
+      // bloco arrastado afogaria o registro. Entra na auditoria o que muda o
+      // fluxo como CADASTRO: nome, gatilho, onde ele mora e como disputa.
+      const changedFields = AUDITED_FLOW_FIELDS.filter((field) => {
+        if (body[field] === undefined) return false;
+        return JSON.stringify(body[field]) !== JSON.stringify(current[field] ?? null);
       });
-      return { flow: serializeAutomationFlowDetail(flow) };
+      if (changedFields.length > 0) {
+        deps.audit.record({
+          organizationId: request.user.organizationId,
+          userId: request.user.sub,
+          action: "automation_flow.updated",
+          entityType: "AutomationFlow",
+          entityId: id,
+          metadata: {
+            changedFields,
+            ...flowScopeAudit(flow),
+            ...(changedFields.includes("departmentId") ? { previousDepartmentId: current.departmentId } : {}),
+          },
+        });
+      }
+      return { flow: serializeFor(flowAccess)(flow) };
     },
   );
 
@@ -226,7 +406,7 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
     { preHandler: requirePermission(deps, "automation.manage") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-      const flow = await findFlowOr404(id, request.user.organizationId);
+      const { flow } = await findVisibleFlow(id, request.user);
       const problems = await validateAutomationFlowForPublish(
         deps.prisma,
         request.user.organizationId,
@@ -247,7 +427,7 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
     { preHandler: requirePermission(deps, "automation.manage") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-      const flow = await findFlowOr404(id, request.user.organizationId);
+      const { flow, flowAccess } = await findWritableFlow(id, request.user);
       const graph = flow.draftGraph as unknown as AutomationGraph;
       const problems = await validateAutomationFlowForPublish(deps.prisma, request.user.organizationId, graph);
       if (problems.length > 0) {
@@ -270,7 +450,7 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
           publishedVersionId: version.id,
           status: flow.status === "draft" ? "active" : flow.status,
         },
-        include: { whatsappInstance: true, publishedVersion: true, _count: { select: { executions: true } } },
+        include: flowInclude,
       });
       deps.audit.record({
         organizationId: request.user.organizationId,
@@ -278,9 +458,9 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
         action: "automation_flow.published",
         entityType: "AutomationFlow",
         entityId: id,
-        metadata: { version: nextVersion },
+        metadata: { version: nextVersion, ...flowScopeAudit(updated) },
       });
-      return { flow: serializeAutomationFlowDetail(updated) };
+      return { flow: serializeFor(flowAccess)(updated) };
     },
   );
 
@@ -289,14 +469,14 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
     { preHandler: requirePermission(deps, "automation.manage") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-      const flow = await findFlowOr404(id, request.user.organizationId);
+      const { flow, flowAccess } = await findWritableFlow(id, request.user);
       if (!flow.publishedVersionId) {
         throw new AppError("Publique o fluxo antes de ativá-lo.", 422, "automation_flow_not_published");
       }
       const updated = await deps.prisma.automationFlow.update({
         where: { id },
         data: { status: "active" },
-        include: { whatsappInstance: true, publishedVersion: true, _count: { select: { executions: true } } },
+        include: flowInclude,
       });
       deps.audit.record({
         organizationId: request.user.organizationId,
@@ -304,8 +484,9 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
         action: "automation_flow.activated",
         entityType: "AutomationFlow",
         entityId: id,
+        metadata: flowScopeAudit(updated),
       });
-      return { flow: serializeAutomationFlowDetail(updated) };
+      return { flow: serializeFor(flowAccess)(updated) };
     },
   );
 
@@ -314,11 +495,11 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
     { preHandler: requirePermission(deps, "automation.manage") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-      await findFlowOr404(id, request.user.organizationId);
+      const { flowAccess } = await findWritableFlow(id, request.user);
       const updated = await deps.prisma.automationFlow.update({
         where: { id },
         data: { status: "inactive" },
-        include: { whatsappInstance: true, publishedVersion: true, _count: { select: { executions: true } } },
+        include: flowInclude,
       });
       // Desligar para o que o fluxo JÁ está fazendo, e não só a disputa por
       // gatilho: a execução em andamento seguia perguntando e respondendo, e
@@ -335,9 +516,9 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
         action: "automation_flow.deactivated",
         entityType: "AutomationFlow",
         entityId: id,
-        metadata: { stoppedExecutions },
+        metadata: { stoppedExecutions, ...flowScopeAudit(updated) },
       });
-      return { flow: serializeAutomationFlowDetail(updated), stoppedExecutions };
+      return { flow: serializeFor(flowAccess)(updated), stoppedExecutions };
     },
   );
 
@@ -346,7 +527,10 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
     { preHandler: requirePermission(deps, "automation.manage") },
     async (request, reply) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-      const flow = await findFlowOr404(id, request.user.organizationId);
+      // A cópia nasce no MESMO departamento e número do original, então quem
+      // duplica precisa poder gravar ali — duplicar não é atalho para criar
+      // fluxo geral sem a chave.
+      const { flow, flowAccess } = await findWritableFlow(id, request.user);
       const copy = await deps.prisma.automationFlow.create({
         data: {
           organizationId: request.user.organizationId,
@@ -355,6 +539,7 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
           triggerType: flow.triggerType,
           triggerConfig: flow.triggerConfig ?? undefined,
           whatsappInstanceId: flow.whatsappInstanceId,
+          departmentId: flow.departmentId,
           priority: flow.priority,
           cooldownMinutes: flow.cooldownMinutes,
           scheduleMode: flow.scheduleMode,
@@ -363,7 +548,7 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
           draftGraph: flow.draftGraph as object,
           createdById: request.user.sub,
         },
-        include: { whatsappInstance: true, _count: { select: { executions: true } } },
+        include: flowInclude,
       });
       deps.audit.record({
         organizationId: request.user.organizationId,
@@ -371,9 +556,9 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
         action: "automation_flow.duplicated",
         entityType: "AutomationFlow",
         entityId: copy.id,
-        metadata: { fromFlowId: id },
+        metadata: { fromFlowId: id, ...flowScopeAudit(copy) },
       });
-      return reply.status(201).send({ flow: serializeAutomationFlowDetail(copy) });
+      return reply.status(201).send({ flow: serializeFor(flowAccess)(copy) });
     },
   );
 
@@ -382,7 +567,7 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
     { preHandler: requirePermission(deps, "automation.manage") },
     async (request) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-      const flow = await findFlowOr404(id, request.user.organizationId);
+      const { flow } = await findWritableFlow(id, request.user);
       // ANTES do delete, sempre: as execuções somem junto com o fluxo
       // (`onDelete: Cascade`) e a sessão de IA que uma delas abriu fica com
       // `automationExecutionId` nulo (`SetNull`) — indistinguível de uma
@@ -400,7 +585,7 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
         action: "automation_flow.deleted",
         entityType: "AutomationFlow",
         entityId: id,
-        metadata: { stoppedExecutions },
+        metadata: { stoppedExecutions, name: flow.name, ...flowScopeAudit(flow) },
       });
       return { ok: true, stoppedExecutions };
     },
@@ -410,12 +595,26 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
    * Histórico de execução (seção 28)
    * ------------------------------------------------------------------ */
 
+  /**
+   * O histórico passa por DOIS recortes. O da conversa (`conversationScope`,
+   * como sempre): ninguém vê execução de conversa que não enxerga. E o do
+   * FLUXO: a lista geral mostra só as execuções dos fluxos que a pessoa
+   * enxergaria, senão o Histórico viraria a porta dos fundos da mesma
+   * configuração que a aba Fluxos passou a esconder.
+   *
+   * A exceção é a pergunta sobre UMA conversa (`conversationId`): ali a
+   * pessoa já enxerga a conversa, e esconder que houve automação nela faria
+   * a conversa parecer ter respondido sozinha. Então a execução aparece,
+   * mas redigida (`flowHidden`): sem o nome do fluxo, sem o registro por
+   * bloco e sem o contexto, que são a configuração de outra área.
+   */
   app.get(
     "/automation-executions",
     { preHandler: requirePermission(deps, "automation.view_history") },
     async (request) => {
       const query = executionListQuerySchema.parse(request.query);
       const access = await loadConversationAccess(deps.prisma, request.user);
+      const flowAccess: AutomationConfigAccess = { instanceIds: access.instanceIds, departmentIds: access.departmentIds };
       const executions = await deps.prisma.automationExecution.findMany({
         where: {
           organizationId: request.user.organizationId,
@@ -423,12 +622,19 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
           ...(query.conversationId ? { conversationId: query.conversationId } : {}),
           ...(query.status ? { status: query.status } : {}),
           conversation: { is: conversationScope(access) },
+          ...(query.conversationId ? {} : { flow: { is: automationConfigScope(flowAccess) } }),
         },
-        include: { flow: { select: { name: true } }, conversation: { select: { title: true, customTitle: true } } },
+        include: executionInclude,
         orderBy: { startedAt: "desc" },
         take: query.limit,
       });
-      return { executions: executions.map(serializeAutomationExecutionSummary) };
+      return {
+        executions: executions.map((execution) =>
+          serializeAutomationExecutionSummary(execution, {
+            flowHidden: !canSeeAutomationConfig(flowAccess, execution.flow),
+          }),
+        ),
+      };
     },
   );
 
@@ -440,14 +646,14 @@ export async function automationRoutes(app: FastifyInstance, deps: AppDeps): Pro
       const access = await loadConversationAccess(deps.prisma, request.user);
       const execution = await deps.prisma.automationExecution.findFirst({
         where: { id, organizationId: request.user.organizationId, conversation: { is: conversationScope(access) } },
-        include: {
-          flow: { select: { name: true } },
-          conversation: { select: { title: true, customTitle: true } },
-          logs: { orderBy: { at: "asc" } },
-        },
+        include: { ...executionInclude, logs: { orderBy: { at: "asc" } } },
       });
       if (!execution) throw new NotFoundError("Execução de automação");
-      return { execution: serializeAutomationExecutionDetail(execution) };
+      const flowHidden = !canSeeAutomationConfig(
+        { instanceIds: access.instanceIds, departmentIds: access.departmentIds },
+        execution.flow,
+      );
+      return { execution: serializeAutomationExecutionDetail(execution, { flowHidden }) };
     },
   );
 }

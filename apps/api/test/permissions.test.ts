@@ -259,6 +259,8 @@ describe("padrões de fábrica (Usuário / Supervisor / Gerente)", () => {
     ["attendance_settings.manage", false, true, true],
     // Automações
     ["automation.manage", false, true, true],
+    // Fluxo e automação de IA GERAIS afetam todo mundo: Gerente para cima.
+    ["automation.manage_general", false, false, true],
     ["automation.view_history", false, true, true],
     // Ligações
     ["call.answer", true, true, true],
@@ -280,11 +282,11 @@ describe("padrões de fábrica (Usuário / Supervisor / Gerente)", () => {
     expect(defaultPermission(action, "manager")).toBe(manager);
   });
 
-  it("o Gerente herda o padrão do Supervisor em tudo, menos no Quality", () => {
+  it("o Gerente herda o padrão do Supervisor em tudo, menos no Quality e na automação geral", () => {
     const divergentes = PERMISSION_ACTION_KEYS.filter(
       (action) => defaultPermission(action, "manager") !== defaultPermission(action, "supervisor"),
     );
-    expect(divergentes).toEqual(["quality.use"]);
+    expect(divergentes.sort()).toEqual(["automation.manage_general", "quality.use"]);
   });
 
   it("o catálogo não tem ação além das declaradas aqui", () => {

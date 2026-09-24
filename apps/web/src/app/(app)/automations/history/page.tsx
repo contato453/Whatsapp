@@ -133,7 +133,14 @@ export default function AutomationHistoryPage() {
               </div>
             )}
 
-            <div>
+            {detail.flowHidden && (
+              <p className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
+                Esta conversa passou por uma automação de outro departamento ou de um número que você não atende.
+                O nome, os passos e as respostas ficam com a área responsável.
+              </p>
+            )}
+
+            <div className={detail.flowHidden ? "hidden" : ""}>
               <p className="mb-1 text-xs uppercase text-slate-400">Caminho executado</p>
               <ol className="space-y-1.5 border-l border-slate-200 pl-3">
                 {detail.logs.map((log) => (
