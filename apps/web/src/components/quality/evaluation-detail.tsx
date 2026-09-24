@@ -102,7 +102,7 @@ export function EvaluationDetail({
           >
             {formatScore(evaluation.overallScore)}
           </span>
-          <Button variant="ghost" className="print:hidden" onClick={alternarDescarte} disabled={trabalhando}>
+          <Button variant="ghost" onClick={alternarDescarte} disabled={trabalhando}>
             {evaluation.discardedAt ? <Undo2 className="h-4 w-4" /> : <Trash2 className="h-4 w-4" />}
             {evaluation.discardedAt ? "Restaurar" : "Descartar"}
           </Button>
@@ -179,19 +179,7 @@ export function EvaluationDetail({
 
       {itemId ? <Transcricoes runId={runId} itemId={itemId} /> : null}
 
-      {/* NO PAPEL o comentário vira TEXTO, e o editor não vai junto. Campo de
-          digitação impresso sai como caixa vazia, e o que o administrador
-          escreveu precisa aparecer no relatório: é a única linha dele num
-          documento que o resto é da IA. Sem comentário gravado, nada é
-          impresso. */}
-      {evaluation.adminComment ? (
-        <div className="mt-4 hidden print:block">
-          <h4 className="text-xs font-semibold text-slate-700">Comentário do administrador</h4>
-          <p className="mt-1 whitespace-pre-wrap text-xs text-slate-700">{evaluation.adminComment}</p>
-        </div>
-      ) : null}
-
-      <div className="mt-4 print:hidden">
+      <div className="mt-4">
         <h4 className="flex items-center gap-1 text-xs font-semibold text-slate-700">
           <MessageSquare className="h-3.5 w-3.5" /> Comentário do administrador
         </h4>
@@ -278,11 +266,11 @@ function Transcricoes({ runId, itemId }: { runId: string; itemId: string }) {
   }, [aberto, transcricoes, runId, itemId]);
 
   return (
-    // `print:hidden`: a transcrição é o conteúdo BRUTO da conversa, não o
-    // julgamento. Num relatório de dez conversas viraria dezenas de páginas do
-    // que o administrador já lê no chat — a mesma decisão de quando o PDF era
-    // uma página à parte.
-    <div className="mt-4 rounded-lg border border-slate-200 print:hidden">
+    // A transcrição é o conteúdo BRUTO da conversa, não o julgamento, e por
+    // isso fica fora do PDF (ver `lib/quality-pdf.ts`): num relatório de dez
+    // conversas viraria dezenas de páginas do que o administrador já lê no
+    // chat. Aqui na tela ela continua, a um clique.
+    <div className="mt-4 rounded-lg border border-slate-200">
       <button
         type="button"
         onClick={() => setAberto((atual) => !atual)}
