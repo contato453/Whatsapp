@@ -4,10 +4,11 @@ import { useEffect, useState } from "react";
 import { Gauge } from "lucide-react";
 import { api, qualityApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import type { QualityRunDto, QualitySettingsDto, UserDirectoryDto } from "@/lib/types";
+import type { DepartmentDto, QualityRunDto, QualitySettingsDto, UserDirectoryDto } from "@/lib/types";
 import { Card, EmptyState, Spinner } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { AgentView } from "@/components/quality/agent-view";
+import { DepartmentView } from "@/components/quality/department-view";
 import { EvaluationList } from "@/components/quality/evaluation-list";
 import { NewAnalysis } from "@/components/quality/new-analysis";
 import { QualitySettingsCard } from "@/components/quality/quality-settings-card";
@@ -26,13 +27,14 @@ import { RunList } from "@/components/quality/run-list";
  * nem um pixel de nota, sob pena de o atendente descobrir que existe avaliação.
  */
 
-type Aba = "nova" | "analises" | "avaliacoes" | "atendentes" | "config";
+type Aba = "nova" | "analises" | "avaliacoes" | "atendentes" | "setores" | "config";
 
 const ABAS: Array<{ id: Aba; label: string }> = [
   { id: "nova", label: "Nova análise" },
   { id: "analises", label: "Análises" },
   { id: "avaliacoes", label: "Avaliações" },
   { id: "atendentes", label: "Por atendente" },
+  { id: "setores", label: "Por departamento" },
   { id: "config", label: "Configurações" },
 ];
 
@@ -43,6 +45,7 @@ export default function QualityPage() {
   const [aba, setAba] = useState<Aba>("nova");
   const [settings, setSettings] = useState<QualitySettingsDto | null>(null);
   const [users, setUsers] = useState<UserDirectoryDto[]>([]);
+  const [departments, setDepartments] = useState<DepartmentDto[]>([]);
   const [disponivel, setDisponivel] = useState<{ enabled: boolean; reason: string | null } | null>(null);
   // Muda quando um disparo novo acontece: é o que faz a lista de análises
   // recarregar sem a tela inteira remontar.
@@ -55,6 +58,10 @@ export default function QualityPage() {
     void api
       .get<{ users: UserDirectoryDto[] }>("/users")
       .then((data) => setUsers(data.users))
+      .catch(() => undefined);
+    void api
+      .get<{ departments: DepartmentDto[] }>("/departments")
+      .then((data) => setDepartments(data.departments))
       .catch(() => undefined);
   }, [podeUsar]);
 
@@ -132,8 +139,9 @@ export default function QualityPage() {
         <div className="mt-5 pb-10">
           {aba === "nova" ? <NewAnalysis settings={settings} onStarted={aoDisparar} /> : null}
           {aba === "analises" ? <RunList refreshToken={refreshToken} /> : null}
-          {aba === "avaliacoes" ? <EvaluationList users={users} /> : null}
+          {aba === "avaliacoes" ? <EvaluationList users={users} departments={departments} /> : null}
           {aba === "atendentes" ? <AgentView /> : null}
+          {aba === "setores" ? <DepartmentView /> : null}
           {aba === "config" ? (
             settings ? (
               <QualitySettingsCard settings={settings} onSaved={setSettings} />

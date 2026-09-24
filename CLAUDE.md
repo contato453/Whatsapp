@@ -240,6 +240,9 @@ snake_case e id `uuid`.
   atendente no período rende uma linha por pessoa). Métricas objetivas em coluna
   (`messagesReceived` é a exceção que confirma a regra: ela é da CONVERSA, não da pessoa —
   ver a seção 22), critérios e plano de ação em JSON, `subject` em texto validado contra o catálogo fechado do shared.
+  `departmentId`/`departmentName` guardam o departamento da conversa NO MOMENTO DA AVALIAÇÃO,
+  copiados: cruzar ao vivo faria transferência posterior reescrever o relatório do mês passado.
+  Nulo é estado válido ("Sem departamento"), e não dado faltando.
   Descarte não apaga a linha, e o comentário do administrador **nunca** altera a nota.
   **Não há tabela de transcrição aqui**: ela vive em `Message.metadata.audioTranscript`, a mesma
   do atendimento por IA. Ver a seção 22.
@@ -948,7 +951,8 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
 
 Rotas em `apps/web/src/app/(app)/`: `dashboard`, `inbox` (+ `inbox/[conversationId]`),
 `whatsapp`, `users` (+ `new`, `[id]`), `departments`, `reports`, `tags`, `quick-replies`,
-`quality` (chave `quality.use`, padrão admin e gerente, e só com a IA configurada), `settings`, `settings/ai` (+ `settings/ai/agents/[id]`, com `new`). Fora do grupo: `login`. **Os rótulos do menu não seguem os nomes das rotas**:
+`quality` (chave `quality.use`, padrão admin e gerente, e só com a IA configurada; abas Nova
+análise, Análises, Avaliações, Por atendente, Por departamento e Configurações), `settings`, `settings/ai` (+ `settings/ai/agents/[id]`, com `new`). Fora do grupo: `login`. **Os rótulos do menu não seguem os nomes das rotas**:
 `/inbox` aparece como "Conversas" e `/whatsapp` como "Conexões" — as rotas ficaram como
 estão para não quebrar favoritos nem os links dos cards do dashboard. Nos textos da
 interface, a tela se chama "Conversas" (ou "lista de conversas"); "Inbox" segue sendo o
@@ -2366,7 +2370,10 @@ um período, dispara, e a IA já configurada dá nota ao atendente, classifica o
 plano de ação. Transcreve o áudio num passo separado (reaproveitando a transcrição já guardada
 na mensagem), mascara CPF, CNPJ, telefone, e-mail, conta e chave Pix antes de enviar, mede
 tempo de primeira resposta, tempo médio e estouro do limite em minutos de expediente, calcula a
-cobertura e marca a avaliação como parcial quando parte da conversa não chegou legível. Execução
+cobertura e marca a avaliação como parcial quando parte da conversa não chegou legível. Lê também **por SETOR e por período**: a aba Por departamento soma as mesmas avaliações por
+departamento (copiado na avaliação, então transferir a conversa depois não muda o passado) e traz a
+linha do escritório inteiro, com as notas ao lado das métricas objetivas; e o disparo pode ser
+montado pelo setor, trazendo as conversas do período em que algum atendente respondeu. Execução
 e leitura exclusivas do administrador, com as rotas respondendo como se o módulo não existisse
 para os demais papéis.
 
@@ -3847,7 +3854,12 @@ GET  /quality/runs              GET /quality/runs/:id
 GET  /quality/runs/:id/items/:itemId/transcripts   (transcrições ÍNTEGRAS, sem máscara)
 GET  /quality/evaluations       (filtros: atendente, assunto, período, nota, descartadas)
 POST /quality/evaluations/:id/discard | /restore    PATCH .../comment
-GET  /quality/agents            (visão por atendente: média no tempo, assuntos, pontos repetidos)
+GET  /quality/agents            (visão por atendente: média no tempo, assuntos, pontos repetidos;
+                                 aceita departmentId, que CRUZA com o período)
+GET  /quality/departments       (leitura por SETOR + a linha do escritório inteiro: notas e as
+                                 métricas objetivas, pelo mesmo acumulador da visão por atendente)
+GET  /quality/candidates        (as conversas que ENTRARIAM numa análise do setor no período —
+                                 só lista, quem dispara continua sendo POST /quality/runs)
 ```
 
 A análise roda **assíncrona** (`void analyzer.run(...)` depois de a rota responder), com estado
@@ -3934,6 +3946,52 @@ tinha `print:hidden` no `layout.tsx`, o que vale para qualquer tela do sistema.
 
 **As transcrições ficam de fora** — são o conteúdo bruto da conversa, e num relatório de dez
 conversas virariam dezenas de páginas do que o administrador já lê no chat.
+
+### Por departamento, e o disparo por setor
+
+A pergunta do dono do escritório não é "como foi esta conversa", é **"como o CS foi em agosto"**.
+O módulo nasceu sem departamento em lugar nenhum: dava para ESCOLHER conversas do CS no seletor,
+mas depois a leitura não sabia que aquilo era CS, e não havia a linha do escritório.
+
+**O DEPARTAMENTO É COPIADO NA AVALIAÇÃO, nunca cruzado na leitura**
+(`QualityEvaluation.departmentId` + `departmentName`, migration
+`20260924020000_quality_evaluation_department`). Cruzar ao vivo com `Conversation.departmentId`
+faria a conversa do CS transferida para o Fiscal em outubro levar consigo a nota de setembro: o
+relatório do mês passado mudaria sozinho, sem ninguém mexer nele. É a mesma razão de `userName` e
+de `QualityRun.requestedByName` serem cópia. **Nulo é estado válido** ("Sem departamento"), e a
+avaliação anterior a esta entrega fica nula de propósito — ninguém sabe em que setor a conversa
+estava naquele dia, e chutar o de hoje é exatamente o erro que a cópia veio evitar.
+
+**AS DUAS LEITURAS SAEM DO MESMO ACUMULADOR** (`apps/api/src/lib/quality/fold.ts`, de onde
+`foldQualityAgents` mudou-se). A média do CS não pode discordar da média das pessoas que atendem
+no CS, e duas somas separadas divergiriam no primeiro ajuste que alguém esquecesse de repetir do
+outro lado — o histórico do Dashboard na seção 13 é o que acontece depois.
+
+**DUAS UNIDADES CONVIVEM NO AGREGADO, e confundi-las é o erro fácil.** A avaliação é por
+(conversa, atendente): dois atendentes na mesma conversa rendem DUAS linhas. Então o que é da
+PESSOA (nota, critérios, mensagens enviadas) soma **por avaliação**, e o que é da CONVERSA
+(desfecho, mensagens recebidas) soma **por conversa distinta**. Somar o desfecho por avaliação
+faria o painel dizer que o setor resolveu três conversas onde resolveu uma — a mesma armadilha que
+`messagesReceived` já documenta na avaliação. Pelo mesmo motivo **o total do escritório não é a
+soma das linhas**: ele é o acumulador rodado sobre tudo de uma vez, porque conversa e pessoa são
+contagens de DISTINTOS (quem atende no CS e no Fiscal é uma pessoa no total e duas nas linhas).
+
+**O tempo médio do setor é PONDERADO pelas respostas medidas**, não média de médias: uma conversa
+de uma resposta em 60 minutos ao lado de uma de nove respostas em 10 daria 35 na média simples e
+dá 15 ponderada, que é o que o cliente esperou. E **sem nenhuma medida o valor é NULO, nunca zero**
+— "ninguém respondeu" e "responderam na hora" são coisas opostas.
+
+**`GET /quality/candidates` é o disparo por setor, e o recorte dele não é "as conversas do
+setor"**: é as que têm **mensagem de um atendente no período**, que é a MESMA condição que o
+analisador aplica antes de avaliar (`no_agent_messages`). Sem ela, metade do teto seria gasta com
+conversa que o disparo iria pular, e a recusa apareceria só depois, na tela de análises. O
+`userId` dela filtra por **quem respondeu**, e não pelo responsável do card: a conversa que a
+pessoa atendeu cobrindo férias de outra é trabalho dela. **A rota só LISTA** — o botão "Buscar
+candidatas" PREENCHE a seleção e a pessoa vê os chips antes de disparar, pelo mesmo motivo que a
+prévia do anexo existe antes do envio: análise disparada não se desfaz, e o custo já foi pago.
+
+Nada disso encosta em `lib/access.ts`: as três rotas passam pelo mesmo `escopoDeConversa` de
+sempre, e o recorte por setor entra por cima.
 
 ### Sigilo
 

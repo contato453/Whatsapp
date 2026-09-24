@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { QUALITY_SUBJECTS } from "@azvchat/shared";
 import { qualityApi } from "@/lib/api";
-import type { QualityEvaluationDto, QualitySubject, UserDirectoryDto } from "@/lib/types";
+import type { DepartmentDto, QualityEvaluationDto, QualitySubject, UserDirectoryDto } from "@/lib/types";
 import { Card, EmptyState, Input, Spinner } from "@/components/ui";
 import { EvaluationDetail } from "./evaluation-detail";
 import { QUALITY_SUBJECT_LABELS, dateInputValue } from "./quality-ui";
@@ -13,8 +13,15 @@ import { QUALITY_SUBJECT_LABELS, dateInputValue } from "./quality-ui";
  * nota. Os filtros vão para a API, que é quem recorta — filtrar no navegador
  * daria uma lista curta sem explicação quando o teto de linhas fosse atingido.
  */
-export function EvaluationList({ users }: { users: UserDirectoryDto[] }) {
+export function EvaluationList({
+  users,
+  departments,
+}: {
+  users: UserDirectoryDto[];
+  departments: DepartmentDto[];
+}) {
   const [userId, setUserId] = useState("");
+  const [departmentId, setDepartmentId] = useState("");
   const [subject, setSubject] = useState<QualitySubject | "">("");
   const [de, setDe] = useState(() => dateInputValue(new Date(Date.now() - 29 * 86_400_000)));
   const [ate, setAte] = useState(() => dateInputValue(new Date()));
@@ -28,6 +35,7 @@ export function EvaluationList({ users }: { users: UserDirectoryDto[] }) {
     qualityApi
       .evaluations({
         userId: userId || undefined,
+        departmentId: departmentId || undefined,
         subject: subject || undefined,
         from: new Date(`${de}T00:00:00`).toISOString(),
         to: new Date(`${ate}T23:59:59`).toISOString(),
@@ -37,7 +45,7 @@ export function EvaluationList({ users }: { users: UserDirectoryDto[] }) {
       })
       .then(setEvaluations)
       .catch(() => setEvaluations([]));
-  }, [userId, subject, de, ate, notaMinima, notaMaxima, incluirDescartadas]);
+  }, [userId, departmentId, subject, de, ate, notaMinima, notaMaxima, incluirDescartadas]);
 
   useEffect(carregar, [carregar]);
 
@@ -64,6 +72,24 @@ export function EvaluationList({ users }: { users: UserDirectoryDto[] }) {
                   {user.name}
                 </option>
               ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-slate-600">Departamento</span>
+            <select
+              value={departmentId}
+              onChange={(event) => setDepartmentId(event.target.value)}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            >
+              <option value="">Todos</option>
+              {departments.map((department) => (
+                <option key={department.id} value={department.id}>
+                  {department.name}
+                </option>
+              ))}
+              {/* Recorte de verdade, e não a ausência do filtro: a conversa que
+                  o número não classificou é atendimento igual. */}
+              <option value="none">Sem departamento</option>
             </select>
           </label>
           <label className="block">

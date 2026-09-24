@@ -386,7 +386,16 @@ export class QualityAnalyzer {
   }): Promise<void> {
     const conversation = await this.deps.prisma.conversation.findUnique({
       where: { id: input.item.conversationId },
-      select: { type: true, status: true, departmentId: true },
+      // O NOME do departamento vem junto para ser COPIADO na avaliação: o
+      // painel por setor precisa continuar legível depois que o departamento
+      // sair do cadastro, do mesmo jeito que `userName` cobre o atendente
+      // removido.
+      select: {
+        type: true,
+        status: true,
+        departmentId: true,
+        department: { select: { name: true } },
+      },
     });
     const history = await this.deps.prisma.conversationAssignmentHistory.findMany({
       where: {
@@ -514,6 +523,10 @@ export class QualityAnalyzer {
           limitBreaches: metrics.limitBreaches,
           messagesSent: metrics.messagesSent,
           messagesReceived: metrics.messagesReceived,
+          // Copiado agora, e não cruzado na leitura: transferência posterior
+          // não pode reescrever de que setor foi o atendimento avaliado.
+          departmentId: conversation?.departmentId ?? null,
+          departmentName: conversation?.department?.name ?? null,
           conversationOutcome: outcome,
         },
       });

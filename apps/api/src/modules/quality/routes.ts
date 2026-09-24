@@ -3,25 +3,24 @@ import {
   AI_DEFAULT_MODEL,
   QUALITY_SETTINGS_LIMITS,
   QUALITY_SUBJECTS,
-  isQualitySubject,
   readAiAttachmentInsightOf,
-  type QualityAgentSummaryDto,
   type QualityAvailabilityDto,
-  type QualityCriterionKey,
-  type QualityEvaluationDto,
   type QualityRunDetailDto,
-  type QualitySubject,
   type QualityTranscriptDto,
-  QUALITY_CRITERIA_KEYS,
 } from "@azvchat/shared";
 import { z } from "zod";
 import type { Prisma } from "@azvchat/database";
 import { conversationScope, loadConversationAccess } from "../../lib/access.js";
+import { loadAttendanceSettings } from "../../lib/attendance-settings.js";
+import { conversationInclude } from "../../lib/conversation-events.js";
+import { scanOverdueConversations } from "../../lib/overdue.js";
+import { resolveConversationPersonNames } from "../../lib/person-profile.js";
 import { authenticate } from "../../lib/auth.js";
 import { loadPermissions } from "../../lib/permissions.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
 import { loadQualitySettings, serializeQualitySettings } from "../../lib/quality/settings.js";
 import {
+  serializeConversation,
   serializeQualityEvaluation,
   serializeQualityRun,
   serializeQualityRunItem,
@@ -31,8 +30,14 @@ import {
   type QualityConversationRef,
   resolveQualityTitles,
 } from "../../lib/quality/title.js";
+import { foldQualityAgents, foldQualityDepartments } from "../../lib/quality/fold.js";
 import { QualityAnalyzer } from "../../services/quality/analyzer.js";
 import type { AppDeps } from "../../types.js";
+
+// Reexportado porque o fold saiu daqui para `lib/quality/fold.ts` quando a
+// leitura por setor passou a somar as MESMAS avaliações: quem já o
+// importava deste módulo continua funcionando.
+export { foldQualityAgents, foldQualityDepartments };
 
 /**
  * MÓDULO QUALITY — rotas.
@@ -85,6 +90,20 @@ async function escopoDeConversa(
 }
 
 const uuid = z.string().uuid();
+
+/**
+ * Lista de ids: parâmetro REPETIDO ou separado por vírgula, como na Inbox e no
+ * Dashboard. Vazia significa "todos", nunca "nenhum".
+ */
+const listaDeUuid = z
+  .union([uuid, z.array(uuid), z.string()])
+  .optional()
+  .transform((value): string[] => {
+    if (!value) return [];
+    const bruto = Array.isArray(value) ? value : value.split(",");
+    return [...new Set(bruto.map((item) => item.trim()).filter(Boolean))];
+  })
+  .pipe(z.array(uuid));
 
 export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
   const guarda = guardaQuality(deps);
@@ -415,6 +434,12 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
     const query = z
       .object({
         userId: uuid.optional(),
+        /**
+         * `none` é "sem departamento", como no Dashboard e na Inbox — e não a
+         * ausência do filtro. O recorte é sobre o departamento COPIADO na
+         * avaliação, nunca o de agora: ver `QualityEvaluation.departmentId`.
+         */
+        departmentId: z.union([uuid, z.literal("none")]).optional(),
         subject: z.enum(QUALITY_SUBJECTS).optional(),
         from: z.coerce.date().optional(),
         to: z.coerce.date().optional(),
@@ -430,6 +455,7 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
         organizationId: request.user.organizationId,
         conversation: await escopoDeConversa(deps, request),
         ...(query.userId ? { userId: query.userId } : {}),
+        ...departamentoWhere(query.departmentId),
         ...(query.subject ? { subject: query.subject } : {}),
         // O recorte de data é sobre o PERÍODO AVALIADO (o do disparo), e não
         // sobre quando a IA leu: perguntar "como foi o atendimento em agosto"
@@ -602,7 +628,129 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
    * divergiriam por arredondamento, e "o total não bate" é como um painel perde
    * a confiança de quem o lê.
    */
-  app.get("/quality/agents", { preHandler: guarda }, async (request) => {
+  /**
+   * CANDIDATAS DO PERÍODO — o disparo por setor, sem marcar conversa a conversa.
+   *
+   * A pergunta do dono do escritório é "como o CS foi em agosto", e montá-la
+   * na mão significava filtrar o seletor e marcar 20 linhas. Aqui ele escolhe
+   * setor e período, e a rota devolve as conversas que REALMENTE entrariam.
+   *
+   * O recorte não é "as conversas do setor": é **as que têm mensagem de um
+   * atendente no período**, que é a mesma condição que o analisador aplica
+   * antes de avaliar (`no_agent_messages`). Sem isso, metade do teto seria
+   * gasto com conversa que o disparo iria pular — o custo é pago na seleção, e
+   * a recusa apareceria só depois, na tela de análises.
+   *
+   * `userId` filtra por **quem respondeu**, e não por quem é o responsável do
+   * card: a avaliação é sobre o atendimento prestado, e a conversa em que a
+   * Damiana escreveu durante as férias de outra pessoa é trabalho dela.
+   *
+   * A rota só LISTA. Quem dispara continua sendo `POST /quality/runs`, com os
+   * ids que a tela mostrou — a pessoa vê o que vai ser analisado antes de
+   * gastar, do mesmo jeito que a prévia do anexo existe antes do envio.
+   */
+  app.get("/quality/candidates", { preHandler: guarda }, async (request) => {
+    const query = z
+      .object({
+        from: z.coerce.date(),
+        to: z.coerce.date(),
+        departmentId: z.union([uuid, z.literal("none")]).optional(),
+        instanceId: listaDeUuid,
+        /** Quem RESPONDEU no período, não o responsável do card. */
+        userId: uuid.optional(),
+        onlyOverdue: z.coerce.boolean().optional(),
+        limit: z.coerce.number().int().min(1).max(QUALITY_SETTINGS_LIMITS.maxConversationsPerRun.max).optional(),
+      })
+      .parse(request.query);
+
+    if (query.to.getTime() <= query.from.getTime()) {
+      throw new AppError("O fim do período precisa ser depois do início.", 400, "validation_error");
+    }
+
+    const settings = await loadQualitySettings(deps.prisma, request.user.organizationId);
+    const limit = query.limit ?? settings.maxConversationsPerRun;
+
+    const filtros: Prisma.ConversationWhereInput[] = [
+      await escopoDeConversa(deps, request),
+      // Arquivada fica de fora, como em toda contagem e listagem da casa.
+      { archivedAt: null },
+      ...(query.departmentId
+        ? [{ departmentId: query.departmentId === "none" ? null : query.departmentId }]
+        : []),
+      ...(query.instanceId.length > 0 ? [{ whatsappInstanceId: { in: query.instanceId } }] : []),
+      // A MESMA condição do analisador: mensagem de atendente, sem ligação
+      // (registro de chamada não é resposta escrita) e sem apagada.
+      {
+        messages: {
+          some: {
+            timestamp: { gte: query.from, lte: query.to },
+            direction: "outbound",
+            deletedAt: null,
+            type: { not: "call" },
+            ...(query.userId ? { sentByUserId: query.userId } : { sentByUserId: { not: null } }),
+          },
+        },
+      },
+    ];
+
+    if (query.onlyOverdue) {
+      // A MESMA conta do card "Atrasados agora" — nunca uma régua nova.
+      const atendimento = await loadAttendanceSettings(deps.prisma, request.user.organizationId);
+      const atrasadas = await scanOverdueConversations(
+        deps.prisma,
+        request.user.organizationId,
+        { organizationId: request.user.organizationId, AND: filtros },
+        atendimento,
+        new Date(),
+      );
+      filtros.push({ id: { in: atrasadas.ids } });
+    }
+
+    const where: Prisma.ConversationWhereInput = {
+      organizationId: request.user.organizationId,
+      AND: filtros,
+    };
+
+    const [total, conversations] = await Promise.all([
+      deps.prisma.conversation.count({ where }),
+      deps.prisma.conversation.findMany({
+        where,
+        orderBy: { lastMessageAt: "desc" },
+        take: limit,
+        include: conversationInclude,
+      }),
+    ]);
+
+    const nomes = await resolveConversationPersonNames(
+      deps.prisma,
+      request.user.organizationId,
+      conversations,
+    );
+    return {
+      conversations: conversations.map((conversation) =>
+        serializeConversation(conversation, nomes.get(conversation.id) ?? null),
+      ),
+      total,
+      /** Quantas ficaram de fora do teto: a tela diz o número, nunca esconde. */
+      omitted: Math.max(0, total - conversations.length),
+      limit,
+    };
+  });
+
+  /**
+   * A LEITURA POR DEPARTAMENTO, mais a linha do escritório inteiro.
+   *
+   * Responde a pergunta que a visão por atendente não responde: "como o CS foi
+   * em agosto". Soma as MESMAS avaliações da aba por atendente, pelo mesmo
+   * acumulador (`lib/quality/fold.ts`) — duas somas separadas fariam a média
+   * do setor discordar da média das pessoas que atendem nele, e é esse tipo de
+   * desencontro que faz a equipe parar de confiar no painel.
+   *
+   * O recorte usa o departamento COPIADO na avaliação: conversa transferida
+   * depois não muda o passado. Descartada continua fora, pelo mesmo motivo da
+   * visão por atendente — ela foi descartada justamente para não pesar.
+   */
+  app.get("/quality/departments", { preHandler: guarda }, async (request) => {
     const query = z
       .object({ from: z.coerce.date().optional(), to: z.coerce.date().optional() })
       .parse(request.query);
@@ -612,6 +760,59 @@ export async function qualityRoutes(app: FastifyInstance, deps: AppDeps): Promis
         organizationId: request.user.organizationId,
         conversation: await escopoDeConversa(deps, request),
         discardedAt: null,
+        ...(query.from || query.to
+          ? {
+              run: {
+                is: {
+                  ...(query.from ? { periodTo: { gte: query.from } } : {}),
+                  ...(query.to ? { periodFrom: { lte: query.to } } : {}),
+                },
+              },
+            }
+          : {}),
+      },
+      orderBy: { createdAt: "asc" },
+      include: {
+        conversation: { select: QUALITY_CONVERSATION_SELECT },
+        run: { select: { periodFrom: true, periodTo: true } },
+      },
+    });
+
+    // O título não entra no agregado, mas o serializer o pede: resolver em
+    // lote é o mesmo custo de sempre (uma consulta), e passar nulo aqui
+    // obrigaria a um segundo caminho de serialização só para esta rota.
+    const titulos = await resolveQualityTitles(
+      deps.prisma,
+      request.user.organizationId,
+      evaluations.map((row) => row.conversation),
+    );
+    return foldQualityDepartments(
+      evaluations.map((row) =>
+        serializeQualityEvaluation(
+          row,
+          row.conversation ? (titulos.get(row.conversation.id) ?? null) : null,
+          row.run,
+        ),
+      ),
+    );
+  });
+
+  app.get("/quality/agents", { preHandler: guarda }, async (request) => {
+    const query = z
+      .object({
+        from: z.coerce.date().optional(),
+        to: z.coerce.date().optional(),
+        // Cruza com o período, como no Dashboard: "a Ana DENTRO do CS".
+        departmentId: z.union([uuid, z.literal("none")]).optional(),
+      })
+      .parse(request.query);
+
+    const evaluations = await deps.prisma.qualityEvaluation.findMany({
+      where: {
+        organizationId: request.user.organizationId,
+        conversation: await escopoDeConversa(deps, request),
+        discardedAt: null,
+        ...departamentoWhere(query.departmentId),
         // Mesmo recorte por PERÍODO AVALIADO da lista de avaliações.
         ...(query.from || query.to
           ? {
@@ -658,94 +859,12 @@ function readDurationSeconds(metadata: unknown): number | null {
 }
 
 /**
- * Dobra as avaliações em uma linha por atendente. Função pura, exportada para o
- * teste: é ela que decide a média que o dono do escritório lê.
+ * O `where` do filtro por departamento. `none` é "sem departamento" — um
+ * recorte de verdade, e não a ausência do filtro: a conversa que o número não
+ * classificou é atendimento igual, e some-la do painel esconderia justamente a
+ * que ninguém está olhando.
  */
-export function foldQualityAgents(evaluations: QualityEvaluationDto[]): QualityAgentSummaryDto[] {
-  interface Bucket {
-    userId: string | null;
-    userName: string;
-    total: number;
-    sum: number;
-    byCriterion: Map<QualityCriterionKey, { sum: number; total: number }>;
-    byMonth: Map<string, { sum: number; total: number }>;
-    subjects: Map<QualitySubject, number>;
-    improvements: Map<string, number>;
-  }
-  const buckets = new Map<string, Bucket>();
-
-  for (const evaluation of evaluations) {
-    // Atendente removido do cadastro (userId nulo) é agrupado pelo NOME copiado:
-    // apagar a pessoa não pode apagar o histórico que o administrador guarda.
-    const key = evaluation.userId ?? `nome:${evaluation.userName}`;
-    let bucket = buckets.get(key);
-    if (!bucket) {
-      bucket = {
-        userId: evaluation.userId,
-        userName: evaluation.userName,
-        total: 0,
-        sum: 0,
-        byCriterion: new Map(),
-        byMonth: new Map(),
-        subjects: new Map(),
-        improvements: new Map(),
-      };
-      buckets.set(key, bucket);
-    }
-    bucket.total += 1;
-    bucket.sum += evaluation.overallScore;
-
-    for (const criterion of evaluation.criteria) {
-      const current = bucket.byCriterion.get(criterion.key) ?? { sum: 0, total: 0 };
-      current.sum += criterion.score;
-      current.total += 1;
-      bucket.byCriterion.set(criterion.key, current);
-    }
-
-    // O mês é o do FIM DO PERÍODO AVALIADO, não o da análise: ver o comentário
-    // de `periodFrom`/`periodTo` em `QualityEvaluationDto`.
-    const month = evaluation.periodTo.slice(0, 7);
-    const monthly = bucket.byMonth.get(month) ?? { sum: 0, total: 0 };
-    monthly.sum += evaluation.overallScore;
-    monthly.total += 1;
-    bucket.byMonth.set(month, monthly);
-
-    if (isQualitySubject(evaluation.subject)) {
-      bucket.subjects.set(evaluation.subject, (bucket.subjects.get(evaluation.subject) ?? 0) + 1);
-    }
-
-    for (const improvement of evaluation.actionPlan.improvements) {
-      // Agrupa por ponto normalizado (minúsculas, sem pontuação final): a IA
-      // escreve a mesma recomendação com palavras ligeiramente diferentes, e sem
-      // normalizar nada se repetiria o suficiente para virar "mais frequente".
-      const normalized = improvement.point.trim().toLowerCase().replace(/[.!?]+$/, "");
-      if (!normalized) continue;
-      bucket.improvements.set(normalized, (bucket.improvements.get(normalized) ?? 0) + 1);
-    }
-  }
-
-  const round = (value: number): number => Math.round(value * 10) / 10;
-
-  return [...buckets.values()]
-    .map((bucket): QualityAgentSummaryDto => ({
-      userId: bucket.userId,
-      userName: bucket.userName,
-      evaluations: bucket.total,
-      averageScore: round(bucket.sum / bucket.total),
-      averageByCriterion: QUALITY_CRITERIA_KEYS.flatMap((key) => {
-        const current = bucket.byCriterion.get(key);
-        return current && current.total > 0 ? [{ key, score: round(current.sum / current.total) }] : [];
-      }),
-      timeline: [...bucket.byMonth.entries()]
-        .sort(([a], [b]) => (a < b ? -1 : 1))
-        .map(([month, value]) => ({ month, score: round(value.sum / value.total), evaluations: value.total })),
-      subjects: [...bucket.subjects.entries()]
-        .map(([subject, total]) => ({ subject, total }))
-        .sort((a, b) => b.total - a.total),
-      recurringImprovements: [...bucket.improvements.entries()]
-        .map(([point, total]) => ({ point, total }))
-        .sort((a, b) => b.total - a.total)
-        .slice(0, 8),
-    }))
-    .sort((a, b) => a.userName.localeCompare(b.userName, "pt-BR"));
+function departamentoWhere(departmentId: string | undefined): { departmentId?: string | null } {
+  if (!departmentId) return {};
+  return { departmentId: departmentId === "none" ? null : departmentId };
 }

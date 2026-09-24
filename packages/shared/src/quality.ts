@@ -339,6 +339,14 @@ export interface QualityEvaluationDto {
   conversationTitle: string | null;
   userId: string | null;
   userName: string;
+  /**
+   * Departamento da conversa no momento da avaliação, COPIADO. Nulo é estado
+   * válido ("Sem departamento"), não dado faltando — e avaliação anterior a
+   * esta entrega também vem nula, porque ninguém sabe em que setor a conversa
+   * estava naquele dia e chutar o de hoje é o erro que a cópia veio evitar.
+   */
+  departmentId: string | null;
+  departmentName: string | null;
   overallScore: number;
   criteria: QualityCriterionScoreDto[];
   subject: QualitySubject;
@@ -421,6 +429,74 @@ export interface QualityAgentSummaryDto {
   /** Pontos a melhorar que mais se repetem nos planos de ação. */
   recurringImprovements: Array<{ point: string; total: number }>;
 }
+
+/**
+ * O bloco agregado de um recorte: um departamento, ou o escritório inteiro.
+ *
+ * DUAS UNIDADES CONVIVEM AQUI, e confundi-las é o erro fácil. A avaliação é
+ * por (conversa, atendente): dois atendentes na mesma conversa rendem DUAS
+ * linhas. Então o que é da PESSOA (nota, critérios, mensagens enviadas) soma
+ * por avaliação, e o que é da CONVERSA (desfecho, mensagens recebidas) soma
+ * por conversa DISTINTA — somar por avaliação contaria a mesma conversa
+ * resolvida três vezes, e o painel diria mais conversas do que existem.
+ */
+export interface QualityAggregateDto {
+  /** Linhas de avaliação: (conversa, atendente). */
+  evaluations: number;
+  /** Conversas distintas por trás delas. */
+  conversations: number;
+  /** Pessoas distintas avaliadas no recorte. */
+  agents: number;
+  averageScore: number;
+  averageByCriterion: Array<{ key: QualityCriterionKey; score: number }>;
+  /** Média por mês civil do PERÍODO AVALIADO, do mais antigo para o mais novo. */
+  timeline: Array<{ month: string; score: number; evaluations: number }>;
+  subjects: Array<{ subject: QualitySubject; total: number }>;
+  recurringImprovements: Array<{ point: string; total: number }>;
+  /** Avaliações marcadas como parciais (cobertura abaixo do mínimo). */
+  partialEvaluations: number;
+  metrics: QualityAggregateMetricsDto;
+}
+
+/**
+ * As métricas objetivas do recorte — medidas sem IA, em minutos de
+ * EXPEDIENTE, pela mesma régua do card "Atrasados agora". Elas é que separam
+ * "a IA achou ruim" de "demoraram 48 minutos em média".
+ */
+export interface QualityAggregateMetricsDto {
+  /** Média do tempo até a primeira resposta, só sobre quem teve resposta. */
+  firstResponseMinutes: number | null;
+  /** Em quantas avaliações houve primeira resposta para medir. */
+  firstResponseMeasured: number;
+  /**
+   * Tempo médio de resposta, PONDERADO pelo número de respostas medidas.
+   * Média de médias trataria uma conversa de uma resposta como igual a uma de
+   * quarenta, e o número do setor passaria a depender de quantas conversas
+   * curtas entraram na amostra.
+   */
+  avgResponseMinutes: number | null;
+  responsesMeasured: number;
+  /** Soma dos estouros do limite de resposta. */
+  limitBreaches: number;
+  /** Em quantas avaliações houve ao menos um estouro. */
+  breachedEvaluations: number;
+  /** Enviadas pela equipe: é da PESSOA, então soma por avaliação. */
+  messagesSent: number;
+  /** Recebidas do cliente: é da CONVERSA, então soma por conversa distinta. */
+  messagesReceived: number;
+  /** Desfecho, contado por conversa distinta. */
+  outcomes: Array<{ outcome: QualityOutcome; total: number }>;
+}
+
+/** Um departamento na leitura por setor. `departmentId` nulo = sem departamento. */
+export interface QualityDepartmentSummaryDto extends QualityAggregateDto {
+  departmentId: string | null;
+  /** Rótulo já resolvido, incluindo o "Sem departamento" do nulo. */
+  departmentName: string;
+}
+
+/** Rótulo do recorte sem departamento, para a tela e a API não divergirem. */
+export const QUALITY_NO_DEPARTMENT_LABEL = "Sem departamento";
 
 /** Estado de um disparo, em tempo real (evento `quality:run`). */
 export interface QualityRunPayload {

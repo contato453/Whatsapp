@@ -1031,10 +1031,13 @@ export interface CrmReportDto {
 export type {
   QualityActionPlanDto,
   QualityAgentSummaryDto,
+  QualityAggregateDto,
+  QualityAggregateMetricsDto,
   QualityAvailabilityDto,
   QualityConfidence,
   QualityCriterionKey,
   QualityCriterionScoreDto,
+  QualityDepartmentSummaryDto,
   QualityEvaluationDto,
   QualityFailureReason,
   QualityImprovementDto,

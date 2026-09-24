@@ -20,6 +20,7 @@ import { MemoryPrisma } from "./helpers/memory-prisma.js";
 const ORG = "org-1";
 const CONVERSATION = "11111111-1111-4111-8111-111111111111";
 const ANA = "22222222-2222-4222-8222-222222222222";
+const DEPARTAMENTO = "33333333-3333-4333-8333-333333333333";
 
 interface ProviderCalls {
   chats: AiChatRequest[];
@@ -96,7 +97,10 @@ async function buildAnalyzer(db: MemoryPrisma) {
   });
 }
 
-function seedRun(db: MemoryPrisma, options: { audioTranscript?: unknown; withAgentMessage?: boolean } = {}) {
+function seedRun(
+  db: MemoryPrisma,
+  options: { audioTranscript?: unknown; withAgentMessage?: boolean; departmentId?: string } = {},
+) {
   const inicio = new Date("2026-09-02T13:00:00Z");
   db.seed("organization", { id: ORG, name: "Azevedo" });
   db.seed("user", { id: ANA, organizationId: ORG, name: "Ana", role: "agent", status: "active" });
@@ -105,7 +109,7 @@ function seedRun(db: MemoryPrisma, options: { audioTranscript?: unknown; withAge
     organizationId: ORG,
     type: "individual",
     status: "open",
-    departmentId: null,
+    departmentId: options.departmentId ?? null,
     externalChatId: "5511999990000@s.whatsapp.net",
     title: "Cliente teste",
     customTitle: null,
@@ -349,6 +353,32 @@ describe("motor do Quality", { timeout: 20_000 }, () => {
     // E o material continua mostrando que a ligação existiu.
     const material = calls.chats[0]?.messages.find((message) => message.role === "user");
     expect(typeof material?.content === "string" ? material.content : "").toContain("[call]");
+  });
+
+  it("copia o departamento da conversa na avaliação, em vez de cruzar na leitura", async () => {
+    // A cópia é o que impede a transferência de amanhã de reescrever o
+    // relatório do mês passado: sem ela, a conversa movida do CS para o Fiscal
+    // levaria a nota de agosto junto.
+    db.seed("department", { id: DEPARTAMENTO, organizationId: ORG, name: "CS" });
+    const runId = seedRun(db, { departmentId: DEPARTAMENTO });
+    const analyzer = await buildAnalyzer(db);
+    await analyzer.run(runId);
+
+    const evaluation = db.rows("qualityEvaluation")[0];
+    expect(evaluation?.departmentId).toBe(DEPARTAMENTO);
+    // O NOME também é cópia: departamento excluído do cadastro não pode apagar
+    // o histórico de avaliação dele.
+    expect(evaluation?.departmentName).toBe("CS");
+  });
+
+  it("conversa sem departamento grava nulo, que é estado válido e continua contando", async () => {
+    const runId = seedRun(db);
+    const analyzer = await buildAnalyzer(db);
+    await analyzer.run(runId);
+
+    const evaluation = db.rows("qualityEvaluation")[0];
+    expect(evaluation?.departmentId).toBeNull();
+    expect(evaluation?.departmentName).toBeNull();
   });
 
   it("registra modelo, tamanho do material e custo estimado da análise", async () => {

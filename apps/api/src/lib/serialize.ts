@@ -832,6 +832,8 @@ export function serializeQualityEvaluation(
     conversationTitle,
     userId: evaluation.userId,
     userName: evaluation.userName,
+    departmentId: evaluation.departmentId,
+    departmentName: evaluation.departmentName,
     overallScore: evaluation.overallScore,
     criteria: readQualityCriteria(evaluation.criteria),
     // Assunto que saiu do catálogo depois de gravado cai em "outro" em vez de
