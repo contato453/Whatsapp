@@ -4,8 +4,6 @@ import { useCallback, useEffect, useState } from "react";
 import { Pencil, Plus, Trash2, Workflow } from "lucide-react";
 import {
   AI_AGENT_STATUS_LABELS,
-  AI_AUTOMATION_CONVERSATION_TYPES,
-  AI_AUTOMATION_CONVERSATION_TYPE_LABELS,
   AI_AUTOMATION_NO_DEPARTMENT,
   type AiAgentSummaryDto,
   type AiAutomationDto,
@@ -31,7 +29,6 @@ const EMPTY: AiAutomationInput = {
   whatsappInstanceId: null,
   departmentId: null,
   onlyWithoutDepartment: false,
-  conversationType: "any",
   onlyUnassigned: true,
   onlyNewConversations: false,
   resolvedTagId: null,
@@ -84,7 +81,6 @@ export function AutomationsPanel() {
             whatsappInstanceId: target.whatsappInstanceId,
             departmentId: target.departmentId,
             onlyWithoutDepartment: target.onlyWithoutDepartment,
-            conversationType: target.conversationType,
             onlyUnassigned: target.onlyUnassigned,
             onlyNewConversations: target.onlyNewConversations,
             resolvedTagId: target.resolvedTagId,
@@ -136,6 +132,15 @@ export function AutomationsPanel() {
   }
 
   const departmentValue = form.onlyWithoutDepartment ? AI_AUTOMATION_NO_DEPARTMENT : (form.departmentId ?? "");
+  // O agente só atende os departamentos marcados nele: automação apontada
+  // para um departamento fora dele nunca dispara, e sem o aviso isso parece
+  // "a IA parou" sem motivo nenhum na tela.
+  const agentMissesDepartment = (automation: AiAutomationDto) => {
+    if (!automation.departmentId) return false;
+    const agent = agents.find((item) => item.id === automation.agentId);
+    if (!agent || agent.isGeneral) return false;
+    return !agent.departments.some((department) => department.id === automation.departmentId);
+  };
   const nameOf = {
     instance: (id: string | null) => instances.find((instance) => instance.id === id)?.name ?? "Qualquer número",
     department: (automation: AiAutomationDto) =>
@@ -184,13 +189,18 @@ export function AutomationsPanel() {
                   <span className={automation.agentStatus !== "active" ? "text-amber-700" : ""}>
                     ({AI_AGENT_STATUS_LABELS[automation.agentStatus]})
                   </span>{" "}
-                  · {nameOf.instance(automation.whatsappInstanceId)} · {nameOf.department(automation)} ·{" "}
-                  {AI_AUTOMATION_CONVERSATION_TYPE_LABELS[automation.conversationType]}
+                  · {nameOf.instance(automation.whatsappInstanceId)} · {nameOf.department(automation)}
                   {automation.onlyUnassigned ? " · só sem responsável" : ""}
                   {automation.onlyNewConversations ? " · só conversa nova" : ""}
                   {nameOf.tag(automation.resolvedTagId) ? ` · resolvido → etiqueta "${nameOf.tag(automation.resolvedTagId)}"` : ""}
                 </p>
                 <p className="text-[11px] text-slate-400">{automation.sessionsCount} atendimento(s) iniciados por esta automação</p>
+                {agentMissesDepartment(automation) && (
+                  <p className="text-[11px] text-amber-700">
+                    O agente não atende {nameOf.department(automation)}: marque o departamento no cadastro do agente, senão esta
+                    automação não inicia atendimento nenhum.
+                  </p>
+                )}
               </div>
               {!automation.canEdit && (
                 <span
@@ -260,19 +270,16 @@ export function AutomationsPanel() {
                   ))}
                 </Select>
               </Field>
-              <Field label="Tipo de conversa">
-                <Select value={form.conversationType} onChange={(event) => setForm({ ...form, conversationType: event.target.value as AiAutomationInput["conversationType"] })}>
-                  {AI_AUTOMATION_CONVERSATION_TYPES.map((type) => (
-                    <option key={type} value={type}>
-                      {AI_AUTOMATION_CONVERSATION_TYPE_LABELS[type]}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
               <Field label="Prioridade (menor vence)">
                 <Input type="number" min={1} max={1000} value={form.priority} onChange={(event) => setForm({ ...form, priority: Number(event.target.value) || 100 })} />
               </Field>
             </div>
+            {/* O tipo de conversa saiu daqui para o agente: avisar evita a
+                pessoa procurar o campo onde ele morava. */}
+            <p className="text-xs text-slate-400">
+              Conversa individual ou grupo agora se escolhe no próprio agente (aba Agentes, &ldquo;Em quais conversas
+              atende&rdquo;), e vale também para o bloco de IA dos fluxos.
+            </p>
             <Toggle
               checked={form.onlyUnassigned}
               onChange={(checked) => setForm({ ...form, onlyUnassigned: checked })}

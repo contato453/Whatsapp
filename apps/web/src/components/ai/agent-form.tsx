@@ -3,6 +3,9 @@
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
 import {
+  AI_AGENT_CONVERSATION_TYPES,
+  AI_AGENT_CONVERSATION_TYPE_HINTS,
+  AI_AGENT_CONVERSATION_TYPE_LABELS,
   AI_ASSIGNEE_MODES,
   AI_ASSIGNEE_MODE_LABELS,
   AI_BEHAVIOR_KEYS,
@@ -88,13 +91,16 @@ export function AgentForm({
       </Section>
 
       {/* ---------------- Departamentos ---------------- */}
-      <Section title="Departamentos" description="Como etiquetas e respostas rápidas: vale para todos ou para os departamentos marcados. Quem enxerga o agente aqui é quem tem esses departamentos.">
+      <Section
+        title="Departamentos"
+        description="Onde o agente ATENDE: só conversas dos departamentos marcados (conversa ainda sem departamento entra sempre), pela automação de IA e pelo bloco dos fluxos. Também decide quem da equipe enxerga o agente nesta tela."
+      >
         {options.canCreateGeneral && (
           <Toggle
             checked={value.isGeneral}
             onChange={(checked) => onChange({ ...value, isGeneral: checked, departmentIds: checked ? [] : value.departmentIds })}
             label="Vale para todos os departamentos"
-            hint="Só o administrador cria agente geral — ele aparece para a organização inteira."
+            hint="Só o administrador cria agente geral — ele atende todos os departamentos e aparece para a organização inteira."
           />
         )}
         <DepartmentCheckboxes
@@ -103,6 +109,34 @@ export function AgentForm({
           disabled={value.isGeneral}
           onChange={(departmentIds) => onChange({ ...value, departmentIds })}
         />
+      </Section>
+
+      {/* ---------------- Tipo de conversa ---------------- */}
+      {/* Fora das "Configurações avançadas" de propósito: "a IA não responde
+          grupo" é a primeira coisa que o escritório procura, e escondida atrás
+          de um "Expandir" ninguém a acharia. */}
+      <Section
+        title="Em quais conversas atende"
+        description="Vale para as duas formas de a IA entrar numa conversa: a automação de IA e o bloco Atendimento por IA dos fluxos."
+      >
+        <Field label="Tipo de conversa">
+          <Select
+            value={config.advanced.conversationType}
+            onChange={(event) =>
+              patchSection("advanced", { conversationType: event.target.value as AiAgentConfig["advanced"]["conversationType"] })
+            }
+          >
+            {AI_AGENT_CONVERSATION_TYPES.map((type) => (
+              <option key={type} value={type}>
+                {AI_AGENT_CONVERSATION_TYPE_LABELS[type]}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <p className="text-xs text-slate-400">
+          {AI_AGENT_CONVERSATION_TYPE_HINTS[config.advanced.conversationType]} Ao salvar, os atendimentos em andamento
+          que ficaram de fora são encerrados com a mensagem de contingência e vão para a fila humana.
+        </p>
       </Section>
 
       {/* ---------------- Objetivo ---------------- */}

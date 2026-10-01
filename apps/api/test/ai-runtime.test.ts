@@ -144,7 +144,6 @@ function scenario(options: { config?: (config: ReturnType<typeof defaultAiAgentC
     whatsappInstanceId: INSTANCE,
     departmentId: null,
     onlyWithoutDepartment: false,
-    conversationType: "any",
     onlyUnassigned: true,
     onlyNewConversations: false,
     resolvedTagId: null,
@@ -650,6 +649,56 @@ describe("AiRuntime — turno de ponta a ponta", () => {
     expect(s.db.rows("aiUsageLog").some((row) => row.outcome === "blocked" && row.errorCode === "budget_exceeded")).toBe(true);
   });
 
+  it("agente 'só conversa individual' não entra em grupo pela automação", async () => {
+    const s = scenario({ config: (config) => (config.advanced.conversationType = "individual") });
+    const fetchMock = mockFetch([], []);
+    vi.stubGlobal("fetch", fetchMock);
+    (s.db.rows("conversation")[0] as Record<string, unknown>).type = "group";
+    const message = inbound(s.db, s.conversationId, "Oi, pessoal");
+    await settle(s.runtime, s, message.id as string);
+    expect(s.db.rows("aiSession")).toHaveLength(0);
+    expect(s.sent).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("o tipo de conversa entra na ESCOLHA: o grupo segue livre para a próxima automação, cujo agente aceita grupo", async () => {
+    const s = scenario({ config: (config) => (config.advanced.conversationType = "individual") });
+    vi.stubGlobal("fetch", mockFetch([() => openAiResponse("Olá!")], []));
+    const groupConfig = defaultAiAgentConfig();
+    groupConfig.objective = "Atender grupos.";
+    groupConfig.identity.sendGreeting = false;
+    const grupoAgent = s.db.seed("aiAgent", {
+      organizationId: ORG,
+      name: "IA de grupo",
+      description: "",
+      status: "active",
+      isGeneral: true,
+      model: null,
+      config: groupConfig,
+      currentVersion: 1,
+      handoffDepartmentId: null,
+      handoffAssigneeId: null,
+    });
+    s.db.seed("aiAgentVersion", { agentId: grupoAgent.id, version: 1, model: null, config: groupConfig });
+    s.db.seed("aiAutomation", {
+      organizationId: ORG,
+      name: "Grupos",
+      active: true,
+      agentId: grupoAgent.id,
+      whatsappInstanceId: INSTANCE,
+      departmentId: null,
+      onlyWithoutDepartment: false,
+      onlyUnassigned: true,
+      onlyNewConversations: false,
+      resolvedTagId: null,
+      priority: 200,
+    });
+    (s.db.rows("conversation")[0] as Record<string, unknown>).type = "group";
+    const message = inbound(s.db, s.conversationId, "Oi, pessoal");
+    await settle(s.runtime, s, message.id as string);
+    expect(s.db.rows("aiSession")[0]?.agentId).toBe(grupoAgent.id);
+  });
+
   it("conversa que já está com um atendente não entra na IA", async () => {
     const s = scenario();
     const fetchMock = mockFetch([], []);
@@ -731,6 +780,21 @@ describe("AiRuntime — bloco 'Atendimento por IA' do construtor de fluxos (star
     const after = s.db.rows("conversation")[0] as Record<string, unknown>;
     expect(after.departmentId).toBe(before.departmentId);
     expect(after.assignedUserId).toBe(before.assignedUserId);
+  });
+
+  it("agente 'só conversa individual' não entra no grupo pelo fluxo também: devolve null", async () => {
+    // Era o furo de quando o tipo morava na automação: o bloco de fluxo não
+    // o enxergava, e a IA acabava respondendo no grupo mesmo assim.
+    const s = scenario({ config: (config) => (config.advanced.conversationType = "individual") });
+    (s.db.rows("conversation")[0] as Record<string, unknown>).type = "group";
+    const result = await s.runtime.startSessionForFlow({
+      conversationId: s.conversationId,
+      agentId: s.agentId,
+      automationExecutionId: "exec-1",
+    });
+    expect(result).toBeNull();
+    expect(s.db.rows("aiSession")).toHaveLength(0);
+    expect(s.sent).toHaveLength(0);
   });
 
   it("scheduleMode fora da janela do agente: devolve null sem gravar sessão", async () => {
@@ -873,10 +937,152 @@ describe("AiRuntime — desligar alcança quem já está sendo atendido", () => 
     expect(s.db.rows("aiSession")[0]?.endReason).toBe("agent_disabled");
   });
 
+  it("passar o agente a 'só individual' tira a IA do grupo onde ela JÁ estava", async () => {
+    const s = await comSessaoAtiva();
+    (s.db.rows("conversation")[0] as Record<string, unknown>).type = "group";
+    (s.db.rows("aiAgent")[0] as { config: ReturnType<typeof defaultAiAgentConfig> }).config.advanced.conversationType = "individual";
+
+    const stopped = await s.runtime.stopSessionsOutsideConversationType({
+      organizationId: ORG,
+      agentId: s.agentId,
+      conversationType: "individual",
+    });
+
+    expect(stopped).toBe(1);
+    expect(s.db.rows("aiSession")[0]?.endReason).toBe("conversation_type_excluded");
+  });
+
+  it("a mesma mudança não mexe na conversa individual que o agente continua atendendo", async () => {
+    const s = await comSessaoAtiva();
+    const stopped = await s.runtime.stopSessionsOutsideConversationType({
+      organizationId: ORG,
+      agentId: s.agentId,
+      conversationType: "individual",
+    });
+    expect(stopped).toBe(0);
+    expect(s.db.rows("aiSession")[0]?.status).toBe("active");
+  });
+
+  it("a varredura também tira a IA do grupo quando o agente mudou fora da rota", async () => {
+    const s = await comSessaoAtiva();
+    (s.db.rows("conversation")[0] as Record<string, unknown>).type = "group";
+    (s.db.rows("aiAgent")[0] as { config: ReturnType<typeof defaultAiAgentConfig> }).config.advanced.conversationType = "individual";
+
+    await s.runtime.sweep();
+    await vi.runAllTimersAsync();
+
+    expect(s.db.rows("aiSession")[0]?.endReason).toBe("conversation_type_excluded");
+  });
+
   it("nada em andamento: desligar não encerra nada e não manda mensagem nenhuma", async () => {
     const s = scenario();
     const stopped = await s.runtime.stopSessionsForAgent({ organizationId: ORG, agentId: s.agentId });
     expect(stopped).toBe(0);
     expect(s.sent).toHaveLength(0);
+  });
+});
+
+/**
+ * OS DEPARTAMENTOS DO AGENTE DECIDEM ONDE ELE ATENDE. Antes eram só de
+ * visualização, e um agente marcado "Comercial" ligado a uma automação de
+ * "Qualquer departamento" respondia o Fiscal também — o que a equipe leu
+ * como "a IA mandou mensagem em conversa de outro departamento".
+ */
+describe("AiRuntime — o agente só atende os departamentos marcados nele", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  /** Agente restrito ao Comercial; a conversa começa no departamento pedido. */
+  function restrito(conversationDepartmentId: string | null) {
+    const s = scenario({ config: (config) => (config.identity.sendGreeting = false) });
+    const agent = s.db.rows("aiAgent")[0] as Record<string, unknown>;
+    agent.isGeneral = false;
+    s.db.seed("aiAgentDepartment", { agentId: s.agentId, departmentId: "dep-comercial" });
+    (s.db.rows("conversation")[0] as Record<string, unknown>).departmentId = conversationDepartmentId;
+    return s;
+  }
+
+  it("automação de qualquer departamento não leva o agente do Comercial para o Fiscal", async () => {
+    const s = restrito("dep-fiscal");
+    const fetchMock = mockFetch([], []);
+    vi.stubGlobal("fetch", fetchMock);
+    const message = inbound(s.db, s.conversationId, "Oi");
+    await settle(s.runtime, s, message.id as string);
+    expect(s.db.rows("aiSession")).toHaveLength(0);
+    expect(s.sent).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("no próprio departamento ele atende normalmente", async () => {
+    const s = restrito("dep-comercial");
+    vi.stubGlobal("fetch", mockFetch([() => openAiResponse("Olá!")], []));
+    const message = inbound(s.db, s.conversationId, "Oi");
+    await settle(s.runtime, s, message.id as string);
+    expect(s.db.rows("aiSession")[0]?.status).toBe("active");
+  });
+
+  it("conversa ainda sem departamento entra sempre (é a triagem)", async () => {
+    const s = restrito(null);
+    vi.stubGlobal("fetch", mockFetch([() => openAiResponse("Olá!")], []));
+    const message = inbound(s.db, s.conversationId, "Oi");
+    await settle(s.runtime, s, message.id as string);
+    expect(s.db.rows("aiSession")).toHaveLength(1);
+  });
+
+  it("pelo bloco de fluxo também não entra em departamento de fora", async () => {
+    const s = restrito("dep-fiscal");
+    const result = await s.runtime.startSessionForFlow({
+      conversationId: s.conversationId,
+      agentId: s.agentId,
+      automationExecutionId: "exec-1",
+    });
+    expect(result).toBeNull();
+    expect(s.db.rows("aiSession")).toHaveLength(0);
+  });
+
+  it("conversa que mudou para um departamento de fora: o turno seguinte encerra a IA", async () => {
+    const s = restrito("dep-comercial");
+    vi.stubGlobal("fetch", mockFetch([() => openAiResponse("Olá!")], []));
+    const first = inbound(s.db, s.conversationId, "Oi");
+    await settle(s.runtime, s, first.id as string);
+    (s.db.rows("conversation")[0] as Record<string, unknown>).departmentId = "dep-fiscal";
+
+    const fetchMock = mockFetch([], []);
+    vi.stubGlobal("fetch", fetchMock);
+    const second = inbound(s.db, s.conversationId, "E agora?");
+    await settle(s.runtime, s, second.id as string);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(s.db.rows("aiSession")[0]?.endReason).toBe("department_excluded");
+  });
+
+  it("desmarcar o departamento no agente tira a IA das conversas dele em andamento", async () => {
+    const s = restrito("dep-comercial");
+    vi.stubGlobal("fetch", mockFetch([() => openAiResponse("Olá!")], []));
+    const message = inbound(s.db, s.conversationId, "Oi");
+    await settle(s.runtime, s, message.id as string);
+    const link = s.db.rows("aiAgentDepartment")[0] as Record<string, unknown>;
+    link.departmentId = "dep-fiscal";
+
+    const stopped = await s.runtime.stopSessionsOutsideDepartments({ organizationId: ORG, agentId: s.agentId });
+
+    expect(stopped).toBe(1);
+    expect(s.db.rows("aiSession")[0]?.endReason).toBe("department_excluded");
+  });
+
+  it("agente geral: a mesma chamada não encerra nada", async () => {
+    const s = scenario({ config: (config) => (config.identity.sendGreeting = false) });
+    vi.stubGlobal("fetch", mockFetch([() => openAiResponse("Olá!")], []));
+    (s.db.rows("conversation")[0] as Record<string, unknown>).departmentId = "dep-fiscal";
+    const message = inbound(s.db, s.conversationId, "Oi");
+    await settle(s.runtime, s, message.id as string);
+    const stopped = await s.runtime.stopSessionsOutsideDepartments({ organizationId: ORG, agentId: s.agentId });
+    expect(stopped).toBe(0);
+    expect(s.db.rows("aiSession")[0]?.status).toBe("active");
   });
 });

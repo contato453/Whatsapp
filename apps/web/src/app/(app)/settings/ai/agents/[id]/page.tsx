@@ -110,12 +110,20 @@ export default function AgentPage() {
     setBusy("save");
     setFeedback(null);
     try {
-      const result = isNew ? await aiApi.createAgent(input) : await aiApi.updateAgent(params.id, input);
+      const { agent: result, stoppedSessions } = isNew
+        ? { agent: await aiApi.createAgent(input), stoppedSessions: 0 }
+        : await aiApi.updateAgent(params.id, input);
       setAgent(result);
       const asInput = toInput(result);
       setInput(asInput);
       setSaved(asInput);
-      setFeedback({ ok: true, message: isNew ? "Agente criado como rascunho. Teste e depois ative." : `Salvo (versão ${result.version}).` });
+      const stopped = stoppedSessionsMessage(stoppedSessions);
+      setFeedback({
+        ok: true,
+        message: isNew
+          ? "Agente criado como rascunho. Teste e depois ative."
+          : `Salvo (versão ${result.version}).${stopped ? ` ${stopped}` : ""}`,
+      });
       if (isNew) router.replace(`/settings/ai/agents/${result.id}`);
       else setVersions(await aiApi.agentVersions(result.id));
     } catch (err) {

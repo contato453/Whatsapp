@@ -1459,7 +1459,11 @@ nível?" por igualdade é um lugar onde o papel novo perde acesso em silêncio (
   (`configInstanceScope`); o histórico de follow-up também passou a respeitar
   `conversationScope`, e o filtro `departmentId` dele só estreita (antes substituía o
   recorte e devolvia o histórico de qualquer departamento). A base de conhecimento da
-  IA segue da organização inteira: não tem departamento nem número.
+  IA segue da organização inteira: não tem departamento nem número. **A exceção
+  deliberada são os departamentos do AGENTE** (`AiAgentDepartment` + `isGeneral`): eles
+  decidem também onde ele atende — ver `agentServesDepartment` na seção 20. Isso não é
+  o recorte de `automationConfigScope` entrando no motor: é dado do próprio agente, sem
+  usuário logado, conferido como o status dele.
 - **PERMISSÃO É AÇÃO, VISIBILIDADE É ALCANCE — e os dois nunca se misturam.** O menu de
   Permissões (`packages/shared/src/permissions.ts` + `apps/api/src/lib/permissions.ts`) decide
   o que cada perfil pode FAZER. Ele **não** decide, e não pode passar a decidir, QUAIS
@@ -3214,7 +3218,8 @@ construtor visual de fluxos, CRM, follow-up automático, filas e campos personal
 contato. Nada disso existe aqui (é o Azevedo-OS que tem CRM; a "fila" da casa é a conversa
 sem responsável). Em vez de inventar um sistema paralelo para cada um:
 - o "bloco Atendimento por IA" é a **automação** (`AiAutomation`): gatilho por número,
-  departamento, tipo de conversa e "só sem responsável"/"só conversa nova" → agente. As
+  departamento e "só sem responsável"/"só conversa nova" → agente (o tipo de conversa,
+  individual ou grupo, é do AGENTE, ver `advanced.conversationType` mais abaixo). As
   saídas do bloco são: **resolvido** (conclui a conversa + etiqueta da automação),
   **transferido** (destino de transferência do agente) e **erro/limite** (mensagem de
   fallback do agente + fila humana);
@@ -3235,7 +3240,7 @@ construtor visual de fluxos" — na época, verdade: não existia um. O construt
 chegou depois, e ganhou um bloco `ai_agent` que entrega a conversa a um agente **dentro** de
 um fluxo desenhado visualmente. As duas portas de entrada continuam existindo, para casos
 diferentes: `AiAutomation` (este item) é o gatilho de ZERO CONFIGURAÇÃO, direto por número/
-departamento/tipo de conversa, sem montar nada visual; o bloco `ai_agent` é para quando a IA
+departamento, sem montar nada visual; o bloco `ai_agent` é para quando a IA
 é UMA ETAPA dentro de algo maior (ex.: menu → "Comercial" → IA → se não resolver, humano). Os
 dois criam a MESMA `AiSession`, só com origem diferente (`automationId` vs.
 `automationExecutionId` — nunca os dois). Ver o bloco dedicado na seção 18 para como as duas
@@ -3358,6 +3363,43 @@ cai no aviso automático de "fora do expediente" (zero configuração) se
 nenhum fluxo a capturar antes; pelo bloco de fluxo, `startSessionForFlow`
 devolve `null` e o fluxo segue pela saída "Transferido / encerrado" de
 sempre — o mesmo caminho de quando não há agente configurado.
+
+**`AiAgentConfig.advanced.conversationType`** — em que tipo de conversa o agente pode
+INICIAR atendimento: `any` (padrão), `individual` ("não responde grupo") ou `group`. **Morava
+na `AiAutomation` e foi para o agente** (migration
+`20261001120000_ai_conversation_type_on_agent`): na automação, o bloco "Atendimento por IA"
+dos fluxos não o enxergava, e a IA entrava no grupo pelo fluxo mesmo com a automação dizendo
+"só individual" — a regra que o escritório mais procura falhava em silêncio numa das portas.
+Agora a mesma função (`agentAcceptsConversationType`, no shared) guarda as DUAS entradas,
+como o `scheduleMode`. Consequências para qualquer mexida aqui: (1) no gatilho de automação o
+tipo entra na ESCOLHA, e não depois dela — o grupo que o agente da primeira automação recusa
+continua livre para a próxima, cujo agente aceita grupo; pelo fluxo, a recusa devolve `null` e
+o bloco segue por "Transferido / encerrado"; (2) **mudar o tipo alcança quem JÁ está sendo
+atendido**, pela mesma regra do interruptor: o `PATCH /ai/agents/:id` chama
+`stopSessionsOutsideConversationType` (devolve `stoppedSessions`, que a tela mostra), e o
+turno e a varredura conferem de novo — motivo próprio `conversation_type_excluded`, porque o
+agente continua no ar; (3) quem decide é a configuração ATUAL do agente, e não a versão
+gravada na sessão: é interruptor, como o status, e não regra de conversa; (4) a migration
+levou o valor das automações para o agente só quando todas as dele (as ativas; sem ativa,
+todas) concordavam num tipo restrito — divergência ficou `any`, que era o efeito somado de
+antes. Na tela, o campo fica na seção visível "Em quais conversas atende", logo depois de
+Departamentos, e não dentro das configurações avançadas recolhidas.
+
+**Os departamentos do agente decidem ONDE ele atende**, e não só quem o enxerga na tela
+(`agentServesDepartment`, no shared). Antes eram só visualização, e um agente marcado
+"Comercial" ligado a uma automação de "Qualquer departamento" respondia o Fiscal também —
+que a equipe leu, com razão, como "a IA mandou mensagem em conversa de outro departamento".
+Regras: (1) geral atende todos, restrito só os marcados; (2) **conversa SEM departamento
+passa sempre**, pela mesma régua de etiqueta e resposta rápida, porque é como a conversa
+nasce quando o número não tem departamento padrão, e barrá-la deixaria sem IA justamente a
+triagem; (3) vale nas duas portas, entra na ESCOLHA da automação (o Fiscal fica livre para a
+próxima) e, no fluxo, a recusa segue por "Transferido / encerrado"; (4) alcança quem já está
+sendo atendido — desmarcar um departamento no `PATCH /ai/agents/:id` chama
+`stopSessionsOutsideDepartments`, e o turno e a varredura conferem de novo, o que também
+pega a conversa que MUDOU para um setor de fora (fluxo que encaminhou) — motivo
+`department_excluded`; (5) quem decide são os vínculos ATUAIS do agente, não a versão da
+sessão. A lista de automações avisa quando a automação aponta para um departamento que o
+agente não atende, porque ela nunca dispararia e isso pareceria "a IA parou".
 
 **A IA LÊ OS ANEXOS DO CLIENTE — ÁUDIO, IMAGEM E DOCUMENTO**
 (`services/ai/attachments.ts`). No WhatsApp, quem tem pressa GRAVA um áudio, FOTOGRAFA o
