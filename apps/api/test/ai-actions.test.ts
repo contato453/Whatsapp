@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PrismaClient } from "@azvchat/database";
 import type { Server } from "socket.io";
 import pino from "pino";
-import { agentAcceptsConversationType, defaultAiAgentConfig, estimateCostMicros, resolveModelPricing } from "@azvchat/shared";
+import { agentAcceptsConversationType, agentServesDepartment, defaultAiAgentConfig, estimateCostMicros, resolveModelPricing } from "@azvchat/shared";
 import { executeTool, type ActionEnvironment } from "../src/services/ai/actions.js";
 import { automationMatches } from "../src/services/ai/runtime.js";
 import { readSessionState } from "../src/services/ai/session.js";
@@ -255,5 +255,14 @@ describe("agentAcceptsConversationType — o tipo de conversa é do AGENTE", () 
     expect(agentAcceptsConversationType("individual", "group")).toBe(false);
     expect(agentAcceptsConversationType("individual", "individual")).toBe(true);
     expect(agentAcceptsConversationType("group", "individual")).toBe(false);
+  });
+});
+
+describe("agentServesDepartment — o departamento do agente decide onde ele atende", () => {
+  it("geral atende todos; restrito só os marcados; sem departamento passa sempre", () => {
+    expect(agentServesDepartment({ isGeneral: true, departmentIds: [] }, "dep-a")).toBe(true);
+    expect(agentServesDepartment({ isGeneral: false, departmentIds: ["dep-a"] }, "dep-a")).toBe(true);
+    expect(agentServesDepartment({ isGeneral: false, departmentIds: ["dep-a"] }, "dep-b")).toBe(false);
+    expect(agentServesDepartment({ isGeneral: false, departmentIds: ["dep-a"] }, null)).toBe(true);
   });
 });

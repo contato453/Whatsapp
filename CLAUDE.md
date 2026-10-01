@@ -1459,7 +1459,11 @@ nível?" por igualdade é um lugar onde o papel novo perde acesso em silêncio (
   (`configInstanceScope`); o histórico de follow-up também passou a respeitar
   `conversationScope`, e o filtro `departmentId` dele só estreita (antes substituía o
   recorte e devolvia o histórico de qualquer departamento). A base de conhecimento da
-  IA segue da organização inteira: não tem departamento nem número.
+  IA segue da organização inteira: não tem departamento nem número. **A exceção
+  deliberada são os departamentos do AGENTE** (`AiAgentDepartment` + `isGeneral`): eles
+  decidem também onde ele atende — ver `agentServesDepartment` na seção 20. Isso não é
+  o recorte de `automationConfigScope` entrando no motor: é dado do próprio agente, sem
+  usuário logado, conferido como o status dele.
 - **PERMISSÃO É AÇÃO, VISIBILIDADE É ALCANCE — e os dois nunca se misturam.** O menu de
   Permissões (`packages/shared/src/permissions.ts` + `apps/api/src/lib/permissions.ts`) decide
   o que cada perfil pode FAZER. Ele **não** decide, e não pode passar a decidir, QUAIS
@@ -3380,6 +3384,22 @@ levou o valor das automações para o agente só quando todas as dele (as ativas
 todas) concordavam num tipo restrito — divergência ficou `any`, que era o efeito somado de
 antes. Na tela, o campo fica na seção visível "Em quais conversas atende", logo depois de
 Departamentos, e não dentro das configurações avançadas recolhidas.
+
+**Os departamentos do agente decidem ONDE ele atende**, e não só quem o enxerga na tela
+(`agentServesDepartment`, no shared). Antes eram só visualização, e um agente marcado
+"Comercial" ligado a uma automação de "Qualquer departamento" respondia o Fiscal também —
+que a equipe leu, com razão, como "a IA mandou mensagem em conversa de outro departamento".
+Regras: (1) geral atende todos, restrito só os marcados; (2) **conversa SEM departamento
+passa sempre**, pela mesma régua de etiqueta e resposta rápida, porque é como a conversa
+nasce quando o número não tem departamento padrão, e barrá-la deixaria sem IA justamente a
+triagem; (3) vale nas duas portas, entra na ESCOLHA da automação (o Fiscal fica livre para a
+próxima) e, no fluxo, a recusa segue por "Transferido / encerrado"; (4) alcança quem já está
+sendo atendido — desmarcar um departamento no `PATCH /ai/agents/:id` chama
+`stopSessionsOutsideDepartments`, e o turno e a varredura conferem de novo, o que também
+pega a conversa que MUDOU para um setor de fora (fluxo que encaminhou) — motivo
+`department_excluded`; (5) quem decide são os vínculos ATUAIS do agente, não a versão da
+sessão. A lista de automações avisa quando a automação aponta para um departamento que o
+agente não atende, porque ela nunca dispararia e isso pareceria "a IA parou".
 
 **A IA LÊ OS ANEXOS DO CLIENTE — ÁUDIO, IMAGEM E DOCUMENTO**
 (`services/ai/attachments.ts`). No WhatsApp, quem tem pressa GRAVA um áudio, FOTOGRAFA o

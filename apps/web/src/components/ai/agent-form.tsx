@@ -91,13 +91,16 @@ export function AgentForm({
       </Section>
 
       {/* ---------------- Departamentos ---------------- */}
-      <Section title="Departamentos" description="Como etiquetas e respostas rápidas: vale para todos ou para os departamentos marcados. Quem enxerga o agente aqui é quem tem esses departamentos.">
+      <Section
+        title="Departamentos"
+        description="Onde o agente ATENDE: só conversas dos departamentos marcados (conversa ainda sem departamento entra sempre), pela automação de IA e pelo bloco dos fluxos. Também decide quem da equipe enxerga o agente nesta tela."
+      >
         {options.canCreateGeneral && (
           <Toggle
             checked={value.isGeneral}
             onChange={(checked) => onChange({ ...value, isGeneral: checked, departmentIds: checked ? [] : value.departmentIds })}
             label="Vale para todos os departamentos"
-            hint="Só o administrador cria agente geral — ele aparece para a organização inteira."
+            hint="Só o administrador cria agente geral — ele atende todos os departamentos e aparece para a organização inteira."
           />
         )}
         <DepartmentCheckboxes

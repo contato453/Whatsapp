@@ -880,7 +880,7 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
     // Passar a não atender um tipo de conversa (ex.: "não responde grupo")
     // alcança quem JÁ está sendo atendido, como desativar o agente: sem isto
     // a IA seguiria falando no grupo que a pessoa acabou de mandar largar.
-    const stoppedSessions =
+    const stoppedByType =
       previous.advanced.conversationType !== body.config.advanced.conversationType
         ? await deps.aiRuntime.stopSessionsOutsideConversationType({
             organizationId,
@@ -888,6 +888,17 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
             conversationType: body.config.advanced.conversationType,
           })
         : 0;
+    // Os departamentos do agente decidem onde ele atende: desmarcar um (ou
+    // deixar de ser geral) tira a IA das conversas daquele setor já em
+    // andamento, pelo mesmo motivo.
+    const previousDepartments = agent.departments.map((link) => link.departmentId).sort().join(",");
+    const departmentsNarrowed =
+      target.isGeneral === false &&
+      (agent.isGeneral || previousDepartments !== [...target.departmentIds].sort().join(","));
+    const stoppedByDepartment = departmentsNarrowed
+      ? await deps.aiRuntime.stopSessionsOutsideDepartments({ organizationId, agentId: id })
+      : 0;
+    const stoppedSessions = stoppedByType + stoppedByDepartment;
     deps.audit.record({
       organizationId,
       userId: request.user.sub,

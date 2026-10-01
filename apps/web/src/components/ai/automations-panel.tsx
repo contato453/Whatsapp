@@ -132,6 +132,15 @@ export function AutomationsPanel() {
   }
 
   const departmentValue = form.onlyWithoutDepartment ? AI_AUTOMATION_NO_DEPARTMENT : (form.departmentId ?? "");
+  // O agente só atende os departamentos marcados nele: automação apontada
+  // para um departamento fora dele nunca dispara, e sem o aviso isso parece
+  // "a IA parou" sem motivo nenhum na tela.
+  const agentMissesDepartment = (automation: AiAutomationDto) => {
+    if (!automation.departmentId) return false;
+    const agent = agents.find((item) => item.id === automation.agentId);
+    if (!agent || agent.isGeneral) return false;
+    return !agent.departments.some((department) => department.id === automation.departmentId);
+  };
   const nameOf = {
     instance: (id: string | null) => instances.find((instance) => instance.id === id)?.name ?? "Qualquer número",
     department: (automation: AiAutomationDto) =>
@@ -186,6 +195,12 @@ export function AutomationsPanel() {
                   {nameOf.tag(automation.resolvedTagId) ? ` · resolvido → etiqueta "${nameOf.tag(automation.resolvedTagId)}"` : ""}
                 </p>
                 <p className="text-[11px] text-slate-400">{automation.sessionsCount} atendimento(s) iniciados por esta automação</p>
+                {agentMissesDepartment(automation) && (
+                  <p className="text-[11px] text-amber-700">
+                    O agente não atende {nameOf.department(automation)}: marque o departamento no cadastro do agente, senão esta
+                    automação não inicia atendimento nenhum.
+                  </p>
+                )}
               </div>
               {!automation.canEdit && (
                 <span

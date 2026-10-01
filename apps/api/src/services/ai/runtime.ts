@@ -5,6 +5,7 @@ import {
   AI_MESSAGE_ORIGIN,
   RealtimeEvents,
   agentAcceptsConversationType,
+  agentServesDepartment,
   estimateCostMicros,
   type AiAgentConfig,
   type AiAgentConversationType,
@@ -255,6 +256,10 @@ export class AiRuntime {
       if (!automationMatches(automation, conversation, { isFirstInbound: inboundCount <= 1 })) continue;
       const agentConfig = parseStoredAgentConfig(automation.agent.config);
       if (!agentAcceptsConversationType(agentConfig.advanced.conversationType, conversation.type)) continue;
+      // Departamento também é do agente: automação "Qualquer departamento"
+      // com agente do Comercial não entra no Fiscal, e o Fiscal segue livre
+      // para a próxima automação.
+      if (!(await this.agentServesConversation(automation.agent, conversation.departmentId))) continue;
       match = automation;
       config = agentConfig;
       break;
@@ -340,6 +345,10 @@ export class AiRuntime {
     // pelo fluxo também, e o bloco segue por "Transferido / encerrado".
     if (!agentAcceptsConversationType(config.advanced.conversationType, conversation.type)) {
       this.deps.logger.info({ event: "ai_session_conversation_type_refused", conversationId: conversation.id, agentId: agent.id });
+      return null;
+    }
+    if (!(await this.agentServesConversation(agent, conversation.departmentId))) {
+      this.deps.logger.info({ event: "ai_session_department_refused", conversationId: conversation.id, agentId: agent.id });
       return null;
     }
     if (!(await this.isAgentScheduledNow(config, conversation.organizationId))) return null;
@@ -513,7 +522,7 @@ export class AiRuntime {
   private async stopActiveSessions(
     organizationId: string,
     filter: Prisma.AiSessionWhereInput,
-    reason: Extract<AiSessionEndReason, "agent_disabled" | "automation_disabled" | "flow_disabled" | "conversation_type_excluded">,
+    reason: Extract<AiSessionEndReason, "agent_disabled" | "automation_disabled" | "flow_disabled" | "conversation_type_excluded" | "department_excluded">,
   ): Promise<number> {
     const { prisma, logger } = this.deps;
     const sessions = await prisma.aiSession.findMany({
@@ -569,6 +578,46 @@ export class AiRuntime {
       "conversation_type_excluded",
     );
   }
+  /**
+   * O agente deixou de atender departamentos (desmarcados no cadastro dele,
+   * ou passou de geral a restrito): as sessões dele em conversa de um
+   * departamento que saiu param AGORA, pelo mesmo motivo do tipo de conversa.
+   * Conversa sem departamento nunca é alcançada (`agentServesDepartment`).
+   */
+  async stopSessionsOutsideDepartments(input: { organizationId: string; agentId: string }): Promise<number> {
+    const agent = await this.deps.prisma.aiAgent.findFirst({
+      where: { id: input.agentId, organizationId: input.organizationId },
+      select: { isGeneral: true, departments: { select: { departmentId: true } } },
+    });
+    if (!agent || agent.isGeneral) return 0;
+    return this.stopActiveSessions(
+      input.organizationId,
+      {
+        agentId: input.agentId,
+        conversation: { is: { departmentId: { not: null, notIn: agent.departments.map((link) => link.departmentId) } } },
+      },
+      "department_excluded",
+    );
+  }
+
+  /**
+   * O agente atende conversa deste departamento? Lê os vínculos ATUAIS do
+   * agente (e não da versão da sessão): é interruptor, como o status. Uma
+   * consulta só quando precisa — agente geral e conversa sem departamento
+   * passam sem ir ao banco.
+   */
+  private async agentServesConversation(
+    agent: { id: string; isGeneral: boolean },
+    departmentId: string | null,
+  ): Promise<boolean> {
+    if (agent.isGeneral || departmentId === null) return true;
+    const links = await this.deps.prisma.aiAgentDepartment.findMany({
+      where: { agentId: agent.id },
+      select: { departmentId: true },
+    });
+    return agentServesDepartment({ isGeneral: false, departmentIds: links.map((link) => link.departmentId) }, departmentId);
+  }
+
 
   /**
    * Automação desligada (ou excluída): as sessões que ELA abriu param junto.
@@ -616,6 +665,12 @@ export class AiRuntime {
     // ATUAL decide (e não a versão da sessão), como o status logo acima.
     if (!agentAcceptsConversationType(parseStoredAgentConfig(session.agent.config).advanced.conversationType, conversation.type)) {
       await this.finishWithFallback(session, conversation, config, "conversation_type_excluded", null);
+      return;
+    }
+    // A conversa mudou para um departamento que o agente não atende (fluxo
+    // que encaminhou, por exemplo), ou o agente deixou de atendê-lo.
+    if (!(await this.agentServesConversation(session.agent, conversation.departmentId))) {
+      await this.finishWithFallback(session, conversation, config, "department_excluded", null);
       return;
     }
 
@@ -1666,6 +1721,11 @@ export class AiRuntime {
           );
           continue;
         }
+        if (!(await this.agentServesConversation(session.agent, conversation.departmentId))) {
+          logger.info({ event: "ai_sweep_department_excluded", sessionId: session.id });
+          await this.enqueue(conversation.id, () => this.finishWithFallback(session, conversation, config, "department_excluded", null));
+          continue;
+        }
         if (session.automationId && !ligadas.has(session.automationId)) {
           logger.info({ event: "ai_sweep_automation_disabled", sessionId: session.id, automationId: session.automationId });
           await this.enqueue(conversation.id, () => this.finishWithFallback(session, conversation, config, "automation_disabled", null));
@@ -1841,6 +1901,8 @@ function reasonLabel(reason: AiSessionEndReason): string {
       return "Fluxo de automação desligado durante o atendimento";
     case "conversation_type_excluded":
       return "O agente deixou de atender este tipo de conversa";
+    case "department_excluded":
+      return "O agente não atende o departamento desta conversa";
     case "attempt_limit":
       return "Limite de tentativas sem resolver";
     default:

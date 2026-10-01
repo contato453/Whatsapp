@@ -408,6 +408,10 @@ export const AI_SESSION_END_REASONS = [
   // continua no ar, e quem lê o histórico precisa saber que foi a regra de
   // tipo, e não um interruptor, que tirou a IA desta conversa.
   "conversation_type_excluded",
+  // O agente deixou de atender o DEPARTAMENTO da conversa (desmarcado no
+  // cadastro dele, ou a conversa mudou para um setor que ele não atende).
+  // Separado do tipo pelo mesmo motivo: o histórico diz qual regra parou.
+  "department_excluded",
   "conversation_archived",
 ] as const;
 export type AiSessionEndReason = (typeof AI_SESSION_END_REASONS)[number];
@@ -427,6 +431,7 @@ export const AI_SESSION_END_REASON_LABELS: Record<AiSessionEndReason, string> = 
   automation_disabled: "A automação que iniciou o atendimento foi desligada",
   flow_disabled: "O fluxo que iniciou o atendimento foi desligado",
   conversation_type_excluded: "O agente deixou de atender este tipo de conversa",
+  department_excluded: "O agente não atende o departamento desta conversa",
   conversation_archived: "A conversa foi arquivada",
 };
 
@@ -1468,6 +1473,22 @@ export const AI_SETTABLE_STATUSES: readonly ConversationStatus[] = [
   "waiting_client",
   "waiting_internal",
 ];
+
+/**
+ * O agente atende conversa deste departamento? Os departamentos marcados no
+ * agente decidem ONDE ele atende, além de quem o enxerga na tela: geral
+ * atende todos; restrito, só os marcados. Conversa SEM departamento passa
+ * sempre — é a mesma régua de etiqueta e resposta rápida ("sem departamento
+ * aceita qualquer item"), e é como a conversa nasce quando o número não tem
+ * departamento padrão: barrá-la deixaria sem IA justamente a triagem.
+ */
+export function agentServesDepartment(
+  agent: { isGeneral: boolean; departmentIds: readonly string[] },
+  conversationDepartmentId: string | null,
+): boolean {
+  if (agent.isGeneral || conversationDepartmentId === null) return true;
+  return agent.departmentIds.includes(conversationDepartmentId);
+}
 
 /** O agente aceita começar atendimento neste tipo de conversa? */
 export function agentAcceptsConversationType(
