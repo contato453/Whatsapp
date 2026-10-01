@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  AI_AGENT_CONVERSATION_TYPES,
   AI_ASSIGNEE_MODES,
   AI_BEHAVIOR_KEYS,
   AI_CAPABILITY_KEYS,
@@ -124,6 +125,7 @@ export const aiAgentConfigSchema: z.ZodType<AiAgentConfig> = z.object({
       .min(AI_CONFIG_LIMITS.responseDelaySeconds.min)
       .max(AI_CONFIG_LIMITS.responseDelaySeconds.max),
     scheduleMode: z.enum(SCHEDULE_MODES),
+    conversationType: z.enum(AI_AGENT_CONVERSATION_TYPES),
   }),
 });
 

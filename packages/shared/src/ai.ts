@@ -403,6 +403,11 @@ export const AI_SESSION_END_REASONS = [
   // o motivo é separado dos outros dois pelo mesmo raciocínio — quem lê o
   // histórico precisa saber qual das três chaves parou este atendimento.
   "flow_disabled",
+  // O agente passou a não atender este TIPO de conversa (ex.: "não responde
+  // grupo") com o atendimento já em andamento. Motivo próprio porque o agente
+  // continua no ar, e quem lê o histórico precisa saber que foi a regra de
+  // tipo, e não um interruptor, que tirou a IA desta conversa.
+  "conversation_type_excluded",
   "conversation_archived",
 ] as const;
 export type AiSessionEndReason = (typeof AI_SESSION_END_REASONS)[number];
@@ -421,6 +426,7 @@ export const AI_SESSION_END_REASON_LABELS: Record<AiSessionEndReason, string> = 
   agent_disabled: "O agente foi desativado",
   automation_disabled: "A automação que iniciou o atendimento foi desligada",
   flow_disabled: "O fluxo que iniciou o atendimento foi desligado",
+  conversation_type_excluded: "O agente deixou de atender este tipo de conversa",
   conversation_archived: "A conversa foi arquivada",
 };
 
@@ -833,8 +839,36 @@ export interface AiAgentConfig {
      * do expediente" (zero configuração) se nenhum fluxo a capturar antes.
      */
     scheduleMode: ScheduleMode;
+    /**
+     * Em que TIPO de conversa este agente pode iniciar atendimento:
+     * qualquer uma (padrão), só individual ou só grupo. Morava na automação
+     * de IA e veio para o agente porque é uma característica DELE — o caso
+     * de origem é "a IA não responde grupo", e com o campo na automação o
+     * bloco "Atendimento por IA" do construtor de fluxos não o enxergava,
+     * então um fluxo ainda punha a IA dentro do grupo. Aqui vale para as
+     * duas portas de entrada, como o `scheduleMode` logo acima.
+     */
+    conversationType: AiAgentConversationType;
   };
 }
+
+// ---------------------------------------------------------------------------
+// Tipo de conversa que o agente atende
+// ---------------------------------------------------------------------------
+
+export const AI_AGENT_CONVERSATION_TYPES = ["any", "individual", "group"] as const;
+export type AiAgentConversationType = (typeof AI_AGENT_CONVERSATION_TYPES)[number];
+export const AI_AGENT_CONVERSATION_TYPE_LABELS: Record<AiAgentConversationType, string> = {
+  any: "Qualquer conversa",
+  individual: "Só conversa individual (não responde grupo)",
+  group: "Só grupo",
+};
+export const AI_AGENT_CONVERSATION_TYPE_HINTS: Record<AiAgentConversationType, string> = {
+  any: "O agente pode começar atendimento em conversa individual e em grupo.",
+  individual:
+    "O agente nunca começa atendimento em grupo, venha ele de uma automação de IA ou de um bloco de fluxo. Pelo fluxo, o grupo segue pela saída \"Transferido / encerrado\".",
+  group: "O agente só começa atendimento em grupo; conversa individual não entra nele.",
+};
 
 export const AI_CONFIG_LIMITS = {
   maxAiMessages: { min: 1, max: 200, default: 20 },
@@ -904,6 +938,7 @@ export function defaultAiAgentConfig(): AiAgentConfig {
       contextMessageLimit: AI_CONFIG_LIMITS.contextMessageLimit.default,
       responseDelaySeconds: AI_CONFIG_LIMITS.responseDelaySeconds.default,
       scheduleMode: DEFAULT_SCHEDULE_MODE,
+      conversationType: "any",
     },
   };
 }
@@ -963,14 +998,6 @@ export const AI_BUDGET_ALERT_THRESHOLDS = [50, 80, 90, 100] as const;
 // ---------------------------------------------------------------------------
 // Automação (o "bloco de IA")
 // ---------------------------------------------------------------------------
-
-export const AI_AUTOMATION_CONVERSATION_TYPES = ["any", "individual", "group"] as const;
-export type AiAutomationConversationType = (typeof AI_AUTOMATION_CONVERSATION_TYPES)[number];
-export const AI_AUTOMATION_CONVERSATION_TYPE_LABELS: Record<AiAutomationConversationType, string> = {
-  any: "Qualquer conversa",
-  individual: "Só conversa individual",
-  group: "Só grupo",
-};
 
 /** Valor do seletor de departamento da tela para "só conversa sem departamento". */
 export const AI_AUTOMATION_NO_DEPARTMENT = "none";
@@ -1283,7 +1310,6 @@ export interface AiAutomationDto {
   departmentId: string | null;
   /** Só conversa que o número não classificou (departamento nulo). */
   onlyWithoutDepartment: boolean;
-  conversationType: AiAutomationConversationType;
   onlyUnassigned: boolean;
   onlyNewConversations: boolean;
   resolvedTagId: string | null;
@@ -1443,10 +1469,10 @@ export const AI_SETTABLE_STATUSES: readonly ConversationStatus[] = [
   "waiting_internal",
 ];
 
-/** A automação casa com este tipo de conversa? */
-export function automationMatchesType(
-  automationType: AiAutomationConversationType,
+/** O agente aceita começar atendimento neste tipo de conversa? */
+export function agentAcceptsConversationType(
+  agentType: AiAgentConversationType,
   conversationType: ConversationType,
 ): boolean {
-  return automationType === "any" || automationType === conversationType;
+  return agentType === "any" || agentType === conversationType;
 }

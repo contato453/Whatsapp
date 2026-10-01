@@ -2398,8 +2398,9 @@ model AiAgentKnowledgeSource {
 }
 
 /// Automação: o gatilho que põe um agente para atender — o "bloco de IA".
-/// Casa a mensagem que chega por número, departamento e tipo de conversa;
-/// nulo = qualquer. `onlyWithoutDepartment` é o caso "só conversa que o
+/// Casa a mensagem que chega por número e departamento; nulo = qualquer.
+/// O TIPO de conversa (individual/grupo) não mora aqui: é do agente
+/// (`config.advanced.conversationType`), para valer também no bloco de fluxo. `onlyWithoutDepartment` é o caso "só conversa que o
 /// número não classificou" (departamento nulo não é "qualquer" nem um id).
 model AiAutomation {
   id                    String   @id @default(uuid())
@@ -2410,7 +2411,6 @@ model AiAutomation {
   whatsappInstanceId    String?
   departmentId          String?
   onlyWithoutDepartment Boolean  @default(false)
-  conversationType      String   @default("any")
   /// Só entra em conversa sem responsável (o normal: a IA não toma conversa de gente).
   onlyUnassigned        Boolean  @default(true)
   /// Só na PRIMEIRA mensagem de uma conversa nova.

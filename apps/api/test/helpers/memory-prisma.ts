@@ -29,6 +29,7 @@ const RELATIONS: Record<string, Record<string, Relation>> = {
     agentVersion: { localKey: "agentVersionId", table: "aiAgentVersion" },
     endedBy: { localKey: "endedByUserId", table: "user" },
     automation: { localKey: "automationId", table: "aiAutomation" },
+    conversation: { localKey: "conversationId", table: "conversation" },
   },
   aiAutomation: { agent: { localKey: "agentId", table: "aiAgent" } },
   aiAgent: {

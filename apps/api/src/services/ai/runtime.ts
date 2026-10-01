@@ -4,9 +4,10 @@ import {
   AI_ATTACHMENT_CONTEXT_LABELS,
   AI_MESSAGE_ORIGIN,
   RealtimeEvents,
-  automationMatchesType,
+  agentAcceptsConversationType,
   estimateCostMicros,
   type AiAgentConfig,
+  type AiAgentConversationType,
   type AiChatTurn,
   type AiMessageOriginMetadata,
   type AiProviderKind,
@@ -245,12 +246,21 @@ export class AiRuntime {
     const inboundCount = await prisma.message.count({
       where: { conversationId: conversation.id, direction: "inbound", deletedAt: null },
     });
-    const match = automations.find((automation) =>
-      automationMatches(automation, conversation, { isFirstInbound: inboundCount <= 1 }),
-    );
-    if (!match) return null;
+    // O tipo de conversa é do AGENTE, e entra na escolha (e não depois dela):
+    // um grupo que a primeira automação não pode atender por causa do agente
+    // dela continua livre para a próxima, cujo agente aceita grupo.
+    let match: (typeof automations)[number] | undefined;
+    let config: AiAgentConfig | undefined;
+    for (const automation of automations) {
+      if (!automationMatches(automation, conversation, { isFirstInbound: inboundCount <= 1 })) continue;
+      const agentConfig = parseStoredAgentConfig(automation.agent.config);
+      if (!agentAcceptsConversationType(agentConfig.advanced.conversationType, conversation.type)) continue;
+      match = automation;
+      config = agentConfig;
+      break;
+    }
+    if (!match || !config) return null;
 
-    const config = parseStoredAgentConfig(match.agent.config);
     if (!(await this.isAgentScheduledNow(config, conversation.organizationId))) {
       this.deps.logger.info({ event: "ai_session_outside_schedule", conversationId: conversation.id, automationId: match.id });
       return null;
@@ -326,6 +336,12 @@ export class AiRuntime {
     });
     if (!agent || agent.status !== "active") return null;
     const config = parseStoredAgentConfig(agent.config);
+    // Mesma régua da automação: agente que não atende grupo não entra no grupo
+    // pelo fluxo também, e o bloco segue por "Transferido / encerrado".
+    if (!agentAcceptsConversationType(config.advanced.conversationType, conversation.type)) {
+      this.deps.logger.info({ event: "ai_session_conversation_type_refused", conversationId: conversation.id, agentId: agent.id });
+      return null;
+    }
     if (!(await this.isAgentScheduledNow(config, conversation.organizationId))) return null;
     if (!(await this.canRestart(conversation))) return null;
 
@@ -497,7 +513,7 @@ export class AiRuntime {
   private async stopActiveSessions(
     organizationId: string,
     filter: Prisma.AiSessionWhereInput,
-    reason: Extract<AiSessionEndReason, "agent_disabled" | "automation_disabled" | "flow_disabled">,
+    reason: Extract<AiSessionEndReason, "agent_disabled" | "automation_disabled" | "flow_disabled" | "conversation_type_excluded">,
   ): Promise<number> {
     const { prisma, logger } = this.deps;
     const sessions = await prisma.aiSession.findMany({
@@ -530,6 +546,28 @@ export class AiRuntime {
   /** Agente desativado: as conversas que ele atende param AGORA. */
   stopSessionsForAgent(input: { organizationId: string; agentId: string }): Promise<number> {
     return this.stopActiveSessions(input.organizationId, { agentId: input.agentId }, "agent_disabled");
+  }
+
+  /**
+   * O agente passou a não atender um tipo de conversa (o caso de origem é
+   * "a IA não responde grupo"): as sessões dele em conversa do tipo que
+   * saiu param AGORA. Sem isto a regra valeria só para atendimento NOVO, e o
+   * grupo onde a IA já estava seguiria sendo respondido — exatamente o que
+   * a pessoa acabou de mandar parar. Lê o tipo da configuração ATUAL do
+   * agente, e não da versão da sessão, pelo mesmo motivo do status: é
+   * interruptor, não regra de conversa.
+   */
+  stopSessionsOutsideConversationType(input: {
+    organizationId: string;
+    agentId: string;
+    conversationType: AiAgentConversationType;
+  }): Promise<number> {
+    if (input.conversationType === "any") return Promise.resolve(0);
+    return this.stopActiveSessions(
+      input.organizationId,
+      { agentId: input.agentId, conversation: { is: { type: { not: input.conversationType } } } },
+      "conversation_type_excluded",
+    );
   }
 
   /**
@@ -572,6 +610,12 @@ export class AiRuntime {
     // o cliente falando com ninguém.
     if (session.agent.status !== "active") {
       await this.finishWithFallback(session, conversation, config, "agent_disabled", null);
+      return;
+    }
+    // Agente que deixou de atender este tipo de conversa: a configuração
+    // ATUAL decide (e não a versão da sessão), como o status logo acima.
+    if (!agentAcceptsConversationType(parseStoredAgentConfig(session.agent.config).advanced.conversationType, conversation.type)) {
+      await this.finishWithFallback(session, conversation, config, "conversation_type_excluded", null);
       return;
     }
 
@@ -1615,6 +1659,13 @@ export class AiRuntime {
           await this.enqueue(conversation.id, () => this.finishWithFallback(session, conversation, config, "agent_disabled", null));
           continue;
         }
+        if (!agentAcceptsConversationType(parseStoredAgentConfig(session.agent.config).advanced.conversationType, conversation.type)) {
+          logger.info({ event: "ai_sweep_conversation_type_excluded", sessionId: session.id });
+          await this.enqueue(conversation.id, () =>
+            this.finishWithFallback(session, conversation, config, "conversation_type_excluded", null),
+          );
+          continue;
+        }
         if (session.automationId && !ligadas.has(session.automationId)) {
           logger.info({ event: "ai_sweep_automation_disabled", sessionId: session.id, automationId: session.automationId });
           await this.enqueue(conversation.id, () => this.finishWithFallback(session, conversation, config, "automation_disabled", null));
@@ -1715,9 +1766,9 @@ export class AiRuntime {
 export function automationMatches(
   automation: Pick<
     AiAutomation,
-    "whatsappInstanceId" | "departmentId" | "onlyWithoutDepartment" | "conversationType" | "onlyUnassigned" | "onlyNewConversations"
+    "whatsappInstanceId" | "departmentId" | "onlyWithoutDepartment" | "onlyUnassigned" | "onlyNewConversations"
   >,
-  conversation: Pick<Conversation, "whatsappInstanceId" | "departmentId" | "type" | "assignedUserId" | "assignedToAll" | "archivedAt">,
+  conversation: Pick<Conversation, "whatsappInstanceId" | "departmentId" | "assignedUserId" | "assignedToAll" | "archivedAt">,
   context: { isFirstInbound: boolean },
 ): boolean {
   if (conversation.archivedAt) return false;
@@ -1727,7 +1778,6 @@ export function automationMatches(
   } else if (automation.departmentId && automation.departmentId !== conversation.departmentId) {
     return false;
   }
-  if (!automationMatchesType(automation.conversationType as "any" | "individual" | "group", conversation.type)) return false;
   if (automation.onlyUnassigned && (conversation.assignedUserId || conversation.assignedToAll)) return false;
   if (automation.onlyNewConversations && !context.isFirstInbound) return false;
   return true;
@@ -1789,6 +1839,8 @@ function reasonLabel(reason: AiSessionEndReason): string {
       return "Automação de IA desligada durante o atendimento";
     case "flow_disabled":
       return "Fluxo de automação desligado durante o atendimento";
+    case "conversation_type_excluded":
+      return "O agente deixou de atender este tipo de conversa";
     case "attempt_limit":
       return "Limite de tentativas sem resolver";
     default:

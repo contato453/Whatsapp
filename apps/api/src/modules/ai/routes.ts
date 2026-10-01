@@ -3,7 +3,6 @@ import { z } from "zod";
 import { Prisma } from "@azvchat/database";
 import {
   AI_AGENT_STATUSES,
-  AI_AUTOMATION_CONVERSATION_TYPES,
   AI_BUDGET_POLICIES,
   AI_CREDIT_ENTRY_KINDS,
   AI_KNOWLEDGE_KINDS,
@@ -878,16 +877,27 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
       });
       return row;
     });
+    // Passar a não atender um tipo de conversa (ex.: "não responde grupo")
+    // alcança quem JÁ está sendo atendido, como desativar o agente: sem isto
+    // a IA seguiria falando no grupo que a pessoa acabou de mandar largar.
+    const stoppedSessions =
+      previous.advanced.conversationType !== body.config.advanced.conversationType
+        ? await deps.aiRuntime.stopSessionsOutsideConversationType({
+            organizationId,
+            agentId: id,
+            conversationType: body.config.advanced.conversationType,
+          })
+        : 0;
     deps.audit.record({
       organizationId,
       userId: request.user.sub,
       action: "ai.agent_updated",
       entityType: "AiAgent",
       entityId: id,
-      metadata: { name: updated.name, status: updated.status, version: updated.currentVersion, configChanged },
+      metadata: { name: updated.name, status: updated.status, version: updated.currentVersion, configChanged, stoppedSessions },
     });
     const [costs, defaultModel] = await Promise.all([agentCosts([id]), defaultModelOf(organizationId)]);
-    return { agent: serializeAiAgent(updated, { costMicros: costs.get(id) ?? 0, defaultModel }) };
+    return { agent: serializeAiAgent(updated, { costMicros: costs.get(id) ?? 0, defaultModel }), stoppedSessions };
   });
 
   app.post("/ai/agents/:id/status", { preHandler: requirePermission(deps, "ai.agent.manage") }, async (request) => {
@@ -1149,7 +1159,6 @@ export async function aiRoutes(app: FastifyInstance, deps: AppDeps): Promise<voi
     whatsappInstanceId: z.string().uuid().nullable().default(null),
     departmentId: z.string().uuid().nullable().default(null),
     onlyWithoutDepartment: z.boolean().default(false),
-    conversationType: z.enum(AI_AUTOMATION_CONVERSATION_TYPES).default("any"),
     onlyUnassigned: z.boolean().default(true),
     onlyNewConversations: z.boolean().default(false),
     resolvedTagId: z.string().uuid().nullable().default(null),

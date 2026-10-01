@@ -498,7 +498,6 @@ export interface AiAutomationInput {
   whatsappInstanceId: string | null;
   departmentId: string | null;
   onlyWithoutDepartment: boolean;
-  conversationType: AiAutomationDto["conversationType"];
   onlyUnassigned: boolean;
   onlyNewConversations: boolean;
   resolvedTagId: string | null;
@@ -569,8 +568,13 @@ export const aiApi = {
     api.get<{ agents: AiAgentDirectoryDto[] }>("/ai/agents/directory").then((data) => data.agents),
   agent: (id: string) => api.get<{ agent: AiAgentDto }>(`/ai/agents/${id}`).then((data) => data.agent),
   createAgent: (input: AiAgentInput) => api.post<{ agent: AiAgentDto }>("/ai/agents", input).then((data) => data.agent),
+  /**
+   * Devolve também quantos atendimentos em andamento a gravação encerrou —
+   * passar a não atender um tipo de conversa tira a IA de quem já estava
+   * sendo atendido, e a tela precisa dizer isso.
+   */
   updateAgent: (id: string, input: AiAgentInput) =>
-    api.patch<{ agent: AiAgentDto }>(`/ai/agents/${id}`, input).then((data) => data.agent),
+    api.patch<{ agent: AiAgentDto; stoppedSessions: number }>(`/ai/agents/${id}`, input),
   /**
    * Devolve o agente E quantos atendimentos em andamento o desligamento
    * encerrou — a tela promete que desativar encerra, então precisa poder

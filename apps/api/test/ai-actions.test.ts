@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PrismaClient } from "@azvchat/database";
 import type { Server } from "socket.io";
 import pino from "pino";
-import { defaultAiAgentConfig, estimateCostMicros, resolveModelPricing } from "@azvchat/shared";
+import { agentAcceptsConversationType, defaultAiAgentConfig, estimateCostMicros, resolveModelPricing } from "@azvchat/shared";
 import { executeTool, type ActionEnvironment } from "../src/services/ai/actions.js";
 import { automationMatches } from "../src/services/ai/runtime.js";
 import { readSessionState } from "../src/services/ai/session.js";
@@ -196,7 +196,6 @@ describe("automationMatches — o gatilho do bloco de IA", () => {
     whatsappInstanceId: null as string | null,
     departmentId: null as string | null,
     onlyWithoutDepartment: false,
-    conversationType: "any",
     onlyUnassigned: true,
     onlyNewConversations: false,
   };
@@ -219,12 +218,11 @@ describe("automationMatches — o gatilho do bloco de IA", () => {
     expect(automationMatches({ ...base, onlyUnassigned: false }, { ...conversation, assignedUserId: "u1" }, { isFirstInbound: false })).toBe(true);
   });
 
-  it("número, departamento, tipo e primeira mensagem restringem", () => {
+  it("número, departamento e primeira mensagem restringem", () => {
     expect(automationMatches({ ...base, whatsappInstanceId: "inst-2" }, conversation, { isFirstInbound: false })).toBe(false);
     expect(automationMatches({ ...base, departmentId: "dep-2" }, conversation, { isFirstInbound: false })).toBe(false);
     expect(automationMatches({ ...base, onlyWithoutDepartment: true }, conversation, { isFirstInbound: false })).toBe(false);
     expect(automationMatches({ ...base, onlyWithoutDepartment: true }, { ...conversation, departmentId: null }, { isFirstInbound: false })).toBe(true);
-    expect(automationMatches({ ...base, conversationType: "group" }, conversation, { isFirstInbound: false })).toBe(false);
     expect(automationMatches({ ...base, onlyNewConversations: true }, conversation, { isFirstInbound: false })).toBe(false);
     expect(automationMatches({ ...base, onlyNewConversations: true }, conversation, { isFirstInbound: true })).toBe(true);
   });
@@ -244,5 +242,18 @@ describe("custo estimado — nunca inventado", () => {
     const overrides = { "gpt-4.1-mini": { inputPerMillion: 1, outputPerMillion: 1 } };
     expect(resolveModelPricing("gpt-4.1-mini", overrides)).toEqual({ inputPerMillion: 1, outputPerMillion: 1 });
     expect(estimateCostMicros("modelo-inexistente", 1_000_000, 0, { "modelo-inexistente": { inputPerMillion: 3, outputPerMillion: 3 } })).toBe(3_000_000);
+  });
+});
+
+describe("agentAcceptsConversationType — o tipo de conversa é do AGENTE", () => {
+  it("padrão de fábrica é qualquer conversa", () => {
+    expect(defaultAiAgentConfig().advanced.conversationType).toBe("any");
+  });
+
+  it("só individual recusa grupo; só grupo recusa individual", () => {
+    expect(agentAcceptsConversationType("any", "group")).toBe(true);
+    expect(agentAcceptsConversationType("individual", "group")).toBe(false);
+    expect(agentAcceptsConversationType("individual", "individual")).toBe(true);
+    expect(agentAcceptsConversationType("group", "individual")).toBe(false);
   });
 });
