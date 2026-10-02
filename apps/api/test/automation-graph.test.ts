@@ -28,10 +28,10 @@ function baseGraph(): AutomationGraph {
 }
 
 describe("validateAutomationGraph", () => {
-  it("um fluxo com trigger e um bloco terminal implícito não sobra sem saída", () => {
-    // "send" não é terminal e não tem saída — deve reclamar.
-    const problems = validateAutomationGraph(baseGraph());
-    expect(problems.some((p) => p.nodeId === "send")).toBe(true);
+  it("enviar mensagem como último bloco encerra o fluxo, sem pendência", () => {
+    // "send" não é terminal, mas é ação simples (`canEndFlow`): pode fechar o
+    // caminho sozinho, sem um "Finalizar" pendurado depois.
+    expect(validateAutomationGraph(baseGraph())).toEqual([]);
   });
 
   it("fluxo completo (trigger -> mensagem -> finalizar) não tem pendência", () => {
@@ -230,6 +230,39 @@ describe("validateAutomationGraph", () => {
     };
     const problems = validateAutomationGraph(graph);
     expect(problems.some((p) => p.message.includes("Tempo esgotado e Cliente respondeu"))).toBe(true);
+  });
+
+  it("ação simples pode ser o último bloco, sem precisar de um Finalizar pendurado no fim", () => {
+    const graph: AutomationGraph = {
+      nodes: [
+        { id: "trigger", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+        { id: "send", type: "send_message", position: { x: 100, y: 0 }, data: { messageType: "text", text: "Oi" } },
+        { id: "tag", type: "tag_add", position: { x: 200, y: 0 }, data: { tagId: "tag-1" } },
+      ],
+      edges: [
+        { id: "e1", source: "trigger", target: "send" },
+        { id: "e2", source: "send", target: "tag" },
+      ],
+    };
+    expect(validateAutomationGraph(graph)).toEqual([]);
+  });
+
+  it("bloco que ramifica ou espera continua exigindo saída — é ali que o esquecimento acontece", () => {
+    for (const node of [
+      { id: "ask", type: "ask_question" as const, data: { question: "CPF?", answerType: "text", saveKey: "cpf" } },
+      { id: "ai", type: "ai_agent" as const, data: { agentId: "agent-1" } },
+      { id: "wait", type: "wait" as const, data: { mode: "duration", amount: 1, unit: "minutes" } },
+    ]) {
+      const graph: AutomationGraph = {
+        nodes: [
+          { id: "trigger", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+          { ...node, position: { x: 100, y: 0 } },
+        ],
+        edges: [{ id: "e1", source: "trigger", target: node.id }],
+      };
+      const problems = validateAutomationGraph(graph);
+      expect(problems.some((p) => p.nodeId === node.id && p.message.includes("não tem para onde seguir"))).toBe(true);
+    }
   });
 
   it("grafo vazio recém-criado (emptyAutomationGraph) só reclama de faltar destino do gatilho", () => {

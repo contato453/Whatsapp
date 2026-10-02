@@ -3027,14 +3027,24 @@ antes.
 
 **Validação antes de publicar** (seção 25): `validateAutomationGraph`
 (shared — forma do grafo: gatilho presente e único, bloco desconectado,
-condição sem os dois caminhos, menu com opção sem destino, "aguardar com
-retomada" sem as duas saídas) mais `validateAutomationFlowForPublish`
+bloco sem saída, condição sem os dois caminhos, menu com opção sem destino,
+"aguardar com retomada" sem as duas saídas) mais `validateAutomationFlowForPublish`
 (`lib/automation/validate.ts` — departamento/etiqueta/usuário referenciados
 existem NESTA organização). `POST /automation-flows/:id/publish` recusa com
 422 e a lista de pendências quando alguma coisa falha; o motor em si também
 confere de novo em runtime (nó sem aresta de saída completa a execução como
 concluída em vez de travar; laço entre blocos é cortado no passo 60 e a
 execução falha com `automation_execution_failed`, nunca derruba o processo).
+
+**O "Finalizar atendimento" não é obrigatório no fim do caminho.** Ação simples
+(`canEndFlow` no catálogo: enviar mensagem, etiqueta, status, encaminhar, atribuir,
+devolver para a fila, enviar para funil, webhook) pode ser o último bloco, sem saída
+ligada — o fluxo termina ali e a conversa segue como estava. Antes só o "Finalizar"
+fechava caminho, e todo fluxo levava um bloco vazio pendurado no fim só para passar
+na publicação. Quem ramifica ou espera (menu, condição, aguardar, fazer pergunta,
+IA) continua obrigado a ter saída: é ali que a conexão esquecida acontece, e onde
+deixar o caminho solto quase nunca é intenção. O motor já tratava nó sem aresta como
+fim normal da execução (`completed`), então nada mudou no lado da execução.
 
 **Permissões**: `automation.manage` (construir, publicar, ativar/desativar,
 templates — padrão supervisor+) e `automation.view_history` (padrão
