@@ -13,6 +13,7 @@ import {
   useNodesState,
   type Connection,
   type Edge,
+  type EdgeTypes,
   type Node,
   type NodeTypes,
 } from "@xyflow/react";
@@ -50,6 +51,7 @@ import type {
 } from "@/lib/types";
 import { Button, Spinner } from "@/components/ui";
 import { FlowNode, FLOW_NODE_TYPE, type FlowNodeData } from "@/components/automations/flow-node";
+import { FlowEdge, FlowEditableContext, FLOW_EDGE_TYPE } from "@/components/automations/flow-edge";
 import { stoppedExecutionsMessage } from "@/components/automations/automation-ui";
 import { useMyDepartments } from "@/components/department-picker";
 import { useAuth } from "@/lib/auth-context";
@@ -57,6 +59,7 @@ import { NodeInspector } from "@/components/automations/node-inspector";
 import { NodePalette } from "@/components/automations/node-palette";
 
 const nodeTypes: NodeTypes = { [FLOW_NODE_TYPE]: FlowNode };
+const edgeTypes: EdgeTypes = { [FLOW_EDGE_TYPE]: FlowEdge };
 
 function defaultConfigFor(type: AutomationNodeType): Record<string, unknown> {
   switch (type) {
@@ -102,6 +105,7 @@ function toReactFlow(graph: AutomationGraph): { nodes: Node<FlowNodeData>[]; edg
     })),
     edges: graph.edges.map((edge) => ({
       id: edge.id,
+      type: FLOW_EDGE_TYPE,
       source: edge.source,
       target: edge.target,
       sourceHandle: edge.sourceHandle ?? undefined,
@@ -250,7 +254,7 @@ export default function AutomationFlowBuilderPage() {
   }, [name, triggerType, triggerConfigText, whatsappInstanceId, departmentId, priority, cooldownMinutes, scheduleMode, nodes, edges]);
 
   const onConnect = useCallback(
-    (connection: Connection) => setEdges((eds) => addEdge(connection, eds)),
+    (connection: Connection) => setEdges((eds) => addEdge({ ...connection, type: FLOW_EDGE_TYPE }, eds)),
     [setEdges],
   );
 
@@ -495,20 +499,30 @@ export default function AutomationFlowBuilderPage() {
       <div className="flex min-h-0 flex-1">
         <NodePalette onAdd={handleAddNode} />
         <div className="min-w-0 flex-1">
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            nodeTypes={nodeTypes}
-            onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-            onPaneClick={() => setSelectedNodeId(null)}
-            fitView
-          >
-            <Background />
-            <Controls />
-          </ReactFlow>
+          <FlowEditableContext.Provider value={!readOnly}>
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={onConnect}
+              nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
+              onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+              // Clicar numa linha seleciona só ela: o inspetor do bloco fecha para o
+              // "x" no meio da linha ser a única ação à vista.
+              onEdgeClick={() => setSelectedNodeId(null)}
+              onPaneClick={() => setSelectedNodeId(null)}
+              // Delete além do Backspace (o padrão): é a tecla que quem vem do
+              // Windows procura para apagar a linha selecionada. Em somente
+              // leitura, nenhuma tecla apaga nada.
+              deleteKeyCode={readOnly ? null : ["Backspace", "Delete"]}
+              fitView
+            >
+              <Background />
+              <Controls />
+            </ReactFlow>
+          </FlowEditableContext.Provider>
         </div>
         {selectedNode && (
           <NodeInspector
