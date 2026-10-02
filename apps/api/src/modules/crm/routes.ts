@@ -14,7 +14,7 @@ import {
 } from "@azvchat/shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
-import type { PermissionAction } from "@azvchat/shared";
+import type { CrmPipelineDirectoryResponse, PermissionAction } from "@azvchat/shared";
 import { accessibleDepartmentIds, conversationAssigneeWhere } from "../../lib/access.js";
 import { authenticate } from "../../lib/auth.js";
 import { findAccessibleConversation } from "../../lib/conversation-access.js";
@@ -57,7 +57,7 @@ import {
   assertCrmEnabled,
   loadOrganizationFeatures,
 } from "../../lib/organization-features.js";
-import { loadPermissions } from "../../lib/permissions.js";
+import { loadPermissions, requireAnyPermission } from "../../lib/permissions.js";
 import { serializeUserDirectory } from "../../lib/serialize.js";
 import type { AppDeps } from "../../types.js";
 
@@ -207,6 +207,35 @@ export async function crmRoutes(app: FastifyInstance, deps: AppDeps): Promise<vo
     });
     return { pipelines: pipelines.map(serializeCrmPipeline) };
   });
+
+  /**
+   * Funis e etapas para o bloco "Enviar para funil (CRM)" do construtor de
+   * fluxos. Fora do `crmGuard` de propósito: com o CRM desligado a resposta é
+   * `enabled: false` e lista vazia, para o bloco explicar o motivo em vez de o
+   * construtor inteiro falhar ao abrir. O recorte por departamento é o mesmo
+   * de `GET /crm/pipelines` — quem não enxerga o funil não o escolhe.
+   */
+  app.get(
+    "/crm/pipelines/directory",
+    { preHandler: requireAnyPermission(deps, ["automation.manage", "crm.view"]) },
+    async (request): Promise<CrmPipelineDirectoryResponse> => {
+      const features = await loadOrganizationFeatures(deps.prisma, request.user.organizationId);
+      if (!features.crm) return { enabled: false, pipelines: [] };
+      await ensureDefaultCrmSetup(deps.prisma, request.user.organizationId);
+      const departmentIds = await accessibleDepartmentIds(deps.prisma, request.user);
+      const pipelines = await deps.prisma.crmPipeline.findMany({
+        where: { organizationId: request.user.organizationId, ...pipelineScope(departmentIds) },
+        select: {
+          id: true,
+          name: true,
+          isActive: true,
+          stages: { select: { id: true, name: true }, orderBy: { position: "asc" } },
+        },
+        orderBy: [{ isDefault: "desc" }, { position: "asc" }, { name: "asc" }],
+      });
+      return { enabled: true, pipelines };
+    },
+  );
 
   app.post(
     "/crm/pipelines",

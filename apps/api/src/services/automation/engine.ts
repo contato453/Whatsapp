@@ -12,6 +12,7 @@ import {
   type AutomationTriggerType,
   type ChangeStatusNodeData,
   type ConditionNodeData,
+  type CrmOpportunityNodeData,
   type FinishNodeData,
   type ForwardDepartmentNodeData,
   type MenuNodeData,
@@ -35,6 +36,8 @@ import { isWithinBusinessHours, nextBusinessWindowStart } from "../../lib/automa
 import { conversationAudience } from "../../realtime/socket.js";
 import { emitConversationAutomation } from "../../lib/conversation-automation.js";
 import { buildPreview, isUniqueViolation } from "../message-ingest.js";
+import { createCrmOpportunity } from "../../lib/crm-opportunity.js";
+import { loadOrganizationFeatures } from "../../lib/organization-features.js";
 import { buildAutomationVariableContext, type AutomationExecutionContextData } from "./context.js";
 
 /**
@@ -1016,6 +1019,65 @@ export class AutomationEngine {
         }
         contextData.aiSessionId = session.id;
         return { type: "wait", reason: "ai_session", until: null };
+      }
+
+      case "crm_opportunity": {
+        const data = node.data as unknown as CrmOpportunityNodeData;
+        // O bloco é PASSAGEIRO do fluxo: qualquer motivo de não abrir o card
+        // (CRM desligado, funil apagado ou inativo, etapa removida) vira log e
+        // o fluxo segue. Travar o atendimento do cliente porque o Kanban
+        // tropeçou trocaria um card a menos por um cliente sem resposta.
+        if (!data.pipelineId) return { type: "continue" };
+        const features = await loadOrganizationFeatures(this.prisma, conversation.organizationId);
+        if (!features.crm) {
+          // Desligar o CRM não pode ser só esconder o menu: o fluxo publicado
+          // continuaria abrindo card num módulo que ninguém enxerga mais.
+          await this.log(execution.id, "warn", "automation_crm_disabled", { nodeId: node.id });
+          return { type: "continue" };
+        }
+        const pipeline = await this.prisma.crmPipeline.findFirst({
+          where: { id: data.pipelineId, organizationId: conversation.organizationId },
+          select: { isActive: true, stages: { select: { id: true } } },
+        });
+        if (!pipeline || !pipeline.isActive) {
+          await this.log(execution.id, "warn", "automation_crm_pipeline_unavailable", { nodeId: node.id });
+          return { type: "continue" };
+        }
+        // Etapa que saiu do funil depois de o fluxo ser publicado cai na
+        // PRIMEIRA etapa em vez de perder o lead: o funil ainda existe, e o
+        // card no começo dele é recuperável; card nenhum não é.
+        const stageId =
+          data.stageId && pipeline.stages.some((stage) => stage.id === data.stageId) ? data.stageId : null;
+        if (data.stageId && !stageId) {
+          await this.log(execution.id, "warn", "automation_crm_stage_missing", { nodeId: node.id });
+        }
+        try {
+          const { opportunity, duplicated } = await createCrmOpportunity(
+            { prisma: this.prisma, io: this.io, logger: this.logger },
+            {
+              organizationId: conversation.organizationId,
+              pipelineId: data.pipelineId,
+              stageId,
+              conversationId: conversation.id,
+              // Autor nulo: quem abriu o card foi o fluxo, não uma pessoa — o
+              // histórico do card diz "criada automaticamente".
+              performedByUserId: null,
+            },
+          );
+          // Já havia card ABERTO desta conversa neste funil: ele fica onde
+          // está. Mover de volta para a etapa do bloco desfaria o avanço que
+          // o vendedor já fez, por causa de uma mensagem nova do cliente.
+          await this.log(execution.id, "info", duplicated ? "automation_crm_opportunity_exists" : "automation_crm_opportunity_created", {
+            nodeId: node.id,
+            data: { opportunityId: opportunity.id },
+          });
+        } catch (err) {
+          await this.log(execution.id, "warn", "automation_crm_opportunity_failed", {
+            nodeId: node.id,
+            message: String(err),
+          });
+        }
+        return { type: "continue" };
       }
 
       case "webhook": {

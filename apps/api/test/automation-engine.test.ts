@@ -2,6 +2,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutomationGraph } from "@azvchat/shared";
 import { AutomationEngine } from "../src/services/automation/engine.js";
 
+// O bloco "Enviar para funil (CRM)" delega a criação ao caminho ÚNICO de
+// oportunidade (`createCrmOpportunity`, coberto pelos testes do CRM). Aqui o
+// que se prova é o que o MOTOR decide: quando chamar, com o quê, e que nada
+// disso trava o fluxo.
+const crmMocks = vi.hoisted(() => ({
+  createCrmOpportunity: vi.fn(),
+  crmEnabled: { value: true },
+}));
+vi.mock("../src/lib/crm-opportunity.js", () => ({
+  createCrmOpportunity: crmMocks.createCrmOpportunity,
+}));
+vi.mock("../src/lib/organization-features.js", () => ({
+  loadOrganizationFeatures: async () => ({ crm: crmMocks.crmEnabled.value }),
+}));
+
 /**
  * O MOTOR de execução — o coração da automação. Nada aqui abre conexão de
  * banco: como o resto da suíte (ver `test/message-ingest-pipeline.test.ts`),
@@ -73,6 +88,7 @@ function buildFakeEnvironment(opts?: {
   const flowVersions = new Map<string, Record<string, unknown>>();
   const executions = new Map<string, Record<string, unknown>>();
   const aiSessions = new Map<string, Record<string, unknown>>();
+  const crmPipelines = new Map<string, Record<string, unknown>>();
   const executionLogs: Record<string, unknown>[] = [];
   const assignmentHistory: Record<string, unknown>[] = [];
   const sentMessages: { instanceId: string; chatId: string; text: string }[] = [];
@@ -296,6 +312,12 @@ function buildFakeEnvironment(opts?: {
         return out;
       },
     },
+    crmPipeline: {
+      findFirst: async ({ where }: { where: Record<string, unknown> }) => {
+        const row = [...crmPipelines.values()].find((item) => matches(item, where));
+        return row ? { ...row } : null;
+      },
+    },
     $transaction: async (ops: Promise<unknown>[]) => Promise.all(ops),
   };
 
@@ -424,6 +446,8 @@ function buildFakeEnvironment(opts?: {
     conversations,
     executions,
     aiSessions,
+    crmPipelines,
+    executionLogs,
     conversationTags,
     sentMessages,
     logger,
@@ -1080,6 +1104,112 @@ describe("AutomationEngine", () => {
       const flowId = env.createFlow({ name: "Menu", triggerType: "first_message", graph: menuGraph });
       expect(await desligar(env, flowId)).toBe(0);
       expect(env.sentMessages).toHaveLength(0);
+    });
+  });
+
+  describe("bloco 'Enviar para funil (CRM)'", () => {
+    function crmGraph(pipelineId: string, stageId = ""): AutomationGraph {
+      return {
+        nodes: [
+          { id: "trigger", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+          { id: "crm", type: "crm_opportunity", position: { x: 100, y: 0 }, data: { pipelineId, stageId } },
+          { id: "send", type: "send_message", position: { x: 200, y: 0 }, data: { messageType: "text", text: "Seguiu" } },
+          { id: "finish", type: "finish", position: { x: 300, y: 0 }, data: {} },
+        ],
+        edges: [
+          { id: "e1", source: "trigger", target: "crm" },
+          { id: "e2", source: "crm", target: "send" },
+          { id: "e3", source: "send", target: "finish" },
+        ],
+      };
+    }
+
+    function setup() {
+      const env = buildFakeEnvironment();
+      vi.setSystemTime(new Date("2026-03-05T10:00:00-03:00"));
+      env.crmPipelines.set("pipe-1", {
+        id: "pipe-1",
+        organizationId: env.ORG,
+        isActive: true,
+        stages: [{ id: "stage-a" }, { id: "stage-b" }],
+      });
+      return env;
+    }
+
+    beforeEach(() => {
+      crmMocks.createCrmOpportunity.mockReset();
+      crmMocks.createCrmOpportunity.mockResolvedValue({ opportunity: { id: "opp-1" }, duplicated: false });
+      crmMocks.crmEnabled.value = true;
+    });
+
+    it("abre o card com o contato da conversa, no funil e na etapa escolhidos, como sistema", async () => {
+      const env = setup();
+      const conversation = env.createConversation();
+      env.createFlow({ name: "Lead", triggerType: "first_message", graph: crmGraph("pipe-1", "stage-b") });
+
+      await env.inbound(conversation.id as string, "Quero contratar");
+
+      expect(crmMocks.createCrmOpportunity).toHaveBeenCalledTimes(1);
+      const input = crmMocks.createCrmOpportunity.mock.calls[0]?.[1] as Record<string, unknown>;
+      expect(input).toMatchObject({
+        organizationId: env.ORG,
+        pipelineId: "pipe-1",
+        stageId: "stage-b",
+        conversationId: conversation.id,
+        performedByUserId: null,
+      });
+      expect(env.sentMessages.map((message) => message.text)).toEqual(["Seguiu"]);
+      expect([...env.executions.values()][0]?.status).toBe("completed");
+    });
+
+    it("etapa vazia ou removida do funil cai na primeira etapa, sem perder o lead", async () => {
+      const env = setup();
+      const conversation = env.createConversation();
+      env.createFlow({ name: "Lead", triggerType: "first_message", graph: crmGraph("pipe-1", "stage-apagada") });
+
+      await env.inbound(conversation.id as string, "Oi");
+
+      const input = crmMocks.createCrmOpportunity.mock.calls[0]?.[1] as Record<string, unknown>;
+      expect(input.stageId).toBeNull();
+      expect(env.executionLogs.some((log) => log.event === "automation_crm_stage_missing")).toBe(true);
+    });
+
+    it("CRM desligado: não abre card e o fluxo segue", async () => {
+      const env = setup();
+      crmMocks.crmEnabled.value = false;
+      const conversation = env.createConversation();
+      env.createFlow({ name: "Lead", triggerType: "first_message", graph: crmGraph("pipe-1") });
+
+      await env.inbound(conversation.id as string, "Oi");
+
+      expect(crmMocks.createCrmOpportunity).not.toHaveBeenCalled();
+      expect(env.sentMessages.map((message) => message.text)).toEqual(["Seguiu"]);
+      expect(env.executionLogs.some((log) => log.event === "automation_crm_disabled")).toBe(true);
+    });
+
+    it("funil desativado ou de outra organização: não abre card e o fluxo segue", async () => {
+      const env = setup();
+      env.crmPipelines.set("pipe-off", { id: "pipe-off", organizationId: env.ORG, isActive: false, stages: [] });
+      env.crmPipelines.set("pipe-alheio", { id: "pipe-alheio", organizationId: "org-2", isActive: true, stages: [] });
+      const first = env.createConversation();
+      env.createFlow({ name: "Lead off", triggerType: "first_message", graph: crmGraph("pipe-off") });
+      await env.inbound(first.id as string, "Oi");
+
+      expect(crmMocks.createCrmOpportunity).not.toHaveBeenCalled();
+      expect(env.sentMessages.map((message) => message.text)).toEqual(["Seguiu"]);
+    });
+
+    it("falha ao criar (ou card já aberto) nunca trava a execução", async () => {
+      const env = setup();
+      crmMocks.createCrmOpportunity.mockRejectedValueOnce(new Error("banco caiu"));
+      const conversation = env.createConversation();
+      env.createFlow({ name: "Lead", triggerType: "first_message", graph: crmGraph("pipe-1") });
+
+      await env.inbound(conversation.id as string, "Oi");
+
+      expect(env.sentMessages.map((message) => message.text)).toEqual(["Seguiu"]);
+      expect([...env.executions.values()][0]?.status).toBe("completed");
+      expect(env.executionLogs.some((log) => log.event === "automation_crm_opportunity_failed")).toBe(true);
     });
   });
 });

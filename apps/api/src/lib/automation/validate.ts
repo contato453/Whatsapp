@@ -5,6 +5,7 @@ import {
   type AssignUserNodeData,
   type AutomationFlowProblem,
   type AutomationGraph,
+  type CrmOpportunityNodeData,
   type FinishNodeData,
   type ForwardDepartmentNodeData,
   type TagNodeData,
@@ -92,6 +93,32 @@ export async function validateAutomationFlowForPublish(
   for (const id of agentIds) {
     if (!foundAgents.has(id)) {
       problems.push({ message: "O bloco de atendimento por IA aponta para um agente que não existe mais." });
+    }
+  }
+
+  // Funil e etapa do bloco "Enviar para funil (CRM)". Em runtime o motor
+  // ainda se defende (funil apagado vira log, etapa removida cai na
+  // primeira), mas publicar já apontando para o que não existe é o erro que
+  // dá para pegar antes de o primeiro lead passar por ali sem virar card.
+  const crmNodes = graph.nodes
+    .filter((node) => node.type === "crm_opportunity")
+    .map((node) => ({ nodeId: node.id, data: node.data as unknown as CrmOpportunityNodeData }))
+    .filter((item) => item.data.pipelineId);
+  if (crmNodes.length > 0) {
+    const pipelines = await prisma.crmPipeline.findMany({
+      where: { id: { in: [...new Set(crmNodes.map((item) => item.data.pipelineId))] }, organizationId },
+      select: { id: true, isActive: true, stages: { select: { id: true } } },
+    });
+    const byId = new Map(pipelines.map((pipeline) => [pipeline.id, pipeline]));
+    for (const { nodeId, data } of crmNodes) {
+      const pipeline = byId.get(data.pipelineId);
+      if (!pipeline) {
+        problems.push({ nodeId, message: "O bloco de funil do CRM aponta para um funil que não existe mais." });
+      } else if (!pipeline.isActive) {
+        problems.push({ nodeId, message: "O bloco de funil do CRM aponta para um funil desativado." });
+      } else if (data.stageId && !pipeline.stages.some((stage) => stage.id === data.stageId)) {
+        problems.push({ nodeId, message: "O bloco de funil do CRM aponta para uma etapa que não existe mais neste funil." });
+      }
     }
   }
 

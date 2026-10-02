@@ -2977,6 +2977,7 @@ elegibilidade com a MESMA `conversationAssigneeWhere` de `lib/access.ts` — um
 fluxo não pode atribuir a quem não enxergaria a conversa), `unassign`,
 `ai_agent` (**"Atendimento por IA" dentro do fluxo** — ver o bloco próprio
 mais abaixo, é o ponto onde este motor encosta no da seção 20),
+`crm_opportunity` (**"Enviar para funil (CRM)"** — ver o bloco próprio mais abaixo),
 `webhook` (POST simples, 5s de timeout, falha vira log e o fluxo segue —
 nunca trava a automação por um sistema externo fora do ar), `finish`
 (mensagem final opcional, concluir atendimento, adicionar etiqueta, gerar
@@ -2987,6 +2988,33 @@ pede "encaminhar para fila/setor/atendente"; aqui isso é
 `assign_user` (atendente específico), porque o AZVCHAT não tem conceito de
 fila separado de departamento (ver seção 5) — inventar um seria duplicar
 estrutura que já existe.
+
+**Bloco "Enviar para funil (CRM)" — onde este motor encosta no CRM da seção 21.**
+O nó `crm_opportunity` (`{ pipelineId, stageId? }`, etapa vazia = a primeira do funil)
+abre uma oportunidade da conversa no Kanban pelo caminho ÚNICO de criação,
+`createCrmOpportunity` (`lib/crm-opportunity.ts`) — o mesmo da tela, do chat, da
+etiqueta-gatilho e do disparo. Nada de criação paralela: o contato vem da conversa, a
+duplicidade é decidida pelo índice parcial, as ações de entrada da etapa rodam e o
+responsável segue a distribuição do funil (`conversationAssigneeWhere`, como sempre).
+Decisões que valem para qualquer mexida aqui: (1) **o bloco é passageiro do fluxo e
+nunca o trava** — CRM desligado (`automation_crm_disabled`), funil apagado, desativado
+ou de outra organização (`automation_crm_pipeline_unavailable`) e falha na criação
+(`automation_crm_opportunity_failed`) viram log, e o fluxo segue pela única saída;
+(2) **etapa que saiu do funil depois da publicação cai na PRIMEIRA etapa**
+(`automation_crm_stage_missing`), em vez de perder o lead: card no começo do funil é
+recuperável, card nenhum não é; (3) **card já aberto desta conversa no mesmo funil fica
+onde está** (`automation_crm_opportunity_exists`) — mover de volta desfaria o avanço que
+o vendedor fez por causa de uma mensagem nova do cliente; (4) **o CRM desligado vale
+também aqui**: o motor confere `loadOrganizationFeatures` antes, senão desligar o módulo
+seria só esconder o menu; (5) o autor é nulo (quem abriu foi o fluxo) e a origem é a de
+sempre para quem nasce de conversa (`whatsapp`). A publicação recusa funil inexistente,
+desativado ou etapa que não é dele (`validateAutomationFlowForPublish`). Para escolher
+funil e etapa, `GET /crm/pipelines/directory` é o recorte mínimo (id, nome, ativo,
+etapas), liberado por `automation.manage` OU `crm.view`, com o mesmo recorte por
+departamento de `GET /crm/pipelines` e **fora do `crmGuard` de propósito**: com o CRM
+desligado responde `enabled: false` e o bloco explica, em vez de o construtor inteiro
+falhar ao abrir. Coberto por `apps/api/test/automation-engine.test.ts` ("bloco 'Enviar
+para funil (CRM)'").
 
 **Variáveis de mensagem do fluxo** (`resolveAutomationTemplate`, em
 `automation-variables.ts`): `{{nome}}`, `{{primeiro_nome}}`, `{{telefone}}`,
@@ -3739,6 +3767,8 @@ POST|DELETE /crm/opportunities/:id/tags/:tagId
 GET    /crm/activities?range=overdue|today|tomorrow|week|done|all[&mine=true]
 POST   /crm/opportunities/:id/activities      PATCH /crm/activities/:id
 GET    /conversations/:id/crm    (o card do painel de contexto da conversa)
+GET    /crm/pipelines/directory   (automation.manage OU crm.view; funis e etapas para o bloco
+       "Enviar para funil (CRM)" dos fluxos — CRM desligado volta `enabled: false`, não 403)
 GET    /crm/settings   POST|PATCH /crm/products   POST|PATCH /crm/loss-reasons
 GET    /crm/reports?pipelineId=&from=&to=     (crm.reports.view)
 

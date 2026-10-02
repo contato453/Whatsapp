@@ -45,6 +45,7 @@ export const AUTOMATION_NODE_TYPES = [
   "unassign",
   "forward_department",
   "ai_agent",
+  "crm_opportunity",
   "webhook",
   "finish",
 ] as const;
@@ -192,6 +193,13 @@ export const AUTOMATION_NODE_TYPE_DEFINITIONS: Record<AutomationNodeType, Automa
       { handle: "resolvido", label: "Resolvido pela IA" },
       { handle: "transferido", label: "Transferido / encerrado" },
     ],
+  },
+  crm_opportunity: {
+    type: "crm_opportunity",
+    category: "atendimento",
+    label: "Enviar para funil (CRM)",
+    description: "Abre uma oportunidade da conversa no Kanban do CRM, no funil e na etapa escolhidos.",
+    color: "#be123c",
   },
   webhook: {
     type: "webhook",
@@ -372,6 +380,13 @@ export interface AssignUserNodeData {
 export interface AiAgentNodeData {
   /** Agente cadastrado em Configurações → Inteligência artificial. */
   agentId: string;
+}
+
+export interface CrmOpportunityNodeData {
+  /** Funil do CRM (Kanban) onde o card nasce. */
+  pipelineId: string;
+  /** Etapa inicial; vazio = a primeira etapa do funil. */
+  stageId?: string;
 }
 
 export interface WebhookNodeData {
@@ -593,6 +608,9 @@ export function validateAutomationGraph(graph: AutomationGraph): AutomationFlowP
     }
     if (node.type === "ai_agent" && !(node.data as unknown as AiAgentNodeData).agentId) {
       problems.push({ nodeId: node.id, message: "Selecione um agente de IA para este bloco." });
+    }
+    if (node.type === "crm_opportunity" && !(node.data as unknown as CrmOpportunityNodeData).pipelineId) {
+      problems.push({ nodeId: node.id, message: "Selecione o funil do CRM para este bloco." });
     }
     if (node.type === "wait" && (node.data as unknown as WaitNodeData).resumeOnReply) {
       const handles = new Set(outgoing.map((edge) => edge.sourceHandle));

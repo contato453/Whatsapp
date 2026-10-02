@@ -17,6 +17,8 @@ import {
   type AutomationNodeType,
   type ChangeStatusNodeData,
   type ConditionNodeData,
+  type CrmOpportunityNodeData,
+  type CrmPipelineDirectoryResponse,
   type FinishNodeData,
   type ForwardDepartmentNodeData,
   type MenuNodeData,
@@ -41,6 +43,8 @@ interface InspectorProps {
   departments: DepartmentDto[];
   users: UserDirectoryDto[];
   agents: AiAgentDirectoryDto[];
+  /** Nulo = a lista de funis não carregou (sem permissão ou falha de rede). */
+  crmPipelines: CrmPipelineDirectoryResponse | null;
 }
 
 function slug(text: string): string {
@@ -52,7 +56,7 @@ function slug(text: string): string {
     .replace(/^_+|_+$/g, "") || `opcao_${Math.random().toString(36).slice(2, 6)}`;
 }
 
-export function NodeInspector({ kind, config, onChange, onDelete, onClose, tags, departments, users, agents }: InspectorProps) {
+export function NodeInspector({ kind, config, onChange, onDelete, onClose, tags, departments, users, agents, crmPipelines }: InspectorProps) {
   const definition = AUTOMATION_NODE_TYPE_DEFINITIONS[kind];
 
   function set<T extends Record<string, unknown>>(patch: Partial<T>): void {
@@ -101,6 +105,9 @@ export function NodeInspector({ kind, config, onChange, onDelete, onClose, tags,
         )}
         {kind === "ai_agent" && (
           <AiAgentFields config={config as unknown as AiAgentNodeData} set={set} agents={agents} />
+        )}
+        {kind === "crm_opportunity" && (
+          <CrmOpportunityFields config={config as unknown as CrmOpportunityNodeData} set={set} directory={crmPipelines} />
         )}
         {kind === "webhook" && <WebhookFields config={config as unknown as WebhookNodeData} set={set} />}
         {kind === "finish" && (
@@ -566,6 +573,84 @@ function AiAgentFields({
         A conversa entra em espera aqui até a IA concluir, transferir ou encerrar. As duas saídas
         deste bloco são para depois disso — deixe uma delas sem conexão se não houver mais nada a
         fazer naquele caminho.
+      </p>
+    </>
+  );
+}
+
+function CrmOpportunityFields({
+  config,
+  set,
+  directory,
+}: {
+  config: CrmOpportunityNodeData;
+  set: (patch: Partial<CrmOpportunityNodeData>) => void;
+  directory: CrmPipelineDirectoryResponse | null;
+}) {
+  if (!directory) {
+    return (
+      <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-700">
+        Não foi possível carregar os funis do CRM. Recarregue a página para tentar de novo.
+      </p>
+    );
+  }
+  if (!directory.enabled) {
+    return (
+      <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-700">
+        O CRM está desligado neste escritório. Enquanto estiver, este bloco não abre card nenhum e o fluxo
+        segue em frente. Um administrador pode religá-lo em Configurações.
+      </p>
+    );
+  }
+  // Funil desativado continua aparecendo QUANDO já é o escolhido: sumir com ele
+  // faria o seletor mostrar "Selecione" e esconder por que o bloco não age.
+  const pipelines = directory.pipelines.filter(
+    (pipeline) => pipeline.isActive || pipeline.id === config.pipelineId,
+  );
+  const selected = directory.pipelines.find((pipeline) => pipeline.id === config.pipelineId) ?? null;
+  return (
+    <>
+      <Field label="Funil">
+        <select
+          className={SELECT_CLASS}
+          value={config.pipelineId ?? ""}
+          // Trocar de funil zera a etapa: a etapa de um funil não existe no outro.
+          onChange={(event) => set({ pipelineId: event.target.value, stageId: "" })}
+        >
+          <option value="">Selecione</option>
+          {pipelines.map((pipeline) => (
+            <option key={pipeline.id} value={pipeline.id}>
+              {pipeline.name}
+              {pipeline.isActive ? "" : " (desativado)"}
+            </option>
+          ))}
+        </select>
+      </Field>
+      {selected && (
+        <Field label="Etapa">
+          <select
+            className={SELECT_CLASS}
+            value={config.stageId ?? ""}
+            onChange={(event) => set({ stageId: event.target.value })}
+          >
+            <option value="">Primeira etapa do funil</option>
+            {selected.stages.map((stage) => (
+              <option key={stage.id} value={stage.id}>
+                {stage.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+      {pipelines.length === 0 && (
+        <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-700">
+          Nenhum funil ativo que você enxergue. Crie um em CRM → Funis.
+        </p>
+      )}
+      <p className="text-xs text-slate-500">
+        Abre uma oportunidade com o contato da própria conversa. Se ela já tiver um card aberto neste
+        funil, o card fica onde está — o fluxo não desfaz o avanço que a equipe já fez. O responsável
+        segue a regra de distribuição do funil.
       </p>
     </>
   );
