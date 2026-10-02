@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Prisma } from "@azvchat/database";
 import { z } from "zod";
+import { resolveConversationPhone } from "../../lib/conversation-phone.js";
 import {
   AZEVEDO_OS_SOURCE,
   assignmentTokenIsValid,
@@ -533,8 +534,14 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     // cada participante. Completamos com duas fontes: o cadastro de
     // contatos e o nome que o WhatsApp envia junto das mensagens (pushName).
     const participantIds = group?.participants.map((p) => p.externalContactId) ?? [];
-    const [participantContacts, namesFromMessages, personProfiles, personGroupCounts, personName] =
-      await Promise.all([
+    const [
+      participantContacts,
+      namesFromMessages,
+      personProfiles,
+      personGroupCounts,
+      personName,
+      contactPhone,
+    ] = await Promise.all([
         group
           ? resolveContacts(deps.prisma, conversation.whatsappInstanceId, participantIds)
           : Promise.resolve(new Map<string, SenderInfo>()),
@@ -560,6 +567,8 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
           : Promise.resolve(new Map<string, number>()),
         // Conversa individual: o título carrega o nome corrigido da pessoa.
         resolveConversationPersonName(deps.prisma, request.user.organizationId, conversation),
+        // Telefone da conversa individual, inclusive quando o endereço é "@lid".
+        resolveConversationPhone(deps.prisma, request.user.organizationId, conversation),
       ]);
     const pushNames = new Map(
       namesFromMessages
@@ -573,6 +582,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
         scheduledPendingCount,
         pinnedItems,
         personName,
+        contactPhone,
       ),
       aiSession: aiSession ? serializeAiSession(aiSession) : null,
       group: group

@@ -48,17 +48,6 @@ import { InternalNotePanelItem, useCanManageNote } from "./internal-note";
 import { AssigneeSelect } from "./assignee-select";
 import type { ConversationCompanyState } from "./use-conversation-company";
 
-/**
- * Telefone de uma conversa individual. O endereço do WhatsApp vem como
- * "5521999999999@s.whatsapp.net"; contas novas usam "@lid", que não carrega
- * o telefone — nesse caso não há o que exibir.
- */
-function phoneFromChatId(externalChatId: string): string | null {
-  const [numero, dominio] = externalChatId.split("@");
-  if (!numero || dominio === "lid" || !/^\d{8,15}$/.test(numero)) return null;
-  return numero;
-}
-
 /** Nome exibido quando o arquivo chegou sem nome original. */
 const FILE_TYPE_LABELS: Record<string, string> = {
   image: "Imagem",
@@ -202,12 +191,13 @@ export function ContextPanel({
     );
   }
 
+  // Quem decide o número é a API (`contactPhone`): ela cobre também a conversa
+  // "@lid", cujo endereço não traz telefone, olhando contato, registro da
+  // pessoa e grupos. Ler só o endereço deixava a equipe sem o número justo
+  // nas contas novas do WhatsApp.
   const telefone =
-    conversation.type === "individual"
-      ? (() => {
-          const numero = phoneFromChatId(conversation.externalChatId);
-          return numero ? formatPhone(numero) : null;
-        })()
+    conversation.type === "individual" && conversation.contactPhone
+      ? formatPhone(conversation.contactPhone)
       : null;
 
   // Nome próprio de participante de grupo.
@@ -340,11 +330,23 @@ export function ContextPanel({
                 No WhatsApp: {conversation.whatsappTitle}
               </p>
             )}
-            <p className="text-xs text-slate-500">
-              {conversation.type === "group"
-                ? `Grupo · ${detail.group?.participantCount ?? "?"} participantes`
-                : (telefone ?? "Conversa individual")}
-            </p>
+            {conversation.type === "group" ? (
+              <p className="text-xs text-slate-500">
+                Grupo · {detail.group?.participantCount ?? "?"} participantes
+              </p>
+            ) : (
+              <>
+                <p className="text-xs text-slate-500">Conversa individual</p>
+                <p
+                  className={
+                    telefone ? "select-all text-xs text-slate-700" : "text-xs text-slate-400"
+                  }
+                  title={telefone ? "WhatsApp do cliente" : undefined}
+                >
+                  {telefone ? `WhatsApp: ${telefone}` : "Número não identificado"}
+                </p>
+              </>
+            )}
             <p className="text-xs text-slate-400">via {conversation.instanceName ?? "—"}</p>
           </div>
           <button

@@ -573,10 +573,13 @@ export function serializeConversationDetail(
   scheduledPendingCount: number,
   pinnedItems: Parameters<typeof serializePinnedItems>[0],
   personName?: string | null,
+  contactPhone: string | null = null,
 ) {
   return {
     ...serializeConversation(conversation, personName),
     scheduledPendingCount,
+    // Só no detalhe: são até três consultas, e a lista não paga isso por linha.
+    contactPhone,
     pinnedItems: serializePinnedItems(pinnedItems),
   };
 }
