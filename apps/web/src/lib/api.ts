@@ -2,6 +2,7 @@
 
 import { AZEVEDO_OS_SOURCE } from "@azvchat/shared";
 import type {
+  CrmPipelineDirectoryResponse,
   AiAgentDirectoryDto,
   AiBalanceDto,
   AiCreditEntryKind,
@@ -1177,6 +1178,10 @@ export const organizationApi = {
 };
 
 export const crmApi = {
+  // Funis e etapas para o bloco "Enviar para funil (CRM)" do construtor de
+  // fluxos: basta `automation.manage`, e o CRM desligado volta como
+  // `enabled: false` em vez de erro.
+  pipelinesDirectory: () => api.get<CrmPipelineDirectoryResponse>("/crm/pipelines/directory"),
   pipelines: () =>
     api.get<{ pipelines: CrmPipelineDto[] }>("/crm/pipelines").then((data) => data.pipelines),
   createPipeline: (input: {

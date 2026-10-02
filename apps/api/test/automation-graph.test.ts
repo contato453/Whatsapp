@@ -194,6 +194,22 @@ describe("validateAutomationGraph", () => {
     expect(validateAutomationGraph(graph)).toEqual([]);
   });
 
+  it("bloco de funil do CRM sem funil escolhido é recusado, e com funil passa limpo", () => {
+    const graph = (pipelineId: string): AutomationGraph => ({
+      nodes: [
+        { id: "trigger", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+        { id: "crm", type: "crm_opportunity", position: { x: 100, y: 0 }, data: { pipelineId, stageId: "" } },
+        { id: "finish", type: "finish", position: { x: 200, y: 0 }, data: {} },
+      ],
+      edges: [
+        { id: "e1", source: "trigger", target: "crm" },
+        { id: "e2", source: "crm", target: "finish" },
+      ],
+    });
+    expect(validateAutomationGraph(graph("")).some((p) => p.message.includes("funil do CRM"))).toBe(true);
+    expect(validateAutomationGraph(graph("pipeline-1"))).toEqual([]);
+  });
+
   it("aguardar com retomada por resposta exige as duas saídas", () => {
     const graph: AutomationGraph = {
       nodes: [

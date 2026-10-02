@@ -9,6 +9,7 @@ import {
   type AutomationNodeType,
   type ChangeStatusNodeData,
   type ConditionNodeData,
+  type CrmOpportunityNodeData,
   type FinishNodeData,
   type MenuNodeData,
   type SendMessageNodeData,
@@ -45,6 +46,8 @@ function summaryFor(kind: AutomationNodeType, config: Record<string, unknown>): 
       return (config as unknown as FinishNodeData).message?.slice(0, 60) || null;
     case "ai_agent":
       return (config as unknown as AiAgentNodeData).agentId ? "Agente selecionado" : "Nenhum agente selecionado";
+    case "crm_opportunity":
+      return (config as unknown as CrmOpportunityNodeData).pipelineId ? "Funil selecionado" : "Nenhum funil selecionado";
     default:
       return null;
   }

@@ -596,3 +596,22 @@ export function crmTimeInStageLabel(stageEnteredAt: string | Date, now: Date = n
   if (dias === 1) return "1 dia nesta etapa";
   return `${dias} dias nesta etapa`;
 }
+
+/**
+ * Recorte mínimo de funil para o bloco "Enviar para funil (CRM)" do
+ * construtor de fluxos — o mesmo espírito do diretório de agentes de IA: quem
+ * monta fluxo (`automation.manage`) escolhe funil e etapa sem precisar da
+ * chave do CRM, e não recebe automações de etapa, distribuição nem pool.
+ */
+export interface CrmPipelineDirectoryDto {
+  id: string;
+  name: string;
+  isActive: boolean;
+  stages: { id: string; name: string }[];
+}
+
+export interface CrmPipelineDirectoryResponse {
+  /** CRM desligado: a lista vem vazia e a tela explica, em vez de um 403. */
+  enabled: boolean;
+  pipelines: CrmPipelineDirectoryDto[];
+}

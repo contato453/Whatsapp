@@ -34,12 +34,13 @@ import {
   SCHEDULE_MODE_HINTS,
   SCHEDULE_MODE_LABELS,
   type AiAgentDirectoryDto,
+  type CrmPipelineDirectoryResponse,
   type AutomationGraph,
   type AutomationNodeType,
   type AutomationTriggerType,
   type ScheduleMode,
 } from "@azvchat/shared";
-import { aiApi, api, automationApi } from "@/lib/api";
+import { aiApi, api, automationApi, crmApi } from "@/lib/api";
 import type {
   AutomationFlowDetailDto,
   AutomationFlowProblemDto,
@@ -80,6 +81,8 @@ function defaultConfigFor(type: AutomationNodeType): Record<string, unknown> {
       return { userId: "" };
     case "ai_agent":
       return { agentId: "" };
+    case "crm_opportunity":
+      return { pipelineId: "", stageId: "" };
     case "webhook":
       return { url: "", headers: {} };
     case "finish":
@@ -141,6 +144,7 @@ export default function AutomationFlowBuilderPage() {
   const [tags, setTags] = useState<TagDto[]>([]);
   const [users, setUsers] = useState<UserDirectoryDto[]>([]);
   const [agents, setAgents] = useState<AiAgentDirectoryDto[]>([]);
+  const [crmPipelines, setCrmPipelines] = useState<CrmPipelineDirectoryResponse | null>(null);
   const [name, setName] = useState("");
   const [triggerType, setTriggerType] = useState<AutomationTriggerType>("new_message");
   const [triggerConfigText, setTriggerConfigText] = useState("");
@@ -175,8 +179,11 @@ export default function AutomationFlowBuilderPage() {
       api.get<{ tags: TagDto[] }>("/tags"),
       api.get<{ users: UserDirectoryDto[] }>("/users"),
       aiApi.agentsDirectory(),
+      // A lista de funis não pode derrubar o construtor: sem ela, só o bloco
+      // de CRM fica sem opções (e explica por quê).
+      crmApi.pipelinesDirectory().catch(() => null),
     ])
-      .then(([loadedFlow, instancesData, departmentsData, tagsData, usersData, agentsData]) => {
+      .then(([loadedFlow, instancesData, departmentsData, tagsData, usersData, agentsData, crmData]) => {
         setFlow(loadedFlow);
         setName(loadedFlow.name);
         setTriggerType(loadedFlow.triggerType);
@@ -195,6 +202,7 @@ export default function AutomationFlowBuilderPage() {
         setTags(tagsData.tags);
         setUsers(usersData.users);
         setAgents(agentsData);
+        setCrmPipelines(crmData);
         // O autosave só liga DEPOIS da primeira carga — sem isso, montar o
         // estado inicial contaria como "mudou" e gravaria de volta o que
         // acabou de vir do servidor.
@@ -513,6 +521,7 @@ export default function AutomationFlowBuilderPage() {
             departments={departments}
             users={users}
             agents={agents}
+            crmPipelines={crmPipelines}
           />
         )}
       </div>
