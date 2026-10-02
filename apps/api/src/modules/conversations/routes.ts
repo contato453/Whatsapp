@@ -14,6 +14,8 @@ import {
   FILTER_NONE,
   PARTICIPANT_CLIENT_ROLES,
   RealtimeEvents,
+  sortWithPinnedFirst,
+  type ConversationPinMap,
 } from "@azvchat/shared";
 import { planReferenceUpdate } from "../../lib/azevedo-os-link.js";
 import { maybeCreateOpportunityFromTag } from "../../lib/crm-opportunity.js";
@@ -53,6 +55,12 @@ import {
   unreadConversationWhere,
 } from "../../lib/conversation-reads.js";
 import { loadConversationAutomations } from "../../lib/conversation-automation.js";
+import {
+  loadVisiblePins,
+  pinConversation,
+  unpinConversation,
+  unpinConversationForEveryone,
+} from "../../lib/conversation-pins.js";
 import { assertKnownFilterIds, listaDe } from "../../lib/conversation-filters.js";
 import { reportFilterConditions, resolvedInPeriodWhere } from "../../lib/report-slice.js";
 import { loadAttendanceSettings } from "../../lib/attendance-settings.js";
@@ -208,6 +216,14 @@ const listQuerySchema = z.object({
    * "false"), como em `archived`: quem não quer o recorte OMITE o parâmetro.
    */
   excludeInternal: z.coerce.boolean().optional(),
+  /**
+   * Põe as conversas que ESTA pessoa fixou no topo da primeira página, e
+   * devolve o mapa `pinned`. Só a Inbox manda: o seletor do Quality e o
+   * painel do relatório paginam por `offset` e contam o `total`, e linhas a
+   * mais no topo bagunçariam as duas coisas. Mesma leitura de `archived`:
+   * quem não quer, OMITE o parâmetro.
+   */
+  pinnedFirst: z.coerce.boolean().optional(),
   limit: z.coerce.number().min(1).max(100).default(50),
   offset: z.coerce.number().min(0).default(0),
 })
@@ -421,16 +437,46 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     }
     where.AND = [...scopeAnd, ...filtros, ...extras];
 
-    const [conversations, total] = await Promise.all([
+    /**
+     * Fixadas desta pessoa (no máximo 3). Saem do recorte de ACESSO, e não do
+     * recorte dos filtros: o mapa diz "o que eu fixei e ainda enxergo", e a
+     * tela usa para o ícone e para o menu. Já as LINHAS fixadas que sobem
+     * para o topo passam por todos os filtros (`where` inteiro): fixada que
+     * furasse o filtro faria a lista deixar de corresponder ao que está
+     * marcado. A arquivada nunca está aqui — arquivar desafixa.
+     */
+    const pinned =
+      query.pinnedFirst && !query.archived
+        ? await loadVisiblePins(deps.prisma, request.user.sub, {
+            organizationId: request.user.organizationId,
+            ...conversationScope(access),
+          })
+        : {};
+    const pinnedIds = Object.keys(pinned);
+    const whereAnd = where.AND as Prisma.ConversationWhereInput[];
+    const [mainConversations, pinnedConversations, total] = await Promise.all([
       deps.prisma.conversation.findMany({
-        where,
+        // As fixadas saem da paginação normal para não aparecerem duas vezes;
+        // o `total` continua contando todas.
+        where:
+          pinnedIds.length > 0 ? { ...where, AND: [...whereAnd, { id: { notIn: pinnedIds } }] } : where,
         include: conversationInclude,
         orderBy: [{ lastMessageAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }],
         take: query.limit,
         skip: query.offset,
       }),
+      pinnedIds.length > 0 && query.offset === 0
+        ? deps.prisma.conversation.findMany({
+            where: { ...where, AND: [...whereAnd, { id: { in: pinnedIds } }] },
+            include: conversationInclude,
+          })
+        : Promise.resolve([]),
       deps.prisma.conversation.count({ where }),
     ]);
+    const conversations = [
+      ...sortWithPinnedFirst(pinnedConversations, pinned),
+      ...mainConversations,
+    ];
     // O contador vai num mapa à parte, e não dentro do DTO: o mesmo DTO é
     // publicado por socket para a audiência inteira da conversa, e um número
     // pessoal ali vazaria de uma pessoa para a outra. Uma consulta só para a
@@ -461,6 +507,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       total,
       unread: Object.fromEntries(unread),
       automation: Object.fromEntries(automation),
+      pinned,
       companyFilter: companyFilterActive ? { unavailable, truncated, unlinkedExcluded } : null,
     };
   });
@@ -792,6 +839,51 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     const unreadCount = await loadUnreadCount(deps.prisma, request.user.sub, id);
     await emitConversationRead(request.user.sub, id, unreadCount);
     return { ok: true, unreadCount };
+  });
+
+  /**
+   * Fixar/desafixar a conversa no topo da lista — SÓ PARA QUEM CHAMOU, como
+   * no WhatsApp Web. Sem chave de permissão e sem auditoria, pelo mesmo
+   * motivo da leitura: é arrumação pessoal da própria tela, que não muda
+   * nada para mais ninguém. A conversa precisa estar no alcance de quem
+   * fixa (404 fora dele), e a resposta é o mapa INTEIRO das fixadas, que
+   * também vai para as outras abas da pessoa pela sala pessoal.
+   */
+  async function emitConversationPins(userId: string, pinned: ConversationPinMap): Promise<void> {
+    deps.io.to(userRoom(userId)).emit(RealtimeEvents.ConversationPins, { pinned });
+  }
+
+  async function pinVisibleWhere(user: FastifyRequest["user"]) {
+    const access = await loadConversationAccess(deps.prisma, user);
+    return { organizationId: user.organizationId, ...conversationScope(access) };
+  }
+
+  app.post("/conversations/:id/pin", { preHandler: authenticate }, async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const conversation = await findConversationOr404(id, request.user);
+    if (conversation.archivedAt) {
+      throw new AppError("Conversa arquivada não pode ser fixada. Desarquive antes.", 409, "conversation_archived");
+    }
+    const pinned = await pinConversation(deps.prisma, {
+      organizationId: request.user.organizationId,
+      userId: request.user.sub,
+      conversationId: id,
+      visibleWhere: await pinVisibleWhere(request.user),
+    });
+    await emitConversationPins(request.user.sub, pinned);
+    return { pinned };
+  });
+
+  app.post("/conversations/:id/unpin", { preHandler: authenticate }, async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    await findConversationOr404(id, request.user);
+    const pinned = await unpinConversation(deps.prisma, {
+      userId: request.user.sub,
+      conversationId: id,
+      visibleWhere: await pinVisibleWhere(request.user),
+    });
+    await emitConversationPins(request.user.sub, pinned);
+    return { pinned };
   });
 
   // ---------------- Atribuição de atendimento ----------------
@@ -1189,6 +1281,8 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
       entityType: "Conversation",
       entityId: id,
     });
+    // Arquivada sai da fixação de todo mundo, como no WhatsApp.
+    await unpinConversationForEveryone(deps.prisma, id);
     await emitConversationUpdated(id, request.user.organizationId);
     // Arquivada não fica em fila nenhuma — cancela follow-up em andamento.
     await reconcileConversation(deps, id);

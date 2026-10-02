@@ -18,11 +18,14 @@ import {
   Users2,
   X,
   Zap,
+  Pin,
+  PinOff,
 } from "lucide-react";
 import {
   AZEVEDO_OS_SOURCE,
   QUICK_REPLY_MEDIA_TYPE_LABELS,
   RealtimeEvents,
+  sortWithPinnedFirst,
   type AiSessionPayload,
   MENTION_ALL_TOKEN,
   activeMentions,
@@ -32,6 +35,8 @@ import {
   mentionTrigger,
   type DraftMention,
   type ScheduledPendingPayload,
+  type ConversationPinMap,
+  type ConversationPinsPayload,
   AZEVEDO_OS_FACET_NONE,
   conversationStatusIsValid,
   isProtocolArtifact,
@@ -49,6 +54,7 @@ import {
   azevedoOsApi,
   conversationMediaApi,
   conversationReadApi,
+  conversationPinApi,
   messagesApi,
   pinnedItemsApi,
   quickRepliesApi,
@@ -95,6 +101,7 @@ import {
 import { useConversationCompany } from "./use-conversation-company";
 import { useMessageScroll } from "./message-scroll";
 import { useUnreadCounts } from "./use-unread-counts";
+import { useConversationPins } from "./use-conversation-pins";
 import {
   useConversationAutomation,
   type ConversationAutomationMap,
@@ -160,6 +167,17 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
    */
   const { automation: conversationAutomation, replaceAll: replaceConversationAutomation } =
     useConversationAutomation();
+  /**
+   * Conversas que ESTA pessoa fixou no topo (até 3, como no WhatsApp Web).
+   * Fora do DTO pelo mesmo motivo do contador de não lidas: é pessoal, e o
+   * DTO é publicado para todo mundo que enxerga a conversa.
+   */
+  const {
+    pinned: pinnedConversations,
+    pinnedRef: pinnedConversationsRef,
+    replaceAll: replacePinnedConversations,
+    remove: removePinnedConversation,
+  } = useConversationPins();
   /**
    * Filtros da lista, num objeto só, reidratados do navegador já na
    * montagem. Este componente vive no layout da rota (`inbox/layout.tsx`)
@@ -494,6 +512,9 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     lista("payroll", filters.payroll);
     if (filters.unlinked) params.set("unlinked", "true");
     if (filters.overdue) params.set("overdue", "true");
+    // As fixadas desta pessoa vêm no topo, pelos mesmos filtros. Na visão de
+    // arquivadas não há fixada: arquivar desafixa.
+    if (filters.view !== "archived") params.set("pinnedFirst", "true");
     params.set("limit", "80");
     api
       .get<{
@@ -501,6 +522,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         total: number;
         unread: Record<string, number>;
         automation: ConversationAutomationMap;
+        pinned: ConversationPinMap;
         companyFilter: CompanyFilterStateDto | null;
       }>(`/conversations?${params.toString()}`)
       .then((data) => {
@@ -513,9 +535,41 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
         // ou fluxo rodando vêm no mapa, e daqui em diante quem o mantém em
         // dia é o evento `conversation:automation`.
         replaceConversationAutomation(data.automation ?? {});
+        replacePinnedConversations(data.pinned ?? {});
       })
       .catch(() => undefined);
-  }, [filters, replaceUnreadCounts, replaceConversationAutomation]);
+  }, [filters, replaceUnreadCounts, replaceConversationAutomation, replacePinnedConversations]);
+
+  /**
+   * A lista como a pessoa a vê: fixadas no topo, a mais recente primeiro, e
+   * o resto na ordem por última mensagem que o servidor e o tempo real já
+   * decidiram. É derivada, e não gravada no estado, porque `message:new`
+   * empurra a conversa para o começo do array — sem reordenar na hora de
+   * desenhar, a mensagem nova passaria por cima das fixadas.
+   */
+  const orderedConversations = useMemo(
+    () => (conversations ? sortWithPinnedFirst(conversations, pinnedConversations) : null),
+    [conversations, pinnedConversations],
+  );
+
+  /**
+   * Fixa ou desafixa. A resposta já traz o mapa inteiro; a quarta fixação é
+   * recusada pela API com a frase dizendo o teto.
+   */
+  const togglePinnedConversation = useCallback(
+    async (id: string) => {
+      try {
+        const data =
+          pinnedConversationsRef.current[id] !== undefined
+            ? await conversationPinApi.unpin(id)
+            : await conversationPinApi.pin(id);
+        replacePinnedConversations(data.pinned);
+      } catch (err) {
+        window.alert(err instanceof Error ? err.message : "Falha ao fixar a conversa");
+      }
+    },
+    [pinnedConversationsRef, replacePinnedConversations],
+  );
 
   useEffect(() => {
     const timer = setTimeout(loadConversations, filters.search ? 300 : 0);
@@ -757,6 +811,8 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       }
     };
     const onConversationUpdated = (payload: ConversationDto) => {
+      // Arquivar desafixa no servidor para todo mundo; aqui só acompanha.
+      if (payload.archivedAt) removePinnedConversation(payload.id);
       setConversations((current) => {
         if (!current) return current;
         if (!current.some((conversation) => conversation.id === payload.id)) return current;
@@ -908,7 +964,32 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
     bumpUnreadCount,
     setUnreadCount,
     applyPinnedItems,
+    removePinnedConversation,
   ]);
+
+  /**
+   * Fixou na OUTRA aba uma conversa que esta lista ainda não trouxe (estava
+   * mais para baixo do que a página carregada): recarrega para ela subir.
+   * Só reage ao evento, nunca à carga da lista — a fixada que não casa com
+   * o filtro ativo não vem do servidor, e reagir à carga viraria um laço.
+   */
+  const conversationsRef = useRef(conversations);
+  conversationsRef.current = conversations;
+  useEffect(() => {
+    if (!socket) return;
+    const onPins = (payload: ConversationPinsPayload) => {
+      const loaded = conversationsRef.current;
+      if (!loaded) return;
+      const missing = Object.keys(payload.pinned).some(
+        (id) => !loaded.some((conversation) => conversation.id === id),
+      );
+      if (missing) loadConversations();
+    };
+    socket.on(RealtimeEvents.ConversationPins, onPins);
+    return () => {
+      socket.off(RealtimeEvents.ConversationPins, onPins);
+    };
+  }, [socket, loadConversations]);
 
   /**
    * Toda escrita no composer passa por aqui, e grava na hora.
@@ -1689,13 +1770,17 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
               }
             />
           ) : (
-            conversations.map((entry) => (
+            (orderedConversations ?? conversations).map((entry) => (
               <ConversationListItem
                 key={entry.id}
                 conversation={entry}
                 unreadCount={unreadCounts[entry.id] ?? 0}
                 automation={conversationAutomation[entry.id] ?? null}
                 active={entry.id === conversationId}
+                pinned={pinnedConversations[entry.id] !== undefined}
+                onTogglePin={
+                  entry.archivedAt ? undefined : () => void togglePinnedConversation(entry.id)
+                }
                 onClick={() => router.push(`/inbox/${entry.id}`)}
               />
             ))
@@ -1800,6 +1885,26 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                     DESTA pessoa e fecha o chat. Ninguém mais vê o aviso
                     voltar, e sair da conversa evita que a leitura volte a
                     avançar na próxima mensagem que chegar aqui. */}
+                {/* Fixar no topo da MINHA lista — o mesmo do card. Arquivada
+                    não fixa: arquivar é o contrário de "estou acompanhando". */}
+                {!conversation.archivedAt && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    title={
+                      pinnedConversations[conversation.id] !== undefined
+                        ? "Desafixar do topo"
+                        : "Fixar no topo"
+                    }
+                    onClick={() => void togglePinnedConversation(conversation.id)}
+                  >
+                    {pinnedConversations[conversation.id] !== undefined ? (
+                      <PinOff className="h-4 w-4" />
+                    ) : (
+                      <Pin className="h-4 w-4" />
+                    )}
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="ghost"

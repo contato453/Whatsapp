@@ -28,6 +28,15 @@ export const RealtimeEvents = {
    * leu, que é exatamente o defeito que a leitura por usuário conserta.
    */
   ConversationRead: "conversation:read",
+  /**
+   * As conversas FIXADAS no topo da lista de UMA pessoa mudaram. Vai para a
+   * sala pessoal (`user:<id>`), como `conversation:read`, porque fixar é
+   * preferência de quem fixou: mandá-lo à audiência da conversa reordenaria
+   * a lista de todo mundo. Carrega o mapa inteiro (no máximo 3), nunca um
+   * patch. Não confundir com `conversation:pinned-items`, que é a fixação de
+   * MENSAGEM dentro da conversa, essa sim da equipe.
+   */
+  ConversationPins: "conversation:pins",
   GroupParticipants: "group:participants",
   InternalNote: "note:new",
   /**
@@ -183,6 +192,14 @@ export interface ScheduledPendingPayload {
  * conversa: aquele payload é de audiência, e um número pessoal ali vazaria
  * para todo mundo que enxerga a conversa.
  */
+/**
+ * As fixadas de UMA pessoa, inteiras — só para as abas dela. Ver
+ * `ConversationPinMap` em `conversation-pins.ts`.
+ */
+export interface ConversationPinsPayload {
+  pinned: Record<string, string>;
+}
+
 export interface ConversationReadPayload {
   conversationId: string;
   unreadCount: number;

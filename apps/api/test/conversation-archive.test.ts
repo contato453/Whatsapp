@@ -37,6 +37,7 @@ interface Recorded {
   conversationUpdates: Array<Record<string, unknown>>;
   conversationUpdateMany: Array<Record<string, unknown>>;
   conversationCreates: Array<Record<string, unknown>>;
+  pinDeletes: Array<Record<string, unknown>>;
   auditActions: string[];
 }
 
@@ -85,6 +86,12 @@ function fakeConversationPrisma(conversation: Record<string, unknown> | null): P
     followUpExecution: followUpExecutionStub,
     userWhatsAppInstance: { findMany: async () => [] },
     userDepartment: { findMany: async () => [] },
+    conversationPin: {
+      deleteMany: async (args: Record<string, unknown>) => {
+        recorded.pinDeletes.push(args);
+        return { count: 0 };
+      },
+    },
     conversation: {
       findFirst: async () => conversation,
       findUnique: async () => conversation,
@@ -146,6 +153,7 @@ beforeEach(() => {
     conversationUpdates: [],
     conversationUpdateMany: [],
     conversationCreates: [],
+    pinDeletes: [],
     auditActions: [],
   };
 });
@@ -213,6 +221,8 @@ describe("POST /conversations/:id/archive|unarchive", () => {
     // Ortogonal ao status: arquivar nunca toca no status do atendimento.
     expect(update).not.toHaveProperty("status");
     expect(recorded.auditActions).toContain("conversation.archived");
+    // Arquivar desafixa do topo da lista de TODO MUNDO, como no WhatsApp.
+    expect(recorded.pinDeletes).toEqual([{ where: { conversationId: CONV_ID } }]);
     await app.close();
   });
 

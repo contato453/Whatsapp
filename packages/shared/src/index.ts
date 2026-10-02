@@ -6,6 +6,7 @@ export * from "./automation.js";
 export * from "./broadcast.js";
 export * from "./automation-variables.js";
 export * from "./conversation-automation.js";
+export * from "./conversation-pins.js";
 export * from "./azevedo-os.js";
 export * from "./dashboard-filters.js";
 export * from "./enums.js";

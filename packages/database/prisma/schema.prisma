@@ -43,6 +43,7 @@ model Organization {
   quickReplies         QuickReply[]
   scheduledMessages    ScheduledMessage[]
   conversationReads    ConversationRead[]
+  conversationPins     ConversationPin[]
   attendanceSettings   AttendanceSettings?
   rolePermissions      RolePermission[]
   personProfiles       PersonProfile[]
@@ -151,6 +152,7 @@ model User {
   defaultForInstances         WhatsAppInstance[]              @relation("InstanceDefaultAssignee")
   permissionChanges           RolePermission[]                @relation("RolePermissionUpdatedBy")
   conversationReads           ConversationRead[]
+  conversationPins            ConversationPin[]
   pinnedItems                 PinnedItem[]
   integrationTokens           IntegrationToken[]              @relation("IntegrationTokenCreatedBy")
   followUpRulesCreated        FollowUpRule[]                  @relation("FollowUpRuleCreatedBy")
@@ -524,6 +526,7 @@ model Conversation {
   assignmentHistory      ConversationAssignmentHistory[]
   scheduledMessages      ScheduledMessage[]
   reads                  ConversationRead[]
+  pins                   ConversationPin[]
   /// Fixadas no topo — INTERNO ao AZVCHAT, nunca propagado ao WhatsApp (ver
   /// `PinnedItem`).
   pinnedItems            PinnedItem[]
@@ -592,6 +595,33 @@ model ConversationRead {
   @@unique([userId, conversationId])
   @@index([conversationId])
   @@map("conversation_reads")
+}
+
+/// Conversa FIXADA no topo da lista, POR USUÁRIO — a mesma ideia do WhatsApp
+/// Web, onde cada conta fixa as suas. Pessoal de propósito: a Tatiana quer o
+/// "Lincoln Azevedo" no topo e a Damiana quer o "Atlas", e uma não pode
+/// desafixar a da outra. Por isso a linha é de (pessoa, conversa) e nada daqui
+/// entra no DTO da conversa, que é publicado para a audiência inteira.
+///
+/// Não confundir com `PinnedItem`, que fixa MENSAGEM dentro da conversa e é
+/// da equipe. Teto de `MAX_PINNED_CONVERSATIONS` (3) por pessoa, aplicado em
+/// `lib/conversation-pins.ts`. Fixação NÃO é visibilidade: conversa que saiu
+/// do alcance da pessoa simplesmente deixa de aparecer, e a linha órfã é
+/// podada na próxima fixação. Arquivar desafixa para todo mundo.
+model ConversationPin {
+  id             String   @id @default(uuid())
+  organizationId String
+  conversationId String
+  userId         String
+  pinnedAt       DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, conversationId])
+  @@index([conversationId])
+  @@map("conversation_pins")
 }
 
 // ============================================================

@@ -197,6 +197,17 @@ snake_case e id `uuid`.
   = nunca leu**, e nada é semeado: conversa que a pessoa nunca abriu aparece por ler
   inteira, que é o estado seguro. Fonte única da conta:
   `apps/api/src/lib/conversation-reads.ts`.
+- `ConversationPin` — **conversa fixada no topo da lista, POR USUÁRIO** (como no WhatsApp
+  Web, onde cada conta fixa as suas). Única por `(userId, conversationId)`, com `pinnedAt`
+  (a mais recente fica em primeiro). Teto de `MAX_PINNED_CONVERSATIONS` (3) por pessoa,
+  em `@azvchat/shared` (`conversation-pins.ts`). **Não confundir com `PinnedItem`**, que
+  fixa MENSAGEM dentro da conversa e é da equipe. Pessoal de propósito: uma pessoa não
+  reordena a lista da outra nem desafixa a dela, e por isso nada daqui entra no
+  `ConversationDto`. **Fixar não é ver**: toda leitura passa pelo `conversationScope` de
+  quem pede, conversa que saiu do alcance deixa de aparecer e a linha órfã é podada na
+  próxima fixação (para não ocupar vaga invisível). **Arquivar desafixa para todo mundo.**
+  Fonte única: `apps/api/src/lib/conversation-pins.ts`. Migration
+  `20261002180000_conversation_pins`.
 - `Message` — `direction`, `type` (`text|image|audio|video|document|sticker|location|contact|poll|call|other`),
   `status` (`pending|sent|delivered|read|failed`), `content`, `mediaUrl`, `quotedMessageId`,
   `sentByUserId`, `deletedAt`/`deletedByUserId`, `editedAt`, `metadata` (Json, ex.: opções
@@ -514,6 +525,15 @@ POST   /conversations/:id/read            POST /conversations/:id/unread
         devolvem o contador já recalculado, valem só para quem chamou e emitem
         `conversation:read` para a sala pessoal — nunca para a audiência da
         conversa. Sem auditoria: leitura é estado pessoal de interface)
+POST   /conversations/:id/pin         POST /conversations/:id/unpin
+       (fixa/desafixa a conversa no topo da lista SÓ PARA QUEM CHAMOU — teto de 3,
+        a quarta é 409 `conversation_pin_limit_reached`; arquivada é 409. Sem chave
+        de permissão e sem auditoria, como a leitura: é arrumação pessoal. Devolvem
+        o mapa inteiro `{ pinned }` e emitem `conversation:pins` para a sala pessoal.
+        Na lista, `GET /conversations?pinnedFirst=true` (só a Inbox manda) põe as
+        fixadas no topo da primeira página PELOS MESMOS FILTROS, fora da paginação
+        normal, e devolve o mapa `pinned`. Quality e relatório não mandam: paginam
+        por offset e contam o `total`)
 POST   /conversations/:id/status
 GET    /conversations/:id/assignees
        (candidatos a responsável desta conversa, por `conversationAssigneeWhere`;
@@ -731,6 +751,13 @@ quando é número real (LID nunca vira telefone); `callerAvatar` aponta a fonte 
 para uma audiência: ele sai para `user:<userId>`, a sala pessoal de quem leu, e existe
 para a segunda aba da mesma pessoa acompanhar. Mandá-lo para a sala da conversa
 apagaria o aviso de quem não leu — o defeito que a leitura por usuário conserta.
+
+`conversation:pins` (`{ pinned }`) é o mapa inteiro das conversas que UMA pessoa fixou
+no topo da lista, e vai para `user:<userId>`, como `conversation:read`: fixar é
+preferência pessoal, e mandar para a audiência da conversa reordenaria a lista de todo
+mundo. Arquivar desafixa para todos sem evento próprio — o `conversation:updated` do
+arquivamento já tira a conversa da lista, e a tela descarta a fixação de quem chega
+arquivado.
 
 `session:closing` e `session:closed` são os únicos eventos que vão para **um socket**, e
 não para uma audiência: quem decide é o horário de uso da pessoa, não o acesso à conversa.
@@ -1033,6 +1060,14 @@ nome técnico no código e neste documento.
   quando chega `message:new` de entrada numa conversa que não é a aberta, e que só zera
   pelo evento `conversation:read` (ou pela resposta do `POST .../read`). O hook fica
   fora do `inbox-shell` de propósito: aquele arquivo já tem ~1300 linhas.
+- **Conversa fixada no topo** (`components/inbox/use-conversation-pins.ts` + o botão do
+  card em `conversation-list.tsx` e o do cabeçalho do chat): até 3 por pessoa, alfinete ao
+  lado do horário, botão de fixar/desafixar no hover do card. A ordem é **derivada na hora
+  de desenhar** (`sortWithPinnedFirst`, no shared), e não gravada no estado: o
+  `message:new` empurra a conversa para o começo do array, e sem reordenar a mensagem
+  nova passaria por cima das fixadas. Fixar numa aba uma conversa que a outra aba ainda
+  não carregou recarrega a lista dela — só no evento, nunca na carga, senão a fixada fora
+  do filtro viraria laço.
 - **Chip de atendimento automático no card** (`components/inbox/use-conversation-automation.ts`
   + os dois `Badge` de `conversation-list.tsx`): a conversa que está sendo atendida por um
   agente de IA (`AiSession` ativa) ou que está dentro de um fluxo do construtor
@@ -2345,7 +2380,8 @@ antes e encerramento da sessão no fechamento; departamento marcado como interno
 conversas ficam fora do dashboard, do card de atrasados e do relatório por atendente sem
 sair da lista de conversas nem perder o aviso de mensagem nova; sinal de atendimento automático no card da lista (chip "IA" com o agente e
 chip "Fluxo" com o nome do fluxo, acendendo e apagando em tempo real para todo mundo que
-enxerga a conversa); fixar mensagem (ou nota
+enxerga a conversa); fixar até 3 conversas no topo da
+própria lista de conversas (pessoal, como no WhatsApp Web); fixar mensagem (ou nota
 interna) no topo da conversa, faixa interna que nunca vai ao WhatsApp, com até 3 fixadas
 por conversa, sem prazo de validade, navegação entre elas e atualização em tempo real para
 todo mundo com a conversa aberta; API de integração para sistema externo disparar mensagem
