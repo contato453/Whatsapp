@@ -781,12 +781,14 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
             ? {
                 ...current,
                 // O evento de conversa não carrega o contador de
-                // agendamentos nem as fixadas; preserva o que o detalhe já
-                // trouxe (fixadas têm evento próprio, `conversation:pinned-items`).
+                // agendamentos, as fixadas nem o telefone; preserva o que o
+                // detalhe já trouxe (fixadas têm evento próprio,
+                // `conversation:pinned-items`).
                 conversation: {
                   ...payload,
                   scheduledPendingCount: current.conversation.scheduledPendingCount,
                   pinnedItems: current.conversation.pinnedItems,
+                  contactPhone: current.conversation.contactPhone,
                 },
               }
             : current,

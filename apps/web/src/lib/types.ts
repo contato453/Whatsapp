@@ -418,6 +418,12 @@ export interface PinnedItemDto {
 export interface ConversationDetailConversationDto extends ConversationDto {
   scheduledPendingCount: number;
   pinnedItems: PinnedItemDto[];
+  /**
+   * Telefone da conversa individual (só dígitos), resolvido na API — vem
+   * também quando o endereço é "@lid", a partir do contato, do registro da
+   * pessoa ou dos grupos. Null = nenhuma fonte conhece o número.
+   */
+  contactPhone: string | null;
 }
 
 export interface ConversationDetailDto {
