@@ -27,6 +27,7 @@ import { integrationMessageApiRoutes } from "./modules/integrations/message-api.
 import { astracallsWebhookRoutes } from "./modules/integrations/astracalls-webhook.js";
 import { permissionRoutes } from "./modules/permissions/routes.js";
 import { automationRoutes } from "./modules/automation/routes.js";
+import { broadcastRoutes } from "./modules/broadcast/routes.js";
 import { aiRoutes } from "./modules/ai/routes.js";
 import { crmRoutes } from "./modules/crm/routes.js";
 import { qualityRoutes } from "./modules/quality/routes.js";
@@ -93,6 +94,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     await astracallsWebhookRoutes(instance, deps);
     await permissionRoutes(instance, deps);
     await automationRoutes(instance, deps);
+    await broadcastRoutes(instance, deps);
     await aiRoutes(instance, deps);
     await crmRoutes(instance, deps);
     await qualityRoutes(instance, deps);

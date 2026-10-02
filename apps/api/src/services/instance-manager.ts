@@ -18,6 +18,7 @@ import { resolveConversationPersonName } from "../lib/person-profile.js";
 import { pinnedItemsIfMessagePinned, unpinMessageIfPinned } from "../lib/pinned-items.js";
 import { extensionFromMime, type MediaStorage } from "../lib/media-storage.js";
 import { handleInboundMessage, handleOutboundMessage } from "../lib/follow-up-engine.js";
+import { handleBroadcastInbound } from "../lib/broadcast.js";
 import type { MessageIngestService } from "./message-ingest.js";
 import type { AuditService } from "../modules/audit/service.js";
 import type { AutomationEngine } from "./automation/engine.js";
@@ -78,6 +79,21 @@ export class InstanceManager {
      * antes de qualquer agente pensar em responder.
      */
     private readonly aiRuntime?: { onInboundMessage(input: { organizationId: string; conversationId: string; messageId: string }): void },
+    /**
+     * Motor dos disparos em massa. Opcional pelo mesmo motivo do `aiRuntime`
+     * (testes que sobem o instance-manager sem ele). A ingestão NÃO sabe o
+     * que é campanha: ela só avisa que chegou mensagem, e quem decide se
+     * aquilo é resposta a um disparo é `handleBroadcastInbound`.
+     */
+    private readonly broadcast?: {
+      handleReply(input: {
+        organizationId: string;
+        campaignId: string;
+        conversationId: string;
+        phone: string;
+        contactName: string | null;
+      }): Promise<void>;
+    },
   ) {}
 
   /** Pacote de dependências que o motor de follow-up pede. */
@@ -181,6 +197,37 @@ export class InstanceManager {
           // cria a mensagem direto e nunca passa por `ingest()`) reinicia a
           // contagem, exatamente como reiniciaria se tivesse saído daqui.
           // Nunca derruba a publicação em tempo real: é aviso, não requisito.
+          // DISPAROS: a resposta do contato marca a entrega (é a taxa de
+          // resposta, a única métrica que diz se a campanha funcionou) e,
+          // quando a mensagem é "SAIR"/"PARAR", descadastra o número na hora
+          // — em TODA campanha da organização. Receber depois de pedir para
+          // sair é o que vira denúncia, e denúncia derruba o chip mais rápido
+          // que volume. Engole a própria falha: mensagem de cliente não pode
+          // se perder porque o módulo de campanha tropeçou.
+          if (message.direction === "inbound") {
+            try {
+              const efeito = await handleBroadcastInbound(this.prisma, {
+                organizationId: conversation.organizationId,
+                conversationId: result.conversationId,
+                content: persisted.content,
+              });
+              if (efeito.delivery && this.broadcast) {
+                await this.broadcast.handleReply({
+                  organizationId: conversation.organizationId,
+                  campaignId: efeito.delivery.campaignId,
+                  conversationId: result.conversationId,
+                  phone: efeito.delivery.phone,
+                  contactName: efeito.delivery.contactName,
+                });
+              }
+            } catch (err) {
+              this.logger.warn({
+                conversationId: result.conversationId,
+                event: "broadcast_inbound_hook_failed",
+                error: String(err),
+              });
+            }
+          }
           try {
             if (message.direction === "inbound") {
               await handleInboundMessage(this.followUpDeps(), result.conversationId);

@@ -3,6 +3,7 @@ export * from "./attachments.js";
 export * from "./attendance.js";
 export * from "./crm.js";
 export * from "./automation.js";
+export * from "./broadcast.js";
 export * from "./automation-variables.js";
 export * from "./conversation-automation.js";
 export * from "./azevedo-os.js";
