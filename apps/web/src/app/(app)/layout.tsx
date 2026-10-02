@@ -21,6 +21,7 @@ import {
   BarChart3,
   Bot,
   Workflow,
+  Megaphone,
   Zap,
   Lock,
   ChevronDown,
@@ -126,6 +127,20 @@ function flattenNav(nav: NavEntry[]): NavLeaf[] {
   return nav.flatMap((item) => (isNavGroup(item) ? item.children : [item]));
 }
 
+/**
+ * O item cujo caminho casa com a URL, preferindo o MAIS LONGO. Itens que são
+ * prefixo uns dos outros (/automations e /automations/broadcasts) casariam
+ * os dois, e o primeiro da lista venceria por acaso.
+ */
+function mostSpecificNavItem(items: NavLeaf[], pathname: string): NavLeaf | undefined {
+  let best: NavLeaf | undefined;
+  for (const item of items) {
+    if (pathname !== item.href && !pathname.startsWith(`${item.href}/`)) continue;
+    if (!best || item.href.length > best.href.length) best = item;
+  }
+  return best;
+}
+
 const NAV: NavEntry[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, minRole: "agent" },
   // Os rótulos falam a língua da equipe; as rotas continuam /inbox e
@@ -195,6 +210,15 @@ const NAV: NavEntry[] = [
         icon: Workflow,
         minRole: "supervisor",
         permission: "follow_up.manage",
+      },
+      // Disparos em massa: Campanhas, Audiências e Descadastros ficam
+      // divididos no topo da própria área (ver `BroadcastTabs`).
+      {
+        href: "/automations/broadcasts",
+        label: "Disparos em massa",
+        icon: Megaphone,
+        minRole: "supervisor",
+        permission: "broadcast.view",
       },
       {
         href: "/settings/ai",
@@ -513,8 +537,11 @@ function Sidebar({
                   {expanded && open && (
                     <div className="ml-4 mt-0.5 space-y-0.5 border-l border-slate-800 pl-2.5">
                       {item.children.map((child) => {
-                        const active =
-                          pathname === child.href || pathname.startsWith(`${child.href}/`);
+                        // Só o filho de caminho MAIS LONGO acende: "Fluxos"
+                        // (/automations) também casaria com
+                        // /automations/broadcasts e as duas linhas ficariam
+                        // destacadas juntas.
+                        const active = mostSpecificNavItem(item.children, pathname) === child;
                         return (
                           <Link
                             key={child.href}
@@ -660,9 +687,9 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   // A tela atual pode não estar no menu (ex.: /users/new): a permissão é a
   // do item cujo caminho a URL começa, e caminho desconhecido fica liberado.
   // `flattenNav` acha tanto os itens soltos quanto os de dentro de um grupo.
-  const current = flattenNav(NAV).find(
-    (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),
-  );
+  // Vence o caminho MAIS LONGO: /automations/broadcasts casa também com
+  // "Fluxos" (/automations), e a permissão que vale é a dos Disparos.
+  const current = mostSpecificNavItem(flattenNav(NAV), pathname);
   // Enquanto a disponibilidade do Quality ainda está carregando, a tela dele
   // espera em vez de mostrar "acesso restrito" e piscar: negar antes da
   // resposta faria o administrador ver a recusa no primeiro segundo de cada F5.

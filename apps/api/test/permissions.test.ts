@@ -274,6 +274,14 @@ describe("padrões de fábrica (Usuário / Supervisor / Gerente)", () => {
     ["ai.session.resume", false, true, true],
     // Quality: a única ação em que o Gerente difere do Supervisor.
     ["quality.use", false, false, true],
+    // Disparos — `broadcast.send` é a única do módulo fechada TAMBÉM para
+    // supervisor (e, por herança, para o Gerente): montar a campanha é
+    // trabalho, apertar o botão que fala com milhares de clientes de uma vez é
+    // decisão de quem responde pelo número.
+    ["broadcast.view", false, true, true],
+    ["broadcast.audience.manage", false, true, true],
+    ["broadcast.campaign.manage", false, true, true],
+    ["broadcast.send", false, false, false],
   ];
 
   it.each(esperado)("%s → Usuário %s, Supervisor %s, Gerente %s", (action, agent, supervisor, manager) => {

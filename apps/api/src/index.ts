@@ -14,6 +14,7 @@ import { ScheduledMessageWorker } from "./services/scheduler.js";
 import { AutomationEngine } from "./services/automation/engine.js";
 import { AutomationWorker } from "./services/automation/worker.js";
 import { FollowUpScheduler } from "./services/follow-up-scheduler.js";
+import { BroadcastWorker } from "./services/broadcast-worker.js";
 import { SessionScheduleWatcher } from "./services/session-schedule-watcher.js";
 import { createAzevedoOsClient } from "./services/azevedo-os-client.js";
 import { createSecretCipher } from "./lib/ai-secrets.js";
@@ -139,6 +140,12 @@ async function main(): Promise<void> {
   const automation = new AutomationEngine(prisma, provider, io, logger, aiRuntime);
   deps.automation = automation;
 
+  // O motor dos disparos nasce ANTES do instance-manager porque ele é
+  // INJETADO nele: é o disparo que cria o card do CRM quando um contato
+  // responde, e a ingestão só avisa que chegou mensagem. Mesma inversão de
+  // ordem que o `aiRuntime` já obrigava, pelo mesmo motivo.
+  const broadcastWorker = new BroadcastWorker(prisma, provider, ingest, io, logger);
+
   const instanceManager = new InstanceManager(
     prisma,
     provider,
@@ -150,6 +157,7 @@ async function main(): Promise<void> {
     automation,
     azevedoOs,
     aiRuntime,
+    broadcastWorker,
   );
   instanceManager.wireProviderEvents();
   deps.instanceManager = instanceManager;
@@ -163,6 +171,8 @@ async function main(): Promise<void> {
 
   const followUpScheduler = new FollowUpScheduler(prisma, provider, io, logger, azevedoOs);
   followUpScheduler.start();
+
+  broadcastWorker.start();
 
   // Avisa e encerra as abas quando o horário de uso fecha. A API já recusa
   // requisição fora do horário; sem este vigia, a aba parada continuaria
@@ -186,6 +196,7 @@ async function main(): Promise<void> {
       scheduler.stop();
       automationWorker.stop();
       followUpScheduler.stop();
+      broadcastWorker.stop();
       sessionScheduleWatcher.stop();
       aiRuntime.stop();
       await provider.shutdownAll();

@@ -594,6 +594,19 @@ GET    /conversations/:id/ai           (sessão de IA mais recente da conversa)
 POST   /conversations/:id/ai/stop      (ai.session.stop)   POST /conversations/:id/ai/resume (ai.session.resume)
        (ver a seção 20)
 
+GET    /broadcast/audiences         POST /broadcast/audiences      (broadcast.audience.manage)
+GET|PATCH|DELETE /broadcast/audiences/:id
+POST   /broadcast/audiences/:id/contacts   DELETE /broadcast/contacts/:id
+POST   /broadcast/import/preview           POST /broadcast/audiences/:id/import
+       (DOIS passos, e o arquivo sobe nos dois: a prévia só LÊ a planilha)
+GET    /broadcast/opt-outs  POST /broadcast/opt-outs  DELETE /broadcast/opt-outs/:id
+GET    /broadcast/campaigns        POST /broadcast/campaigns   (broadcast.campaign.manage)
+GET|PATCH|DELETE /broadcast/campaigns/:id   (editar só em rascunho — 409 `campaign_locked`)
+POST   /broadcast/campaigns/:id/start|pause|resume|cancel      (broadcast.send)
+POST   /broadcast/campaigns/:id/test-send   GET /broadcast/campaigns/:id/deliveries
+GET    /broadcast/options
+       (disparos em massa, ver a seção 24)
+
 GET    /quality/availability   (quality.use; o módulo está de pé? sem IA configurada, não)
 GET|PUT /quality/settings      (quality.use; tetos: conversas por disparo, duração de áudio, cobertura, modelo)
 POST   /quality/runs           GET /quality/runs   GET /quality/runs/:id
@@ -952,7 +965,9 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
 Rotas em `apps/web/src/app/(app)/`: `dashboard`, `inbox` (+ `inbox/[conversationId]`),
 `whatsapp`, `users` (+ `new`, `[id]`), `departments`, `reports`, `tags`, `quick-replies`,
 `quality` (chave `quality.use`, padrão admin e gerente, e só com a IA configurada; abas Nova
-análise, Análises, Avaliações, Por atendente, Por departamento e Configurações), `settings`, `settings/ai` (+ `settings/ai/agents/[id]`, com `new`). Fora do grupo: `login`. **Os rótulos do menu não seguem os nomes das rotas**:
+análise, Análises, Avaliações, Por atendente, Por departamento e Configurações), `settings`, `settings/ai` (+ `settings/ai/agents/[id]`, com `new`),
+`automations/broadcasts` (+ `new`, `[id]`, `[id]/edit`, `audiences`, `audiences/[id]`,
+`opt-outs` — os disparos em massa, ver a seção 24). Fora do grupo: `login`. **Os rótulos do menu não seguem os nomes das rotas**:
 `/inbox` aparece como "Conversas" e `/whatsapp` como "Conexões" — as rotas ficaram como
 estão para não quebrar favoritos nem os links dos cards do dashboard. Nos textos da
 interface, a tela se chama "Conversas" (ou "lista de conversas"); "Inbox" segue sendo o
@@ -2368,6 +2383,12 @@ das oportunidades novas (rodízio, menor carga, pessoa fixa ou herdar do atendim
 respeitando quem enxerga a conversa), interruptor do módulo em Configurações (desligar esconde
 o menu, fecha as rotas e cancela os follow-ups pendentes sem apagar nada) e o card do CRM
 dentro do painel de contexto da conversa.
+
+Disparos em massa, dentro de Automações (seção 24): audiência cadastrada à mão ou importada
+de planilha, campanha com hora marcada, intervalo sorteado, teto diário, só no expediente,
+variações do texto, teste para um número, descadastro por "SAIR", pausa sozinha quando o
+número cai ou falha em série, progresso ao vivo, histórico contato a contato e oportunidade no
+CRM para quem responder.
 
 **Quality — avaliação do atendimento pela IA** (seção 22): o administrador seleciona conversas e
 um período, dispara, e a IA já configurada dá nota ao atendente, classifica o assunto e sugere
@@ -4129,6 +4150,181 @@ mudou para ninguém. Auditoria em
 
 **Sem IA configurada o módulo fica DESLIGADO**: o item de menu não aparece, a tela explica e o
 disparo responde 409 `quality_disabled`. Nada quebra por ausência de configuração.
+
+---
+
+## 24. Disparos em massa (campanhas de WhatsApp, dentro de Automações)
+
+Item **Disparos em massa** dentro do grupo **Automações** da barra lateral
+(`/automations/broadcasts`), com três telas divididas no topo da área — Campanhas,
+Audiências e Descadastros — mais o detalhe da campanha e o formulário. Mora em
+Automações porque é mais uma forma de o sistema mandar mensagem sozinho, ao lado de
+fluxos e follow-up. O escritório cadastra uma lista de contatos (à mão ou importando
+planilha), escreve a mensagem, escolhe o número e o ritmo, e o backend manda uma a uma,
+sozinho, mostrando na tela quantas saíram e quantas faltam.
+
+**Veio do produto Comercial** (`contato453/azvchat-comercial`, seção 22 de lá), copiado
+sem mudar regra: o mesmo motor, as mesmas travas e as mesmas tabelas (migration
+`20261002120000_broadcasts`, só aditiva). Correção feita lá vale trazer para cá, e
+vice-versa. A única diferença é o lugar no menu: lá é item próprio (`/broadcasts`),
+aqui é filho de Automações. Por isso o `layout.tsx` passou a escolher o item de menu de
+caminho **MAIS LONGO** (`mostSpecificNavItem`): `/automations/broadcasts` também casa
+com "Fluxos" (`/automations`), e sem isso as duas linhas acenderiam juntas e a tela
+seria liberada pela permissão de Fluxos em vez da de Disparos.
+
+**TUDO AQUI É DESENHADO CONTRA O BLOQUEIO DO WHATSAPP, e essa é a decisão que explica o
+resto.** Disparo em massa é a forma mais rápida de perder um número, e o número é o ativo:
+perdê-lo é perder o histórico vivo de todos os clientes daquele chip. Por isso as travas
+não são configuráveis para zero, e a tela abre com o aviso sempre visível, nunca escondido
+num "saiba mais".
+
+### As três peças, separadas de propósito
+
+```
+AUDIÊNCIA (quem)  →  CAMPANHA (o quê, por onde, em que ritmo)  →  ENTREGA (o que houve com cada um)
+```
+
+- `BroadcastAudience` + `BroadcastContact` — a lista é **reutilizável**: a mesma serve a
+  quantas campanhas o escritório quiser, e corrigir um telefone nela vale para as
+  seguintes. `BroadcastContact.fields` (Json) guarda as **colunas extras da planilha**, que
+  viram variável `{{campo.<coluna>}}` sem cadastro e sem migration.
+- `BroadcastCampaign` — mensagem, variações, número, faixa de intervalo, teto diário,
+  expediente, destino no CRM e etiqueta.
+- `BroadcastDelivery` — uma linha por contato, e ela **CONGELA** telefone, nome e o texto
+  EXATO que saiu. O histórico precisa responder "o que esta pessoa recebeu naquele dia"
+  mesmo depois de alguém editar o contato ou apagar a audiência inteira.
+- `BroadcastOptOut` — o descadastro, único por `(organizationId, phone)`. **É da
+  ORGANIZAÇÃO, nunca da campanha**: quem pediu para sair não pode receber da próxima.
+
+Fonte única do domínio: `packages/shared/src/broadcast.ts`. Leitura/escrita e serialização:
+`apps/api/src/lib/broadcast.ts`. Planilha: `apps/api/src/lib/broadcast-import.ts`. Motor:
+`apps/api/src/services/broadcast-worker.ts`.
+
+### As travas anti-bloqueio (`BROADCAST_LIMITS`)
+
+| Trava | Por quê |
+| --- | --- |
+| **Intervalo é uma FAIXA, sorteada a cada mensagem** (padrão 30–90s, piso absoluto de 5s) | O WhatsApp não procura "muitas mensagens", procura PADRÃO. Uma a cada 30s exatos por duas horas é assinatura de robô; entre 30 e 90 não é. `pickIntervalMs` fica no shared porque o teste precisa fixá-la e a tela precisa estimar com a MESMA média. |
+| **Teto diário por campanha** (padrão 200) | Passou do teto, a campanha se reagenda para o próximo dia e continua de onde parou — não para, não repete ninguém. |
+| **Só dentro do expediente** (padrão ligado) | Usa o MESMO `AttendanceSettings`/`nextBusinessMoment` do dashboard e do follow-up, nunca um cadastro paralelo. Mensagem de escritório às 3h é a que mais vira denúncia. |
+| **Variações do texto** (até 4 além da principal) | Mil mensagens idênticas é o padrão mais fácil de reconhecer. O worker sorteia entre elas. |
+| **Descadastro automático por palavra** | Quem responde "SAIR" para de receber na hora, em TODA campanha da organização. Receber depois de pedir para sair é o que transforma cliente irritado em denúncia — e é a denúncia, não o volume, que bane o número. |
+| **Disjuntor de falhas seguidas** (5) | Falha em série é sintoma de bloqueio em curso. Para no quinto erro e pausa com `too_many_failures`; insistir até o fim da lista é o que derruba o chip. |
+| **Número desconectado pausa sozinho** | `instance_offline`, em vez de queimar a fila contra um chip fora do ar. |
+| **Uma campanha rodando por número**, garantida por índice PARCIAL | Duas no mesmo chip dobram o ritmo real sem ninguém ver: o operador configurou uma a cada 60s e o WhatsApp vê uma a cada 30s. |
+| **Teste antes do disparo** (`POST .../test-send`) | Manda para UM número resolvendo as variáveis. É a única forma de ver o que o cliente vai ver antes de falar com a lista inteira. |
+
+O índice parcial cobre **só `running`**, e não `scheduled`: agendar duas campanhas para
+dias diferentes no mesmo chip é legítimo — a segunda espera a primeira acabar na promoção
+do worker.
+
+**A comparação do descadastro é sobre a mensagem INTEIRA normalizada, e exige igualdade,
+nunca "contém".** "Não quero parar de receber" contém "parar" e significa o contrário;
+descadastrar por conter a palavra silenciaria quem queria continuar recebendo, e ninguém
+descobriria — a pessoa simplesmente pararia de aparecer nas campanhas seguintes.
+
+### A fila é MATERIALIZADA no início
+
+`generateDeliveries` cria uma entrega por contato quando a campanha começa. A alternativa
+(descobrir o próximo contato a cada mensagem) faria "quantos faltam" ser uma conta
+diferente a cada consulta e deixaria a audiência editada NO MEIO do disparo mudar quem
+recebe — a pessoa configurou o envio para a lista que existia quando apertou o botão.
+Com a fila pronta, retomar depois de um reinício é continuar de onde parou, sem pular nem
+repetir. Quem já está descadastrado entra como `skipped`/`opted_out` em vez de ficar de
+fora: senão o total da campanha não fecha com o tamanho da audiência e ninguém entende a
+diferença. `createMany({ skipDuplicates: true })` cobre a regeração.
+
+### O motor (`BroadcastWorker`)
+
+`setInterval` de 3s, mesmo padrão do `ScheduledMessageWorker`, do `AutomationWorker` e do
+`FollowUpScheduler`: **todo o estado está no banco** (`nextSendAt`, `sentToday`,
+`consecutiveFailures`), nunca em `setTimeout` — a campanha sobrevive a deploy, a reinício e
+a fechar o navegador. Cada volta promove as agendadas cuja hora chegou e manda UMA mensagem
+por campanha rodando, nesta ordem de guardas: número conectado → expediente → teto diário →
+próxima entrega pendente → descadastro **reconferido no instante do envio** (a pessoa pode
+ter pedido para sair depois de a fila ser gerada) → telefone normalizado → variação
+sorteada e variáveis resolvidas.
+
+O envio **reaproveita o caminho manual**, como a API de integração da seção 17:
+`ingest.ensureConversation` → `provider.sendText` → `Message.create` outbound com
+`metadata.origem = "broadcast"` → prévia → `MessageNew` + `ConversationUpdated` na
+`conversationAudience()`. Nada de caminho paralelo de inserção de mensagem, e a conversa
+aparece na Inbox como qualquer outra.
+
+### Variáveis da mensagem
+
+Catálogo em `BROADCAST_VARIABLES`: `{{nome}}`, `{{primeiro_nome}}`, `{{empresa}}`,
+`{{telefone}}`, `{{saudacao}}` (pela hora do ENVIO, não a de montar a campanha) e o curinga
+`{{campo.<coluna>}}` para qualquer coluna extra da planilha.
+
+**Variável sem valor vira VAZIO e o texto é costurado** (`tidyResolvedText`) — diferente da
+resposta rápida, que vira `[Rótulo]`. O motivo é quem está olhando: na resposta rápida há
+uma atendente lendo antes do Enter, e aqui não há ninguém no momento do envio, então o nome
+técnico chegando ao cliente seria pior que o buraco. A costura não é enfeite: "Olá {{nome}},
+tudo bem?" com nome vazio viraria "Olá , tudo bem?", e essa vírgula solta denuncia disparo
+automático na primeira linha da mensagem.
+
+### Importação de planilha — DOIS passos, sempre
+
+`POST /broadcast/import/preview` só LÊ o arquivo e devolve colunas, mapeamento sugerido e
+as primeiras linhas; `POST /broadcast/audiences/:id/import` é que grava. **Adivinhar a
+coluna sozinho importaria 800 contatos com o telefone errado — e isso só se descobre quando
+o disparo sai, quando não dá mais para desfazer.** O arquivo sobe DUAS vezes, uma em cada
+passo, de propósito: guardar a planilha no servidor entre a prévia e a confirmação criaria
+um arquivo temporário com telefone de cliente esperando alguém lembrar de apagar.
+
+Lê `.xlsx`/`.xlsm`/`.xls` (exceljs) e `.csv`/`.txt` (parser próprio, com **detecção de
+separador** — o Excel em português exporta com ponto e vírgula, e assumir vírgula
+transformaria a planilha inteira numa coluna só). O telefone é normalizado com
+`normalizeBrazilPhone` antes de tudo — é o que faz a deduplicação enxergar que
+`(11) 99999-8888` e `5511999998888` são a mesma pessoa. Linha recusada volta **com o número
+da linha**, para a pessoa corrigir a planilha em vez de adivinhar.
+
+### CRM — `BroadcastCrmMode`, e o padrão é `on_reply`
+
+`never` | `on_send` | `on_reply` (padrão). A oportunidade nasce por `createCrmOpportunity`,
+o mesmo caminho do "+ Criar oportunidade" da conversa — nada de criação paralela de card.
+
+**`on_reply` é padrão por decisão, não por acaso**: criar um card por contato disparado
+entope o funil com 5.000 cartas que ninguém respondeu, e o Kanban deixa de significar
+"negócio em andamento" no dia seguinte ao primeiro disparo. Quem respondeu, sim, é lead de
+verdade — e a resposta é o evento que o sistema já detecta (`BroadcastDelivery.repliedAt`).
+`on_send` continua existindo para lista curta e qualificada.
+
+### Resposta do contato
+
+`handleBroadcastInbound` é chamado do hook de ingestão (`instance-manager`), **nunca
+lança** e engole a própria falha: disparo é acessório, mensagem de cliente não pode se
+perder porque o módulo de campanha tropeçou. Ele faz duas coisas: marca `repliedAt` na
+entrega mais recente **ainda não respondida** (sem isso a segunda mensagem do cliente
+sobrescreveria a hora da primeira, e a métrica passaria a medir a última mensagem dele) e
+registra o descadastro quando o texto é um pedido de saída.
+
+### Permissões
+
+Área `disparos` do catálogo: `broadcast.view`, `broadcast.audience.manage` e
+`broadcast.campaign.manage` (padrão não/sim) e **`broadcast.send`, padrão não/NÃO — fechada
+até para supervisor**. É a única assimetria do módulo, e é deliberada: montar a campanha é
+trabalho de supervisão, apertar o botão que fala com milhares de clientes de uma vez é
+decisão de quem responde pelo número. Nada aqui encosta em `lib/access.ts` — o número da
+campanha passa por `accessibleInstanceIds`, a mesma régua de sempre, e a conversa criada
+segue a visibilidade normal.
+
+### Tempo real: NÃO tem
+
+O progresso é `setInterval` de 5s chamando a mesma rota, e só enquanto há campanha
+rodando — o desenho do Dashboard. Empurrar cada mensagem enviada por socket custaria mais
+que uma consulta por volta e criaria uma sala nova para um payload que é agregado, não é
+conversa de cliente. **Evento novo de socket aqui seria o erro**: a mensagem em si já sai
+por `MessageNew` na audiência de sempre.
+
+### O que ficou de fora desta entrega
+
+Disparo com mídia (só texto sai pelo motor); agendamento recorrente (a campanha tem uma
+hora, não uma periodicidade); segmentação por filtro dentro da audiência (o recorte é a
+audiência inteira — criar outra lista é barato); relatório consolidado de disparos no
+Dashboard (os números por campanha já existem na tela dela); e o "aquecimento" automático
+de chip novo, que precisaria de desenho próprio para não virar um segundo motor de envio.
 
 ---
 

@@ -71,6 +71,11 @@ model Organization {
   qualityRuns          QualityRun[]
   qualityRunItems      QualityRunItem[]
   qualityEvaluations   QualityEvaluation[]
+  broadcastAudiences  BroadcastAudience[]
+  broadcastContacts   BroadcastContact[]
+  broadcastOptOuts    BroadcastOptOut[]
+  broadcastCampaigns  BroadcastCampaign[]
+  broadcastDeliveries BroadcastDelivery[]
 
   @@map("organizations")
 }
@@ -171,6 +176,9 @@ model User {
   qualityRunsRequested        QualityRun[]                    @relation("QualityRunRequestedBy")
   qualityEvaluations          QualityEvaluation[]             @relation("QualityEvaluationUser")
   qualityEvaluationsDiscarded QualityEvaluation[]             @relation("QualityEvaluationDiscardedBy")
+  broadcastAudiences    BroadcastAudience[]              @relation("BroadcastAudienceCreatedBy")
+  broadcastCampaigns    BroadcastCampaign[]              @relation("BroadcastCampaignCreatedBy")
+  broadcastOptOuts      BroadcastOptOut[]                @relation("BroadcastOptOutCreatedBy")
 
   @@index([organizationId])
   @@map("users")
@@ -273,6 +281,7 @@ model WhatsAppInstance {
   outOfHoursForSettings AttendanceSettings[]   @relation("AttendanceOutOfHoursInstance")
   followUpRules         FollowUpRule[]
   aiAutomations         AiAutomation[]
+  broadcastCampaigns    BroadcastCampaign[]
 
   @@index([organizationId])
   @@index([departmentId])
@@ -536,6 +545,7 @@ model Conversation {
   crmOpportunities       CrmOpportunity[]
   qualityRunItems        QualityRunItem[]
   qualityEvaluations     QualityEvaluation[]
+  broadcastDeliveries   BroadcastDelivery[]
 
   @@unique([whatsappInstanceId, externalChatId])
   @@index([organizationId, status])
@@ -649,6 +659,7 @@ model Message {
   readMarks              ConversationRead[]
   pinnedItems            PinnedItem[]
   integrationMessageLogs IntegrationMessageLog[]
+  broadcastDeliveries BroadcastDelivery[]
 
   @@unique([conversationId, externalMessageId])
   @@index([conversationId, timestamp])
@@ -782,6 +793,7 @@ model Tag {
 
   // Nome único na organização inteira: a etiqueta aparece na conversa sem
   // dizer de qual departamento é, então dois "URGENTE" seriam indistinguíveis.
+  broadcastCampaigns BroadcastCampaign[]
   @@unique([organizationId, name])
   @@index([isGeneral])
   @@map("tags")
@@ -1450,6 +1462,7 @@ model CrmPipeline {
   assignees           CrmPipelineAssignee[]
   stages              CrmStage[]
   opportunities       CrmOpportunity[]
+  broadcastCampaigns   BroadcastCampaign[]
 
   @@unique([organizationId, name])
   @@index([organizationId, isActive])
@@ -1541,6 +1554,7 @@ model CrmStage {
   pipeline      CrmPipeline      @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
   actions       CrmStageAction[]
   opportunities CrmOpportunity[]
+  broadcastCampaigns BroadcastCampaign[]
 
   @@unique([pipelineId, name])
   @@index([pipelineId, position])
@@ -2722,4 +2736,262 @@ model QualityEvaluation {
   @@index([organizationId, departmentId])
   @@index([itemId])
   @@map("quality_evaluations")
+}
+
+// ============================================================
+// Disparos em massa (audiência → campanha → entrega)
+// ============================================================
+// Ver a seção 24 do CLAUDE.md. A regra que decidiu o desenho inteiro:
+// DISPARO EM MASSA É A FORMA MAIS RÁPIDA DE PERDER O NÚMERO DO ESCRITÓRIO,
+// e o número é o ativo — com ele vai o histórico vivo de todos os clientes
+// daquele chip. Por isso o ritmo, o teto diário, o descadastro e a parada
+// automática por falhas não são enfeite de configuração: são o módulo.
+//
+// As três tabelas têm tempos de vida diferentes de propósito:
+//   - a AUDIÊNCIA é viva e reutilizável (corrigir um telefone nela vale para
+//     as campanhas seguintes);
+//   - a CAMPANHA é a decisão de um dia (texto, número, ritmo, destino no CRM);
+//   - a ENTREGA é HISTÓRICO CONGELADO: guarda o telefone e o texto exatos que
+//     saíram, para responder "o que esta pessoa recebeu em tal dia" mesmo
+//     depois de alguém editar o contato ou apagar a audiência inteira.
+
+enum BroadcastCampaignStatus {
+  draft
+  scheduled
+  running
+  paused
+  completed
+  canceled
+}
+
+enum BroadcastDeliveryStatus {
+  pending
+  sent
+  failed
+  skipped
+}
+
+enum BroadcastContactSource {
+  manual
+  import
+}
+
+enum BroadcastCrmMode {
+  never
+  on_send
+  on_reply
+}
+
+model BroadcastAudience {
+  id             String  @id @default(uuid())
+  organizationId String
+  name           String
+  description    String?
+  createdById    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?               @relation("BroadcastAudienceCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  contacts     BroadcastContact[]
+  campaigns    BroadcastCampaign[]
+
+  @@unique([organizationId, name])
+  @@map("broadcast_audiences")
+}
+
+model BroadcastContact {
+  id             String @id @default(uuid())
+  organizationId String
+  audienceId     String
+  /// Telefone JÁ NORMALIZADO (só dígitos, com o 55) por `normalizeBrazilPhone`.
+  /// Normalizar na GRAVAÇÃO, e não no envio, é o que faz a deduplicação
+  /// funcionar: "(11) 99999-8888" e "5511999998888" são a mesma pessoa, e
+  /// sem normalizar antes do índice único a planilha entraria duas vezes.
+  phone       String
+  name        String?
+  company     String?
+  /// Colunas EXTRAS da planilha, chaveadas pelo nome normalizado da coluna —
+  /// viram `{{campo.<coluna>}}` no texto. Json e não tabela filha porque o
+  /// escritório inventa coluna a cada planilha ("cidade", "vencimento",
+  /// "regime"), e uma tabela de campos por contato seria três consultas para
+  /// montar uma frase.
+  fields      Json?
+  source      BroadcastContactSource @default(manual)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  audience     BroadcastAudience   @relation(fields: [audienceId], references: [id], onDelete: Cascade)
+  deliveries   BroadcastDelivery[]
+
+  /// Mesma pessoa não entra duas vezes na mesma lista — a importação conta
+  /// como "repetido" em vez de criar linha nova.
+  @@unique([audienceId, phone])
+  @@index([organizationId, phone])
+  @@map("broadcast_contacts")
+}
+
+/// DESCADASTRO, por ORGANIZAÇÃO e não por audiência — de propósito.
+///
+/// Quem pediu para sair pediu para sair do escritório, não daquela lista: se
+/// o descadastro fosse por audiência, a próxima planilha importada traria a
+/// pessoa de volta e ela receberia de novo. E receber depois de pedir para
+/// sair é o caminho mais curto para o "bloquear e denunciar", que é o que de
+/// fato derruba um número — mais rápido que volume.
+model BroadcastOptOut {
+  id             String @id @default(uuid())
+  organizationId String
+  phone          String
+  /// Como entrou: `keyword` (respondeu SAIR/PARAR), `manual` (alguém da
+  /// equipe cadastrou) ou `import` (veio marcado na planilha).
+  reason         String @default("manual")
+  /// Conversa onde a pessoa pediu — nulo quando foi cadastro manual.
+  conversationId String?
+  createdById    String?
+
+  createdAt DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("BroadcastOptOutCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, phone])
+  @@map("broadcast_opt_outs")
+}
+
+model BroadcastCampaign {
+  id             String                  @id @default(uuid())
+  organizationId String
+  name           String
+  status         BroadcastCampaignStatus @default(draft)
+  /// Por que parou, quando parou sozinha (`instance_offline`,
+  /// `too_many_failures`, `daily_limit`) ou `manual`. Pausa sem motivo
+  /// deixaria a equipe olhando uma tela parada sem saber o que fazer.
+  pausedReason   String?
+
+  audienceId         String
+  whatsappInstanceId String
+
+  /// Texto principal, com as variáveis de `@azvchat/shared/broadcast`.
+  message String
+  /// Variações do texto (array de string). O worker sorteia entre a principal
+  /// e as variações a cada envio: mil mensagens IDÊNTICAS é o padrão que o
+  /// WhatsApp reconhece melhor, e variar duas frases custa nada.
+  messageVariants Json?
+
+  /// Nulo = começa quando alguém apertar "Iniciar".
+  scheduledFor DateTime?
+
+  /// O intervalo é uma FAIXA e o worker sorteia dentro dela — intervalo fixo
+  /// é assinatura de robô. O piso de 5s é do código, não configurável.
+  minIntervalSeconds Int @default(30)
+  maxIntervalSeconds Int @default(90)
+  /// Teto por dia; nulo = sem teto (desaconselhado, e a tela avisa).
+  dailyLimit         Int?
+  /// Só dispara dentro do expediente de `AttendanceSettings` — a MESMA
+  /// configuração do dashboard e do follow-up, nunca um cadastro paralelo.
+  respectBusinessHours Boolean @default(true)
+
+  /// Falhas SEGUIDAS. Chega no teto, a campanha se pausa: falha em sequência
+  /// é sintoma de bloqueio em curso, e insistir até o fim da lista é o que
+  /// derruba o número. Zera a cada envio bem-sucedido.
+  consecutiveFailures Int @default(0)
+
+  /// Destino no CRM depois do disparo. `on_reply` é o padrão: card por
+  /// contato DISPARADO entope o funil; card por contato que RESPONDEU é lead.
+  crmMode       BroadcastCrmMode @default(on_reply)
+  crmPipelineId String?
+  crmStageId    String?
+  /// Etiqueta aplicada à conversa criada pelo disparo — é assim que a Inbox
+  /// distingue "conversa que nasceu de campanha" das demais.
+  tagId         String?
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+  /// Quando a PRÓXIMA mensagem pode sair. É o relógio do disparo, e mora no
+  /// banco (nunca em `setTimeout`): reiniciar a API no meio de uma campanha
+  /// de 5.000 contatos não pode recomeçar nem pular ninguém.
+  nextSendAt DateTime?
+  /// Quantas saíram no dia civil corrente e qual é esse dia — é o par que
+  /// aplica o teto diário sem varrer as entregas a cada mensagem.
+  sentToday      Int      @default(0)
+  sentTodayDate  String?
+
+  createdById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  audience     BroadcastAudience   @relation(fields: [audienceId], references: [id], onDelete: Restrict)
+  instance     WhatsAppInstance    @relation(fields: [whatsappInstanceId], references: [id], onDelete: Cascade)
+  pipeline     CrmPipeline?        @relation(fields: [crmPipelineId], references: [id], onDelete: SetNull)
+  stage        CrmStage?           @relation(fields: [crmStageId], references: [id], onDelete: SetNull)
+  tag          Tag?                @relation(fields: [tagId], references: [id], onDelete: SetNull)
+  createdBy    User?               @relation("BroadcastCampaignCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  deliveries   BroadcastDelivery[]
+
+  @@index([organizationId, status])
+  @@index([status, nextSendAt])
+  @@map("broadcast_campaigns")
+}
+
+/// Uma linha por contato da campanha — a fila e o histórico na mesma tabela.
+///
+/// As entregas são geradas de UMA VEZ quando a campanha inicia, e não
+/// descobertas a cada mensagem: com a fila materializada, "quantos faltam" é
+/// uma contagem, retomar depois de um reinício é continuar de onde parou, e
+/// editar a audiência no meio do disparo NÃO muda quem já está na fila — que
+/// é o comportamento correto (a pessoa configurou o envio para uma lista, e
+/// não para "o que a lista for quando chegar a vez").
+model BroadcastDelivery {
+  id             String                  @id @default(uuid())
+  organizationId String
+  campaignId     String
+  contactId      String?
+  /// CONGELADOS na geração da fila: o contato pode ser editado ou apagado
+  /// depois, e o histórico precisa continuar dizendo para qual número foi.
+  phone          String
+  contactName    String?
+  contactCompany String?
+
+  status     BroadcastDeliveryStatus @default(pending)
+  /// Por que não foi enviada, quando `skipped` (`opted_out`, `invalid_phone`,
+  /// `duplicate`, `canceled`). Pular quem pediu descadastro é o sistema
+  /// funcionando, e por isso não se mistura com `failed`.
+  skipReason String?
+  /// Erro do envio, em texto — o que a tela mostra para a equipe entender.
+  failureReason String?
+  /// O texto EXATO que saiu, com as variáveis já resolvidas. Gravado no
+  /// envio, nunca antes: antes ele ainda mudaria.
+  content    String?
+  attempts   Int       @default(0)
+  sentAt     DateTime?
+  /// Quando o contato RESPONDEU. É a métrica que interessa (taxa de
+  /// resposta) e o gatilho do card do CRM no modo `on_reply`.
+  repliedAt  DateTime?
+
+  conversationId String?
+  messageId      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign     BroadcastCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact      BroadcastContact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  conversation Conversation?     @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  message      Message?          @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  /// O mesmo contato não entra duas vezes na mesma campanha.
+  @@unique([campaignId, contactId])
+  /// A fila do worker e os contadores da tela saem daqui.
+  @@index([campaignId, status])
+  /// Casar a resposta do cliente com a entrega: a ingestão consulta por
+  /// conversa, e sem este índice a checagem custaria uma varredura por
+  /// mensagem recebida.
+  @@index([conversationId, repliedAt])
+  @@map("broadcast_deliveries")
 }

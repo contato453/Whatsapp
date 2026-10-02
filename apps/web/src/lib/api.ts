@@ -2,6 +2,14 @@
 
 import { AZEVEDO_OS_SOURCE } from "@azvchat/shared";
 import type {
+  BroadcastAudienceDto,
+  BroadcastCampaignDto,
+  BroadcastContactDto,
+  BroadcastDeliveryDto,
+  BroadcastDeliveryStatus,
+  BroadcastImportPreviewDto,
+  BroadcastImportResultDto,
+  BroadcastOptOutDto,
   CrmPipelineDirectoryResponse,
   AiAgentDirectoryDto,
   AiBalanceDto,
@@ -1495,3 +1503,147 @@ function buscaQuality(query: Record<string, string | undefined>): string {
   const suffix = search.toString();
   return suffix ? `?${suffix}` : "";
 }
+
+export interface BroadcastOptionsDto {
+  instances: { id: string; name: string; status: string }[];
+  pipelines: { id: string; name: string; stages: { id: string; name: string }[] }[];
+  tags: { id: string; name: string; color: string | null }[];
+}
+
+export interface BroadcastCampaignInput {
+  name: string;
+  audienceId: string;
+  whatsappInstanceId: string;
+  message: string;
+  messageVariants?: string[];
+  scheduledFor?: string | null;
+  minIntervalSeconds: number;
+  maxIntervalSeconds: number;
+  dailyLimit?: number | null;
+  respectBusinessHours: boolean;
+  crmMode: string;
+  crmPipelineId?: string | null;
+  crmStageId?: string | null;
+  tagId?: string | null;
+}
+
+/**
+ * DISPAROS EM MASSA. A prévia e a importação da planilha são as duas únicas
+ * chamadas do módulo que sobem arquivo — e o arquivo sobe DUAS vezes, uma em
+ * cada passo, de propósito: guardar a planilha no servidor entre a prévia e a
+ * confirmação criaria um arquivo temporário com telefone de cliente esperando
+ * alguém lembrar de apagar.
+ */
+export const broadcastApi = {
+  options: () => api.get<BroadcastOptionsDto>("/broadcast/options"),
+
+  audiences: {
+    list: () =>
+      api.get<{ audiences: BroadcastAudienceDto[] }>("/broadcast/audiences").then((d) => d.audiences),
+    get: (id: string) =>
+      api.get<{ audience: BroadcastAudienceDto; contacts: BroadcastContactDto[] }>(
+        `/broadcast/audiences/${id}`,
+      ),
+    create: (input: { name: string; description?: string | null }) =>
+      api
+        .post<{ audience: BroadcastAudienceDto }>("/broadcast/audiences", input)
+        .then((d) => d.audience),
+    update: (id: string, input: { name?: string; description?: string | null }) =>
+      api
+        .patch<{ audience: BroadcastAudienceDto }>(`/broadcast/audiences/${id}`, input)
+        .then((d) => d.audience),
+    remove: (id: string) => api.delete<{ ok: true }>(`/broadcast/audiences/${id}`),
+    addContacts: (
+      id: string,
+      contacts: { phone: string; name?: string | null; company?: string | null }[],
+    ) =>
+      api
+        .post<{ result: BroadcastImportResultDto }>(`/broadcast/audiences/${id}/contacts`, {
+          contacts,
+        })
+        .then((d) => d.result),
+    removeContact: (contactId: string) =>
+      api.delete<{ ok: true }>(`/broadcast/contacts/${contactId}`),
+    previewImport: (file: File) => {
+      const form = new FormData();
+      form.append("file", file);
+      return api
+        .postForm<{ preview: BroadcastImportPreviewDto }>("/broadcast/import/preview", form)
+        .then((d) => d.preview);
+    },
+    import: (
+      id: string,
+      file: File,
+      mapping: { phoneColumn: string; nameColumn?: string; companyColumn?: string; extraColumns: string[] },
+    ) => {
+      const form = new FormData();
+      // Os campos vêm ANTES do arquivo: o @fastify/multipart entrega os
+      // campos já lidos em `file.fields` só quando eles chegam primeiro no
+      // corpo — invertido, o mapeamento chegaria vazio na rota.
+      form.append("phoneColumn", mapping.phoneColumn);
+      if (mapping.nameColumn) form.append("nameColumn", mapping.nameColumn);
+      if (mapping.companyColumn) form.append("companyColumn", mapping.companyColumn);
+      if (mapping.extraColumns.length > 0) {
+        form.append("extraColumns", mapping.extraColumns.join("\n"));
+      }
+      form.append("file", file);
+      return api
+        .postForm<{ result: BroadcastImportResultDto }>(`/broadcast/audiences/${id}/import`, form)
+        .then((d) => d.result);
+    },
+  },
+
+  optOuts: {
+    list: () =>
+      api.get<{ optOuts: BroadcastOptOutDto[] }>("/broadcast/opt-outs").then((d) => d.optOuts),
+    add: (phone: string) =>
+      api.post<{ optOut: BroadcastOptOutDto | null }>("/broadcast/opt-outs", { phone }),
+    remove: (id: string) => api.delete<{ ok: true }>(`/broadcast/opt-outs/${id}`),
+  },
+
+  campaigns: {
+    list: () =>
+      api.get<{ campaigns: BroadcastCampaignDto[] }>("/broadcast/campaigns").then((d) => d.campaigns),
+    get: (id: string) =>
+      api.get<{ campaign: BroadcastCampaignDto }>(`/broadcast/campaigns/${id}`).then((d) => d.campaign),
+    create: (input: BroadcastCampaignInput) =>
+      api
+        .post<{ campaign: BroadcastCampaignDto }>("/broadcast/campaigns", input)
+        .then((d) => d.campaign),
+    update: (id: string, input: Partial<BroadcastCampaignInput>) =>
+      api
+        .patch<{ campaign: BroadcastCampaignDto }>(`/broadcast/campaigns/${id}`, input)
+        .then((d) => d.campaign),
+    remove: (id: string) => api.delete<{ ok: true }>(`/broadcast/campaigns/${id}`),
+    start: (id: string) =>
+      api.post<{
+        campaign: BroadcastCampaignDto;
+        queued: number;
+        skippedOptOut: number;
+        skippedInvalid: number;
+      }>(`/broadcast/campaigns/${id}/start`),
+    pause: (id: string) =>
+      api
+        .post<{ campaign: BroadcastCampaignDto }>(`/broadcast/campaigns/${id}/pause`)
+        .then((d) => d.campaign),
+    resume: (id: string) =>
+      api
+        .post<{ campaign: BroadcastCampaignDto }>(`/broadcast/campaigns/${id}/resume`)
+        .then((d) => d.campaign),
+    cancel: (id: string) =>
+      api
+        .post<{ campaign: BroadcastCampaignDto }>(`/broadcast/campaigns/${id}/cancel`)
+        .then((d) => d.campaign),
+    testSend: (id: string, phone: string) =>
+      api.post<{ sent: boolean; content: string }>(`/broadcast/campaigns/${id}/test-send`, { phone }),
+    deliveries: (id: string, params: { status?: BroadcastDeliveryStatus; cursor?: string } = {}) => {
+      const search = new URLSearchParams();
+      if (params.status) search.set("status", params.status);
+      if (params.cursor) search.set("cursor", params.cursor);
+      const query = search.toString();
+      return api.get<{ deliveries: BroadcastDeliveryDto[]; nextCursor: string | null }>(
+        `/broadcast/campaigns/${id}/deliveries${query ? `?${query}` : ""}`,
+      );
+    },
+  },
+};

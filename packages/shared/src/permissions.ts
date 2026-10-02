@@ -41,6 +41,7 @@ export const PERMISSION_AREAS = [
   "crm",
   "cadastros",
   "automacoes",
+  "disparos",
   "visao",
   "ia",
 ] as const;
@@ -52,6 +53,7 @@ export const PERMISSION_AREA_LABELS: Record<PermissionArea, string> = {
   crm: "CRM",
   cadastros: "Cadastros",
   automacoes: "Automações",
+  disparos: "Disparos em massa",
   visao: "Visão e relatórios",
   ia: "Inteligência artificial",
 };
@@ -62,6 +64,8 @@ export const PERMISSION_AREA_DESCRIPTIONS: Record<PermissionArea, string> = {
   crm: "Quem trabalha o funil de oportunidades e quem configura os funis do escritório.",
   cadastros: "Quem mexe nas listas que o escritório inteiro usa.",
   automacoes: "Quem monta, publica e acompanha os fluxos automáticos de atendimento.",
+  disparos:
+    "Quem monta audiências e campanhas de disparo em massa, e quem pode de fato apertar o botão que manda. Disparar é a ação mais arriscada do sistema: erra e o número do escritório some.",
   visao: "Quais números e registros do escritório cada perfil consegue consultar.",
   ia: "Quem configura e acompanha o atendimento por IA. A chave da OpenAI e o orçamento continuam só do administrador.",
 };
@@ -311,6 +315,40 @@ export const PERMISSION_ACTIONS = [
       "Número de backup nasce com toda conversa nova já arquivada. Ligar não arquiva o que já existe.",
     area: "cadastros",
     defaults: { agent: false, supervisor: true },
+  },
+
+  // ---------- Disparos em massa ----------
+  {
+    key: "broadcast.view",
+    label: "Abrir Disparos",
+    description:
+      "Ver as campanhas, as audiências e o histórico de envio. Só ver — montar e disparar têm chaves próprias.",
+    area: "disparos",
+    defaults: { agent: false, supervisor: true },
+  },
+  {
+    key: "broadcast.audience.manage",
+    label: "Montar audiências",
+    description:
+      "Criar audiência, cadastrar contato na mão, importar planilha e administrar a lista de descadastro do escritório.",
+    area: "disparos",
+    defaults: { agent: false, supervisor: true },
+  },
+  {
+    key: "broadcast.campaign.manage",
+    label: "Montar campanhas",
+    description:
+      "Criar e editar a campanha: texto, número que envia, ritmo, agendamento e o destino no CRM. Montar não dispara.",
+    area: "disparos",
+    defaults: { agent: false, supervisor: true },
+  },
+  {
+    key: "broadcast.send",
+    label: "Disparar de verdade",
+    description:
+      "Iniciar, pausar, retomar e cancelar o envio em massa — e mandar o teste para um número. Nasce SÓ para o administrador de propósito: montar a campanha errada se corrige, mandar para cinco mil pessoas não.",
+    area: "disparos",
+    defaults: { agent: false, supervisor: false },
   },
 
   // ---------- Visão e relatórios ----------

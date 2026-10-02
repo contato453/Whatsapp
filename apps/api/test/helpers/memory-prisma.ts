@@ -104,6 +104,7 @@ export class MemoryPrisma {
       "followUpRule", "followUpRuleDepartment", "followUpRuleStep", "followUpExecution", "followUpExecutionLog",
       "automationFlow", "automationExecution",
       "qualitySettings", "qualityRun", "qualityRunItem", "qualityEvaluation",
+      "broadcastAudience", "broadcastContact", "broadcastOptOut", "broadcastCampaign", "broadcastDelivery",
     ]) {
       this.tables.set(name, []);
     }
@@ -156,6 +157,27 @@ export class MemoryPrisma {
       create: async (args: { data: Row; include?: Row; select?: Row }) => {
         const row = self.insert(table, args.data);
         return self.shape(table, row, args);
+      },
+      // `skipDuplicates` só sabe o que a fila do disparo precisa: a mesma
+      // `(campaignId, contactId)` não entra duas vezes. É o bastante para o
+      // teste da retomada; um dublê genérico de índice único seria um Prisma.
+      createMany: async (args: { data: Row | Row[]; skipDuplicates?: boolean }) => {
+        const itens = Array.isArray(args.data) ? args.data : [args.data];
+        let count = 0;
+        for (const item of itens) {
+          if (args.skipDuplicates && table === "broadcastDelivery") {
+            const repetida = self
+              .rows(table)
+              .some(
+                (linha) =>
+                  linha.campaignId === item.campaignId && linha.contactId === item.contactId,
+              );
+            if (repetida) continue;
+          }
+          self.insert(table, item);
+          count += 1;
+        }
+        return { count };
       },
       update: async (args: { where: Row; data: Row; include?: Row; select?: Row }) => {
         const row = self.filter(table, args.where)[0];
@@ -383,7 +405,10 @@ export class MemoryPrisma {
       const ops = condition as Row;
       if ("in" in ops && !(ops.in as unknown[]).includes(value)) return false;
       if ("notIn" in ops && (ops.notIn as unknown[]).includes(value)) return false;
-      if ("not" in ops && (ops.not === null ? value === null : value === ops.not)) return false;
+      // `not: null` é "não é nulo". Campo AUSENTE na linha semeada chega como
+      // `undefined`, e no banco os dois são a mesma coisa — tratar só `null`
+      // faria uma linha sem o campo passar por "preenchido".
+      if ("not" in ops && (ops.not === null ? value == null : value === ops.not)) return false;
       if ("gt" in ops && !(compare(value, ops.gt) > 0)) return false;
       if ("gte" in ops && !(compare(value, ops.gte) >= 0)) return false;
       if ("lt" in ops && !(compare(value, ops.lt) < 0)) return false;
