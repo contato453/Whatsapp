@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Bot, Users2, User, UserRound, Workflow } from "lucide-react";
+import { Archive, Bot, Pin, PinOff, Users2, User, UserRound, Workflow } from "lucide-react";
 import {
   ALL_USERS_ASSIGNEE_LABEL,
   AZEVEDO_OS_SOURCE,
@@ -25,6 +25,8 @@ export function ConversationListItem({
   unreadCount,
   automation,
   active,
+  pinned = false,
+  onTogglePin,
   onClick,
 }: {
   conversation: ConversationDto;
@@ -43,9 +45,19 @@ export function ConversationListItem({
    */
   automation?: ConversationAutomationDto | null;
   active: boolean;
+  /**
+   * Fixada no topo por ESTA pessoa. Também vem de fora: fixar é preferência
+   * pessoal, e o DTO da conversa é o mesmo para todo mundo que a enxerga.
+   */
+  pinned?: boolean;
+  /** Ausente = sem botão de fixar (visão de arquivadas, que não fixa). */
+  onTogglePin?: () => void;
   onClick: () => void;
 }) {
   return (
+    // O botão de fixar é IRMÃO do card, e não filho: botão dentro de botão é
+    // HTML inválido, e o clique nele abriria a conversa junto.
+    <div className="group relative">
     <button
       onClick={onClick}
       className={cn(
@@ -74,7 +86,10 @@ export function ConversationListItem({
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
             <p className="truncate text-sm font-semibold text-slate-900">{conversation.title}</p>
-            <span className="shrink-0 text-[10px] text-slate-400">
+            <span className="flex shrink-0 items-center gap-1 text-[10px] text-slate-400">
+              {pinned && (
+                <Pin className="h-3 w-3 rotate-45 text-slate-500" aria-label="Fixada no topo" />
+              )}
               {formatTime(conversation.lastMessageAt)}
             </span>
           </div>
@@ -184,5 +199,23 @@ export function ConversationListItem({
         </div>
       </div>
     </button>
+    {onTogglePin && (
+      // Aparece no hover (e no foco por teclado), no canto de baixo, longe
+      // do horário e do contador de não lidas — clicar no lugar errado
+      // abriria a conversa em vez de fixar.
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          onTogglePin();
+        }}
+        title={pinned ? "Desafixar do topo" : "Fixar no topo"}
+        aria-label={pinned ? "Desafixar do topo" : "Fixar no topo"}
+        className="absolute bottom-2 right-2 rounded-md border border-slate-200 bg-white p-1 text-slate-500 opacity-0 shadow-sm transition-opacity hover:text-slate-800 focus:opacity-100 group-hover:opacity-100"
+      >
+        {pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+      </button>
+    )}
+    </div>
   );
 }

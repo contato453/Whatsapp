@@ -2,6 +2,7 @@
 
 import { AZEVEDO_OS_SOURCE } from "@azvchat/shared";
 import type {
+  ConversationPinMap,
   BroadcastAudienceDto,
   BroadcastCampaignDto,
   BroadcastContactDto,
@@ -747,6 +748,18 @@ export const conversationReadApi = {
     api.post<{ ok: boolean; unreadCount: number }>(`/conversations/${conversationId}/read`),
   unread: (conversationId: string) =>
     api.post<{ ok: boolean; unreadCount: number }>(`/conversations/${conversationId}/unread`),
+};
+
+/**
+ * Conversa fixada no topo da lista — SÓ para quem fixa, como no WhatsApp
+ * Web. As duas devolvem o mapa inteiro das fixadas desta pessoa, e as
+ * outras abas dela recebem o mesmo mapa pelo evento `conversation:pins`.
+ */
+export const conversationPinApi = {
+  pin: (conversationId: string) =>
+    api.post<{ pinned: ConversationPinMap }>(`/conversations/${conversationId}/pin`),
+  unpin: (conversationId: string) =>
+    api.post<{ pinned: ConversationPinMap }>(`/conversations/${conversationId}/unpin`),
 };
 
 /**
