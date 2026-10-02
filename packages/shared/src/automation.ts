@@ -86,6 +86,16 @@ export interface AutomationNodeTypeDefinition {
   isTrigger?: boolean;
   /** Não tem saída — encerra aquele caminho do fluxo. */
   isTerminal?: boolean;
+  /**
+   * Ação simples que PODE ser o último bloco de um caminho, sem saída ligada:
+   * o fluxo termina ali, como se houvesse um "Finalizar" vazio depois. Antes
+   * só o "Finalizar atendimento" podia fechar um caminho, e todo fluxo
+   * precisava de um bloco pendurado no fim só para passar na publicação.
+   * Fica de FORA tudo que se ramifica ou espera (menu, condição, aguardar,
+   * pergunta, IA): é ali que o esquecimento de uma saída acontece, e onde
+   * deixar o caminho solto quase nunca é intenção.
+   */
+  canEndFlow?: boolean;
 }
 
 export const AUTOMATION_NODE_TYPE_DEFINITIONS: Record<AutomationNodeType, AutomationNodeTypeDefinition> = {
@@ -103,6 +113,7 @@ export const AUTOMATION_NODE_TYPE_DEFINITIONS: Record<AutomationNodeType, Automa
     label: "Enviar mensagem",
     description: "Manda uma mensagem para o cliente pelo número da conversa.",
     color: "#2563eb",
+    canEndFlow: true,
   },
   ask_question: {
     type: "ask_question",
@@ -147,6 +158,7 @@ export const AUTOMATION_NODE_TYPE_DEFINITIONS: Record<AutomationNodeType, Automa
     label: "Adicionar etiqueta",
     description: "Aplica uma etiqueta à conversa.",
     color: "#b45309",
+    canEndFlow: true,
   },
   tag_remove: {
     type: "tag_remove",
@@ -154,6 +166,7 @@ export const AUTOMATION_NODE_TYPE_DEFINITIONS: Record<AutomationNodeType, Automa
     label: "Remover etiqueta",
     description: "Tira uma etiqueta da conversa.",
     color: "#b45309",
+    canEndFlow: true,
   },
   change_status: {
     type: "change_status",
@@ -161,6 +174,7 @@ export const AUTOMATION_NODE_TYPE_DEFINITIONS: Record<AutomationNodeType, Automa
     label: "Alterar status",
     description: "Muda o status do atendimento (aberto, aguardando cliente...).",
     color: "#b45309",
+    canEndFlow: true,
   },
   forward_department: {
     type: "forward_department",
@@ -168,6 +182,7 @@ export const AUTOMATION_NODE_TYPE_DEFINITIONS: Record<AutomationNodeType, Automa
     label: "Encaminhar para setor",
     description: "Muda o departamento da conversa — quem enxerga o atendimento muda junto.",
     color: "#be123c",
+    canEndFlow: true,
   },
   assign_user: {
     type: "assign_user",
@@ -175,6 +190,7 @@ export const AUTOMATION_NODE_TYPE_DEFINITIONS: Record<AutomationNodeType, Automa
     label: "Atribuir atendente",
     description: "Passa o atendimento para uma pessoa específica.",
     color: "#be123c",
+    canEndFlow: true,
   },
   unassign: {
     type: "unassign",
@@ -182,6 +198,7 @@ export const AUTOMATION_NODE_TYPE_DEFINITIONS: Record<AutomationNodeType, Automa
     label: "Devolver para a fila",
     description: "Tira o responsável — a conversa some da caixa de quem tinha e some para quem está livre no setor.",
     color: "#be123c",
+    canEndFlow: true,
   },
   ai_agent: {
     type: "ai_agent",
@@ -200,6 +217,7 @@ export const AUTOMATION_NODE_TYPE_DEFINITIONS: Record<AutomationNodeType, Automa
     label: "Enviar para funil (CRM)",
     description: "Abre uma oportunidade da conversa no Kanban do CRM, no funil e na etapa escolhidos.",
     color: "#be123c",
+    canEndFlow: true,
   },
   webhook: {
     type: "webhook",
@@ -207,6 +225,7 @@ export const AUTOMATION_NODE_TYPE_DEFINITIONS: Record<AutomationNodeType, Automa
     label: "Chamar webhook",
     description: "Envia os dados da execução para uma URL externa (POST com JSON).",
     color: "#0891b2",
+    canEndFlow: true,
   },
   finish: {
     type: "finish",
@@ -566,6 +585,7 @@ export function validateAutomationGraph(graph: AutomationGraph): AutomationFlowP
     if (definition.isTerminal) continue;
     const outgoing = outgoingByNode.get(node.id) ?? [];
     if (outgoing.length === 0) {
+      if (definition.canEndFlow) continue;
       problems.push({ nodeId: node.id, message: `"${definition.label}" não tem para onde seguir.` });
       continue;
     }

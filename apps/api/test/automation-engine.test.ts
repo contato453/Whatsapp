@@ -824,6 +824,30 @@ describe("AutomationEngine", () => {
       expect([...env.executions.values()][0]?.status).toBe("completed");
   });
 
+  it("caminho que termina numa ação simples, sem Finalizar, conclui a execução", async () => {
+    const env = buildFakeEnvironment();
+    vi.setSystemTime(new Date("2026-03-05T10:00:00-03:00"));
+    const conversation = env.createConversation();
+    env.createFlow({
+      name: "Sem finalizar",
+      triggerType: "first_message",
+      graph: {
+        nodes: [
+          { id: "trigger", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+          { id: "send", type: "send_message", position: { x: 100, y: 0 }, data: { messageType: "text", text: "Olá!" } },
+        ],
+        edges: [{ id: "e1", source: "trigger", target: "send" }],
+      },
+    });
+
+    await env.inbound(conversation.id as string, "Oi");
+
+    expect(env.sentMessages.map((message) => message.text)).toEqual(["Olá!"]);
+    expect([...env.executions.values()][0]?.status).toBe("completed");
+    // Sem o "Finalizar", nada mexe no atendimento: a conversa segue aberta.
+    expect(env.conversations.get(conversation.id as string)?.status).toBe("open");
+  });
+
   describe("bloco 'Atendimento por IA'", () => {
     function aiGraph(agentId: string): AutomationGraph {
       return {

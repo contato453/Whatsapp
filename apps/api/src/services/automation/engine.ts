@@ -785,9 +785,10 @@ export class AutomationEngine {
 
       const edge = pickNextEdge(graph, node.id, result.handle);
       if (!edge) {
-        // Nó não terminal sem saída conectada: a validação na publicação já
-        // deveria ter barrado isso, mas o motor não confia cegamente nela —
-        // termina como concluído em vez de travar a execução para sempre.
+        // Nó sem saída conectada: é o fim normal de um caminho que termina
+        // numa ação simples (`canEndFlow`), e também a rede de segurança para
+        // qualquer outro nó que escapasse da validação — nos dois casos a
+        // execução termina como concluída em vez de travar para sempre.
         await this.completeExecution(execution.id, contextData, null);
         return;
       }
