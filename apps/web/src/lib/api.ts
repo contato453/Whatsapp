@@ -1,6 +1,6 @@
 "use client";
 
-import { AZEVEDO_OS_SOURCE } from "@azvchat/shared";
+import { AZEVEDO_OS_SOURCE, type CallAnalysisDto } from "@azvchat/shared";
 import type {
   ConversationPinMap,
   BroadcastAudienceDto,
@@ -238,6 +238,13 @@ export const callsApi = {
   },
   /** URL autenticada da gravação — buscar com `fetchMediaBlobUrl`. */
   recordingPath: (callId: string) => `/calls/${callId}/recording`,
+  /** Transcrição e resumo já feitos (vazios quando ainda não houve análise). */
+  analysis: (callId: string) => api.get<{ analysis: CallAnalysisDto }>(`/calls/${callId}/analysis`),
+  /**
+   * Pede a análise: transcreve e resume. Pode levar minutos numa ligação
+   * longa; análise pronta volta na hora, sem custo.
+   */
+  analyze: (callId: string) => api.post<{ analysis: CallAnalysisDto }>(`/calls/${callId}/analysis`),
   /** Exclui as gravações de um período (admin) para liberar espaço na VPS. */
   purgeRecordings: (from: string, to: string) =>
     api.post<{

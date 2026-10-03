@@ -19,6 +19,11 @@ export {
 } from "./audio/container.js";
 export { MP3_MIME_TYPE, convertAudioToMp3 } from "./audio/mp3.js";
 export {
+  TRANSCRIPTION_CHUNK_BITRATE_BPS,
+  splitAudioForTranscription,
+  type TranscriptionChunk,
+} from "./audio/transcription-chunks.js";
+export {
   AudioConversionError,
   normalizeAudioForWhatsApp,
   type AudioNormalizationProfile,

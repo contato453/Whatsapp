@@ -71,6 +71,7 @@ model Organization {
   qualitySettings      QualitySettings?
   qualityRuns          QualityRun[]
   qualityRunItems      QualityRunItem[]
+  callAnalyses         CallAnalysis[]
   qualityEvaluations   QualityEvaluation[]
   broadcastAudiences  BroadcastAudience[]
   broadcastContacts   BroadcastContact[]
@@ -690,6 +691,7 @@ model Message {
   pinnedItems            PinnedItem[]
   integrationMessageLogs IntegrationMessageLog[]
   broadcastDeliveries BroadcastDelivery[]
+  callAnalysis        CallAnalysis?
 
   @@unique([conversationId, externalMessageId])
   @@index([conversationId, timestamp])
@@ -2208,6 +2210,10 @@ enum AiUsageKind {
   test
   connection_test
   models
+  /// Resumo da gravação de uma ligação (botão da tela de Ligações). Tipo
+  /// próprio pelo mesmo motivo do `quality`; a transcrição da gravação entra
+  /// como `transcription`, cobrada por minuto.
+  call_summary
   /// Avaliação do módulo Quality. Tipo próprio, e não `chat`: somá-la ao
   /// atendimento faria o custo por turno de conversa deixar de fechar, o mesmo
   /// defeito que a separação de `transcription` e `vision` já evitou.
@@ -3024,4 +3030,44 @@ model BroadcastDelivery {
   /// mensagem recebida.
   @@index([conversationId, repliedAt])
   @@map("broadcast_deliveries")
+}
+
+/// Transcrição e resumo da GRAVAÇÃO de uma ligação, feitos pela IA quando
+/// alguém clica no botão da tela de Ligações. Uma linha por ligação (a
+/// `Message` de tipo `call`).
+///
+/// Tabela própria, e não `Message.metadata`, de propósito: o metadata viaja
+/// INTEIRO em toda carga de mensagens da conversa e em todo `message:updated`,
+/// e uma ligação de meia hora rende dezenas de milhares de caracteres — cada
+/// abertura do chat passaria a carregar a transcrição sem ninguém pedir.
+///
+/// Transcrição e resumo são gravados em momentos separados: o resumo que falha
+/// não joga fora a transcrição, que é a parte cara (cobrada por minuto).
+model CallAnalysis {
+  id                  String    @id @default(uuid())
+  organizationId      String
+  /// A ligação (`Message` de tipo `call`). Quem enxerga a conversa dela
+  /// enxerga a análise — o recorte sai de `access.ts`, pela mensagem.
+  messageId           String    @unique
+  /// Nulo = ainda não transcrita. Vazio = transcrita, sem fala reconhecida.
+  transcript          String?
+  transcriptTruncated Boolean   @default(false)
+  transcriptModel     String?
+  transcribedAt       DateTime?
+  /// `CallSummary` do shared, validado antes de gravar.
+  summary             Json?
+  summaryModel        String?
+  summarizedAt        DateTime?
+  /// Cópia, como em `QualityRun.requestedByName`: quem pediu e saiu do
+  /// cadastro não apaga a autoria.
+  requestedById       String?
+  requestedByName     String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  message      Message      @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("call_analyses")
 }

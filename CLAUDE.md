@@ -238,6 +238,8 @@ snake_case e id `uuid`.
 **Inteligência artificial** — `AiProviderConfig`, `AiSettings`, `AiAgent` (+ `AiAgentDepartment`,
 `AiAgentVersion`, `AiAgentKnowledgeSource`), `AiKnowledgeSource`, `AiAutomation`, `AiSession`,
 `AiUsageLog`, `AiCreditEntry` (lançamentos do saldo estimado do crédito). Ver a seção 20.
+`CallAnalysis` — transcrição e resumo da GRAVAÇÃO de uma ligação, uma linha por ligação
+(`messageId` único da `Message` de tipo `call`). Ver "Resumo da ligação com IA" na seção 13.
 
 **Qualidade do atendimento (Quality)**
 - `QualitySettings` — tetos por organização: conversas por disparo (padrão 20), duração máxima
@@ -610,6 +612,9 @@ POST   /ai/agents/:id/status  POST /ai/agents/:id/duplicate  GET /ai/agents/:id/
 POST   /ai/agents/:id/test   (testador: nada sai pelo WhatsApp; consumo entra como `test`)
 GET|POST /ai/knowledge  PATCH|DELETE /ai/knowledge/:id     GET /ai/options
 GET|POST /ai/automations  PATCH|DELETE /ai/automations/:id  (tudo isso: ai.agent.manage)
+GET    /calls/:id/analysis   (call.recording.play; transcrição e resumo já feitos, vazios se nunca pedidos)
+POST   /calls/:id/analysis   (call.recording.analyze E call.recording.play; transcreve e resume a
+       gravação — síncrono, pode levar minutos; análise pronta volta na hora sem custo. Ver a seção 13)
 GET    /conversations/:id/ai           (sessão de IA mais recente da conversa)
 POST   /conversations/:id/ai/stop      (ai.session.stop)   POST /conversations/:id/ai/resume (ai.session.resume)
        (ver a seção 20)
@@ -2339,6 +2344,33 @@ nível?" por igualdade é um lugar onde o papel novo perde acesso em silêncio (
   registro, senão ele prova o contrário do que precisa provar; (3) a emissão de tempo real vem
   **depois** da gravação e dentro de `try/catch` — aviso de tela não pode derrubar trabalho já
   pago ao provedor de IA.
+- **RESUMO DA LIGAÇÃO COM IA: TRANSCREVE E RESUME, NÃO AVALIA — e a gravação não separa
+  quem falou.** O botão "Resumir com IA" da tela de Ligações manda o MP3 do AstraCalls para a
+  transcrição e depois pede o resumo (assunto, pedidos do cliente, combinados, próximos passos e
+  "dados citados" para conferir). Fonte única em `apps/api/src/services/ai/call-analysis.ts`;
+  contrato e rótulos em `packages/shared/src/call-analysis.ts`. Decisões que valem para qualquer
+  mexida: (1) **só roda por clique**, nunca na ingestão — a transcrição é cobrada por minuto na
+  conta OpenAI do escritório; (2) **mora em tabela própria (`CallAnalysis`), não no
+  `Message.metadata`**: o metadata viaja inteiro em toda carga de mensagens e em todo
+  `message:updated`, e meia hora de ligação são dezenas de milhares de caracteres; (3)
+  **transcrição e resumo são gravados em passos separados** — resumo que falha não joga fora a
+  transcrição (a parte cara), e análise pronta não é refeita; dois cliques simultâneos esperam a
+  mesma execução (mapa em memória, API em instância única); (4) **a gravação vai em pedaços de
+  10 minutos** (`splitAudioForTranscription`, em `packages/whatsapp/src/audio/`), depois de
+  reduzida a MP3 mono 16 kHz 32 kbps — a API de transcrição tem teto de tamanho e de duração por
+  arquivo; acima de 90 minutos é recusada (422 `call_recording_too_long`) antes de baixar o
+  arquivo; (5) **a gravação mistura as duas vozes**: o resumo é instruído a não atribuir fala sem
+  contexto claro, e por isso AVALIAR o atendente pela ligação não está aqui — é outra etapa, que
+  depende de confirmar se o AstraCalls grava cada lado num canal; (6) **sem máscara de CPF/CNPJ**,
+  ao contrário do Quality: o áudio inteiro já foi ao provedor para ser transcrito, mascarar o
+  texto depois não protege nada e apagaria o dado que a equipe precisa conferir; o conteúdo vai
+  delimitado como DADO e a chamada não leva ferramenta; (7) consumo em `transcription` (por
+  pedaço) e no tipo próprio `call_summary`, nunca no `chat`; o orçamento mensal bloqueado recusa
+  com 409 `ai_budget_blocked`; (8) **ler a análise exige `call.recording.play`** (é o conteúdo da
+  gravação, escrito) e pedir exige também `call.recording.analyze` (padrão: supervisor para cima);
+  (9) excluir as gravações por período apaga o ÁUDIO, não a análise — o texto é pequeno e continua
+  legível pelo botão "Ver resumo". Nada disso encosta em `lib/access.ts`: a ligação é procurada
+  pelo `conversationScope` de sempre, dentro da organização.
 - Baileys é integração não oficial: risco de banimento do número. Use números dedicados.
 
 ---
@@ -2407,6 +2439,10 @@ LENDO os anexos que o cliente manda — áudio transcrito, imagem descrita (com 
 do comprovante) e documento PDF/DOCX/TXT com o texto extraído, cada um lido uma vez, guardado
 na própria mensagem, exibido na bolha para a equipe conferir e cobrado em linha separada no
 consumo (documento não custa: é lido no servidor).
+
+Resumo de ligação com IA: botão na tela de Ligações que transcreve a gravação (em pedaços,
+até 90 minutos) e resume o que foi conversado, com os dados citados destacados para conferir e a
+transcrição completa ao lado, guardados na ligação para não pagar duas vezes (ver a seção 13).
 
 CRM em Kanban integrado ao atendimento: funis por departamento com etapas configuráveis
 (probabilidade, prazo de parada e automações de entrada/saída), oportunidade criada de dentro

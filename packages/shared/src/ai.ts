@@ -1035,7 +1035,7 @@ export function isAiMessage(metadata: unknown): metadata is AiMessageOriginMetad
 // Consumo
 // ---------------------------------------------------------------------------
 
-export const AI_USAGE_KINDS = ["chat", "transcription", "vision", "test", "connection_test", "models", "quality"] as const;
+export const AI_USAGE_KINDS = ["chat", "transcription", "vision", "test", "connection_test", "models", "quality", "call_summary"] as const;
 export type AiUsageKind = (typeof AI_USAGE_KINDS)[number];
 export const AI_USAGE_KIND_LABELS: Record<AiUsageKind, string> = {
   chat: "Atendimento",
@@ -1045,6 +1045,7 @@ export const AI_USAGE_KIND_LABELS: Record<AiUsageKind, string> = {
   connection_test: "Teste de conexão",
   models: "Lista de modelos",
   quality: "Avaliação de qualidade",
+  call_summary: "Resumo de ligação",
 };
 
 // ---------------------------------------------------------------------------
@@ -1074,12 +1075,13 @@ export const AI_CREDIT_ENTRY_KIND_HINTS: Record<AiCreditEntryKind, string> = {
  * gatilho de automação e o do bloco de fluxo são o mesmo `chat`, e o
  * escritório pergunta por eles separados ("quanto as automações gastam?").
  */
-export const AI_SPEND_USES = ["attendance", "flows", "quality", "transcription", "vision", "test", "other"] as const;
+export const AI_SPEND_USES = ["attendance", "flows", "quality", "calls", "transcription", "vision", "test", "other"] as const;
 export type AiSpendUse = (typeof AI_SPEND_USES)[number];
 export const AI_SPEND_USE_LABELS: Record<AiSpendUse, string> = {
   attendance: "Atendimento por IA",
   flows: "Automações (fluxos)",
   quality: "Quality",
+  calls: "Resumo de ligações",
   transcription: "Transcrição de áudio",
   vision: "Leitura de imagem",
   test: "Testador de agente",
@@ -1089,7 +1091,8 @@ export const AI_SPEND_USE_HINTS: Record<AiSpendUse, string> = {
   attendance: "Agentes acionados pelas automações de IA",
   flows: 'Agentes acionados pelo bloco "Atendimento por IA" dos fluxos',
   quality: "Avaliações do atendimento",
-  transcription: "Áudios do cliente ouvidos pela IA ou pelo Quality",
+  calls: "Gravações de ligação resumidas pelo botão da tela de Ligações",
+  transcription: "Áudios do cliente e gravações de ligação transcritos pela IA",
   vision: "Fotos e comprovantes lidos pela IA",
   test: "Conversas de teste na tela do agente",
   other: "Teste de conexão e lista de modelos",
@@ -1100,6 +1103,8 @@ export function aiSpendUseOf(kind: AiUsageKind, fromFlow: boolean): AiSpendUse {
   switch (kind) {
     case "chat":
       return fromFlow ? "flows" : "attendance";
+    case "call_summary":
+      return "calls";
     case "quality":
     case "transcription":
     case "vision":

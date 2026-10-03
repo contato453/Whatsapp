@@ -253,6 +253,12 @@ export interface CallLogDto {
   isVideo: boolean;
   durationSeconds: number | null;
   hasRecording: boolean;
+  /**
+   * Análise da gravação pela IA: `none` = nunca pedida; `transcribed` =
+   * transcrita, sem resumo (gravação sem fala, ou o resumo falhou); `ready` =
+   * transcrição e resumo prontos.
+   */
+  analysis: "none" | "transcribed" | "ready";
   timestamp: string;
 }
 

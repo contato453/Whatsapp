@@ -38,7 +38,12 @@ export class AudioConversionError extends Error {
  *  requisição para sempre. */
 export const FFMPEG_TIMEOUT_MS = 60_000;
 
-export function runFfmpeg(args: string[], input: Buffer): Promise<Buffer> {
+/**
+ * `timeoutMs` só muda para quem processa arquivo grande de propósito (a
+ * gravação inteira de uma ligação, ver `transcription-chunks.ts`); o resto do
+ * sistema fica com o teto padrão.
+ */
+export function runFfmpeg(args: string[], input: Buffer, timeoutMs: number = FFMPEG_TIMEOUT_MS): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     let settled = false;
     const finish = (fn: () => void) => {
@@ -55,7 +60,7 @@ export function runFfmpeg(args: string[], input: Buffer): Promise<Buffer> {
     const timer = setTimeout(() => {
       ffmpeg.kill("SIGKILL");
       finish(() => reject(new AudioConversionError("Conversão de áudio demorou demais", "timeout")));
-    }, FFMPEG_TIMEOUT_MS);
+    }, timeoutMs);
 
     ffmpeg.stdout.on("data", (chunk: Buffer) => out.push(chunk));
     // Sem drenar o stderr o buffer do sistema enche e o ffmpeg trava.

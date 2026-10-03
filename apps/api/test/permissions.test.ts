@@ -266,6 +266,7 @@ describe("padrões de fábrica (Usuário / Supervisor / Gerente)", () => {
     ["call.answer", true, true, true],
     ["call.view", true, true, true],
     ["call.recording.play", false, true, true],
+    ["call.recording.analyze", false, true, true],
     ["call.recording.delete", false, false, false],
     // Inteligência artificial
     ["ai.agent.manage", false, true, true],

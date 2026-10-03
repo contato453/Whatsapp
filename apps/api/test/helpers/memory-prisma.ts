@@ -103,7 +103,7 @@ export class MemoryPrisma {
       "aiAgentKnowledgeSource", "aiAutomation", "aiSession", "aiUsageLog", "aiCreditEntry",
       "followUpRule", "followUpRuleDepartment", "followUpRuleStep", "followUpExecution", "followUpExecutionLog",
       "automationFlow", "automationExecution",
-      "qualitySettings", "qualityRun", "qualityRunItem", "qualityEvaluation",
+      "qualitySettings", "qualityRun", "qualityRunItem", "qualityEvaluation", "callAnalysis",
       "broadcastAudience", "broadcastContact", "broadcastOptOut", "broadcastCampaign", "broadcastDelivery",
     ]) {
       this.tables.set(name, []);
