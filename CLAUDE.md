@@ -3103,6 +3103,15 @@ IA) continua obrigado a ter saída: é ali que a conexão esquecida acontece, e 
 deixar o caminho solto quase nunca é intenção. O motor já tratava nó sem aresta como
 fim normal da execução (`completed`), então nada mudou no lado da execução.
 
+**A ligação (linha) se apaga sozinha, sem levar o bloco.** Antes, a única forma de
+desfazer uma ligação errada era excluir o bloco inteiro (que leva todas as linhas dele) e
+montá-lo de novo. A linha agora é um tipo próprio (`components/automations/flow-edge.tsx`):
+clicar nela a seleciona (fica vermelha) e mostra um "x" no meio, e Delete ou Backspace
+também apagam a selecionada. O "x" chama `deleteElements` do React Flow, o mesmo caminho
+da tecla, então o autosave grava como qualquer outra mudança. Em somente leitura (fluxo
+geral sem `automation.manage_general`) não há "x" nem tecla que apague: o autosave está
+desligado ali, e a linha sumiria da tela para voltar no próximo carregamento.
+
 **Permissões**: `automation.manage` (construir, publicar, ativar/desativar,
 templates — padrão supervisor+) e `automation.view_history` (padrão
 supervisor+), catálogo `packages/shared/src/permissions.ts`, área

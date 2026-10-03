@@ -38,6 +38,10 @@ export function NodePalette({ onAdd }: { onAdd: (type: AutomationNodeType) => vo
           </div>
         </div>
       ))}
+      <p className="mt-2 px-1 text-[11px] leading-snug text-slate-400">
+        Para apagar uma ligação, clique na linha e use o <span className="font-semibold">x</span> que aparece
+        nela (ou a tecla Delete).
+      </p>
     </div>
   );
 }
