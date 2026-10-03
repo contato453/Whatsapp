@@ -4439,3 +4439,47 @@ Esqueleto pronto:
 > `@azvchat/shared`, kit de UI, textos em português, comentário explicando o porquê).
 > Ao final: migration nova (nunca editar migration aplicada), teste cobrindo a regra, e
 > `pnpm typecheck && pnpm lint && pnpm test` verdes. Commit e push na branch de trabalho.
+
+## 25. Maya no WhatsApp (assistente do Azevedo-OS num grupo)
+
+Desde 03/10/2026, a pedido do Lincoln. A Maya é a assistente consultiva do Portal
+Gestão do Azevedo-OS; aqui ela responde num **grupo só**, e só a **um número**.
+Código: `apps/api/src/services/maya-whatsapp.ts`; teste: `apps/api/test/maya-whatsapp.test.ts`.
+
+**O AZVCHAT é só o carteiro.** A Maya não mora aqui e nada aqui decide o que ela pode
+ver. A pergunta vai para a Edge Function `maya-whatsapp` do Azevedo-OS
+(`POST .../functions/v1/maya-whatsapp`, `Authorization: Bearer <AZEVEDO_OS_API_TOKEN>`,
+corpo `{ telefone, pergunta, historico }`). Lá o telefone é procurado em
+`os_preferencias.maya_whatsapp_telefone`, uma sessão do dono do número é aberta, e a
+mesma Maya do portal responde **como ele**, com a RLS dele e as travas dela (usuário
+mestre + interruptor ligado). Telefone sem vínculo lá → `404 unknown_phone` → o grupo
+fica **calado**. Recusa da Maya (`403`) → a frase dela vai para o grupo. Outra falha →
+"Não consegui consultar a Maya agora".
+
+Duas entradas, ambas no mesmo grupo (`MAYA_GRUPO`, JID `...@g.us` ou nome exato):
+
+1. **Pergunta e resposta.** O gancho é no `instance-manager`, ao lado da IA de
+   atendimento, só para mensagem de ENTRADA nova de texto. O serviço filtra grupo e
+   número (`MAYA_TELEFONE`, comparado sem 55 e sem o nono dígito, a mesma regra de
+   `os_telefone_canonico` lá) e põe a pergunta numa fila por conversa, para as
+   respostas saírem em ordem. Histórico das últimas 6 falas, só em memória.
+2. **Resumo programado.** `MAYA_RESUMO_HORARIO` (HH:MM, Brasília) nos dias
+   `MAYA_RESUMO_DIAS` (padrão `1-5`), com `MAYA_RESUMO_PERGUNTA` ou a padrão. Um
+   `setInterval` de 1 min confere `hora >= horário`, então um restart às 08:00:30 não
+   pula o dia. O que impede o resumo de sair duas vezes é o BANCO: mensagem de saída com
+   `senderName = "Maya (resumo)"` desde a meia-noite de Brasília. Não troque esse
+   `senderName` sem trocar a checagem.
+
+Regras que valem preservar:
+
+- **O grupo da Maya é dela.** `instance-manager` não chama o motor de automações nem a IA
+  de atendimento quando `maya.ehOGrupo(conversa)`; sem isso duas IAs responderiam.
+- **Desligada por omissão.** Faltando `MAYA_GRUPO`, `MAYA_TELEFONE` ou
+  `AZEVEDO_OS_API_TOKEN`, `mayaConfigFromEnv` devolve null e nada roda.
+- **Endereço derivado.** `.../functions/v1/azvchat` → `.../functions/v1/maya-whatsapp`;
+  `MAYA_WHATSAPP_URL` sobrepõe. Timeout mínimo de 60 s (a Maya pensa em várias voltas).
+- **Grupo por nome é ambíguo por natureza.** Dois grupos com o mesmo nome: o resumo não
+  sai (log `maya_whatsapp_group_ambiguous`); use o JID.
+- As variáveis `MAYA_*` vão no `.env.azvchat2` da VPS, à mão: o `deploy.yml` só escreve
+  as `AZEVEDO_OS_*`.
+

@@ -114,6 +114,25 @@ const envSchema = z.object({
   FINANCEIRO_WHATSAPP_INSTANCE_ID: optionalEnv(z.string().uuid()),
 
   /**
+   * Maya no WhatsApp (ver `services/maya-whatsapp.ts` e CLAUDE.md §25): a
+   * assistente do Azevedo OS respondendo num grupo daqui. Usa o mesmo token e
+   * o mesmo projeto da integração de leitura (`AZEVEDO_OS_API_*`); o endereço
+   * da função sai do `AZEVEDO_OS_API_URL`, e `MAYA_WHATSAPP_URL` só existe
+   * para sobrepor. Sem `MAYA_GRUPO` e `MAYA_TELEFONE`, nada liga.
+   */
+  MAYA_WHATSAPP_URL: optionalEnv(z.string().url()),
+  /** JID do grupo (`...@g.us`) ou o nome exato do grupo. */
+  MAYA_GRUPO: optionalEnv(z.string().min(1)),
+  /** O único número que aciona a Maya no grupo; com DDD, 55 opcional. */
+  MAYA_TELEFONE: optionalEnv(z.string().regex(/^\+?[\d\s().-]{10,20}$/, "MAYA_TELEFONE deve ser um telefone com DDD")),
+  /** Hora do resumo diário, "HH:MM" no fuso de Brasília. Vazio: sem resumo. */
+  MAYA_RESUMO_HORARIO: optionalEnv(z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "MAYA_RESUMO_HORARIO deve ser HH:MM")),
+  /** Dias do resumo, 0 = domingo: "1-5" (dias úteis), "1,3,5", "0-6". */
+  MAYA_RESUMO_DIAS: z.string().default("1-5"),
+  /** A pergunta que a Maya recebe no horário do resumo. */
+  MAYA_RESUMO_PERGUNTA: optionalEnv(z.string().min(1).max(2000)),
+
+  /**
    * Limite de envios por MINUTO de cada token da API de integração
    * (`POST /integrations/messages`). Folgado de saída — confirmação de
    * agendamento é evento esporádico —, mas fica em configuração para o
