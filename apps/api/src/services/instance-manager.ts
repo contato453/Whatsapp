@@ -94,6 +94,28 @@ export class InstanceManager {
         contactName: string | null;
       }): Promise<void>;
     },
+    /**
+     * Maya no WhatsApp (`services/maya-whatsapp.ts`). Opcional pelo mesmo
+     * motivo dos dois acima. Ela mesma decide se a mensagem é com ela (grupo
+     * e número configurados); daqui só sai o aviso de que chegou mensagem.
+     */
+    private readonly maya?: {
+      ehOGrupo(conversation: { type: string; externalChatId: string; title: string; customTitle: string | null }): boolean;
+      onInboundMessage(input: {
+        conversation: {
+          id: string;
+          organizationId: string;
+          whatsappInstanceId: string;
+          externalChatId: string;
+          type: string;
+          title: string;
+          customTitle: string | null;
+          archivedAt: Date | null;
+        };
+        senderPhone: string | null;
+        content: string | null;
+      }): void;
+    },
   ) {}
 
   /** Pacote de dependências que o motor de follow-up pede. */
@@ -262,7 +284,11 @@ export class InstanceManager {
           // manda (ou que a automação acabou de mandar) nunca reabre a
           // checagem de fluxo. `handleIncomingMessage` nunca lança, mesma
           // regra do `ingest()`.
-          if (message.direction === "inbound") {
+          // O grupo da Maya é dela: fluxo de automação e IA de atendimento
+          // ficam de fora, senão duas IAs respondem a mesma pergunta.
+          const grupoDaMaya = this.maya?.ehOGrupo(conversation) ?? false;
+
+          if (message.direction === "inbound" && !grupoDaMaya) {
             void this.automation.handleIncomingMessage({
               organizationId,
               conversationId: conversation.id,
@@ -273,11 +299,23 @@ export class InstanceManager {
           // Só mensagem RECEBIDA aciona a IA — o eco do que a equipe (ou a
           // própria IA) enviou nunca vira turno. O motor tem fila e debounce
           // próprios e nunca lança.
-          if (persisted.direction === "inbound" && !conversation.archivedAt) {
+          if (persisted.direction === "inbound" && !conversation.archivedAt && !grupoDaMaya) {
             this.aiRuntime?.onInboundMessage({
               organizationId,
               conversationId: conversation.id,
               messageId: persisted.id,
+            });
+          }
+
+          // Maya no WhatsApp: só mensagem RECEBIDA, e o próprio serviço filtra
+          // grupo e número. Nunca lança nem espera (fila própria). O telefone
+          // gravado vem primeiro porque a ingestão completa o número de quem
+          // chega como LID a partir dos participantes do grupo.
+          if (persisted.direction === "inbound") {
+            this.maya?.onInboundMessage({
+              conversation,
+              senderPhone: persisted.senderPhone ?? message.senderPhone ?? null,
+              content: persisted.type === "text" ? persisted.content : null,
             });
           }
 
