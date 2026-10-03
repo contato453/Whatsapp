@@ -407,6 +407,14 @@ export const PERMISSION_ACTIONS = [
     defaults: { agent: false, supervisor: true },
   },
   {
+    key: "call.recording.analyze",
+    label: "Transcrever e resumir a gravação com IA",
+    description:
+      "Mandar a gravação de uma ligação para a IA transcrever e resumir. Cada análise é cobrada na conta da OpenAI do escritório — por padrão, só supervisor.",
+    area: "ligacoes",
+    defaults: { agent: false, supervisor: true },
+  },
+  {
     key: "call.recording.delete",
     label: "Excluir gravações por período",
     description:

@@ -29,7 +29,7 @@ const AVERAGE_WINDOW_DAYS = 30;
 const MIN_AVERAGE_DAYS = 1;
 
 /** Chamadas que custam e deveriam ter preço; sem ele, o gasto real é maior. */
-const PRICEABLE_KINDS: AiUsageKind[] = ["chat", "test", "transcription", "vision", "quality"];
+const PRICEABLE_KINDS: AiUsageKind[] = ["chat", "test", "transcription", "vision", "quality", "call_summary"];
 
 type EntryWithAuthor = AiCreditEntry & { createdBy: { id: string; name: string } | null };
 

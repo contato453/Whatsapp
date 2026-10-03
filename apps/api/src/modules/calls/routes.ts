@@ -5,9 +5,11 @@ import { z } from "zod";
 import type { Prisma } from "@azvchat/database";
 import { formatPhone } from "@azvchat/shared";
 import { conversationScope, loadConversationAccess } from "../../lib/access.js";
-import { requirePermission } from "../../lib/permissions.js";
+import { loadPermissions, requirePermission } from "../../lib/permissions.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
 import { phoneFromJid, resolveConversationPersonNames } from "../../lib/person-profile.js";
+import { splitAudioForTranscription } from "@azvchat/whatsapp";
+import { analyzeCall, serializeCallAnalysis } from "../../services/ai/call-analysis.js";
 import type { AppDeps } from "../../types.js";
 
 /** Lista de valores num filtro: aceita repetido (?x=a&x=b) ou "a,b". */
@@ -257,6 +259,9 @@ export async function callRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
           senderPhone: true,
           timestamp: true,
           metadata: true,
+          // Só as DATAS: a transcrição pode ter dezenas de milhares de
+          // caracteres, e a lista precisa saber apenas se há análise.
+          callAnalysis: { select: { transcribedAt: true, summarizedAt: true } },
           conversation: {
             select: {
               id: true,
@@ -305,6 +310,11 @@ export async function callRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
         durationSeconds:
           typeof metadata.durationSeconds === "number" ? metadata.durationSeconds : null,
         hasRecording: typeof metadata.recordingId === "string" && metadata.recordingId.length > 0,
+        analysis: row.callAnalysis?.summarizedAt
+          ? ("ready" as const)
+          : row.callAnalysis?.transcribedAt
+            ? ("transcribed" as const)
+            : ("none" as const),
         timestamp: row.timestamp.toISOString(),
       };
     });
@@ -348,6 +358,79 @@ export async function callRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
     reply.header("Content-Type", recording.mimeType);
     reply.header("Cache-Control", "private, max-age=3600");
     return reply.send(recording.data);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Transcrição e resumo da gravação pela IA (ver `services/ai/call-analysis.ts`).
+  //
+  // Ler a análise exige poder OUVIR a gravação: a transcrição é o mesmo
+  // conteúdo, só que escrito, e uma chave à parte para ler o texto abriria a
+  // gravação para quem foi barrado de ouvi-la. Pedir a análise exige a chave
+  // própria (é cobrada na conta OpenAI do escritório) E poder ouvir.
+  // ---------------------------------------------------------------------------
+
+  async function findCallForAnalysis(id: string, user: FastifyRequest["user"]) {
+    const access = await loadConversationAccess(deps.prisma, user);
+    const message = await deps.prisma.message.findFirst({
+      where: {
+        id,
+        type: "call",
+        deletedAt: null,
+        organizationId: user.organizationId,
+        conversation: { is: conversationScope(access) },
+      },
+      select: {
+        id: true,
+        organizationId: true,
+        direction: true,
+        metadata: true,
+        conversation: { select: { id: true, whatsappInstanceId: true, departmentId: true } },
+      },
+    });
+    if (!message?.conversation) throw new NotFoundError("Ligação");
+    return { ...message, conversation: message.conversation };
+  }
+
+  app.get("/calls/:id/analysis", { preHandler: requirePermission(deps, "call.recording.play") }, async (request) => {
+    const { id } = idParams.parse(request.params);
+    const call = await findCallForAnalysis(id, request.user);
+    const row = await deps.prisma.callAnalysis.findUnique({ where: { messageId: call.id } });
+    return { analysis: serializeCallAnalysis(row, call.id) };
+  });
+
+  app.post("/calls/:id/analysis", { preHandler: requirePermission(deps, "call.recording.analyze") }, async (request) => {
+    const { id } = idParams.parse(request.params);
+    (await loadPermissions(deps.prisma, request.user)).assert("call.recording.play");
+    const call = await findCallForAnalysis(id, request.user);
+    const provider = deps.provider as {
+      getCallRecording?: (instanceId: string, recordingId: string) => Promise<{ data: Buffer; mimeType: string } | null>;
+    };
+    const analysis = await analyzeCall(
+      {
+        prisma: deps.prisma,
+        logger: deps.logger,
+        aiCipher: deps.aiCipher,
+        fetchRecording: async (instanceId, recordingId) => {
+          if (typeof provider.getCallRecording !== "function") {
+            throw new AppError("O provider atual não fornece gravação.", 501, "recording_unsupported");
+          }
+          return provider.getCallRecording(instanceId, recordingId);
+        },
+        splitAudio: splitAudioForTranscription,
+      },
+      { ...call, direction: call.direction === "outbound" ? "outbound" : "inbound" },
+      { id: request.user.sub, name: request.user.name },
+    );
+    // Auditoria da AÇÃO, nunca do conteúdo: quem pediu, qual ligação.
+    deps.audit.record({
+      organizationId: request.user.organizationId,
+      userId: request.user.sub,
+      action: "call.analysis_requested",
+      entityType: "Message",
+      entityId: call.id,
+      metadata: { conversationId: call.conversation.id, summarized: analysis.summary !== null },
+    });
+    return { analysis };
   });
 
   /**

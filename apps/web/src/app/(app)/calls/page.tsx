@@ -8,6 +8,7 @@ import {
   PhoneOutgoing,
   RefreshCw,
   Search,
+  Sparkles,
   Trash2,
   Video,
 } from "lucide-react";
@@ -26,6 +27,7 @@ import {
   type MultiSelectGroup,
 } from "@/components/ui";
 import { AudioPlayer } from "@/components/inbox/audio-player";
+import { CallAnalysisModal } from "@/components/calls/call-analysis-modal";
 import { cn } from "@/lib/utils";
 
 /**
@@ -112,6 +114,9 @@ export default function CallsPage() {
   const { can } = useAuth();
   const canPlayRecording = can("call.recording.play");
   const canDeleteRecording = can("call.recording.delete");
+  // Ler a análise pede poder OUVIR a gravação (é o mesmo conteúdo, escrito);
+  // pedir uma nova pede também a chave própria, porque é cobrada.
+  const canAnalyzeRecording = canPlayRecording && can("call.recording.analyze");
   const [purgeOpen, setPurgeOpen] = useState(false);
   const [preset, setPreset] = useState<PresetKey | "custom">("all");
   const initialFrom = new Date();
@@ -339,7 +344,17 @@ export default function CallsPage() {
           </p>
           <Card className="divide-y divide-slate-100 p-0">
             {calls.map((call) => (
-              <CallRow key={call.id} call={call} canPlayRecording={canPlayRecording} />
+              <CallRow
+                key={call.id}
+                call={call}
+                canPlayRecording={canPlayRecording}
+                canAnalyzeRecording={canAnalyzeRecording}
+                onAnalysisChange={(status) =>
+                  setCalls((current) =>
+                    current.map((item) => (item.id === call.id ? { ...item, analysis: status } : item)),
+                  )
+                }
+              />
             ))}
           </Card>
           {totalPages > 1 && (
@@ -373,7 +388,22 @@ export default function CallsPage() {
   );
 }
 
-function CallRow({ call, canPlayRecording }: { call: CallLogDto; canPlayRecording: boolean }) {
+function CallRow({
+  call,
+  canPlayRecording,
+  canAnalyzeRecording,
+  onAnalysisChange,
+}: {
+  call: CallLogDto;
+  canPlayRecording: boolean;
+  canAnalyzeRecording: boolean;
+  onAnalysisChange: (status: CallLogDto["analysis"]) => void;
+}) {
+  const [analysisOpen, setAnalysisOpen] = useState(false);
+  // Análise feita continua legível mesmo depois de a gravação ser excluída
+  // para liberar espaço: o texto é pequeno e é o que sobrou da ligação.
+  const showAnalysis =
+    canPlayRecording && (call.analysis !== "none" || (call.hasRecording && canAnalyzeRecording));
   const meta = STATUS_META[call.status] ?? STATUS_META.missed;
   const missed = call.status === "missed" || call.status === "rejected";
   const Icon = missed ? PhoneMissed : call.direction === "outbound" ? PhoneOutgoing : PhoneIncoming;
@@ -414,6 +444,29 @@ function CallRow({ call, canPlayRecording }: { call: CallLogDto; canPlayRecordin
         </div>
       </div>
       <div className="flex items-center gap-3">
+        {showAnalysis && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setAnalysisOpen(true)}
+            title={
+              call.analysis === "ready"
+                ? "Ver o resumo feito pela IA"
+                : "Transcrever e resumir a gravação com IA"
+            }
+          >
+            <Sparkles className={cn("h-4 w-4", call.analysis === "ready" && "text-indigo-600")} />
+            {call.analysis === "ready" ? "Ver resumo" : "Resumir com IA"}
+          </Button>
+        )}
+        {analysisOpen && (
+          <CallAnalysisModal
+            call={call}
+            canAnalyze={canAnalyzeRecording}
+            onClose={() => setAnalysisOpen(false)}
+            onAnalyzed={onAnalysisChange}
+          />
+        )}
         {call.hasRecording && canPlayRecording && (
           <div className="flex items-center gap-1.5 rounded-full bg-slate-50 px-3 py-1.5 ring-1 ring-slate-200">
             <AudioPlayer
