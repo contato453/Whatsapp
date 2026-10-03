@@ -19,6 +19,7 @@ import { SessionScheduleWatcher } from "./services/session-schedule-watcher.js";
 import { createAzevedoOsClient } from "./services/azevedo-os-client.js";
 import { createSecretCipher } from "./lib/ai-secrets.js";
 import { AiRuntime } from "./services/ai/runtime.js";
+import { MayaWhatsappService, mayaConfigFromEnv } from "./services/maya-whatsapp.js";
 import { loadConversationAccess } from "./lib/access.js";
 import type { AuthTokenPayload } from "./lib/auth.js";
 import type { AppDeps } from "./types.js";
@@ -146,6 +147,13 @@ async function main(): Promise<void> {
   // ordem que o `aiRuntime` já obrigava, pelo mesmo motivo.
   const broadcastWorker = new BroadcastWorker(prisma, provider, ingest, io, logger);
 
+  // Maya no WhatsApp: desligada (e calada no boot só com um aviso) quando
+  // falta configuração. Injetada no instance-manager como o `aiRuntime`.
+  const maya = new MayaWhatsappService(prisma, provider, io, logger, mayaConfigFromEnv(config));
+  if (!maya.enabled) {
+    logger.info({ event: "maya_whatsapp_disabled" }, "Maya no WhatsApp desligada (MAYA_GRUPO/MAYA_TELEFONE ou AZEVEDO_OS_API_* ausentes)");
+  }
+
   const instanceManager = new InstanceManager(
     prisma,
     provider,
@@ -158,6 +166,7 @@ async function main(): Promise<void> {
     azevedoOs,
     aiRuntime,
     broadcastWorker,
+    maya,
   );
   instanceManager.wireProviderEvents();
   deps.instanceManager = instanceManager;
@@ -173,6 +182,7 @@ async function main(): Promise<void> {
   followUpScheduler.start();
 
   broadcastWorker.start();
+  maya.start();
 
   // Avisa e encerra as abas quando o horário de uso fecha. A API já recusa
   // requisição fora do horário; sem este vigia, a aba parada continuaria
@@ -197,6 +207,7 @@ async function main(): Promise<void> {
       automationWorker.stop();
       followUpScheduler.stop();
       broadcastWorker.stop();
+      maya.stop();
       sessionScheduleWatcher.stop();
       aiRuntime.stop();
       await provider.shutdownAll();
