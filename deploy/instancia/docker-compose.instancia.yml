@@ -67,6 +67,14 @@ services:
       AZEVEDO_OS_API_TOKEN: ${AZEVEDO_OS_API_TOKEN:-}
       AZEVEDO_OS_WEB_URL: ${AZEVEDO_OS_WEB_URL:-}
       AZEVEDO_OS_TIMEOUT_MS: ${AZEVEDO_OS_TIMEOUT_MS:-5000}
+      # Maya no WhatsApp (CLAUDE.md, seção 25). Sem MAYA_GRUPO e MAYA_TELEFONE
+      # ela fica desligada, então vazio aqui é o padrão seguro.
+      MAYA_WHATSAPP_URL: ${MAYA_WHATSAPP_URL:-}
+      MAYA_GRUPO: ${MAYA_GRUPO:-}
+      MAYA_TELEFONE: ${MAYA_TELEFONE:-}
+      MAYA_RESUMO_HORARIO: ${MAYA_RESUMO_HORARIO:-}
+      MAYA_RESUMO_DIAS: ${MAYA_RESUMO_DIAS:-1-5}
+      MAYA_RESUMO_PERGUNTA: ${MAYA_RESUMO_PERGUNTA:-}
       CALL_RECORDINGS_DIR: ${CALL_RECORDINGS_DIR:-/recordings}
     volumes:
       - whatsapp_sessions:/app/data/sessions

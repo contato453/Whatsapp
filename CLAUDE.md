@@ -4481,5 +4481,10 @@ Regras que valem preservar:
 - **Grupo por nome é ambíguo por natureza.** Dois grupos com o mesmo nome: o resumo não
   sai (log `maya_whatsapp_group_ambiguous`); use o JID.
 - As variáveis `MAYA_*` vão no `.env.azvchat2` da VPS, à mão: o `deploy.yml` só escreve
-  as `AZEVEDO_OS_*`.
+  as `AZEVEDO_OS_*`. **E vão também no bloco `environment:` do serviço da API no
+  compose**, que é uma allowlist: variável fora dele não chega ao container, mesmo
+  estando no arquivo de variáveis. A primeira entrega esqueceu isso, e a Maya subiu
+  desligada em produção sem nada acusar (só o log `maya_whatsapp_disabled` no boot).
+  O modelo `deploy/instancia/docker-compose.instancia.yml` já as tem; o
+  `docker-compose.azvchat2.yml` da VPS fica fora do Git e precisa da mesma edição à mão.
 
