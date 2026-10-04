@@ -12,7 +12,8 @@ import {
   Trash2,
   Video,
 } from "lucide-react";
-import { api, callsApi, fetchAuthedBlobUrl } from "@/lib/api";
+import { isCallRecordingSettled } from "@azvchat/shared";
+import { ApiError, api, callsApi, fetchAuthedBlobUrl } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { downloadCallRecording } from "@/lib/media-download";
 import type { CallLogDto, InstanceDto } from "@/lib/types";
@@ -354,6 +355,13 @@ export default function CallsPage() {
                     current.map((item) => (item.id === call.id ? { ...item, analysis: status } : item)),
                   )
                 }
+                onRecordingMissing={() =>
+                  setCalls((current) =>
+                    current.map((item) =>
+                      item.id === call.id ? { ...item, hasRecording: false, recordingMissing: true } : item,
+                    ),
+                  )
+                }
               />
             ))}
           </Card>
@@ -393,13 +401,31 @@ function CallRow({
   canPlayRecording,
   canAnalyzeRecording,
   onAnalysisChange,
+  onRecordingMissing,
 }: {
   call: CallLogDto;
   canPlayRecording: boolean;
   canAnalyzeRecording: boolean;
   onAnalysisChange: (status: CallLogDto["analysis"]) => void;
+  onRecordingMissing: () => void;
 }) {
   const [analysisOpen, setAnalysisOpen] = useState(false);
+
+  /**
+   * Toca a gravação e, se o AstraCalls disser que ela não existe (404 depois
+   * da carência, que a API já gravou na ligação), troca a linha por
+   * "Gravação indisponível" na hora, sem esperar recarregar a lista. Antes da
+   * carência o 404 é "ainda não ficou pronta", e o player continua com o
+   * alerta de tentar de novo.
+   */
+  async function loadRecording(): Promise<string> {
+    try {
+      return await fetchAuthedBlobUrl(callsApi.recordingPath(call.id));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404 && isCallRecordingSettled(call)) onRecordingMissing();
+      throw err;
+    }
+  }
   // Análise feita continua legível mesmo depois de a gravação ser excluída
   // para liberar espaço: o texto é pequeno e é o que sobrou da ligação.
   const showAnalysis =
@@ -465,6 +491,7 @@ function CallRow({
             canAnalyze={canAnalyzeRecording}
             onClose={() => setAnalysisOpen(false)}
             onAnalyzed={onAnalysisChange}
+            onRecordingMissing={onRecordingMissing}
           />
         )}
         {call.hasRecording && canPlayRecording && (
@@ -472,10 +499,18 @@ function CallRow({
             <AudioPlayer
               outbound={false}
               durationSeconds={call.durationSeconds ?? undefined}
-              load={() => fetchAuthedBlobUrl(callsApi.recordingPath(call.id))}
+              load={loadRecording}
             />
-            <DownloadRecordingButton call={call} />
+            <DownloadRecordingButton call={call} onRecordingMissing={onRecordingMissing} />
           </div>
+        )}
+        {call.recordingMissing && canPlayRecording && (
+          <span
+            className="whitespace-nowrap rounded-full bg-slate-50 px-3 py-1.5 text-xs text-slate-500 ring-1 ring-slate-200"
+            title="O AstraCalls não tem a gravação desta ligação. Ela pode ter sido atendida no celular, fora do sistema, ou apagada por lá."
+          >
+            Gravação indisponível
+          </span>
         )}
         <span className="shrink-0 whitespace-nowrap text-xs tabular-nums text-slate-400">
           {formatWhen(call.timestamp)}
@@ -491,7 +526,13 @@ function CallRow({
  * enquanto baixa, ícone volta ao normal depois — falha some sozinha no
  * próximo clique, sem texto extra que não cabe nesta linha estreita.
  */
-function DownloadRecordingButton({ call }: { call: CallLogDto }) {
+function DownloadRecordingButton({
+  call,
+  onRecordingMissing,
+}: {
+  call: CallLogDto;
+  onRecordingMissing: () => void;
+}) {
   const [downloading, setDownloading] = useState(false);
   const [downloadFailed, setDownloadFailed] = useState(false);
 
@@ -502,7 +543,12 @@ function DownloadRecordingButton({ call }: { call: CallLogDto }) {
       // Mesmo caminho autenticado do player — um `<a href>` direto não envia
       // o header Authorization que a rota exige.
       await downloadCallRecording(call);
-    } catch {
+    } catch (err) {
+      // Mesma regra do player: gravação que não existe vira texto na linha.
+      if (err instanceof ApiError && err.status === 404 && isCallRecordingSettled(call)) {
+        onRecordingMissing();
+        return;
+      }
       setDownloadFailed(true);
     } finally {
       setDownloading(false);

@@ -3,10 +3,11 @@ import { join } from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Prisma } from "@azvchat/database";
-import { formatPhone } from "@azvchat/shared";
+import { CALL_RECORDING_MISSING_METADATA_KEY, formatPhone, isCallRecordingMissing } from "@azvchat/shared";
 import { conversationScope, loadConversationAccess } from "../../lib/access.js";
 import { loadPermissions, requirePermission } from "../../lib/permissions.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
+import { noteMissingCallRecording, recordingMissingError } from "../../lib/call-recording.js";
 import { phoneFromJid, resolveConversationPersonNames } from "../../lib/person-profile.js";
 import { splitAudioForTranscription } from "@azvchat/whatsapp";
 import { analyzeCall, serializeCallAnalysis } from "../../services/ai/call-analysis.js";
@@ -309,7 +310,13 @@ export async function callRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
         isVideo: metadata.isVideo === true,
         durationSeconds:
           typeof metadata.durationSeconds === "number" ? metadata.durationSeconds : null,
-        hasRecording: typeof metadata.recordingId === "string" && metadata.recordingId.length > 0,
+        hasRecording:
+          typeof metadata.recordingId === "string" &&
+          metadata.recordingId.length > 0 &&
+          !isCallRecordingMissing(metadata),
+        // O sistema esperava uma gravação e o AstraCalls disse que ela não
+        // existe: a tela diz isso, em vez de um player que só dá erro.
+        recordingMissing: isCallRecordingMissing(metadata),
         analysis: row.callAnalysis?.summarizedAt
           ? ("ready" as const)
           : row.callAnalysis?.transcribedAt
@@ -340,6 +347,8 @@ export async function callRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
     const metadata = (message.metadata as Record<string, unknown> | null) ?? {};
     const recordingId = typeof metadata.recordingId === "string" ? metadata.recordingId : null;
     if (!recordingId) throw new NotFoundError("Gravação");
+    // Já dada como inexistente: nem pergunta de novo ao AstraCalls.
+    if (isCallRecordingMissing(metadata)) throw recordingMissingError();
 
     const provider = deps.provider as {
       getCallRecording?: (
@@ -354,7 +363,7 @@ export async function callRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
       message.conversation.whatsappInstanceId,
       recordingId,
     );
-    if (!recording) throw new NotFoundError("Gravação");
+    if (!recording) throw await noteMissingCallRecording(deps.prisma, { id, organizationId: request.user.organizationId });
     reply.header("Content-Type", recording.mimeType);
     reply.header("Cache-Control", "private, max-age=3600");
     return reply.send(recording.data);
@@ -402,6 +411,7 @@ export async function callRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
     const { id } = idParams.parse(request.params);
     (await loadPermissions(deps.prisma, request.user)).assert("call.recording.play");
     const call = await findCallForAnalysis(id, request.user);
+    if (isCallRecordingMissing(call.metadata)) throw recordingMissingError();
     const provider = deps.provider as {
       getCallRecording?: (instanceId: string, recordingId: string) => Promise<{ data: Buffer; mimeType: string } | null>;
     };
@@ -414,7 +424,10 @@ export async function callRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
           if (typeof provider.getCallRecording !== "function") {
             throw new AppError("O provider atual não fornece gravação.", 501, "recording_unsupported");
           }
-          return provider.getCallRecording(instanceId, recordingId);
+          const recording = await provider.getCallRecording(instanceId, recordingId);
+          // Mesma regra do player: 404 depois da carência marca a ligação.
+          if (!recording) throw await noteMissingCallRecording(deps.prisma, call);
+          return recording;
         },
         splitAudio: splitAudioForTranscription,
       },
@@ -499,8 +512,10 @@ export async function callRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
         }
       }
 
-      // Limpa o ponteiro da gravação, preservando o resto do metadata.
-      const { recordingId: _drop, ...rest } = metadata;
+      // Limpa o ponteiro da gravação, preservando o resto do metadata. A
+      // marca de "não existe no AstraCalls" sai junto: apagada de propósito
+      // não é indisponível, e a linha não deve dizer que é.
+      const { recordingId: _drop, [CALL_RECORDING_MISSING_METADATA_KEY]: _missing, ...rest } = metadata;
       await deps.prisma.message.update({
         where: { id: call.id },
         data: { metadata: rest as Prisma.InputJsonValue },
