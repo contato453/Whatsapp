@@ -4,6 +4,7 @@ export * from "./attendance.js";
 export * from "./crm.js";
 export * from "./automation.js";
 export * from "./call-analysis.js";
+export * from "./call-recording.js";
 export * from "./broadcast.js";
 export * from "./automation-variables.js";
 export * from "./conversation-automation.js";

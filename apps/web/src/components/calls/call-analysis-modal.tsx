@@ -8,7 +8,7 @@ import {
   type CallAnalysisDto,
   type CallSummary,
 } from "@azvchat/shared";
-import { callsApi } from "@/lib/api";
+import { ApiError, callsApi } from "@/lib/api";
 import type { CallLogDto } from "@/lib/types";
 import { Button, Modal, Spinner } from "@/components/ui";
 
@@ -27,11 +27,14 @@ export function CallAnalysisModal({
   canAnalyze,
   onClose,
   onAnalyzed,
+  onRecordingMissing,
 }: {
   call: CallLogDto;
   canAnalyze: boolean;
   onClose: () => void;
   onAnalyzed: (status: CallLogDto["analysis"]) => void;
+  /** A API respondeu que a gravação não existe no AstraCalls. */
+  onRecordingMissing?: () => void;
 }) {
   const [analysis, setAnalysis] = useState<CallAnalysisDto | null>(null);
   const [loading, setLoading] = useState(call.analysis !== "none");
@@ -65,6 +68,7 @@ export function CallAnalysisModal({
       setAnalysis(data.analysis);
       onAnalyzed(data.analysis.summary ? "ready" : data.analysis.transcript != null ? "transcribed" : "none");
     } catch (err) {
+      if (err instanceof ApiError && err.code === "recording_missing") onRecordingMissing?.();
       setError(err instanceof Error ? err.message : "Falha ao analisar a gravação.");
     } finally {
       setRunning(false);

@@ -2371,6 +2371,17 @@ nível?" por igualdade é um lugar onde o papel novo perde acesso em silêncio (
   (9) excluir as gravações por período apaga o ÁUDIO, não a análise — o texto é pequeno e continua
   legível pelo botão "Ver resumo". Nada disso encosta em `lib/access.ts`: a ligação é procurada
   pelo `conversationScope` de sempre, dentro da organização.
+- **GRAVAÇÃO DE LIGAÇÃO É DEDUZIDA, E PODE NÃO EXISTIR.** O AstraCalls não manda o id da
+  gravação: o provider supõe que toda chamada ATENDIDA tem um MP3 com o id da própria chamada
+  (`astracalls-provider.ts`). Ligação atendida no celular, fora do AstraCalls, ou gravação
+  apagada por lá, deixava a tela com um player que só mostrava o alerta vermelho. Agora o 404
+  do AstraCalls, **passada a carência** (`CALL_RECORDING_GRACE_MS`, 30 min contados do FIM da
+  ligação, em `packages/shared/src/call-recording.ts`), grava `recordingMissingAt` no
+  `Message.metadata` (`lib/call-recording.ts`), e a lista troca player, download e "Resumir
+  com IA" por "Gravação indisponível". Antes da carência o 404 é só "ainda não ficou pronta"
+  (`recording_not_ready`) e nada é gravado: o arquivo é escrito depois de a chamada acabar, e
+  marcar cedo apagaria de vez uma gravação que ia aparecer. O `recordingId` FICA no banco, e a
+  exclusão por período remove as duas chaves (apagada de propósito não é "indisponível").
 - Baileys é integração não oficial: risco de banimento do número. Use números dedicados.
 
 ---

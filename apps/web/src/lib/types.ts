@@ -254,6 +254,12 @@ export interface CallLogDto {
   durationSeconds: number | null;
   hasRecording: boolean;
   /**
+   * O sistema esperava uma gravação e o AstraCalls respondeu que ela não
+   * existe (atendida fora do sistema, apagada lá). A linha diz isso em texto,
+   * sem player, download nem IA.
+   */
+  recordingMissing: boolean;
+  /**
    * Análise da gravação pela IA: `none` = nunca pedida; `transcribed` =
    * transcrita, sem resumo (gravação sem fala, ou o resumo falhou); `ready` =
    * transcrição e resumo prontos.
