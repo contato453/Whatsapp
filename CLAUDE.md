@@ -4467,10 +4467,10 @@ mestre + interruptor ligado). Telefone sem vínculo lá → `404 unknown_phone` 
 fica **calado**. Recusa da Maya (`403`) → a frase dela vai para o grupo. Outra falha →
 "Não consegui consultar a Maya agora".
 
-Duas entradas, ambas no mesmo grupo (`MAYA_GRUPO`, JID `...@g.us` ou nome exato):
+Três entradas, todas no mesmo grupo (`MAYA_GRUPO`, JID `...@g.us` ou nome exato):
 
 1. **Pergunta e resposta.** O gancho é no `instance-manager`, ao lado da IA de
-   atendimento, só para mensagem de ENTRADA nova de texto. O serviço filtra grupo e
+   atendimento, só para mensagem de ENTRADA nova de texto (ou áudio, item 3). O serviço filtra grupo e
    número (`MAYA_TELEFONE`, comparado sem 55 e sem o nono dígito, a mesma regra de
    `os_telefone_canonico` lá) e põe a pergunta numa fila por conversa, para as
    respostas saírem em ordem. Histórico das últimas 6 falas, só em memória.
@@ -4480,6 +4480,18 @@ Duas entradas, ambas no mesmo grupo (`MAYA_GRUPO`, JID `...@g.us` ou nome exato)
    pula o dia. O que impede o resumo de sair duas vezes é o BANCO: mensagem de saída com
    `senderName = "Maya (resumo)"` desde a meia-noite de Brasília. Não troque esse
    `senderName` sem trocar a checagem.
+
+3. **Áudio.** Áudio do mesmo número, no mesmo grupo, vira texto antes de ir, e a
+   transcrição segue como pergunta. Quem transcreve é `services/maya-audio.ts`,
+   que chama o MESMO `ensureAttachmentInsights` da IA de atendimento e do Quality:
+   a transcrição fica em `Message.metadata.audioTranscript` (a bolha da Inbox a
+   mostra), o consumo entra como `transcription` sem sessão, e o teto de duração e
+   o orçamento mensal valem como lá. O interruptor `AiSettings.transcribeAudio` é
+   da IA de ATENDIMENTO e não vale aqui, pelo mesmo motivo do Quality. A
+   transcrição acontece dentro da fila da conversa, então áudio e texto seguidos
+   respondem na ordem em que chegaram. Áudio que não virou texto (sem IA
+   configurada, orçamento bloqueado, sem fala, longo demais) vira um aviso no
+   grupo, nunca silêncio. Áudio de outro número nem é transcrito: é chamada paga.
 
 Regras que valem preservar:
 

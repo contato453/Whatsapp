@@ -114,6 +114,15 @@ export class InstanceManager {
         };
         senderPhone: string | null;
         content: string | null;
+        audio?: {
+          id: string;
+          type: string;
+          content: string | null;
+          mediaUrl: string | null;
+          mimeType: string | null;
+          filename: string | null;
+          metadata: unknown;
+        } | null;
       }): void;
     },
   ) {}
@@ -316,6 +325,7 @@ export class InstanceManager {
               conversation,
               senderPhone: persisted.senderPhone ?? message.senderPhone ?? null,
               content: persisted.type === "text" ? persisted.content : null,
+              audio: persisted.type === "audio" ? persisted : null,
             });
           }
 

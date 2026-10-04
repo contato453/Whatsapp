@@ -8,6 +8,8 @@ import { serializeConversation, serializeMessage } from "../lib/serialize.js";
 import { resolveConversationPersonName } from "../lib/person-profile.js";
 import { conversationAudience } from "../realtime/socket.js";
 import { buildPreview } from "./message-ingest.js";
+import type { ReadableMessage } from "./ai/attachments.js";
+import type { MayaAudioResult, MayaAudioTranscriber } from "./maya-audio.js";
 
 /**
  * MAYA NO WHATSAPP — a assistente do Azevedo OS respondendo num grupo daqui.
@@ -25,6 +27,9 @@ import { buildPreview } from "./message-ingest.js";
  * A Maya NÃO mora aqui. Quem decide o que ela pode ver é o Azevedo OS: o
  * telefone precisa estar vinculado lá (Gestão > Configurações), e a resposta
  * sai com a visão da pessoa dona do número. Este serviço é só o carteiro.
+ *
+ * Áudio do mesmo número vira texto antes de ir (`maya-audio.ts`, a mesma
+ * transcrição da IA de atendimento), e a pergunta segue o caminho do texto.
  *
  * Sem `MAYA_GRUPO` ou `MAYA_TELEFONE`, ou sem a integração do Azevedo OS
  * configurada, o serviço nasce desligado e nada muda no atendimento.
@@ -57,6 +62,18 @@ const HISTORICO_MAXIMO = 6;
 const SENDER_RESPOSTA = "Maya";
 /** Também é a marca que impede o resumo de sair duas vezes no mesmo dia. */
 const SENDER_RESUMO = "Maya (resumo)";
+
+/**
+ * O que a Maya diz quando o áudio não virou pergunta. Calar seria pior: quem
+ * mandou o áudio ficaria esperando uma resposta que não vem.
+ */
+const AVISO_AUDIO: Record<Exclude<MayaAudioResult, { ok: true }>["motivo"], string> = {
+  unreadable: "Não consegui ouvir o áudio. Pode escrever a pergunta?",
+  ai_not_configured:
+    "Para eu ouvir áudio, a IA precisa estar configurada no AZVCHAT (Configurações > Inteligência artificial). Por enquanto, escreva a pergunta.",
+  budget_blocked:
+    "O orçamento de IA do AZVCHAT deste mês acabou, então não consigo ouvir áudio agora. Escreva a pergunta.",
+};
 
 /**
  * Monta a configuração a partir do ambiente. Devolve null (desligado) quando
@@ -206,6 +223,8 @@ export class MayaWhatsappService {
     private readonly config: MayaWhatsappConfig | null,
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly relogio: () => Date = () => new Date(),
+    /** Sem ele (testes antigos, IA não montada), áudio é ignorado como antes. */
+    private readonly transcrever?: MayaAudioTranscriber,
   ) {}
 
   get enabled(): boolean {
@@ -229,20 +248,24 @@ export class MayaWhatsappService {
     conversation: ConversaDoGrupo;
     senderPhone: string | null;
     content: string | null;
+    /** A mensagem de áudio já gravada (com o arquivo no storage), ou null. */
+    audio?: ReadableMessage | null;
   }): void {
     if (!this.config) return;
-    const { conversation, senderPhone, content } = input;
+    const { conversation, senderPhone, content, audio } = input;
     if (!this.ehOGrupo(conversation) || conversation.archivedAt) return;
     const texto = content?.trim();
-    if (!texto) return;
+    const comAudio = !texto && audio && this.transcrever ? audio : null;
+    if (!texto && !comAudio) return;
     const autorizado = telefoneCanonico(this.config.telefone);
     if (!autorizado || telefoneCanonico(senderPhone) !== autorizado) return;
 
     // Uma pergunta por vez por grupo: a segunda espera a primeira responder,
-    // senão as respostas chegariam fora de ordem.
+    // senão as respostas chegariam fora de ordem. O áudio entra na MESMA fila,
+    // e a transcrição acontece já dentro dela, pelo mesmo motivo.
     const anterior = this.filas.get(conversation.id) ?? Promise.resolve();
     const proxima = anterior
-      .then(() => this.responder(conversation, texto))
+      .then(() => (texto ? this.responder(conversation, texto) : this.responderAudio(conversation, comAudio!)))
       .catch((err: unknown) => {
         this.logger.error({ event: "maya_whatsapp_reply_failed", conversationId: conversation.id, error: String(err) });
       });
@@ -340,6 +363,21 @@ export class MayaWhatsappService {
       return null;
     }
     return achadas[0] ?? null;
+  }
+
+  private async responderAudio(conversa: ConversaDoGrupo, audio: ReadableMessage): Promise<void> {
+    if (!this.transcrever) return;
+    const r = await this.transcrever({
+      organizationId: conversa.organizationId,
+      conversationId: conversa.id,
+      message: audio,
+    });
+    if (!r.ok) {
+      this.logger.warn({ event: "maya_whatsapp_audio_unreadable", conversationId: conversa.id, motivo: r.motivo });
+      await this.enviar(conversa, AVISO_AUDIO[r.motivo], SENDER_RESPOSTA, "maya");
+      return;
+    }
+    await this.responder(conversa, r.text);
   }
 
   private async responder(conversa: ConversaDoGrupo, pergunta: string): Promise<void> {
