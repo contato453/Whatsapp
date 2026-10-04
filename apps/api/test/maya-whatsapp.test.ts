@@ -12,6 +12,7 @@ import {
   telefoneCanonico,
   type MayaWhatsappConfig,
 } from "../src/services/maya-whatsapp.js";
+import type { MayaAudioResult, MayaAudioTranscriber } from "../src/services/maya-audio.js";
 import { MemoryPrisma } from "./helpers/memory-prisma.js";
 
 /**
@@ -22,7 +23,9 @@ import { MemoryPrisma } from "./helpers/memory-prisma.js";
  *   2. telefone sem vínculo no Azevedo OS deixa o grupo CALADO;
  *   3. falha da Maya vira uma frase no grupo, não silêncio (quem perguntou
  *      precisa saber que não veio resposta);
- *   4. o resumo sai uma vez por dia, depois do horário, e nem um restart do
+ *   4. áudio do número configurado vira texto e segue como pergunta; áudio
+ *      que não deu para ouvir vira aviso, nunca silêncio;
+ *   5. o resumo sai uma vez por dia, depois do horário, e nem um restart do
  *      processo o faz sair de novo (o banco é quem diz que já saiu).
  */
 
@@ -53,6 +56,7 @@ function montar(
     config?: MayaWhatsappConfig | null;
     fetch?: () => Promise<Response>;
     agora?: Date;
+    transcrever?: MayaAudioTranscriber;
   } = {},
 ) {
   const db = new MemoryPrisma();
@@ -91,6 +95,7 @@ function montar(
     opts.config === undefined ? config() : opts.config,
     fetchImpl as unknown as typeof fetch,
     () => agora,
+    opts.transcrever,
   );
   return {
     db,
@@ -225,6 +230,56 @@ describe("pergunta e resposta no grupo", () => {
     await esperarFila();
     expect(maya.enabled).toBe(false);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+const AUDIO = {
+  id: "msg-audio",
+  type: "audio",
+  content: null,
+  mediaUrl: "org-1/audio.ogg",
+  mimeType: "audio/ogg",
+  filename: null,
+  metadata: { durationSeconds: 7 },
+};
+
+describe("áudio no grupo", () => {
+  it("transcreve e manda a transcrição como pergunta", async () => {
+    const transcrever = vi.fn(async (): Promise<MayaAudioResult> => ({ ok: true, text: "Quantas empresas temos?" }));
+    const { maya, fetchImpl, sendText, conversa } = montar({ transcrever });
+    maya.onInboundMessage({ conversation: conversa, senderPhone: LINCOLN, content: null, audio: AUDIO });
+    await esperarFila();
+
+    expect(transcrever).toHaveBeenCalledWith({ organizationId: ORG, conversationId: "conv-maya", message: AUDIO });
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toMatchObject({ pergunta: "Quantas empresas temos?" });
+    expect(sendText).toHaveBeenCalledWith("inst-1", GRUPO_JID, "Temos *248* empresas.");
+  });
+
+  it("áudio de outro número nem chega a ser transcrito (é chamada paga)", async () => {
+    const transcrever = vi.fn(async (): Promise<MayaAudioResult> => ({ ok: true, text: "x" }));
+    const { maya, conversa } = montar({ transcrever });
+    maya.onInboundMessage({ conversation: conversa, senderPhone: "5511988887777", content: null, audio: AUDIO });
+    await esperarFila();
+    expect(transcrever).not.toHaveBeenCalled();
+  });
+
+  it("áudio que não deu para ouvir vira aviso no grupo, sem perguntar à Maya", async () => {
+    const transcrever = vi.fn(async (): Promise<MayaAudioResult> => ({ ok: false, motivo: "ai_not_configured" }));
+    const { maya, fetchImpl, sendText, conversa } = montar({ transcrever });
+    maya.onInboundMessage({ conversation: conversa, senderPhone: LINCOLN, content: null, audio: AUDIO });
+    await esperarFila();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(String((sendText.mock.calls[0] as unknown[])[2])).toContain("IA precisa estar configurada");
+  });
+
+  it("sem transcritor montado, áudio é ignorado como antes", async () => {
+    const { maya, fetchImpl, sendText, conversa } = montar();
+    maya.onInboundMessage({ conversation: conversa, senderPhone: LINCOLN, content: null, audio: AUDIO });
+    await esperarFila();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(sendText).not.toHaveBeenCalled();
   });
 });
 

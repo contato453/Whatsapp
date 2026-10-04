@@ -20,6 +20,7 @@ import { createAzevedoOsClient } from "./services/azevedo-os-client.js";
 import { createSecretCipher } from "./lib/ai-secrets.js";
 import { AiRuntime } from "./services/ai/runtime.js";
 import { MayaWhatsappService, mayaConfigFromEnv } from "./services/maya-whatsapp.js";
+import { createMayaAudioTranscriber } from "./services/maya-audio.js";
 import { loadConversationAccess } from "./lib/access.js";
 import type { AuthTokenPayload } from "./lib/auth.js";
 import type { AppDeps } from "./types.js";
@@ -149,7 +150,16 @@ async function main(): Promise<void> {
 
   // Maya no WhatsApp: desligada (e calada no boot só com um aviso) quando
   // falta configuração. Injetada no instance-manager como o `aiRuntime`.
-  const maya = new MayaWhatsappService(prisma, provider, io, logger, mayaConfigFromEnv(config));
+  const maya = new MayaWhatsappService(
+    prisma,
+    provider,
+    io,
+    logger,
+    mayaConfigFromEnv(config),
+    fetch,
+    () => new Date(),
+    createMayaAudioTranscriber({ prisma, io, logger: logger.child({ module: "maya" }), media: storage, cipher: aiCipher }),
+  );
   if (!maya.enabled) {
     logger.info({ event: "maya_whatsapp_disabled" }, "Maya no WhatsApp desligada (MAYA_GRUPO/MAYA_TELEFONE ou AZEVEDO_OS_API_* ausentes)");
   }
