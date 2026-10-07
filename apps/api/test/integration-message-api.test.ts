@@ -20,6 +20,10 @@ const INSTANCE_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_INSTANCE_ID = "22222222-2222-4222-8222-222222222222";
 const TOKEN = "azv_um-token-de-integracao-valido-com-entropia";
 const TOKEN_HASH = hashIntegrationToken(TOKEN);
+const USER_ID = "33333333-3333-4333-8333-333333333333";
+const OTHER_ORG_USER_ID = "44444444-4444-4444-8444-444444444444";
+const TAG_ID = "55555555-5555-4555-8555-555555555555";
+const OTHER_ORG_TAG_ID = "66666666-6666-4666-8666-666666666666";
 
 interface LogRow {
   conversationId: string | null;
@@ -35,11 +39,22 @@ interface Recorded {
   emitted: string[];
   logRows: Map<string, LogRow>;
   tokenUpdated: number;
+  conversationUpdates: Array<Record<string, unknown>>;
+  historyRows: Array<Record<string, unknown>>;
+  tagLinks: Array<{ conversationId: string; tagId: string }>;
+  userWhere: Array<Record<string, unknown>>;
+  /** Ordem dos efeitos: prova que a atribuição acontece ANTES do envio. */
+  timeline: string[];
 }
 let recorded: Recorded;
 
 function buildApp(
-  opts: { active?: boolean; connectionStatus?: string; instance?: Record<string, unknown> | null } = {},
+  opts: {
+    active?: boolean;
+    connectionStatus?: string;
+    instance?: Record<string, unknown> | null;
+    existingAssignedUserId?: string | null;
+  } = {},
 ): FastifyInstance {
   const token = {
     id: "tok-1",
@@ -91,14 +106,83 @@ function buildApp(
       },
     },
     whatsAppInstance: { findUnique: async () => instance },
+    // Só o usuário da org-1 existe para a org-1 — o filtro real (ativo, com
+    // acesso ao número) é do `eligibleAssigneeWhere`, conferido à parte.
+    user: {
+      findFirst: async ({ where }: { where: { id: string; organizationId: string } }) => {
+        recorded.userWhere.push(where as unknown as Record<string, unknown>);
+        return where.id === USER_ID && where.organizationId === "org-1"
+          ? { id: USER_ID, name: "Ana Comercial" }
+          : null;
+      },
+    },
+    tag: {
+      findFirst: async ({ where }: { where: { id: string; organizationId: string } }) =>
+        where.id === TAG_ID && where.organizationId === "org-1" ? { id: TAG_ID } : null,
+    },
+    $transaction: async (ops: Array<Promise<unknown>>) => Promise.all(ops),
+    conversationAssignmentHistory: {
+      create: async (args: { data: Record<string, unknown> }) => {
+        recorded.historyRows.push(args.data);
+        return args.data;
+      },
+    },
+    conversationTag: {
+      upsert: async (args: { create: { conversationId: string; tagId: string } }) => {
+        recorded.timeline.push("tag");
+        recorded.tagLinks.push(args.create);
+        return args.create;
+      },
+    },
+    aiSession: { findFirst: async () => null },
     message: {
       create: async (args: { data: Record<string, unknown> }) => {
         recorded.messageCreateArgs.push(args.data);
         return { id: "msg-1", ...args.data };
       },
     },
-    conversation: { update: async () => ({}) },
+    conversation: {
+      update: async (args: { data: Record<string, unknown> }) => {
+        if ("assignedUserId" in args.data) recorded.timeline.push("assign");
+        recorded.conversationUpdates.push(args.data);
+        return {};
+      },
+      findUnique: async () => ({
+        ...baseConversation(INSTANCE_ID, "org-1"),
+        assignedUserId: USER_ID,
+        assignedUser: { id: USER_ID, name: "Ana Comercial" },
+        tags: [],
+      }),
+    },
   } as unknown as PrismaClient;
+
+  function baseConversation(instanceId: string, organizationId: string) {
+    return {
+      id: "conv-1",
+      organizationId,
+      whatsappInstanceId: instanceId,
+      externalChatId: "5511999998888@s.whatsapp.net",
+      type: "individual",
+      departmentId: null,
+      assignedUserId: opts.existingAssignedUserId ?? null,
+      instance: null,
+      assignedUser: null,
+      assignedToAll: false,
+      department: null,
+      tags: [],
+      customTitle: null,
+      title: null,
+      profilePicture: null,
+      status: "open",
+      archivedAt: null,
+      archivedBy: null,
+      lastMessageAt: null,
+      lastMessagePreview: null,
+      externalReference: null,
+      externalSource: null,
+      createdAt: new Date("2026-08-29T11:00:00Z"),
+    };
+  }
 
   const deps = {
     config: { INTEGRATION_TOKEN_RATE_LIMIT_PER_MINUTE: 60 },
@@ -109,6 +193,7 @@ function buildApp(
     provider: {
       getConnectionStatus: async () => opts.connectionStatus ?? "connected",
       sendText: async (instanceId: string, chatId: string, text: string) => {
+        recorded.timeline.push("send");
         recorded.sendTextArgs.push({ instanceId, chatId, text });
         return { externalMessageId: "wamid-1", timestamp: new Date("2026-08-29T12:00:00Z") };
       },
@@ -117,31 +202,7 @@ function buildApp(
       ensureConversation: async (
         input: { instanceId: string; externalChatId: string },
         organizationId: string,
-      ) => ({
-        id: "conv-1",
-        organizationId,
-        whatsappInstanceId: input.instanceId,
-        externalChatId: input.externalChatId,
-        type: "individual",
-        departmentId: null,
-        assignedUserId: null,
-        instance: null,
-        assignedUser: null,
-        assignedToAll: false,
-        department: null,
-        tags: [],
-        customTitle: null,
-        title: null,
-        profilePicture: null,
-        status: "open",
-        archivedAt: null,
-        archivedBy: null,
-        lastMessageAt: null,
-        lastMessagePreview: null,
-        externalReference: null,
-        externalSource: null,
-        createdAt: new Date("2026-08-29T11:00:00Z"),
-      }),
+      ) => baseConversation(input.instanceId, organizationId),
     },
   } as unknown as AppDeps;
 
@@ -168,6 +229,11 @@ beforeEach(() => {
     emitted: [],
     logRows: new Map(),
     tokenUpdated: 0,
+    conversationUpdates: [],
+    historyRows: [],
+    tagLinks: [],
+    userWhere: [],
+    timeline: [],
   };
 });
 
@@ -316,6 +382,105 @@ describe("POST /integrations/messages — idempotência", () => {
     });
     // Enviou uma vez só.
     expect(recorded.sendTextArgs).toHaveLength(1);
+    await app.close();
+  });
+});
+
+describe("POST /integrations/messages — responsável e etiqueta", () => {
+  it("sem os campos, a conversa segue sem responsável e sem etiqueta (comportamento de antes)", async () => {
+    const app = buildApp();
+    await app.ready();
+    const res = await send(app, { telefone: "5511999998888", mensagem: "oi" });
+    expect(res.statusCode).toBe(200);
+    expect(recorded.historyRows).toHaveLength(0);
+    expect(recorded.tagLinks).toHaveLength(0);
+    expect(recorded.conversationUpdates.some((d) => "assignedUserId" in d)).toBe(false);
+    await app.close();
+  });
+
+  it("atribui o responsável e aplica a etiqueta ANTES de enviar, com histórico e auditoria", async () => {
+    const app = buildApp();
+    await app.ready();
+    const res = await send(app, {
+      telefone: "5511999998888",
+      mensagem: "oi",
+      assignedUserId: USER_ID,
+      tagId: TAG_ID,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(recorded.conversationUpdates).toContainEqual({ assignedUserId: USER_ID, assignedToAll: false });
+    expect(recorded.historyRows[0]).toMatchObject({
+      action: "assigned",
+      toUserId: USER_ID,
+      performedByUserId: null,
+      note: "Atribuído pela integração (Agendamento)",
+    });
+    expect(recorded.tagLinks).toEqual([{ conversationId: "conv-1", tagId: TAG_ID }]);
+    expect(recorded.auditActions).toEqual(
+      expect.arrayContaining(["conversation.assigned", "conversation.tag_added", "message.sent.integration"]),
+    );
+    // A conversa já tem dono quando a mensagem sai: a IA "só sem responsável"
+    // não pega a resposta do cliente, por mais rápida que seja.
+    expect(recorded.timeline.indexOf("assign")).toBeLessThan(recorded.timeline.indexOf("send"));
+    expect(recorded.timeline.indexOf("tag")).toBeLessThan(recorded.timeline.indexOf("send"));
+    await app.close();
+  });
+
+  it("o responsável é procurado na organização e no número DO TOKEN", async () => {
+    const app = buildApp();
+    await app.ready();
+    await send(app, { telefone: "5511999998888", mensagem: "oi", assignedUserId: USER_ID });
+    expect(recorded.userWhere[0]).toMatchObject({ id: USER_ID, organizationId: "org-1", status: "active" });
+    expect(JSON.stringify(recorded.userWhere[0])).toContain(INSTANCE_ID);
+    await app.close();
+  });
+
+  it("conversa que já era de outra pessoa vira transferência", async () => {
+    const app = buildApp({ existingAssignedUserId: "77777777-7777-4777-8777-777777777777" });
+    await app.ready();
+    const res = await send(app, { telefone: "5511999998888", mensagem: "oi", assignedUserId: USER_ID });
+    expect(res.statusCode).toBe(200);
+    expect(recorded.historyRows[0]).toMatchObject({ action: "transferred_user", toUserId: USER_ID });
+    await app.close();
+  });
+
+  it("conversa que já é do mesmo responsável não gera histórico repetido", async () => {
+    const app = buildApp({ existingAssignedUserId: USER_ID });
+    await app.ready();
+    const res = await send(app, { telefone: "5511999998888", mensagem: "oi", assignedUserId: USER_ID });
+    expect(res.statusCode).toBe(200);
+    expect(recorded.historyRows).toHaveLength(0);
+    await app.close();
+  });
+
+  it("responsável de OUTRA organização é 400, e nada é enviado nem atribuído", async () => {
+    const app = buildApp();
+    await app.ready();
+    const res = await send(app, { telefone: "5511999998888", mensagem: "oi", assignedUserId: OTHER_ORG_USER_ID });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("responsavel_invalido");
+    expect(recorded.sendTextArgs).toHaveLength(0);
+    expect(recorded.historyRows).toHaveLength(0);
+    await app.close();
+  });
+
+  it("etiqueta de OUTRA organização é 400, e nada é enviado nem etiquetado", async () => {
+    const app = buildApp();
+    await app.ready();
+    const res = await send(app, { telefone: "5511999998888", mensagem: "oi", tagId: OTHER_ORG_TAG_ID });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("etiqueta_invalida");
+    expect(recorded.sendTextArgs).toHaveLength(0);
+    expect(recorded.tagLinks).toHaveLength(0);
+    await app.close();
+  });
+
+  it("id que não é uuid é recusado na validação, sem enviar", async () => {
+    const app = buildApp();
+    await app.ready();
+    const res = await send(app, { telefone: "5511999998888", mensagem: "oi", tagId: "nao-e-uuid" });
+    expect(res.statusCode).toBe(400);
+    expect(recorded.sendTextArgs).toHaveLength(0);
     await app.close();
   });
 });
