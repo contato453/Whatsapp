@@ -31,7 +31,8 @@ const createInstanceSchema = z.object({
 });
 
 const updateInstanceSchema = z.object({
-  name: z.string().min(2).max(80).optional(),
+  // trim antes do min: espaço sozinho não pode virar nome em branco na lista.
+  name: z.string().trim().min(2).max(80).optional(),
   departmentId: z.string().uuid().nullable().optional(),
   /** Responsável padrão das conversas deste número — null remove. */
   defaultAssigneeId: z.string().uuid().nullable().optional(),

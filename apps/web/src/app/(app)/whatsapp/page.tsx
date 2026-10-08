@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Archive,
   DatabaseBackup,
+  Pencil,
   Plug,
   PlugZap,
   Plus,
@@ -39,6 +40,8 @@ export default function WhatsAppPage() {
   /** Quem pode ser responsável padrão, por número. */
   const [assignees, setAssignees] = useState<Record<string, UserDirectoryDto[]>>({});
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  /** Número sendo renomeado: o nome só era digitado na criação, e corrigir exigia mexer no banco. */
+  const [renaming, setRenaming] = useState<{ instance: InstanceDto; name: string } | null>(null);
 
   const load = useCallback(() => {
     api.get<{ instances: InstanceDto[] }>("/whatsapp-instances").then((data) => {
@@ -108,6 +111,35 @@ export default function WhatsAppPage() {
       setNewDepartmentId("");
       setCreating(false);
       load();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function renameInstance() {
+    if (!renaming) return;
+    const name = renaming.name.trim();
+    if (name.length < 2) return;
+    if (name === renaming.instance.name) {
+      setRenaming(null);
+      return;
+    }
+    setBusy("rename");
+    try {
+      await api.patch(`/whatsapp-instances/${renaming.instance.id}`, { name });
+      // Só o rótulo muda: sessão, conversas e vínculos continuam presos ao id do número.
+      setInstances((current) =>
+        current?.map((instance) =>
+          instance.id === renaming.instance.id ? { ...instance, name } : instance,
+        ) ?? null,
+      );
+      setNotice({ tone: "ok", text: `Número renomeado para "${name}".` });
+      setRenaming(null);
+    } catch (err) {
+      setNotice({
+        tone: "error",
+        text: err instanceof ApiError ? err.message : "Não foi possível renomear o número",
+      });
     } finally {
       setBusy(null);
     }
@@ -330,6 +362,18 @@ export default function WhatsAppPage() {
                       <Smartphone className="h-4 w-4" />
                     </div>
                     <p className="truncate font-semibold text-slate-900">{instance.name}</p>
+                    {/* Mesma chave que a API exige no PATCH: botão que aparece é botão que funciona. */}
+                    {can("whatsapp_instance.manage") && (
+                      <button
+                        type="button"
+                        className="shrink-0 rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                        onClick={() => setRenaming({ instance, name: instance.name })}
+                        title="Renomear número"
+                        aria-label={`Renomear ${instance.name}`}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                     {/* Selo ao lado do nome: explica por que este número não
                         aparece nas conversas nem nos números do dashboard. */}
                     {instance.isBackup && (
@@ -506,6 +550,38 @@ export default function WhatsAppPage() {
             Criar instância
           </Button>
         </div>
+      </Modal>
+
+      <Modal open={renaming != null} onClose={() => setRenaming(null)} title="Renomear número">
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void renameInstance();
+          }}
+        >
+          <Field label="Nome da instância">
+            <Input
+              value={renaming?.name ?? ""}
+              onChange={(event) =>
+                setRenaming((current) => (current ? { ...current, name: event.target.value } : current))
+              }
+              maxLength={80}
+              autoFocus
+            />
+          </Field>
+          <p className="text-xs text-slate-500">
+            Muda só o nome exibido no sistema. A conexão com o WhatsApp, as conversas e os
+            vínculos do número continuam iguais, sem precisar ler o QR Code de novo.
+          </p>
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={busy === "rename" || (renaming?.name.trim().length ?? 0) < 2}
+          >
+            Salvar nome
+          </Button>
+        </form>
       </Modal>
 
       <Modal
