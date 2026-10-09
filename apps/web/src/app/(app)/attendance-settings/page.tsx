@@ -14,6 +14,7 @@ import {
   type AttendanceSettings,
   type BusinessHours,
   type GreetingSettings,
+  type HolidaySettings,
   type LoginHours,
   type OutOfHoursSettings,
   type Weekday,
@@ -21,6 +22,7 @@ import {
 import { api, ApiError, attendanceSettingsApi } from "@/lib/api";
 import { Button, Card, Field, Input, Spinner, Textarea } from "@/components/ui";
 import type { InstanceDto } from "@/lib/types";
+import { HolidaysCard, validateCustomHolidays } from "@/components/settings/holidays-card";
 
 /**
  * Fusos oferecidos quando o navegador não sabe listar os dele. Cobrem o
@@ -66,9 +68,11 @@ interface FieldErrors {
   responseLimitMinutes?: string;
   businessHours: WeekErrors;
   loginHours: WeekErrors;
+  /** Erro por linha da lista de feriados próprios, pelo índice. */
+  holidays: Record<number, string>;
 }
 
-const NO_ERRORS: FieldErrors = { businessHours: {}, loginHours: {} };
+const NO_ERRORS: FieldErrors = { businessHours: {}, loginHours: {}, holidays: {} };
 
 /**
  * Uma semana vale quando todo dia ativo fecha. Serve para o expediente e
@@ -99,10 +103,12 @@ function validate(
   limitInput: string,
   businessHours: BusinessHours[],
   loginHours: LoginHours[],
+  holidays: HolidaySettings,
 ): FieldErrors {
   const errors: FieldErrors = {
     businessHours: validateWeek(businessHours),
     loginHours: validateWeek(loginHours),
+    holidays: validateCustomHolidays(holidays.custom),
   };
   const limit = Number(limitInput);
   if (!Number.isInteger(limit)) {
@@ -117,7 +123,8 @@ function hasErrors(errors: FieldErrors): boolean {
   return (
     errors.responseLimitMinutes !== undefined ||
     Object.keys(errors.businessHours).length > 0 ||
-    Object.keys(errors.loginHours).length > 0
+    Object.keys(errors.loginHours).length > 0 ||
+    Object.keys(errors.holidays).length > 0
   );
 }
 
@@ -247,6 +254,7 @@ export default function AttendanceSettingsPage() {
   );
   const [greeting, setGreeting] = useState<GreetingSettings>(DEFAULT_ATTENDANCE_SETTINGS.greeting);
   const [outOfHours, setOutOfHours] = useState<OutOfHoursSettings>(DEFAULT_ATTENDANCE_SETTINGS.outOfHours);
+  const [holidays, setHolidays] = useState<HolidaySettings>(DEFAULT_ATTENDANCE_SETTINGS.holidays);
   const [instances, setInstances] = useState<InstanceDto[]>([]);
 
   const timezones = useMemo(listTimezones, []);
@@ -262,6 +270,7 @@ export default function AttendanceSettingsPage() {
         setLoginHours(settings.loginHours);
         setGreeting(settings.greeting);
         setOutOfHours(settings.outOfHours);
+        setHolidays(settings.holidays);
       })
       .catch((err) =>
         setLoadError(err instanceof Error ? err.message : "Falha ao carregar os parâmetros"),
@@ -299,7 +308,7 @@ export default function AttendanceSettingsPage() {
   async function handleSave(): Promise<void> {
     // Nada de salvar a cada tecla: a validação e a gravação acontecem aqui,
     // no botão, porque isto é regra do escritório e não preferência pessoal.
-    const found = validate(limitInput, businessHours, loginHours);
+    const found = validate(limitInput, businessHours, loginHours, holidays);
     setErrors(found);
     setSaveError(null);
     setSaved(false);
@@ -313,6 +322,10 @@ export default function AttendanceSettingsPage() {
       loginHours,
       greeting,
       outOfHours,
+      holidays: {
+        ...holidays,
+        custom: holidays.custom.map((holiday) => ({ ...holiday, name: holiday.name.trim() })),
+      },
     };
     setSaving(true);
     try {
@@ -324,6 +337,7 @@ export default function AttendanceSettingsPage() {
       setLoginHours(settings.loginHours);
       setGreeting(settings.greeting);
       setOutOfHours(settings.outOfHours);
+      setHolidays(settings.holidays);
       setSaved(true);
     } catch (err) {
       setSaveError(
@@ -405,7 +419,7 @@ export default function AttendanceSettingsPage() {
           </h2>
           <p className="mb-4 text-sm text-slate-500">
             O tempo de resposta só corre dentro destes horários. Dia desligado não acumula
-            atraso nenhum. Feriado não é tratado e conta como dia normal.
+            atraso nenhum, e os feriados cadastrados logo abaixo também não.
           </p>
 
           <div className="mb-5 max-w-sm">
@@ -438,6 +452,15 @@ export default function AttendanceSettingsPage() {
             onChange={updateDay}
           />
         </Card>
+
+        <HolidaysCard
+          value={holidays}
+          errors={errors.holidays}
+          onChange={(next) => {
+            setHolidays(next);
+            setSaved(false);
+          }}
+        />
 
         <Card className="p-6">
           <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-500">

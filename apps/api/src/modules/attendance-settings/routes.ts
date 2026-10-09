@@ -1,6 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
+  HOLIDAY_DATE_PATTERN,
+  MAX_CUSTOM_HOLIDAYS,
+  MAX_HOLIDAY_NAME_LENGTH,
   RESPONSE_LIMIT_MAX_MINUTES,
   RESPONSE_LIMIT_MIN_MINUTES,
   TIME_OF_DAY_PATTERN,
@@ -91,6 +94,54 @@ const outOfHoursSchema = z.object({
   whatsappInstanceId: z.string().uuid().nullable(),
 });
 
+/**
+ * Feriados próprios do escritório. A data é conferida no calendário de
+ * verdade (31/02 passa no padrão, mas não existe), e duas linhas com a mesma
+ * data — ou o mesmo dia e mês quando uma delas repete todo ano — são recusadas:
+ * a segunda não muda nada no cálculo e só confundiria quem lê a lista.
+ */
+const customHolidaySchema = z.object({
+  date: z
+    .string()
+    .regex(HOLIDAY_DATE_PATTERN, "Data deve estar no formato AAAA-MM-DD")
+    .refine((value) => {
+      const [year, month, day] = value.split("-").map(Number);
+      const parsed = new Date(Date.UTC(year!, month! - 1, day!));
+      return parsed.getUTCMonth() === month! - 1 && parsed.getUTCDate() === day;
+    }, "Data inexistente no calendário"),
+  name: z.string().trim().min(1, "Informe o nome do feriado").max(MAX_HOLIDAY_NAME_LENGTH),
+  recurring: z.boolean(),
+});
+
+const holidaysSchema = z.object({
+  nationalEnabled: z.boolean(),
+  optionalEnabled: z.boolean(),
+  custom: z
+    .array(customHolidaySchema)
+    .max(MAX_CUSTOM_HOLIDAYS)
+    .superRefine((holidays, ctx) => {
+      const exactDates = new Set<string>();
+      const recurringDays = new Set<string>();
+      const allDays = new Set<string>();
+      for (const [index, holiday] of holidays.entries()) {
+        const monthDay = holiday.date.slice(5);
+        const duplicate = holiday.recurring
+          ? allDays.has(monthDay)
+          : exactDates.has(holiday.date) || recurringDays.has(monthDay);
+        if (duplicate) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [index, "date"],
+            message: "Esta data já está na lista de feriados",
+          });
+        }
+        exactDates.add(holiday.date);
+        allDays.add(monthDay);
+        if (holiday.recurring) recurringDays.add(monthDay);
+      }
+    }),
+});
+
 export const attendanceSettingsSchema = z.object({
   responseLimitMinutes: z
     .number()
@@ -105,6 +156,12 @@ export const attendanceSettingsSchema = z.object({
   loginHours: weekScheduleSchema(),
   greeting: greetingSchema,
   outOfHours: outOfHoursSchema,
+  /**
+   * Opcional de propósito: uma aba aberta antes desta entrega manda o corpo
+   * sem feriados, e gravar isso como "lista vazia" apagaria em silêncio o
+   * que alguém cadastrou. Ausente = manter o que já está gravado.
+   */
+  holidays: holidaysSchema.optional(),
 });
 
 export type AttendanceSettingsInput = z.infer<typeof attendanceSettingsSchema>;
@@ -153,6 +210,8 @@ export async function attendanceSettingsRoutes(
         }
       }
 
+      const holidays = input.holidays ?? before.holidays;
+
       const saved = await deps.prisma.$transaction(async (tx) => {
         const settings = await tx.attendanceSettings.upsert({
           where: { organizationId },
@@ -172,6 +231,8 @@ export async function attendanceSettingsRoutes(
             outOfHoursMessage: input.outOfHours.message,
             outOfHoursCooldownMinutes: input.outOfHours.cooldownMinutes,
             outOfHoursInstanceId: input.outOfHours.whatsappInstanceId,
+            nationalHolidaysEnabled: holidays.nationalEnabled,
+            optionalHolidaysEnabled: holidays.optionalEnabled,
           },
           update: {
             responseLimitMinutes: input.responseLimitMinutes,
@@ -186,6 +247,8 @@ export async function attendanceSettingsRoutes(
             outOfHoursMessage: input.outOfHours.message,
             outOfHoursCooldownMinutes: input.outOfHours.cooldownMinutes,
             outOfHoursInstanceId: input.outOfHours.whatsappInstanceId,
+            nationalHolidaysEnabled: holidays.nationalEnabled,
+            optionalHolidaysEnabled: holidays.optionalEnabled,
           },
         });
         // A semana chega inteira e substitui a inteira: é mais simples de
@@ -212,6 +275,21 @@ export async function attendanceSettingsRoutes(
             endTime: day.endTime,
           })),
         });
+        // Feriados próprios: a lista inteira chega e substitui a inteira,
+        // como a semana. Só quando veio no corpo — ausente é "não mexer".
+        if (input.holidays) {
+          await tx.attendanceHoliday.deleteMany({ where: { settingsId: settings.id } });
+          if (input.holidays.custom.length > 0) {
+            await tx.attendanceHoliday.createMany({
+              data: input.holidays.custom.map((holiday) => ({
+                settingsId: settings.id,
+                date: holiday.date,
+                name: holiday.name,
+                recurring: holiday.recurring,
+              })),
+            });
+          }
+        }
         return settings;
       });
 
@@ -237,6 +315,10 @@ export async function attendanceSettingsRoutes(
           loginHours: { before: before.loginHours, after: after.loginHours },
           greeting: { before: before.greeting, after: after.greeting },
           outOfHours: { before: before.outOfHours, after: after.outOfHours },
+          // Feriado muda o número de atraso do dashboard e as métricas do
+          // Quality daquele dia: quem marcou (ou desmarcou) precisa ficar
+          // registrado.
+          holidays: { before: before.holidays, after: after.holidays },
         },
         ip: request.ip,
       });

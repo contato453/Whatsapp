@@ -44,6 +44,9 @@ interface StoredSettings {
   outOfHoursMessage: string | null;
   outOfHoursCooldownMinutes: number;
   outOfHoursInstanceId: string | null;
+  nationalHolidaysEnabled: boolean;
+  optionalHolidaysEnabled: boolean;
+  holidays: Array<{ date: string; name: string; recurring: boolean }>;
 }
 
 let stored: StoredSettings | null = null;
@@ -57,7 +60,7 @@ function fakePrisma(): PrismaClient {
       update,
     }: {
       create: Partial<StoredSettings>;
-      update: Omit<StoredSettings, "id" | "businessHours" | "loginHours">;
+      update: Omit<StoredSettings, "id" | "businessHours" | "loginHours" | "holidays">;
     }) => {
       if (!stored) {
         stored = {
@@ -76,6 +79,9 @@ function fakePrisma(): PrismaClient {
           outOfHoursMessage: create.outOfHoursMessage ?? null,
           outOfHoursCooldownMinutes: create.outOfHoursCooldownMinutes ?? 180,
           outOfHoursInstanceId: create.outOfHoursInstanceId ?? null,
+          nationalHolidaysEnabled: create.nationalHolidaysEnabled ?? true,
+          optionalHolidaysEnabled: create.optionalHolidaysEnabled ?? false,
+          holidays: [],
         };
       } else {
         stored.responseLimitMinutes = update.responseLimitMinutes;
@@ -90,6 +96,8 @@ function fakePrisma(): PrismaClient {
         stored.outOfHoursMessage = update.outOfHoursMessage;
         stored.outOfHoursCooldownMinutes = update.outOfHoursCooldownMinutes;
         stored.outOfHoursInstanceId = update.outOfHoursInstanceId;
+        stored.nationalHolidaysEnabled = update.nationalHolidaysEnabled;
+        stored.optionalHolidaysEnabled = update.optionalHolidaysEnabled;
       }
       return { ...stored, organizationId: ORG };
     },
@@ -114,13 +122,24 @@ function fakePrisma(): PrismaClient {
       return { count: data.length };
     },
   };
+  const attendanceHoliday = {
+    deleteMany: async () => {
+      if (stored) stored.holidays = [];
+      return { count: 0 };
+    },
+    createMany: async ({ data }: { data: StoredSettings["holidays"] }) => {
+      if (stored) stored.holidays = data;
+      return { count: data.length };
+    },
+  };
   return {
     rolePermission: rolePermissionStub,
     attendanceSettings,
     attendanceBusinessHours,
     attendanceLoginHours,
+    attendanceHoliday,
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
-      fn({ attendanceSettings, attendanceBusinessHours, attendanceLoginHours }),
+      fn({ attendanceSettings, attendanceBusinessHours, attendanceLoginHours, attendanceHoliday }),
   } as unknown as PrismaClient;
 }
 
@@ -204,6 +223,8 @@ describe("rotas de parâmetros de atendimento", () => {
       loginHours: DEFAULT_ATTENDANCE_SETTINGS.loginHours,
       greeting: DEFAULT_ATTENDANCE_SETTINGS.greeting,
       outOfHours: DEFAULT_ATTENDANCE_SETTINGS.outOfHours,
+      // Feriados nacionais nascem ligados; facultativos e datas próprias, não.
+      holidays: { nationalEnabled: true, optionalEnabled: false, custom: [] },
     });
     await app.close();
   });
@@ -323,6 +344,84 @@ describe("rotas de parâmetros de atendimento", () => {
     expect(response.statusCode).toBe(400);
     expect(stored).toBeNull();
     await app.close();
+  });
+});
+
+describe("feriados nos parâmetros", () => {
+  beforeEach(() => {
+    stored = null;
+    auditActions.length = 0;
+  });
+
+  it("grava os feriados próprios e as duas chaves, e devolve na leitura", async () => {
+    const app = await buildTestApp();
+    const holidays = {
+      nationalEnabled: true,
+      optionalEnabled: true,
+      custom: [
+        { date: "2026-01-25", name: "Aniversário de São Paulo", recurring: true },
+        { date: "2026-12-24", name: "Recesso", recurring: false },
+      ],
+    };
+    const response = await app.inject({
+      method: "PUT",
+      url: "/attendance-settings",
+      headers: { authorization: `Bearer ${tokenFor(app, "supervisor")}` },
+      payload: { ...VALID_BODY, holidays },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().settings.holidays).toEqual(holidays);
+    expect(stored?.optionalHolidaysEnabled).toBe(true);
+    expect(stored?.holidays).toHaveLength(2);
+    await app.close();
+  });
+
+  it("corpo sem feriados (aba antiga) mantém o que já estava cadastrado", async () => {
+    const app = await buildTestApp();
+    const headers = { authorization: `Bearer ${tokenFor(app, "supervisor")}` };
+    await app.inject({
+      method: "PUT",
+      url: "/attendance-settings",
+      headers,
+      payload: {
+        ...VALID_BODY,
+        holidays: {
+          nationalEnabled: false,
+          optionalEnabled: false,
+          custom: [{ date: "2026-07-09", name: "Revolução Constitucionalista", recurring: true }],
+        },
+      },
+    });
+    const response = await app.inject({
+      method: "PUT",
+      url: "/attendance-settings",
+      headers,
+      payload: VALID_BODY,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(stored?.holidays).toHaveLength(1);
+    expect(stored?.nationalHolidaysEnabled).toBe(false);
+    await app.close();
+  });
+
+  it("recusa data inexistente, nome vazio e data repetida", () => {
+    const base = { nationalEnabled: true, optionalEnabled: false };
+    for (const custom of [
+      [{ date: "2026-02-31", name: "Inventado", recurring: false }],
+      [{ date: "2026-05-10", name: "   ", recurring: false }],
+      [
+        { date: "2026-05-10", name: "A", recurring: false },
+        { date: "2026-05-10", name: "B", recurring: false },
+      ],
+      [
+        { date: "2025-05-10", name: "Todo ano", recurring: true },
+        { date: "2026-05-10", name: "Repetido", recurring: false },
+      ],
+    ]) {
+      expect(
+        attendanceSettingsSchema.safeParse({ ...VALID_BODY, holidays: { ...base, custom } }).success,
+      ).toBe(false);
+    }
   });
 });
 

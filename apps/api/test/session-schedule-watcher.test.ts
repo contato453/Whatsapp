@@ -62,6 +62,9 @@ function fakePrisma(loginRestrictionEnabled = true): PrismaClient {
         loginRestrictionEnabled,
         businessHours: DEFAULT_ATTENDANCE_SETTINGS.businessHours,
         loginHours: DEFAULT_ATTENDANCE_SETTINGS.loginHours,
+        nationalHolidaysEnabled: true,
+        optionalHolidaysEnabled: false,
+        holidays: [],
       }),
     },
   } as unknown as PrismaClient;

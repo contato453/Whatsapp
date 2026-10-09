@@ -1,5 +1,5 @@
 import { Prisma, type PrismaClient } from "@azvchat/database";
-import type { AttendanceSettings } from "@azvchat/shared";
+import type { AttendanceSettings, BusinessCalendar } from "@azvchat/shared";
 import {
   computeOverdue,
   selectOverdue,
@@ -49,7 +49,7 @@ export async function scanOverdueConversations(
   prisma: PrismaClient,
   organizationId: string,
   conversationWhere: Prisma.ConversationWhereInput,
-  settings: Pick<AttendanceSettings, "timezone" | "businessHours" | "responseLimitMinutes">,
+  settings: BusinessCalendar & Pick<AttendanceSettings, "responseLimitMinutes">,
   now: Date,
 ): Promise<OverdueScan> {
   /**

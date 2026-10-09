@@ -1,7 +1,9 @@
 import {
   DASHBOARD_PERIOD_DAYS,
   DEFAULT_TIMEZONE,
+  holidayMatcher,
   type AttendanceSettings,
+  type BusinessCalendar,
   type BusinessHours,
   type DashboardFixedPeriod,
   type DashboardPeriod,
@@ -216,8 +218,10 @@ function usableDays(businessHours: BusinessHours[]): Map<Weekday, BusinessHours>
  * ela volta a contar na abertura do próximo dia ativo. Dia desligado não
  * acumula nada.
  *
- * Feriado **não** é tratado nesta entrega: conta como dia normal. Se um dia
- * passar a ser tratado, o lugar é aqui.
+ * FERIADO PARA O RELÓGIO como dia desligado (nacionais calculados, pontos
+ * facultativos quando ligados e as datas próprias do escritório, ver
+ * `@azvchat/shared` `holidays.ts`). É aqui, e só aqui, que o atraso do
+ * dashboard e as métricas do Quality aprendem que dia é feriado.
  *
  * Com todos os dias desligados o resultado é zero e a função devolve na hora
  * — sem isso a varredura ficaria procurando um próximo horário útil que não
@@ -226,18 +230,19 @@ function usableDays(businessHours: BusinessHours[]): Map<Weekday, BusinessHours>
 export function businessMinutesBetween(
   from: Date,
   to: Date,
-  settings: Pick<AttendanceSettings, "timezone" | "businessHours">,
+  settings: BusinessCalendar,
 ): number {
   if (to.getTime() <= from.getTime()) return 0;
   const days = usableDays(settings.businessHours);
   if (days.size === 0) return 0;
+  const isHoliday = holidayMatcher(settings.holidays);
 
   const timeZone = safeTimeZone(settings.timezone);
   let cursor = civilDateIn(timeZone, from);
   let total = 0;
 
   for (let scanned = 0; scanned < MAX_BUSINESS_DAYS_SCANNED; scanned += 1) {
-    const config = days.get(weekdayOf(cursor));
+    const config = isHoliday(cursor) ? undefined : days.get(weekdayOf(cursor));
     if (config) {
       const opens = zonedTimeToUtc(
         timeZone,
@@ -383,7 +388,7 @@ export interface OverdueResult {
  */
 export function selectOverdue(
   waiting: WaitingConversation[],
-  settings: Pick<AttendanceSettings, "timezone" | "businessHours" | "responseLimitMinutes">,
+  settings: BusinessCalendar & Pick<AttendanceSettings, "responseLimitMinutes">,
   now: Date,
 ): Array<{ conversationId: string; minutes: number }> {
   const atrasadas: Array<{ conversationId: string; minutes: number }> = [];
@@ -398,7 +403,7 @@ export function selectOverdue(
 /** Quantas passaram do limite e há quanto tempo espera a mais antiga. */
 export function computeOverdue(
   waiting: WaitingConversation[],
-  settings: Pick<AttendanceSettings, "timezone" | "businessHours" | "responseLimitMinutes">,
+  settings: BusinessCalendar & Pick<AttendanceSettings, "responseLimitMinutes">,
   now: Date,
 ): OverdueResult {
   const atrasadas = selectOverdue(waiting, settings, now);
