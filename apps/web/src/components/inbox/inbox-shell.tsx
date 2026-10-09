@@ -1723,6 +1723,26 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   // em não lida — ver o porquê e o mecanismo completo em `message-scroll.ts`.
   const messageScroll = useMessageScroll(conversationId, timeline.length);
 
+  // Link que aponta uma mensagem (`/inbox/<id>?messageId=<id>`, o "trecho N"
+  // da avaliação do Quality): abre a conversa JÁ na mensagem citada, e não no
+  // fim. Espera as mensagens E o detalhe da conversa: antes do detalhe a
+  // janela de mensagens não existe no DOM, e a rolagem cairia no vazio — a
+  // mesma corrida que `message-scroll.ts` descreve. O ref guarda a âncora já
+  // aplicada, senão cada mensagem nova que chega puxaria a tela de volta.
+  const anchorMessageId = searchParams.get("messageId");
+  const appliedAnchorRef = useRef<string | null>(null);
+  const jumpToQuotedRef = useRef(jumpToQuotedMessage);
+  jumpToQuotedRef.current = jumpToQuotedMessage;
+  const conversationReady =
+    messages !== null && detail?.conversation.id === conversationId;
+  useEffect(() => {
+    if (!conversationId || !anchorMessageId || !conversationReady) return;
+    const key = `${conversationId}:${anchorMessageId}`;
+    if (appliedAnchorRef.current === key) return;
+    appliedAnchorRef.current = key;
+    void jumpToQuotedRef.current(anchorMessageId);
+  }, [conversationId, anchorMessageId, conversationReady]);
+
   return (
     <div className="flex h-full">
       {/* Coluna esquerda: lista */}
