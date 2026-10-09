@@ -5,7 +5,13 @@ import type {
   ProviderGroup,
   PollVotes,
 } from "@azvchat/shared";
-import { RealtimeEvents, readMessageSecret, type CallIncomingPayload } from "@azvchat/shared";
+import {
+  CALL_END_REASON_LABELS,
+  RealtimeEvents,
+  readMessageSecret,
+  type CallEvent,
+  type CallIncomingPayload,
+} from "@azvchat/shared";
 import type { WhatsAppProvider } from "@azvchat/whatsapp";
 import { decryptEditedText } from "@azvchat/whatsapp";
 import type { Server } from "socket.io";
@@ -39,6 +45,22 @@ const CALL_LABELS: Record<string, (isVideo: boolean) => string> = {
   rejected: (isVideo) => (isVideo ? "Chamada de vídeo recusada" : "Chamada de voz recusada"),
   missed: (isVideo) => (isVideo ? "Chamada de vídeo perdida" : "Chamada de voz perdida"),
 };
+
+/**
+ * Rótulo da linha de chamada na conversa. A chamada de SAÍDA tem o motivo do
+ * fim no texto ("não atendeu", "ocupado"), porque é o que muda o próximo passo
+ * de quem ligou; a recebida mantém os rótulos de sempre.
+ */
+function callLabel(event: CallEvent): string {
+  if (event.direction === "outbound") {
+    const kind = event.isVideo ? "Chamada de vídeo" : "Chamada de voz";
+    if (event.status === "accepted" || event.status === "ended") return `${kind} realizada`;
+    if (event.status === "ringing") return `${kind} realizada (chamando)`;
+    const reason = event.endReason ? CALL_END_REASON_LABELS[event.endReason].toLowerCase() : "não atendida";
+    return `${kind} realizada: ${reason}`;
+  }
+  return (CALL_LABELS[event.status] ?? CALL_LABELS.ringing)?.(event.isVideo) ?? "Chamada";
+}
 
 /** Revalida a foto de um participante no máximo a cada 7 dias. */
 const PARTICIPANT_AVATAR_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -545,7 +567,7 @@ export class InstanceManager {
           organizationId,
         );
 
-        const label = (CALL_LABELS[event.status] ?? CALL_LABELS.ringing)?.(event.isVideo) ?? "Chamada";
+        const label = callLabel(event);
         // Mesma chamada emite vários eventos (tocando → atendida/perdida):
         // usamos o id da chamada para atualizar em vez de duplicar.
         const existing = await this.prisma.message.findUnique({
@@ -569,6 +591,9 @@ export class InstanceManager {
           isVideo: event.isVideo,
         };
         if (event.durationSeconds != null) callMetadata.durationSeconds = event.durationSeconds;
+        // Motivo do fim, guardado como CÓDIGO (`call-progress.ts`). Só nos
+        // estados terminais: o progresso não pode apagar um motivo já gravado.
+        if (event.endReason) callMetadata.callEndReason = event.endReason;
         if (event.recordingId) callMetadata.recordingId = event.recordingId;
         const direction: "inbound" | "outbound" = event.direction ?? "inbound";
 
@@ -651,11 +676,15 @@ export class InstanceManager {
           callId: event.callId,
           conversationId: conversation.id,
           status: event.status,
+          endReason: event.endReason ?? null,
+          ...(event.remoteRinging ? { remoteRinging: true } : {}),
         });
 
         // Está tocando agora: avisa o responsável em qualquer tela do sistema.
         // O sistema nunca atende nem rejeita — o telefone segue tocando.
-        if (!existing && event.status === "ringing") {
+        // Só chamada RECEBIDA: o "tocando" da chamada que nós discamos é
+        // progresso para quem ligou, não um telefone tocando para a equipe.
+        if (!existing && event.status === "ringing" && event.direction !== "outbound") {
           // A identidade é resolvida AQUI, no backend, para a tela receber
           // pronto — nada de consulta de agenda espalhada por componente.
           // São só consultas locais indexadas: não seguram o aviso.

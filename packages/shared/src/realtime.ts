@@ -1,3 +1,4 @@
+import type { CallEndReason } from "./call-progress.js";
 import type { AiBudgetPolicy, AiSessionDto } from "./ai.js";
 import type { ConversationAutomationDto } from "./conversation-automation.js";
 import type { ConnectionStatus, MessageStatus } from "./enums.js";
@@ -252,6 +253,10 @@ export interface CallStatusPayload {
   callId: string;
   conversationId: string;
   status: CallLiveStatus;
+  /** Motivo do fim, nos estados terminais (`ended`/`rejected`/`missed`). */
+  endReason?: CallEndReason | null;
+  /** Chamada de saída: o aparelho do cliente confirmou que está tocando. */
+  remoteRinging?: boolean;
 }
 
 /** Grupo conhecido de que quem liga participa — diz "de qual cliente" é a pessoa. */

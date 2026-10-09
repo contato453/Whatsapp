@@ -13,12 +13,14 @@ import type {
   QuotedMessageRef,
   SendTextOptions,
 } from "@azvchat/shared";
+import { callEndReasonFromProvider, type CallEndReason } from "@azvchat/shared";
+import { CallStartError } from "../call-errors.js";
 import type {
   MessageTarget,
   WhatsAppProvider,
   WhatsAppProviderEvents,
 } from "../provider.js";
-import { AstraCallsClient } from "./client.js";
+import { AstraCallsClient, AstraCallsHttpError } from "./client.js";
 import { SessionMapping } from "./mapping.js";
 import { SseConsumer, type AstraSseEvent } from "./sse.js";
 import {
@@ -93,6 +95,21 @@ export class AstraCallsProvider implements WhatsAppProvider {
       acceptedAtMs: number | null;
     }
   >();
+  /**
+   * Chamadas que NÓS discamos (callId devolvido pelo `startCall`). Sem isto a
+   * direção era deduzida de "o primeiro evento foi `incoming`?", e um
+   * `call-status` de progresso da chamada de saída seria lido como chamada
+   * RECEBIDA, acendendo o aviso de "tocando" na tela da equipe inteira.
+   */
+  private readonly outboundCallIds = new Set<string>();
+  /**
+   * Chamadas que o NOSSO lado encerrou (botão de desligar). É a única
+   * informação que o AstraCalls não tem como mandar de volta: sem ela, quem
+   * desiste antes de o cliente atender ficava registrado como "perdida" do
+   * cliente, que é outra coisa (a equipe ligaria de novo achando que ele não
+   * atendeu).
+   */
+  private readonly endedByUs = new Set<string>();
 
   constructor(options: AstraCallsProviderOptions) {
     this.logger = options.logger ?? pino({ level: process.env.LOG_LEVEL ?? "info" });
@@ -307,8 +324,32 @@ export class AstraCallsProvider implements WhatsAppProvider {
     opts?: { video?: boolean },
   ): Promise<{ callId: string }> {
     const sid = await this.requireSid(instanceId);
-    const call = await this.client.startCall(sid, phone, { video: opts?.video });
-    if (!call.callId) throw new Error("AstraCalls não devolveu o id da chamada.");
+    let call: { callId: string | null };
+    try {
+      call = await this.client.startCall(sid, phone, { video: opts?.video });
+    } catch (err) {
+      // Erro ao DISCAR: é aqui que o "número não existe / não tem WhatsApp"
+      // aparece (o WhatsApp recusa antes de tocar). O texto cru vai para o
+      // log, sem dígitos de telefone; a tela recebe só o código.
+      const status = err instanceof AstraCallsHttpError ? err.status : null;
+      const body = err instanceof AstraCallsHttpError ? err.body : String(err);
+      const sanitized = body.replace(/\d{4,}/g, "#").slice(0, 300);
+      const notFound =
+        /not[_\s-]?(found|registered|on[_\s-]?whatsapp|exist)|invalid|unknown[_\s-]?(number|user|jid)|no[_\s-]?account/i.test(
+          body,
+        );
+      this.logger.warn({
+        instanceId,
+        event: "astracalls_call_start_failed",
+        httpStatus: status,
+        detail: sanitized,
+        mappedReason: notFound ? "not_found" : "failed",
+      });
+      throw new CallStartError(notFound ? "not_found" : "failed");
+    }
+    if (!call.callId) throw new CallStartError("failed");
+    this.outboundCallIds.add(call.callId);
+    this.logger.info({ instanceId, event: "call_progress", callId: call.callId, step: "dialed" });
     return { callId: call.callId };
   }
 
@@ -329,6 +370,10 @@ export class AstraCallsProvider implements WhatsAppProvider {
   }
 
   async endCall(instanceId: string, callId: string): Promise<void> {
+    // Marca ANTES de pedir: o `call-ended` pode chegar pelo SSE antes de a
+    // resposta HTTP voltar, e precisa saber que fomos nós.
+    this.endedByUs.add(callId);
+    this.logger.info({ instanceId, event: "call_progress", callId, step: "hangup_requested" });
     await this.client.endCall(await this.requireSid(instanceId), callId);
   }
 
@@ -762,26 +807,47 @@ export class AstraCallsProvider implements WhatsAppProvider {
           return;
         case "incoming":
           // Chamada tocando.
+          this.logCallEvent(event, type);
           this.emitCall(event, "ringing");
           return;
-        case "call-status":
-          // Só "connected" nos interessa como evento (atendida); starting/
-          // ringing já vêm por `incoming`.
-          if (asString(event.status) === "connected") this.emitCall(event, "accepted");
+        case "call-status": {
+          this.logCallEvent(event, type);
+          const callStatus = (asString(event.status) ?? "").toLowerCase();
+          if (callStatus === "connected") {
+            this.emitCall(event, "accepted");
+            return;
+          }
+          // Progresso da chamada de SAÍDA: o aparelho do cliente tocando é o
+          // que separa "chamando" de "tocando". Na recebida, o "tocando" já
+          // veio pelo `incoming`, e repeti-lo aqui não acrescenta nada.
+          const callId = asString(event.id) ?? "";
+          if (callStatus === "ringing" && this.outboundCallIds.has(callId)) {
+            this.emitCall(event, "ringing", { remoteRinging: true });
+          }
           return;
+        }
         case "call-ended": {
-          const reason = (asString(event.reason) ?? "").toLowerCase();
-          const rejected = reason.includes("reject") || reason.includes("decline");
-          // Encerramento: recusada continua recusada; senão, se a chamada
-          // chegou a ser atendida, permanece "atendida" (encerrar não vira
-          // perdida); só é "perdida" quando nunca foi atendida.
+          this.logCallEvent(event, type);
           const callId = asString(event.id) ?? "";
           const accepted = this.activeCalls.get(callId)?.accepted ?? false;
-          // Recusada continua recusada; atendida-e-encerrada vira `ended`
-          // (terminal, mas conta como atendida no registro); nunca atendida é
-          // perdida. `ended` é o sinal que faz a TELA parar de contar minutos.
-          const status = rejected ? "rejected" : accepted ? "ended" : "missed";
-          this.emitCall(event, status);
+          const rawReason = asString(event.reason);
+          const { reason, recognized } = callEndReasonFromProvider({
+            reason: rawReason,
+            accepted,
+            endedByUs: this.endedByUs.has(callId),
+          });
+          if (!recognized) {
+            // Motivo que não conhecemos vira "Falha na ligação" na tela, e o
+            // texto técnico fica AQUI — é o que se ensina ao mapeamento.
+            this.logger.warn({ event: "astracalls_call_unknown_reason", callId, reason: rawReason });
+          }
+          // Atendida-e-encerrada vira `ended` (terminal, mas conta como
+          // atendida no registro); recusada continua recusada; o resto é
+          // "perdida" no filtro antigo, com o motivo refinando a linha.
+          const status = accepted ? "ended" : reason === "rejected" ? "rejected" : "missed";
+          this.emitCall(event, status, { endReason: reason });
+          this.outboundCallIds.delete(callId);
+          this.endedByUs.delete(callId);
           return;
         }
         case "incoming-claimed":
@@ -838,9 +904,27 @@ export class AstraCallsProvider implements WhatsAppProvider {
   }
 
   /** Traduz um evento de chamada do SSE em CallEvent e emite. */
+  /**
+   * Log estruturado de TODO evento de chamada que chega do AstraCalls, em
+   * ordem, sem telefone nem nome: tipo, status, motivo cru e o id. É o rastro
+   * que responde "o que o provedor mandou entre discar e atender" em minutos.
+   */
+  private logCallEvent(event: AstraSseEvent, type: string): void {
+    this.logger.info({
+      event: "call_progress",
+      step: type,
+      callId: asString(event.id),
+      status: asString(event.status),
+      reason: asString(event.reason),
+      direction: this.outboundCallIds.has(asString(event.id) ?? "") ? "outbound" : undefined,
+      keys: Object.keys(event).sort().join(","),
+    });
+  }
+
   private emitCall(
     event: AstraSseEvent,
     status: "ringing" | "accepted" | "ended" | "rejected" | "missed",
+    extra?: { endReason?: CallEndReason; remoteRinging?: boolean },
   ): void {
     const sid = asString(event.sessionId);
     if (!sid) return;
@@ -883,7 +967,8 @@ export class AstraCallsProvider implements WhatsAppProvider {
     // Sem `incoming` antes, é chamada que NÓS fizemos (outbound). Uma vez
     // sabida, fica no cache para os eventos seguintes (accept/ended) manterem.
     const direction: "inbound" | "outbound" =
-      cached?.direction ?? (status === "ringing" ? "inbound" : "outbound");
+      cached?.direction ??
+      (this.outboundCallIds.has(callId) ? "outbound" : status === "ringing" ? "inbound" : "outbound");
 
     // Marca o instante em que atendeu, para calcular a duração no fim.
     const acceptedAtMs =
@@ -943,6 +1028,8 @@ export class AstraCallsProvider implements WhatsAppProvider {
       direction,
       recordingId,
       durationSeconds,
+      endReason: extra?.endReason ?? null,
+      ...(extra?.remoteRinging ? { remoteRinging: true } : {}),
       timestamp: astraTimestampToDate(ts),
     });
 

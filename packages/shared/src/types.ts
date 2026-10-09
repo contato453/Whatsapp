@@ -1,3 +1,4 @@
+import type { CallEndReason } from "./call-progress.js";
 import type {
   ConnectionStatus,
   ConversationType,
@@ -213,6 +214,16 @@ export interface CallEvent {
   recordingId?: string | null;
   /** Duração da chamada em segundos, quando o provider a informa. */
   durationSeconds?: number | null;
+  /**
+   * Por que a chamada TERMINOU (só nos estados terminais). Traduzido no
+   * provider a partir do `reason` do AstraCalls; ver `call-progress.ts`.
+   */
+  endReason?: CallEndReason | null;
+  /**
+   * `true` quando o provedor confirmou que o aparelho do cliente está TOCANDO
+   * (chamada de saída). É progresso, não estado do registro.
+   */
+  remoteRinging?: boolean;
   timestamp: Date;
 }
 

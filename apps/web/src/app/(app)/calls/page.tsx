@@ -12,7 +12,7 @@ import {
   Trash2,
   Video,
 } from "lucide-react";
-import { isCallRecordingSettled } from "@azvchat/shared";
+import { CALL_END_REASON_LABELS, isCallRecordingSettled } from "@azvchat/shared";
 import { ApiError, api, callsApi, fetchAuthedBlobUrl } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { downloadCallRecording } from "@/lib/media-download";
@@ -430,7 +430,17 @@ function CallRow({
   // para liberar espaço: o texto é pequeno e é o que sobrou da ligação.
   const showAnalysis =
     canPlayRecording && (call.analysis !== "none" || (call.hasRecording && canAnalyzeRecording));
-  const meta = STATUS_META[call.status] ?? STATUS_META.missed;
+  const baseMeta = STATUS_META[call.status] ?? STATUS_META.missed;
+  // O motivo REFINA a situação: "Perdida" vira "Ocupado", "Não atendeu",
+  // "Número sem WhatsApp" ou "Cancelada por nós", porque cada um pede um
+  // próximo passo diferente. Sem motivo registrado, fica como sempre foi.
+  const meta =
+    call.endReason && call.endReason !== "completed"
+      ? {
+          label: CALL_END_REASON_LABELS[call.endReason],
+          className: call.endReason === "canceled" ? "text-slate-500" : baseMeta.className,
+        }
+      : baseMeta;
   const missed = call.status === "missed" || call.status === "rejected";
   const Icon = missed ? PhoneMissed : call.direction === "outbound" ? PhoneOutgoing : PhoneIncoming;
   const duration = formatDuration(call.durationSeconds);

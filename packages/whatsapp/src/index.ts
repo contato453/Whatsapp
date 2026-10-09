@@ -1,4 +1,5 @@
 export type { WhatsAppProvider, WhatsAppProviderEvents } from "./provider.js";
+export { CallStartError } from "./call-errors.js";
 export { QrCodeWhatsAppProvider, type QrCodeProviderOptions } from "./qrcode/qrcode-provider.js";
 export {
   AstraCallsProvider,

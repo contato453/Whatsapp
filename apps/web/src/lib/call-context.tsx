@@ -9,8 +9,14 @@ import {
   useRef,
   useState,
 } from "react";
-import { RealtimeEvents, type CallIncomingPayload, type CallStatusPayload } from "@azvchat/shared";
-import { callsApi } from "@/lib/api";
+import {
+  RealtimeEvents,
+  type CallEndReason,
+  type CallIncomingPayload,
+  type CallStatusPayload,
+} from "@azvchat/shared";
+import { ApiError, callsApi } from "@/lib/api";
+import { CallTonePlayer } from "@/lib/call-tones";
 import { useSocket } from "@/lib/socket-context";
 import { CallPanel } from "@/components/inbox/call-panel";
 
@@ -34,6 +40,30 @@ export interface ActiveCall {
   status: CallUiStatus;
   error: string | null;
   connectedAt: number | null;
+  /** Instante em que começou a chamar (saída), para o "há quanto tempo". */
+  ringingSince: number | null;
+  /** O provedor confirmou que o aparelho do cliente está tocando. */
+  remoteRinging: boolean;
+  /** Por que terminou, para o painel dizer em português. */
+  endReason: CallEndReason | null;
+}
+
+/**
+ * Uma chamada por vez POR ABA: o botão de ligar fica desabilitado enquanto há
+ * chamada no painel. Duas abas da mesma pessoa não se conhecem (não há
+ * sincronização entre abas), então cada uma pode ter a sua — quem decide se o
+ * número aguenta duas ao mesmo tempo é o WhatsApp.
+ */
+
+/** Quanto tempo o painel fica com o motivo na tela antes de sumir. */
+const END_VISIBLE_MS = 1500;
+const END_REASON_VISIBLE_MS = 6000;
+
+/** Motivo quando o servidor não mandou um (versão anterior, evento sem motivo). */
+function fallbackReason(status: CallStatusPayload["status"]): CallEndReason {
+  if (status === "ended") return "completed";
+  if (status === "rejected") return "rejected";
+  return "no_answer";
 }
 
 interface CallContextValue {
@@ -66,45 +96,134 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const micRef = useRef<MediaStream | null>(null);
   const callRef = useRef<ActiveCall | null>(null);
   callRef.current = call;
+  const mutedRef = useRef(false);
+  mutedRef.current = muted;
+  const tonesRef = useRef<CallTonePlayer | null>(null);
+  /** O outro lado já mandou som de verdade (retorno do provedor ou voz). */
+  const remoteSoundRef = useRef(false);
+  /** O cliente atendeu (saída). Ref, e não estado, porque o "atendida" pode
+   * chegar antes de o WebRTC terminar de montar o microfone. */
+  const answeredRef = useRef(false);
+  const hideTimerRef = useRef<number | null>(null);
+
+  const tones = useCallback((): CallTonePlayer => {
+    if (!tonesRef.current) tonesRef.current = new CallTonePlayer();
+    return tonesRef.current;
+  }, []);
+
+  /**
+   * Microfone da chamada de SAÍDA só abre quando o cliente atende. Antes disso
+   * não há ninguém do outro lado, e é assim que nada da discagem (nem o tom
+   * local que o microfone captaria do alto-falante) sobe para o provedor e
+   * para a gravação.
+   */
+  const setMicLive = useCallback((live: boolean) => {
+    micRef.current?.getAudioTracks().forEach((track) => (track.enabled = live && !mutedRef.current));
+  }, []);
+
+  const scheduleHide = useCallback((ms: number) => {
+    if (hideTimerRef.current !== null) window.clearTimeout(hideTimerRef.current);
+    hideTimerRef.current = window.setTimeout(() => {
+      hideTimerRef.current = null;
+      setCall(null);
+    }, ms);
+  }, []);
 
   const cleanupMedia = useCallback(() => {
     pcRef.current?.close();
     pcRef.current = null;
     micRef.current?.getTracks().forEach((t) => t.stop());
     micRef.current = null;
+    tonesRef.current?.unwatch();
     setRemoteStream(null);
     setMuted(false);
   }, []);
 
+  /**
+   * Fim da chamada com motivo: cala o retorno, toca o aviso de ocupado ou de
+   * número inexistente quando o provedor não mandou o próprio, e deixa o
+   * motivo na tela tempo suficiente para ser lido.
+   */
+  const finishWithReason = useCallback(
+    (reason: CallEndReason, error: string | null = null) => {
+      const current = callRef.current;
+      const player = tones();
+      player.stop();
+      if (current?.direction === "out" && !remoteSoundRef.current) {
+        if (reason === "busy") player.playBusy();
+        else if (reason === "not_found") player.playNotFound();
+      }
+      cleanupMedia();
+      setCall((c) => (c ? { ...c, status: "ended", endReason: reason, error: error ?? c.error } : null));
+      scheduleHide(reason === "completed" || reason === "canceled" ? END_VISIBLE_MS : END_REASON_VISIBLE_MS);
+      console.info("[call] encerrada", { callId: current?.callId ?? null, reason });
+    },
+    [cleanupMedia, scheduleHide, tones],
+  );
+
   /** Encerra no provider (se já houver callId) e limpa tudo. */
   const hangup = useCallback(() => {
     const current = callRef.current;
-    cleanupMedia();
-    if (current?.callId) {
+    if (!current || current.status === "ended") {
+      tonesRef.current?.stop();
+      setCall(null);
+      return;
+    }
+    if (current.callId) {
       const action = current.status === "ringing" && current.direction === "in" ? "reject" : "end";
       const fn = action === "reject" ? callsApi.reject : callsApi.end;
       void fn(current.conversationId, current.callId).catch(() => undefined);
     }
-    setCall((c) => (c ? { ...c, status: "ended", error: c.error } : null));
-    // Some da tela depois de um instante, para o "Encerrada" ser visto.
-    window.setTimeout(() => setCall(null), 1500);
-  }, [cleanupMedia]);
+    // Desligar antes de o cliente atender é "cancelada por nós", não perdida
+    // do cliente. O registro no banco segue o mesmo motivo (o provider sabe
+    // quem pediu o encerramento).
+    const reason: CallEndReason =
+      current.direction === "out" && current.status !== "in-call" ? "canceled" : "completed";
+    finishWithReason(reason);
+  }, [finishWithReason]);
 
   /**
    * Handshake WebRTC comum às duas direções: captura o microfone, monta a
    * oferta, espera o ICE e troca o SDP pela nossa API. Devolve true no sucesso.
    */
   const establishWebRtc = useCallback(
-    async (conversationId: string, callId: string): Promise<boolean> => {
+    async (conversationId: string, callId: string, outbound = false): Promise<boolean> => {
       try {
         const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
         micRef.current = mic;
         const pc = new RTCPeerConnection({ iceServers: [] });
         pcRef.current = pc;
         mic.getAudioTracks().forEach((track) => pc.addTrack(track, mic));
+        if (outbound) setMicLive(answeredRef.current);
         pc.addTransceiver("audio", { direction: "recvonly" });
+        // O áudio remoto vai para o alto-falante NA PRIMEIRA TRILHA, e não no
+        // atendimento: qualquer som que o outro lado mande antes de atender
+        // (retorno de chamada) precisa ser ouvido, e ligar o player só no
+        // "atendida" o descartaria. Na saída, o mesmo stream é escutado para
+        // calar o tom local assim que vier som de verdade de lá.
         pc.ontrack = (event) => {
-          if (event.streams[0]) setRemoteStream(event.streams[0]);
+          const stream = event.streams[0];
+          if (!stream) return;
+          setRemoteStream(stream);
+          if (outbound && !answeredRef.current) {
+            tones().watchRemoteAudio(stream, (level) => {
+              remoteSoundRef.current = true;
+              tones().stop();
+              console.info("[call] som remoto antes do atendimento: tom local desligado", {
+                callId,
+                level: Number(level.toFixed(3)),
+              });
+              // Rede de segurança: se o "atendida" não chegar pelo socket, o
+              // microfone não pode ficar fechado numa conversa que começou.
+              window.setTimeout(() => {
+                const c = callRef.current;
+                if (c && c.callId === callId && c.status === "ringing") {
+                  console.warn("[call] atendimento não confirmado; microfone aberto pelo som remoto", { callId });
+                  setMicLive(true);
+                }
+              }, 3000);
+            });
+          }
         };
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
@@ -130,18 +249,25 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
           err instanceof DOMException && err.name === "NotAllowedError"
             ? "Permissão de microfone negada."
             : "Falha ao conectar o áudio.";
+        // Na saída, a chamada já foi discada: encerra no provedor para o
+        // telefone do cliente não continuar tocando sem ninguém do lado de cá.
+        if (outbound) void callsApi.end(conversationId, callId).catch(() => undefined);
+        tonesRef.current?.stop();
         cleanupMedia();
-        setCall((c) => (c ? { ...c, status: "ended", error: message } : null));
-        window.setTimeout(() => setCall(null), 2500);
+        setCall((c) => (c ? { ...c, status: "ended", endReason: "failed", error: message } : null));
+        scheduleHide(END_REASON_VISIBLE_MS);
         return false;
       }
     },
-    [cleanupMedia],
+    [cleanupMedia, scheduleHide, setMicLive, tones],
   );
 
   const startOutbound = useCallback(
     ({ conversationId, title }: { conversationId: string; title: string }) => {
-      if (callRef.current) return; // uma chamada por vez
+      if (callRef.current && callRef.current.status !== "ended") return; // uma chamada por vez
+      if (hideTimerRef.current !== null) window.clearTimeout(hideTimerRef.current);
+      remoteSoundRef.current = false;
+      answeredRef.current = false;
       setCall({
         conversationId,
         callId: null,
@@ -150,31 +276,47 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         status: "starting",
         error: null,
         connectedAt: null,
+        ringingSince: null,
+        remoteRinging: false,
+        endReason: null,
       });
       void (async () => {
+        let callId: string;
         try {
-          const { callId } = await callsApi.start(conversationId, false);
-          setCall((c) => (c ? { ...c, callId, status: "ringing" } : null));
-          // Prepara o áudio já; a conversa começa quando o outro lado atende
-          // (evento call:status "accepted"), mas o caminho de mídia fica pronto.
-          await establishWebRtc(conversationId, callId);
+          ({ callId } = await callsApi.start(conversationId, false));
         } catch (err) {
+          // Recusa ANTES de tocar: número sem WhatsApp, formato inválido ou
+          // falha do provedor. A frase vem pronta da API; o código decide o tom.
+          const code = err instanceof ApiError ? err.code : undefined;
+          const reason: CallEndReason = code === "call_not_found" ? "not_found" : "failed";
           const message =
             typeof err === "object" && err && "message" in err
               ? String((err as { message: unknown }).message)
               : "Não foi possível iniciar a chamada.";
-          cleanupMedia();
-          setCall((c) => (c ? { ...c, status: "ended", error: message } : null));
-          window.setTimeout(() => setCall(null), 2500);
+          console.info("[call] discagem recusada", { code: code ?? null, reason });
+          finishWithReason(reason, message);
+          return;
         }
+        // O cliente pode ter desligado o painel enquanto discava.
+        if (!callRef.current || callRef.current.status === "ended") {
+          void callsApi.end(conversationId, callId).catch(() => undefined);
+          return;
+        }
+        setCall((c) => (c ? { ...c, callId, status: "ringing", ringingSince: Date.now() } : null));
+        console.info("[call] discada", { callId });
+        // Retorno local até o cliente atender (ou até o provedor mandar som).
+        if (!answeredRef.current) tones().startRingback();
+        await establishWebRtc(conversationId, callId, true);
       })();
     },
-    [establishWebRtc, cleanupMedia],
+    [establishWebRtc, finishWithReason, tones],
   );
 
   const answerIncoming = useCallback(
     (payload: CallIncomingPayload) => {
-      if (callRef.current) return;
+      if (callRef.current && callRef.current.status !== "ended") return;
+      if (hideTimerRef.current !== null) window.clearTimeout(hideTimerRef.current);
+      tonesRef.current?.stop();
       setCall({
         conversationId: payload.conversationId,
         callId: payload.callId,
@@ -183,6 +325,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         status: "starting",
         error: null,
         connectedAt: null,
+        ringingSince: null,
+        remoteRinging: false,
+        endReason: null,
       });
       void (async () => {
         try {
@@ -194,18 +339,23 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         } catch {
           cleanupMedia();
           setCall((c) => (c ? { ...c, status: "ended", error: "Falha ao atender." } : null));
-          window.setTimeout(() => setCall(null), 2500);
+          scheduleHide(2500);
         }
       })();
     },
-    [establishWebRtc, cleanupMedia],
+    [establishWebRtc, cleanupMedia, scheduleHide],
   );
 
   const toggleMute = useCallback(() => {
     const mic = micRef.current;
     if (!mic) return;
     const next = !muted;
-    mic.getAudioTracks().forEach((track) => (track.enabled = !next));
+    mutedRef.current = next;
+    // Na saída ainda não atendida o microfone continua fechado; o botão só
+    // guarda a escolha para quando o cliente atender.
+    const c = callRef.current;
+    const live = !(c?.direction === "out" && c.status !== "in-call");
+    mic.getAudioTracks().forEach((track) => (track.enabled = live && !next));
     setMuted(next);
   }, [muted]);
 
@@ -216,8 +366,22 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     const onStatus = (payload: CallStatusPayload) => {
       const current = callRef.current;
       if (!current || current.callId !== payload.callId) return;
+      console.info("[call] status", {
+        callId: payload.callId,
+        status: payload.status,
+        endReason: payload.endReason ?? null,
+        remoteRinging: payload.remoteRinging ?? false,
+      });
+      if (current.status === "ended") return;
       if (payload.status === "accepted") {
+        // Atendeu: o retorno cala NA HORA, antes de qualquer voz.
+        answeredRef.current = true;
+        tonesRef.current?.stop();
+        tonesRef.current?.unwatch();
+        setMicLive(true);
         setCall((c) => (c && !c.connectedAt ? { ...c, status: "in-call", connectedAt: Date.now() } : c));
+      } else if (payload.status === "ringing") {
+        if (payload.remoteRinging) setCall((c) => (c ? { ...c, remoteRinging: true } : c));
       } else if (
         payload.status === "ended" ||
         payload.status === "rejected" ||
@@ -225,19 +389,24 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       ) {
         // `ended` = o outro lado desligou depois de atender. Sem tratar isto, a
         // tela continuava contando minutos de uma chamada que já acabou.
-        cleanupMedia();
-        setCall((c) => (c ? { ...c, status: "ended" } : null));
-        window.setTimeout(() => setCall(null), 1500);
+        finishWithReason(payload.endReason ?? fallbackReason(payload.status));
       }
     };
     socket.on(RealtimeEvents.CallStatus, onStatus);
     return () => {
       socket.off(RealtimeEvents.CallStatus, onStatus);
     };
-  }, [socket, cleanupMedia]);
+  }, [socket, finishWithReason, setMicLive]);
 
-  // Segurança: solta o microfone se o componente sair de cena.
-  useEffect(() => () => cleanupMedia(), [cleanupMedia]);
+  // Segurança: solta o microfone e cala os tons se o componente sair de cena.
+  useEffect(
+    () => () => {
+      cleanupMedia();
+      tonesRef.current?.dispose();
+      if (hideTimerRef.current !== null) window.clearTimeout(hideTimerRef.current);
+    },
+    [cleanupMedia],
+  );
 
   const value = useMemo<CallContextValue>(
     () => ({ call, muted, remoteStream, startOutbound, answerIncoming, toggleMute, hangup }),

@@ -18,6 +18,9 @@ export class SessionMapping {
   private forward: Record<string, string> = {}; // instanceId -> sid
   private reverse: Record<string, string> = {}; // sid -> instanceId
   private loaded = false;
+  /** Leitura em andamento: duas chamadas simultâneas esperam a MESMA, senão a
+   * que termina por último zera o que a outra já gravou por cima. */
+  private loading: Promise<void> | null = null;
 
   constructor(
     private readonly sessionDir: string,
@@ -28,6 +31,11 @@ export class SessionMapping {
 
   private async ensureLoaded(): Promise<void> {
     if (this.loaded) return;
+    this.loading ??= this.load();
+    await this.loading;
+  }
+
+  private async load(): Promise<void> {
     try {
       const raw = await readFile(this.file, "utf8");
       const parsed = JSON.parse(raw) as Record<string, string>;
