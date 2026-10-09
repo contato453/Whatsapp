@@ -4511,3 +4511,64 @@ Regras que valem preservar:
   O modelo `deploy/instancia/docker-compose.instancia.yml` já as tem; o
   `docker-compose.azvchat2.yml` da VPS fica fora do Git e precisa da mesma edição à mão.
 
+
+## 26. Ligações pelo discador: pilha, progresso e motivo de encerramento
+
+**A pilha.** A ligação é uma CHAMADA DE WHATSAPP, não telefonia comum: não há operadora,
+SIP nem PSTN no caminho. O AstraCalls (servidor próprio, `astracalls.azvchat.com.br`,
+whatsmeow por baixo) fala com o WhatsApp; o navegador fala com o AstraCalls por **WebRTC
+direto** (UDP, `RTCPeerConnection` sem STUN, handshake não-trickle) e a SINALIZAÇÃO
+(discar, atender, recusar, encerrar, troca de SDP) passa pela nossa API, que guarda a
+chave (`modules/calls/routes.ts` → `AstraCallsProvider` → `AstraCallsClient`). O
+progresso chega pelo SSE `/api/events` do AstraCalls: `incoming` (recebida tocando),
+`call-status` (`starting`/`ringing`/`connected`) e `call-ended` (com `reason`). Nada fora
+de `packages/whatsapp` conhece esse formato: a API recebe `CallEvent` e `CallStartError`.
+
+**Por que quem discava ficava mudo.** O áudio remoto JÁ era ligado ao alto-falante na
+primeira trilha (`ontrack`), antes do atendimento. O que faltava: (1) o **som de chamada**
+— o WhatsApp não manda retorno pela rede, quem toca o "tuuu" é o aplicativo de quem liga,
+então pelo AZVCHAT não havia som nenhum até atender; (2) os **estados** — o provider
+descartava todo `call-status` que não fosse `connected` e lia do `call-ended` só "recusa
+ou não", então a tela só sabia "Chamando…" e "Encerrada".
+
+**O tom local** (`apps/web/src/lib/call-tones.ts`, Web Audio, sem arquivo de áudio):
+padrão brasileiro de 425 Hz — chamada 1 s/4 s, ocupado 250/250 ms por 3 s, e a sequência
+de três tons subindo para "número sem WhatsApp". Começa quando a API devolve o `callId` e
+**cala na hora** com o atendimento, a recusa, o fim, o desligar ou o primeiro som REMOTO de
+verdade (`watchRemoteAudio` mede o RMS do stream remoto: se o provedor um dia passar a
+mandar o próprio retorno, o nosso some sozinho e os dois nunca tocam juntos — é a
+alternativa, não o padrão). É agendado no relógio do áudio, não em `setTimeout`, para aba
+em segundo plano não picotar. Falhar ao tocar nunca derruba a ligação.
+
+**O microfone da chamada de SAÍDA fica fechado até o cliente atender** (`setMicLive`):
+nada da discagem, nem o tom que o microfone captaria do alto-falante, sobe para o provedor
+e para a gravação. Rede de segurança: som remoto sem o "atendida" em 3 s abre o microfone,
+senão um evento perdido deixaria a conversa muda. A gravação em si é do AstraCalls e só
+existe para chamada atendida.
+
+**Estados na tela** (`components/inbox/call-panel.tsx`, em texto com `aria-live`):
+Discando → Chamando (com o tempo desde que começou a chamar) → "Tocando no aparelho do
+cliente" quando o provedor confirma (`remoteRinging`) → Atendida (cronômetro da conversa) →
+o MOTIVO, que fica 6 s na tela.
+
+**O motivo de encerramento** é código, fonte única em `packages/shared/src/call-progress.ts`
+(`CALL_END_REASONS`, rótulos e `callEndReasonFromProvider`): `completed`, `no_answer`,
+`busy`, `rejected`, `not_found` (número sem WhatsApp, recusado AO DISCAR), `canceled`
+(nós desligamos antes de atender — o provider marca `endedByUs` antes de pedir o fim) e
+`failed`. Sem motivo e nunca atendida continua sendo `no_answer`, o "perdida" de sempre;
+motivo que não reconhecemos vira `failed` na tela e o texto cru vai SÓ para o log
+(`astracalls_call_unknown_reason`), que é como se ensina a próxima palavra. **Guardado em
+`Message.metadata.callEndReason`, sem migration**, e a lista de Ligações mostra o motivo no
+lugar de "Perdida"; o filtro continua com os três valores antigos. Ligação antiga fica sem
+motivo — não se inventa.
+
+**Log de diagnóstico**: todo evento de chamada do SSE sai como `event: "call_progress"`
+(tipo, status, reason cru, id, chaves do payload — nunca telefone), mais `dialed` e
+`hangup_requested`; na tela, `console.info("[call] ...")`. "O que o provedor mandou entre
+discar e atender" se responde com `docker logs ... | grep call_progress`.
+
+**Bordas**: formato de telefone inválido é recusado ANTES de discar (422
+`call_invalid_phone`); a recebida não mudou (só a guarda que impede o "tocando" da chamada
+de saída de abrir o aviso de chamada recebida para a equipe); uma chamada por ABA — duas abas
+da mesma pessoa não se conhecem, e quem decide se o número aguenta duas é o WhatsApp.
+Nada disso encosta em `lib/access.ts` nem cria auditoria nova.

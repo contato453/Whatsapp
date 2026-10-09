@@ -3,6 +3,7 @@ import type {
   AiSessionDto,
   AutomationExecutionStatus,
   AutomationFlowStatus,
+  CallEndReason,
   AutomationGraph,
   AutomationTriggerType,
   ConnectionStatus,
@@ -250,6 +251,11 @@ export interface CallLogDto {
   direction: "inbound" | "outbound";
   /** ringing | accepted | missed | rejected */
   status: string;
+  /**
+   * Motivo do fim (ocupado, não atendeu, número sem WhatsApp, cancelada por
+   * nós...). Nulo nas ligações de antes deste registro: não se inventa motivo.
+   */
+  endReason: CallEndReason | null;
   isVideo: boolean;
   durationSeconds: number | null;
   hasRecording: boolean;

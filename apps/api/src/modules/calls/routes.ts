@@ -3,13 +3,19 @@ import { join } from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Prisma } from "@azvchat/database";
-import { CALL_RECORDING_MISSING_METADATA_KEY, formatPhone, isCallRecordingMissing } from "@azvchat/shared";
+import {
+  CALL_END_REASON_DESCRIPTIONS,
+  CALL_RECORDING_MISSING_METADATA_KEY,
+  formatPhone,
+  isCallEndReason,
+  isCallRecordingMissing,
+} from "@azvchat/shared";
 import { conversationScope, loadConversationAccess } from "../../lib/access.js";
 import { loadPermissions, requirePermission } from "../../lib/permissions.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
 import { noteMissingCallRecording, recordingMissingError } from "../../lib/call-recording.js";
 import { phoneFromJid, resolveConversationPersonNames } from "../../lib/person-profile.js";
-import { splitAudioForTranscription } from "@azvchat/whatsapp";
+import { CallStartError, splitAudioForTranscription } from "@azvchat/whatsapp";
 import { analyzeCall, serializeCallAnalysis } from "../../services/ai/call-analysis.js";
 import type { AppDeps } from "../../types.js";
 
@@ -125,9 +131,32 @@ export async function callRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
     const body = z.object({ video: z.boolean().optional() }).parse(request.body ?? {});
     const conversation = await findConversationOr404(id, request.user);
     const phone = await resolveCallPhone(request.user.organizationId, conversation);
-    const { callId } = await callProvider().startCall(conversation.whatsappInstanceId, phone, {
-      video: body.video,
-    });
+    // Formato conferido ANTES de discar: número torto devolvia erro só depois
+    // de o provedor desistir, e a pessoa ficava em silêncio esperando.
+    if (!/^\d{10,15}$/.test(phone)) {
+      throw new AppError(
+        "O telefone desta conversa não tem um formato válido para ligar.",
+        422,
+        "call_invalid_phone",
+      );
+    }
+    let callId: string;
+    try {
+      ({ callId } = await callProvider().startCall(conversation.whatsappInstanceId, phone, {
+        video: body.video,
+      }));
+    } catch (err) {
+      // O provedor já traduziu a recusa num motivo e registrou o detalhe
+      // técnico no log; a tela recebe só a frase.
+      if (err instanceof CallStartError) {
+        throw new AppError(
+          CALL_END_REASON_DESCRIPTIONS[err.reason],
+          422,
+          err.reason === "not_found" ? "call_not_found" : "call_start_failed",
+        );
+      }
+      throw err;
+    }
     deps.audit.record({
       organizationId: request.user.organizationId,
       userId: request.user.sub,
@@ -307,6 +336,9 @@ export async function callRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
         instanceId: conversation?.whatsappInstanceId ?? null,
         direction: row.direction,
         status: typeof metadata.callStatus === "string" ? metadata.callStatus : "missed",
+        // Motivo do fim, quando foi registrado. Ligação antiga fica nula, sem
+        // motivo inventado.
+        endReason: isCallEndReason(metadata.callEndReason) ? metadata.callEndReason : null,
         isVideo: metadata.isVideo === true,
         durationSeconds:
           typeof metadata.durationSeconds === "number" ? metadata.durationSeconds : null,
