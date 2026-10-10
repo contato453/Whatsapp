@@ -1637,6 +1637,11 @@ export const broadcastApi = {
         .patch<{ campaign: BroadcastCampaignDto }>(`/broadcast/campaigns/${id}`, input)
         .then((d) => d.campaign),
     remove: (id: string) => api.delete<{ ok: true }>(`/broadcast/campaigns/${id}`),
+    /** Cópia em RASCUNHO — é o "editar" de campanha que já saiu do rascunho. */
+    duplicate: (id: string) =>
+      api
+        .post<{ campaign: BroadcastCampaignDto }>(`/broadcast/campaigns/${id}/duplicate`)
+        .then((d) => d.campaign),
     start: (id: string) =>
       api.post<{
         campaign: BroadcastCampaignDto;

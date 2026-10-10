@@ -842,6 +842,72 @@ export async function broadcastRoutes(app: FastifyInstance, deps: AppDeps): Prom
     },
   );
 
+  // DUPLICAR é o caminho de "editar" uma campanha que já começou (ou acabou):
+  // a original fica intacta, com a fila e o texto exato que saiu para cada
+  // contato, e a cópia nasce RASCUNHO, sem entrega nenhuma, pronta para mudar
+  // tudo. Reabrir a original para edição apagaria a pergunta "o que esta
+  // pessoa recebeu naquele dia", que é o motivo de o histórico existir.
+  // Não copia status, horário marcado, contadores nem motivo de pausa:
+  // a cópia não pode nascer agendada para uma hora que já passou.
+  app.post(
+    "/broadcast/campaigns/:id/duplicate",
+    { preHandler: requirePermission(deps, "broadcast.campaign.manage") },
+    async (request, reply) => {
+      const { id } = idParams.parse(request.params);
+      const organizationId = request.user.organizationId;
+      const original = await deps.prisma.broadcastCampaign.findFirst({
+        where: { id, organizationId },
+      });
+      if (!original) throw new NotFoundError("Campanha");
+      // A mesma régua da criação: quem não enxerga o número da original não
+      // ganha, pela cópia, uma campanha falando por ele.
+      await assertInstanceReachable(request, original.whatsappInstanceId);
+
+      const campanha = await deps.prisma.broadcastCampaign.create({
+        data: {
+          organizationId,
+          name: `${original.name} (cópia)`.slice(0, 120),
+          status: "draft",
+          audienceId: original.audienceId,
+          whatsappInstanceId: original.whatsappInstanceId,
+          message: original.message,
+          messageVariants: original.messageVariants ?? undefined,
+          scheduledFor: null,
+          minIntervalSeconds: original.minIntervalSeconds,
+          maxIntervalSeconds: original.maxIntervalSeconds,
+          dailyLimit: original.dailyLimit,
+          respectBusinessHours: original.respectBusinessHours,
+          crmMode: original.crmMode,
+          crmPipelineId: original.crmPipelineId,
+          crmStageId: original.crmStageId,
+          tagId: original.tagId,
+          createdById: request.user.sub,
+        },
+        include: campaignInclude,
+      });
+
+      deps.audit.record({
+        organizationId,
+        userId: request.user.sub,
+        action: "broadcast.campaign_duplicated",
+        entityType: "BroadcastCampaign",
+        entityId: campanha.id,
+        metadata: { name: campanha.name, sourceCampaignId: original.id },
+      });
+
+      return reply.status(201).send({
+        campaign: serializeCampaign(campanha as unknown as CampaignRow, {
+          total: 0,
+          pending: 0,
+          sent: 0,
+          failed: 0,
+          skipped: 0,
+          replied: 0,
+        }),
+      });
+    },
+  );
+
   // ==========================================================
   // Controle do envio — a chave `broadcast.send`
   // ==========================================================

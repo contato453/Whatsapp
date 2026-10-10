@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { ArrowLeft, Pause, Pencil, Play, Send, Square } from "lucide-react";
+import { useParams, useRouter } from "next/navigation";
+import { ArrowLeft, Copy, Pause, Pencil, Play, Send, Square } from "lucide-react";
 import {
   BROADCAST_CRM_MODE_LABELS,
   BROADCAST_DELIVERY_STATUSES,
@@ -42,6 +42,7 @@ export default function BroadcastDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
   const { can } = useAuth();
+  const router = useRouter();
 
   const [campaign, setCampaign] = useState<BroadcastCampaignDto | null>(null);
   const [deliveries, setDeliveries] = useState<BroadcastDeliveryDto[]>([]);
@@ -109,6 +110,30 @@ export default function BroadcastDetailPage() {
     }
   }
 
+  // Fora do rascunho a campanha não se edita no lugar (o histórico guarda o
+  // texto exato que saiu): "Editar" cria uma cópia em rascunho e abre ela.
+  async function duplicar(paraEditar: boolean) {
+    if (!campaign) return;
+    if (
+      paraEditar &&
+      !window.confirm(
+        `"${campaign.name}" já saiu do rascunho e não pode mais ser alterada — o histórico dela continua como está.\n\n` +
+          "Vou criar uma cópia em rascunho, com a mesma mensagem, audiência e ritmo, para você editar e disparar de novo.",
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const copia = await broadcastApi.campaigns.duplicate(campaign.id);
+      router.push(paraEditar ? `/automations/broadcasts/${copia.id}/edit` : `/automations/broadcasts/${copia.id}`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Não foi possível duplicar a campanha");
+      setBusy(false);
+    }
+  }
+
   async function enviarTeste() {
     setBusy(true);
     setError(null);
@@ -170,6 +195,24 @@ export default function BroadcastDetailPage() {
                   Editar
                 </Button>
               </Link>
+            )}
+            {campaign.status !== "draft" && podeMontar && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                title="Já saiu do rascunho: edita uma cópia nova"
+                onClick={() => void duplicar(true)}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                Editar
+              </Button>
+            )}
+            {podeMontar && (
+              <Button variant="outline" size="sm" disabled={busy} onClick={() => void duplicar(false)}>
+                <Copy className="h-3.5 w-3.5" />
+                Duplicar
+              </Button>
             )}
             {podeDisparar && (
               <Button variant="outline" size="sm" onClick={() => setTestOpen(true)}>

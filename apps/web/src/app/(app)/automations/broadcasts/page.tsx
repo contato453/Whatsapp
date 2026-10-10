@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Pause, Play, Plus, Square, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Copy, Pause, Pencil, Play, Plus, Square, Trash2 } from "lucide-react";
 import {
   BROADCAST_PAUSE_REASON_LABELS,
   formatEstimate,
@@ -35,6 +36,7 @@ const AUTO_REFRESH_MS = 5000;
 
 export default function BroadcastsPage() {
   const { can } = useAuth();
+  const router = useRouter();
   const [campaigns, setCampaigns] = useState<BroadcastCampaignDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -67,8 +69,26 @@ export default function BroadcastsPage() {
 
   async function acao(
     campaign: BroadcastCampaignDto,
-    tipo: "start" | "pause" | "resume" | "cancel" | "remove",
+    tipo: "start" | "pause" | "resume" | "cancel" | "remove" | "edit" | "duplicate",
   ) {
+    // Só o RASCUNHO se edita no lugar. Depois de disparada, a campanha guarda o
+    // texto exato que saiu para cada contato, e mudá-la reescreveria esse
+    // histórico — então "Editar" vira uma cópia em rascunho, e a tela diz isso
+    // antes, para ninguém achar que mexeu na original.
+    if (tipo === "edit" && campaign.status === "draft") {
+      router.push(`/automations/broadcasts/${campaign.id}/edit`);
+      return;
+    }
+    if (
+      tipo === "edit" &&
+      !window.confirm(
+        `"${campaign.name}" já saiu do rascunho e não pode mais ser alterada — o histórico dela continua como está.\n\n` +
+          "Vou criar uma cópia em rascunho, com a mesma mensagem, audiência e ritmo, para você editar e disparar de novo.",
+      )
+    ) {
+      return;
+    }
+
     if (tipo === "start") {
       const confirmado = window.confirm(
         `Disparar "${campaign.name}" para a audiência ${campaign.audienceName}?\n\n` +
@@ -104,6 +124,12 @@ export default function BroadcastsPage() {
         await broadcastApi.campaigns.resume(campaign.id);
       } else if (tipo === "cancel") {
         await broadcastApi.campaigns.cancel(campaign.id);
+      } else if (tipo === "edit") {
+        const copia = await broadcastApi.campaigns.duplicate(campaign.id);
+        router.push(`/automations/broadcasts/${copia.id}/edit`);
+        return;
+      } else if (tipo === "duplicate") {
+        await broadcastApi.campaigns.duplicate(campaign.id);
       } else {
         await broadcastApi.campaigns.remove(campaign.id);
       }
@@ -216,6 +242,33 @@ export default function BroadcastsPage() {
                           <Square className="h-3.5 w-3.5" /> Cancelar
                         </Button>
                       )}
+                    {podeMontar && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busy === campaign.id}
+                        title={
+                          campaign.status === "draft"
+                            ? "Editar a campanha"
+                            : "Já saiu do rascunho: edita uma cópia nova"
+                        }
+                        onClick={() => void acao(campaign, "edit")}
+                      >
+                        <Pencil className="h-3.5 w-3.5" /> Editar
+                      </Button>
+                    )}
+                    {podeMontar && (
+                      <button
+                        type="button"
+                        title="Duplicar"
+                        aria-label="Duplicar"
+                        className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-brand-600"
+                        disabled={busy === campaign.id}
+                        onClick={() => void acao(campaign, "duplicate")}
+                      >
+                        <Copy className="h-4 w-4" />
+                      </button>
+                    )}
                     {podeMontar && campaign.status !== "running" && (
                       <button
                         type="button"
