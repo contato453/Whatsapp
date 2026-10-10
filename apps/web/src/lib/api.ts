@@ -1611,6 +1611,8 @@ export const broadcastApi = {
         .postForm<{ result: BroadcastImportResultDto }>(`/broadcast/audiences/${id}/import`, form)
         .then((d) => d.result);
     },
+    /** O modelo .xlsx para preencher — rota autenticada, então vem como blob. */
+    templateBlobUrl: () => fetchAuthedBlobUrl("/broadcast/import/template"),
   },
 
   optOuts: {

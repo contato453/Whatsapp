@@ -295,3 +295,87 @@ export function prepareContacts(
 
   return { contacts, rejected, duplicatedInFile };
 }
+
+/**
+ * As colunas do MODELO de planilha, na ordem em que aparecem.
+ *
+ * As três primeiras usam nomes que `guessImportRole` reconhece sozinho, então
+ * quem preenche o modelo chega à prévia com o mapeamento já certo. As demais
+ * são exemplos de variável (`{{campo.cidade}}`...): a pessoa pode apagar,
+ * renomear ou criar outras — toda coluna que não é telefone, nome ou empresa
+ * vira variável, e o modelo existe para MOSTRAR isso, não para limitar.
+ */
+export const IMPORT_TEMPLATE_COLUMNS: { header: string; width: number; note: string }[] = [
+  { header: "Telefone", width: 20, note: "Obrigatório. Com DDD, com ou sem 55, com ou sem pontuação. Ex.: (11) 99999-8888" },
+  { header: "Nome", width: 28, note: "Nome da pessoa. Vira {{nome}} e {{primeiro_nome}} na mensagem." },
+  { header: "Empresa", width: 30, note: "Opcional. Vira {{empresa}} na mensagem." },
+  { header: "Cidade", width: 18, note: "Exemplo de variável: vira {{campo.cidade}}. Pode apagar ou renomear." },
+  { header: "Vencimento", width: 16, note: "Exemplo de variável: vira {{campo.vencimento}}. Pode apagar ou renomear." },
+  { header: "Servico", width: 22, note: "Exemplo de variável: vira {{campo.servico}}. Pode apagar ou renomear." },
+];
+
+/**
+ * Gera o modelo de planilha (.xlsx) para baixar, preencher e importar.
+ *
+ * A aba de dados vai SÓ com o cabeçalho, sem linha de exemplo: exemplo
+ * esquecido na planilha seria importado e receberia a campanha — um número
+ * inventado que pode ser de alguém de verdade. Os exemplos ficam na aba "Como
+ * preencher", que a importação nunca lê (ela lê só a PRIMEIRA aba).
+ */
+export async function buildImportTemplate(): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "AZVCHAT";
+
+  const contatos = workbook.addWorksheet("Contatos", {
+    views: [{ state: "frozen", ySplit: 1 }],
+  });
+  contatos.columns = IMPORT_TEMPLATE_COLUMNS.map((coluna) => ({
+    header: coluna.header,
+    key: coluna.header,
+    width: coluna.width,
+  }));
+  // Telefone como TEXTO: em formato número o Excel mostra 5,5119E+12 e come
+  // o zero à esquerda; a mesma coisa vale para data digitada como texto.
+  contatos.getColumn(1).numFmt = "@";
+  contatos.getColumn(5).numFmt = "@";
+  const cabecalho = contatos.getRow(1);
+  cabecalho.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  cabecalho.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F7A45" } };
+  IMPORT_TEMPLATE_COLUMNS.forEach((coluna, indice) => {
+    cabecalho.getCell(indice + 1).note = coluna.note;
+  });
+
+  const ajuda = workbook.addWorksheet("Como preencher");
+  ajuda.getColumn(1).width = 110;
+  const linhas = [
+    "COMO PREENCHER O MODELO DE AUDIÊNCIA",
+    "",
+    "1. Preencha a aba \"Contatos\" (a primeira). É só ela que o AZVCHAT lê na importação.",
+    "2. Uma pessoa por linha. A primeira linha é o cabeçalho e não pode ser apagada.",
+    "3. Telefone é obrigatório, com DDD. Pode ter ou não o 55 e a pontuação: (11) 99999-8888, 11999998888 e 5511999998888 são o mesmo número.",
+    "4. Telefone repetido na planilha entra uma vez só. Linha com telefone inválido é recusada e a tela diz o número da linha.",
+    "5. Nome e Empresa são opcionais e viram {{nome}}, {{primeiro_nome}} e {{empresa}} no texto da campanha.",
+    "6. Qualquer outra coluna vira uma variável {{campo.<nome da coluna>}}, em minúsculas, sem acento e com \"_\" no lugar de espaço.",
+    "   Ex.: a coluna \"Data de Vencimento\" vira {{campo.data_de_vencimento}}; a coluna \"Cidade\" vira {{campo.cidade}}.",
+    "7. As colunas Cidade, Vencimento e Servico são só exemplos: apague, renomeie ou acrescente as que precisar.",
+    "8. Salve como .xlsx (ou .csv) e importe em Automações → Disparos em massa → Audiências → a audiência → Importar planilha.",
+    "   Antes de gravar, a tela mostra as colunas para você conferir qual é o telefone, o nome e a empresa.",
+    "",
+    "EXEMPLO DE PREENCHIMENTO (não copie estes números: são fictícios)",
+  ];
+  for (const texto of linhas) ajuda.addRow([texto]);
+  ajuda.getRow(1).font = { bold: true, size: 13 };
+  ajuda.getRow(linhas.length).font = { bold: true };
+
+  const exemplo = ajuda.addRow(IMPORT_TEMPLATE_COLUMNS.map((coluna) => coluna.header));
+  exemplo.font = { bold: true };
+  ajuda.addRow(["(11) 90000-0001", "Maria Souza", "Souza Comércio Ltda", "Campinas", "10/11/2026", "Contabilidade"]);
+  ajuda.addRow(["21 90000-0002", "João Lima", "", "Rio de Janeiro", "15/11/2026", "Folha de pagamento"]);
+  ajuda.addRow([]);
+  ajuda.addRow([
+    "Mensagem de exemplo: \"Olá {{primeiro_nome}}! Lembrando que o vencimento de {{campo.servico}} é em {{campo.vencimento}}.\"",
+  ]);
+
+  const arquivo = await workbook.xlsx.writeBuffer();
+  return Buffer.from(arquivo);
+}

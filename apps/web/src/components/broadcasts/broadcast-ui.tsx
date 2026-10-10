@@ -1,8 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Megaphone, ShieldAlert } from "lucide-react";
+import { Download, Megaphone, ShieldAlert } from "lucide-react";
 import {
   BROADCAST_CAMPAIGN_STATUS_COLORS,
   BROADCAST_CAMPAIGN_STATUS_LABELS,
@@ -12,7 +13,9 @@ import {
   type BroadcastPauseReason,
 } from "@azvchat/shared";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui";
+import { broadcastApi } from "@/lib/api";
+import { triggerBlobDownload } from "@/lib/media-download";
+import { Badge, Button } from "@/components/ui";
 
 /**
  * Navegação interna dos DISPAROS EM MASSA. No Interno a área mora dentro do
@@ -181,5 +184,40 @@ export function BroadcastWarning() {
         </p>
       </div>
     </div>
+  );
+}
+
+/**
+ * Botão "Baixar modelo de planilha". O arquivo é gerado pela API (a mesma
+ * régua de colunas que a importação reconhece) e vem por fetch autenticado,
+ * nunca por `href` — a rota exige o Bearer. O clique fica travado até o
+ * arquivo chegar, senão o clique duplo baixa duas vezes.
+ */
+export function ImportTemplateButton({
+  size,
+  onError,
+}: {
+  size?: "sm";
+  onError?: (message: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function baixar() {
+    setBusy(true);
+    try {
+      const blobUrl = await broadcastApi.audiences.templateBlobUrl();
+      triggerBlobDownload(blobUrl, "modelo-audiencia-azvchat.xlsx");
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
+    } catch {
+      onError?.("Não foi possível baixar o modelo de planilha");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Button variant="secondary" size={size} disabled={busy} onClick={() => void baixar()}>
+      <Download className={size === "sm" ? "h-3.5 w-3.5" : "h-4 w-4"} /> Baixar modelo de planilha
+    </Button>
   );
 }

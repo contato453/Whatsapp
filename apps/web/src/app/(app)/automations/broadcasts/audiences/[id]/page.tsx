@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { ArrowLeft, FileSpreadsheet, Plus, Trash2, Upload } from "lucide-react";
 import {
   guessImportRole,
+  normalizeColumnKey,
   type BroadcastAudienceDto,
   type BroadcastContactDto,
   type BroadcastImportPreviewDto,
@@ -14,7 +15,7 @@ import {
 import { ApiError, broadcastApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Badge, Button, Card, EmptyState, Field, Input, Modal, Spinner } from "@/components/ui";
-import { BroadcastTabs } from "@/components/broadcasts/broadcast-ui";
+import { BroadcastTabs, ImportTemplateButton } from "@/components/broadcasts/broadcast-ui";
 
 /**
  * OS CONTATOS DE UMA AUDIÊNCIA — cadastro manual e importação de planilha.
@@ -45,7 +46,25 @@ export default function BroadcastAudienceDetailPage() {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<BroadcastImportPreviewDto | null>(null);
   const [mapping, setMapping] = useState({ phone: "", name: "", company: "" });
-  const [extras, setExtras] = useState<string[]>([]);
+  // Colunas que a pessoa DESLIGOU como variável. As variáveis em si são
+  // derivadas do mapeamento (toda coluna que não é telefone, nome nem
+  // empresa): guardar a lista pronta deixaria a coluna trocada no seletor
+  // de telefone aparecendo ao mesmo tempo como variável.
+  const [skippedExtras, setSkippedExtras] = useState<string[]>([]);
+  const extras = preview
+    ? preview.columns.filter(
+        (coluna) =>
+          coluna !== mapping.phone &&
+          coluna !== mapping.name &&
+          coluna !== mapping.company &&
+          !skippedExtras.includes(coluna),
+      )
+    : [];
+  const candidatasAVariavel = preview
+    ? preview.columns.filter(
+        (coluna) => coluna !== mapping.phone && coluna !== mapping.name && coluna !== mapping.company,
+      )
+    : [];
   const [importResult, setImportResult] = useState<BroadcastImportResultDto | null>(null);
 
   const load = useCallback(async () => {
@@ -80,11 +99,7 @@ export default function BroadcastAudienceDetailPage() {
       const nome = resultado.columns.find((coluna) => guessImportRole(coluna) === "name") ?? "";
       const empresa = resultado.columns.find((coluna) => guessImportRole(coluna) === "company") ?? "";
       setMapping({ phone: telefone, name: nome, company: empresa });
-      setExtras(
-        resultado.columns.filter(
-          (coluna) => coluna !== telefone && coluna !== nome && coluna !== empresa,
-        ),
-      );
+      setSkippedExtras([]);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Não consegui ler a planilha");
       setFile(null);
@@ -177,7 +192,7 @@ export default function BroadcastAudienceDetailPage() {
             Aceita .xlsx, .xls e .csv. A primeira linha tem que ser o cabeçalho. Colunas além de
             nome, telefone e empresa viram variáveis{" "}
             <code className="rounded bg-slate-100 px-1">{"{{campo.coluna}}"}</code> para usar no
-            texto da campanha.
+            texto da campanha. Não tem a planilha pronta? Baixe o modelo, preencha e importe aqui.
           </p>
 
           <input
@@ -190,9 +205,12 @@ export default function BroadcastAudienceDetailPage() {
               if (selecionado) void escolherArquivo(selecionado);
             }}
           />
-          <Button variant="secondary" disabled={busy} onClick={() => fileRef.current?.click()}>
-            <Upload className="h-4 w-4" /> Escolher planilha
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="secondary" disabled={busy} onClick={() => fileRef.current?.click()}>
+              <Upload className="h-4 w-4" /> Escolher planilha
+            </Button>
+            <ImportTemplateButton onError={setError} />
+          </div>
 
           {preview && (
             <div className="mt-4 space-y-4 rounded-lg border border-slate-200 p-4">
@@ -245,6 +263,46 @@ export default function BroadcastAudienceDetailPage() {
                   </select>
                 </Field>
               </div>
+
+              {candidatasAVariavel.length > 0 && (
+                <div>
+                  <p className="mb-1.5 text-xs font-medium text-slate-700">
+                    Variáveis para o texto da campanha
+                  </p>
+                  <p className="mb-2 text-xs text-slate-500">
+                    Cada coluna marcada é guardada no contato e pode ser usada na mensagem. Desmarque
+                    a que não interessa.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {candidatasAVariavel.map((coluna) => {
+                      const ligada = !skippedExtras.includes(coluna);
+                      const chave = normalizeColumnKey(coluna);
+                      return (
+                        <label
+                          key={coluna}
+                          className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={ligada}
+                            onChange={() =>
+                              setSkippedExtras((atual) =>
+                                ligada ? [...atual, coluna] : atual.filter((item) => item !== coluna),
+                              )
+                            }
+                          />
+                          {coluna}
+                          {chave ? (
+                            <code className="rounded bg-slate-100 px-1 text-[11px] text-slate-700">
+                              {`{{campo.${chave}}}`}
+                            </code>
+                          ) : null}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {preview.sample.length > 0 && (
                 <div className="overflow-x-auto">
