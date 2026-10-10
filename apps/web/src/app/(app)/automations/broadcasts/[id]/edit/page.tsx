@@ -2,11 +2,11 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { useParams, useRouter } from "next/navigation";
+import { ArrowLeft, Copy } from "lucide-react";
 import type { BroadcastCampaignDto } from "@azvchat/shared";
 import { ApiError, broadcastApi } from "@/lib/api";
-import { Spinner } from "@/components/ui";
+import { Button, Spinner } from "@/components/ui";
 import { CampaignForm } from "@/components/broadcasts/campaign-form";
 import { BroadcastHeader } from "@/components/broadcasts/broadcast-ui";
 
@@ -20,6 +20,19 @@ export default function EditBroadcastPage() {
   const params = useParams<{ id: string }>();
   const [campaign, setCampaign] = useState<BroadcastCampaignDto | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [copiando, setCopiando] = useState(false);
+  const router = useRouter();
+
+  async function editarCopia(id: string) {
+    setCopiando(true);
+    try {
+      const copia = await broadcastApi.campaigns.duplicate(id);
+      router.push(`/automations/broadcasts/${copia.id}/edit`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Não foi possível duplicar a campanha");
+      setCopiando(false);
+    }
+  }
 
   useEffect(() => {
     void (async () => {
@@ -53,11 +66,22 @@ export default function EditBroadcastPage() {
       {campaign.status === "draft" ? (
         <CampaignForm campaign={campaign} />
       ) : (
-        <p className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
-          Esta campanha já saiu do rascunho e não pode mais ser editada. Mudar o texto agora
-          faria parte da lista receber um recado e o resto, outro. Duplique numa campanha nova
-          para mandar a versão corrigida a quem ainda não recebeu.
-        </p>
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          <p>
+            Esta campanha já saiu do rascunho e não pode mais ser editada. Mudar o texto agora
+            faria parte da lista receber um recado e o resto, outro. Edite uma cópia nova, com a
+            mesma mensagem, audiência e ritmo — o histórico desta continua como está.
+          </p>
+          <Button
+            className="mt-3"
+            size="sm"
+            disabled={copiando}
+            onClick={() => void editarCopia(campaign.id)}
+          >
+            <Copy className="h-3.5 w-3.5" />
+            Editar uma cópia
+          </Button>
+        </div>
       )}
     </div>
   );

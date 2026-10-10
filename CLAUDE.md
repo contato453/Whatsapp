@@ -643,6 +643,7 @@ GET    /broadcast/opt-outs  POST /broadcast/opt-outs  DELETE /broadcast/opt-outs
 GET    /broadcast/campaigns        POST /broadcast/campaigns   (broadcast.campaign.manage)
 GET|PATCH|DELETE /broadcast/campaigns/:id   (editar só em rascunho — 409 `campaign_locked`)
 POST   /broadcast/campaigns/:id/start|pause|resume|cancel      (broadcast.send)
+POST   /broadcast/campaigns/:id/duplicate   (cópia em RASCUNHO — o "editar" de campanha já disparada)
 POST   /broadcast/campaigns/:id/test-send   GET /broadcast/campaigns/:id/deliveries
 GET    /broadcast/options
        (disparos em massa, ver a seção 24)
@@ -4371,6 +4372,16 @@ uma atendente lendo antes do Enter, e aqui não há ninguém no momento do envio
 técnico chegando ao cliente seria pior que o buraco. A costura não é enfeite: "Olá {{nome}},
 tudo bem?" com nome vazio viraria "Olá , tudo bem?", e essa vírgula solta denuncia disparo
 automático na primeira linha da mensagem.
+
+### Editar e duplicar
+
+Só o RASCUNHO se edita no lugar (`campaign_locked` no PATCH): depois de disparada, a
+campanha guarda o texto exato que saiu para cada contato. O botão **Editar** (lista e
+detalhe) abre o formulário no rascunho e, em qualquer outro status, avisa e cria uma CÓPIA
+em rascunho (`POST /broadcast/campaigns/:id/duplicate`) para editar; **Duplicar** faz a
+mesma cópia sem abrir o formulário. A cópia leva mensagem, variações, audiência, número,
+ritmo, teto, expediente, CRM e etiqueta, e nasce sem entrega, sem horário marcado e sem
+motivo de pausa. Número pela régua da criação; auditoria `broadcast.campaign_duplicated`.
 
 ### Importação de planilha — DOIS passos, sempre
 
