@@ -638,6 +638,7 @@ GET|PATCH|DELETE /broadcast/audiences/:id
 POST   /broadcast/audiences/:id/contacts   DELETE /broadcast/contacts/:id
 POST   /broadcast/import/preview           POST /broadcast/audiences/:id/import
        (DOIS passos, e o arquivo sobe nos dois: a prévia só LÊ a planilha)
+GET    /broadcast/import/template          (o MODELO .xlsx para baixar e preencher)
 GET    /broadcast/opt-outs  POST /broadcast/opt-outs  DELETE /broadcast/opt-outs/:id
 GET    /broadcast/campaigns        POST /broadcast/campaigns   (broadcast.campaign.manage)
 GET|PATCH|DELETE /broadcast/campaigns/:id   (editar só em rascunho — 409 `campaign_locked`)
@@ -4379,6 +4380,18 @@ coluna sozinho importaria 800 contatos com o telefone errado — e isso só se d
 o disparo sai, quando não dá mais para desfazer.** O arquivo sobe DUAS vezes, uma em cada
 passo, de propósito: guardar a planilha no servidor entre a prévia e a confirmação criaria
 um arquivo temporário com telefone de cliente esperando alguém lembrar de apagar.
+
+**O modelo de planilha** (`GET /broadcast/import/template`, `buildImportTemplate` em
+`lib/broadcast-import.ts`, botão "Baixar modelo de planilha" na lista de Audiências e no
+card de importação) é um .xlsx gerado pela API: a primeira aba ("Contatos") tem SÓ o
+cabeçalho — Telefone, Nome e Empresa, que `guessImportRole` já reconhece, mais três
+colunas de exemplo de variável (Cidade, Vencimento, Servico) —, com telefone e data
+formatados como texto. **Nenhuma linha de exemplo na aba de dados, de propósito**: exemplo
+esquecido ali seria importado e receberia a campanha. Os exemplos e as instruções ficam na
+segunda aba, que a importação nunca lê. Na prévia, cada coluna que vira variável aparece
+com o nome dela (`{{campo.<chave>}}`) e pode ser desmarcada; a lista é DERIVADA do
+mapeamento, para a coluna escolhida como telefone não sair também como variável. Criar
+audiência leva direto à tela dela, onde ficam a importação e o cadastro na mão.
 
 Lê `.xlsx`/`.xlsm`/`.xls` (exceljs) e `.csv`/`.txt` (parser próprio, com **detecção de
 separador** — o Excel em português exporta com ponto e vírgula, e assumir vírgula

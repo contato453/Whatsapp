@@ -12,7 +12,12 @@ import {
   tidyResolvedText,
 } from "@azvchat/shared";
 import { generateDeliveries, handleBroadcastInbound, registerOptOut } from "../src/lib/broadcast.js";
-import { prepareContacts } from "../src/lib/broadcast-import.js";
+import {
+  IMPORT_TEMPLATE_COLUMNS,
+  buildImportTemplate,
+  prepareContacts,
+  readSpreadsheet,
+} from "../src/lib/broadcast-import.js";
 import { MemoryPrisma } from "./helpers/memory-prisma.js";
 
 /**
@@ -143,6 +148,25 @@ describe("importação de planilha", () => {
     expect(resultado.duplicatedInFile).toBe(1);
     expect(resultado.rejected.map((item) => item.row)).toEqual([4, 5]);
     expect(resultado.rejected[0]?.reason).toBe("Sem telefone");
+  });
+});
+
+describe("modelo de planilha", () => {
+  it("volta pela própria importação com o mapeamento já certo e SEM linha de dado", async () => {
+    const arquivo = await buildImportTemplate();
+    const lido = await readSpreadsheet(arquivo, "modelo-audiencia-azvchat.xlsx");
+
+    // A importação lê a PRIMEIRA aba: ela tem de ser a de contatos, só com
+    // o cabeçalho. Exemplo esquecido ali receberia a campanha.
+    expect(lido.columns).toEqual(IMPORT_TEMPLATE_COLUMNS.map((coluna) => coluna.header));
+    expect(lido.rows).toHaveLength(0);
+
+    expect(guessImportRole("Telefone")).toBe("phone");
+    expect(guessImportRole("Nome")).toBe("name");
+    expect(guessImportRole("Empresa")).toBe("company");
+    // As demais são as variáveis de exemplo.
+    expect(lido.columns.slice(3).map((coluna) => guessImportRole(coluna))).toEqual([null, null, null]);
+    expect(lido.columns.slice(3).map(normalizeColumnKey)).toEqual(["cidade", "vencimento", "servico"]);
   });
 });
 

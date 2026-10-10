@@ -27,6 +27,7 @@ import {
 } from "../../lib/broadcast.js";
 import {
   buildImportPreview,
+  buildImportTemplate,
   prepareContacts,
   readSpreadsheet,
   type ImportMapping,
@@ -355,6 +356,20 @@ export async function broadcastRoutes(app: FastifyInstance, deps: AppDeps): Prom
   // ==========================================================
   // Importação de planilha (dois passos: prévia → importar)
   // ==========================================================
+
+  // O modelo de planilha para baixar e preencher. Mesma chave da importação:
+  // quem não pode montar audiência não tem para que baixar o modelo dela.
+  app.get(
+    "/broadcast/import/template",
+    { preHandler: requirePermission(deps, "broadcast.audience.manage") },
+    async (_request, reply) => {
+      const arquivo = await buildImportTemplate();
+      return reply
+        .header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        .header("Content-Disposition", 'attachment; filename="modelo-audiencia-azvchat.xlsx"')
+        .send(arquivo);
+    },
+  );
 
   app.post(
     "/broadcast/import/preview",

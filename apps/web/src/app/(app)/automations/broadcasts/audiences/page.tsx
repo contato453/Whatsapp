@@ -2,15 +2,21 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Plus, Trash2, Users } from "lucide-react";
 import type { BroadcastAudienceDto } from "@azvchat/shared";
 import { ApiError, broadcastApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Badge, Button, Card, EmptyState, Field, Input, Modal, Spinner, Textarea } from "@/components/ui";
-import { BroadcastHeader, BroadcastTabs } from "@/components/broadcasts/broadcast-ui";
+import {
+  BroadcastHeader,
+  BroadcastTabs,
+  ImportTemplateButton,
+} from "@/components/broadcasts/broadcast-ui";
 
 export default function BroadcastAudiencesPage() {
   const { can } = useAuth();
+  const router = useRouter();
   const [audiences, setAudiences] = useState<BroadcastAudienceDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -35,13 +41,16 @@ export default function BroadcastAudiencesPage() {
     setBusy(true);
     setError(null);
     try {
-      await broadcastApi.audiences.create({
+      const criada = await broadcastApi.audiences.create({
         name: form.name.trim(),
         description: form.description.trim() || null,
       });
       setCreating(false);
       setForm({ name: "", description: "" });
-      await load();
+      // Vai direto para a audiência nova, onde ficam a importação da planilha
+      // e o cadastro na mão: audiência vazia na lista não serve para nada, e
+      // o próximo passo é sempre trazer os contatos.
+      router.push(`/automations/broadcasts/audiences/${criada.id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Não foi possível criar a audiência");
     } finally {
@@ -69,9 +78,12 @@ export default function BroadcastAudiencesPage() {
         description="As listas de contatos que as campanhas usam. A mesma lista serve a quantas campanhas quiser."
         action={
           podeMontar ? (
-            <Button onClick={() => setCreating(true)}>
-              <Plus className="h-4 w-4" /> Nova audiência
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <ImportTemplateButton onError={setError} />
+              <Button onClick={() => setCreating(true)}>
+                <Plus className="h-4 w-4" /> Nova audiência
+              </Button>
+            </div>
           ) : undefined
         }
       />
@@ -87,7 +99,7 @@ export default function BroadcastAudiencesPage() {
         <Card className="p-4">
           <EmptyState
             title="Nenhuma audiência ainda"
-            description="Crie uma audiência e traga os contatos na mão ou por planilha."
+            description="Baixe o modelo de planilha, preencha com os contatos e as variáveis, e crie uma audiência para importar. Também dá para cadastrar na mão."
           />
         </Card>
       ) : (
@@ -151,8 +163,11 @@ export default function BroadcastAudiencesPage() {
               placeholder="De onde veio esta lista e para que serve."
             />
           </Field>
+          <p className="text-xs text-slate-500">
+            Na próxima tela você importa a planilha ou cadastra os contatos na mão.
+          </p>
           <Button className="w-full" disabled={busy || form.name.trim().length < 2} onClick={() => void criar()}>
-            Criar audiência
+            Criar e adicionar contatos
           </Button>
         </div>
       </Modal>
