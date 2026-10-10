@@ -142,6 +142,7 @@ const STATUS_BY_REASON: Record<AiSessionEndReason, AiSessionStatus> = {
   flow_disabled: "stopped",
   conversation_type_excluded: "stopped",
   department_excluded: "stopped",
+  keyword_deactivated: "stopped",
   conversation_archived: "stopped",
 };
 

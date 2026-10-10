@@ -3552,6 +3552,33 @@ todas) concordavam num tipo restrito — divergência ficou `any`, que era o efe
 antes. Na tela, o campo fica na seção visível "Em quais conversas atende", logo depois de
 Departamentos, e não dentro das configurações avançadas recolhidas.
 
+**`AiAgentConfig.keywords`** — PALAVRAS-CHAVE que ligam (`activate`) e desligam
+(`deactivate`) o agente de DENTRO da conversa: a terceira porta de entrada, que não depende
+de automação. Seção "Ativar e desativar por palavra-chave" do formulário do agente; sem
+migration (o `config` é JSON, e agente antigo ganha listas vazias = desligado). Quem lê é
+`AiRuntime.onConversationText`, chamado de três lugares: a ingestão (mensagem do CLIENTE e
+mensagem que a equipe mandou do PRÓPRIO celular), `afterOutboundPersist` (composer, DEPOIS da
+interrupção da IA por resposta humana) e a criação de nota interna — escrita numa nota, a
+frase não chega ao cliente. Mensagem com `metadata.origem` (IA, fluxo, disparo, integração)
+nunca conta: a IA repetindo a frase desligaria a si mesma. Decisões que valem para qualquer
+mexida: (1) **a comparação é `findAiKeyword` (shared), e a frase precisa aparecer INTEIRA como
+palavra**, sem acento nem maiúscula — "ia" não liga com "dia"; a pontuação fica, para a equipe
+poder usar um código como "#ia"; (2) **ativar pula só a escolha da automação e o `canRestart`**
+(é pedido explícito, como o "Devolver para IA"), e respeita as réguas do AGENTE — status, tipo
+de conversa, departamentos, horário, orçamento e credenciais; (3) **o cursor da sessão nova é
+apontado**: a IA responde só o que o cliente deixou sem resposta depois da última mensagem
+nossa, nunca o histórico inteiro — frase do cliente tem a própria mensagem respondida, frase
+numa mensagem do atendente faz a IA esperar o próximo passo do cliente, frase numa nota faz a
+IA responder já a pendência; (4) **desativar pelo CLIENTE é pedido de atendente**: mensagem de
+transferência, resumo em nota e o destino humano do agente (`transferToHuman`), nunca silêncio;
+**pela EQUIPE a IA só sai**, sem aviso ao cliente e sem mexer no responsável; motivo
+`keyword_deactivated` nos dois casos; (5) a configuração ATUAL do agente decide a desativação
+(interruptor, não regra da versão da sessão); (6) a mesma frase nas duas listas é recusada no
+cadastro; (7) entra na MESMA fila por conversa, então nunca cruza com um turno — a ativação
+pelo cliente acontece antes do turno do debounce, e há um turno só. Nada disso encosta em
+`lib/access.ts`. Coberto por `apps/api/test/ai-runtime.test.ts` ("palavra-chave liga e desliga")
+e `ai-keywords.test.ts`.
+
 **Os departamentos do agente decidem ONDE ele atende**, e não só quem o enxerga na tela
 (`agentServesDepartment`, no shared). Antes eram só visualização, e um agente marcado
 "Comercial" ligado a uma automação de "Qualquer departamento" respondia o Fiscal também —

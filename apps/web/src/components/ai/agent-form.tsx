@@ -139,6 +139,34 @@ export function AgentForm({
         </p>
       </Section>
 
+      {/* ---------------- Palavras-chave ---------------- */}
+      <Section
+        title="Ativar e desativar por palavra-chave"
+        description="Quando uma destas palavras ou frases aparece na conversa — escrita pelo cliente, por um atendente numa mensagem ou numa nota interna —, o agente entra ou sai na hora, sem depender de automação."
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <KeywordListField
+            label="Ativa o agente (uma por linha)"
+            placeholder={"#ia\nquero falar com a assistente"}
+            value={config.keywords.activate}
+            onChange={(activate) => patchSection("keywords", { activate })}
+          />
+          <KeywordListField
+            label="Desativa o agente (uma por linha)"
+            placeholder={"#humano\nfalar com atendente"}
+            value={config.keywords.deactivate}
+            onChange={(deactivate) => patchSection("keywords", { deactivate })}
+          />
+        </div>
+        <p className="text-xs text-slate-400">
+          Maiúsculas e acentos não importam, e a frase precisa aparecer inteira: &quot;ia&quot; não ativa com &quot;dia&quot;.
+          Prefira um código que ninguém escreve por acaso, como &quot;#ia&quot;. Ativar respeita o tipo de conversa, os
+          departamentos e o horário do agente, e a IA responde o que o cliente deixou sem resposta. Desativada pelo
+          cliente, a conversa vai para a fila humana com a mensagem de transferência; desativada pela equipe, a IA só
+          sai. Escrita numa nota interna, a frase não chega ao cliente.
+        </p>
+      </Section>
+
       {/* ---------------- Objetivo ---------------- */}
       <Section title="Objetivo da IA" description="A missão do agente, em português claro. Entra em primeiro lugar nas instruções.">
         <Textarea
@@ -550,5 +578,44 @@ function AdvancedSection({
         </div>
       )}
     </Section>
+  );
+}
+
+/**
+ * Lista de palavras-chave, uma por linha. O texto digitado fica num estado
+ * próprio: limpar linhas vazias a cada tecla engoliria o Enter de quem está
+ * começando a frase seguinte.
+ */
+function KeywordListField({
+  label,
+  placeholder,
+  value,
+  onChange,
+}: {
+  label: string;
+  placeholder: string;
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [raw, setRaw] = useState(() => value.join("\n"));
+  return (
+    <Field label={label}>
+      <Textarea
+        rows={3}
+        placeholder={placeholder}
+        value={raw}
+        onChange={(event) => {
+          setRaw(event.target.value);
+          onChange(
+            event.target.value
+              .split("\n")
+              .map((line) => line.trim())
+              .filter(Boolean)
+              .map((line) => line.slice(0, AI_CONFIG_LIMITS.keywords.maxLength))
+              .slice(0, AI_CONFIG_LIMITS.keywords.max),
+          );
+        }}
+      />
+    </Field>
   );
 }

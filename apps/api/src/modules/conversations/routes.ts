@@ -1825,6 +1825,19 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
     deps.io
       .to(conversationAudience(request.user.organizationId, conversation))
       .emit(RealtimeEvents.InternalNote, payload);
+    // Palavra-chave de agente de IA escrita numa NOTA: é o jeito de a equipe
+    // ligar ou desligar a IA sem o cliente ver a frase. A nota não interrompe
+    // a IA por si só (não é resposta ao cliente), então só a frase decide.
+    if (!conversation.archivedAt) {
+      deps.aiRuntime?.onConversationText({
+        organizationId: request.user.organizationId,
+        conversationId: id,
+        text: note.content,
+        author: "team",
+        at: note.createdAt,
+        actor: { userId: request.user.sub, userName: request.user.name },
+      });
+    }
     return reply.status(201).send({ note: payload });
   });
 
