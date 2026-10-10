@@ -1,4 +1,4 @@
-import type { AttendanceSettings, QualityOutcome } from "@azvchat/shared";
+import type { AttendanceSettings, BusinessCalendar, QualityOutcome } from "@azvchat/shared";
 import { businessMinutesBetween } from "../../modules/dashboard/metrics.js";
 
 /**
@@ -69,7 +69,7 @@ export interface QualityMetricsResult {
 export function computeQualityMetrics(
   messages: QualityMetricsMessage[],
   evaluatedUserId: string,
-  settings: Pick<AttendanceSettings, "timezone" | "businessHours" | "responseLimitMinutes">,
+  settings: BusinessCalendar & Pick<AttendanceSettings, "responseLimitMinutes">,
 ): QualityMetricsResult {
   const ordered = [...messages].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
   let pendingInbound: Date | null = null;

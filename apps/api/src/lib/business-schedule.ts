@@ -1,4 +1,4 @@
-import type { AttendanceSettings, BusinessHours, Weekday } from "@azvchat/shared";
+import { holidayMatcher, type BusinessCalendar, type BusinessHours, type Weekday } from "@azvchat/shared";
 import {
   addCivilDays,
   civilDateIn,
@@ -18,9 +18,9 @@ import {
  * sistema inteiro, senão o follow-up respeitaria um horário e o card de
  * atraso outro.
  *
- * Feriado não é tratado aqui pelo mesmo motivo que não é tratado no
- * atraso: não existe tabela de feriados no AZVCHAT (ver `CLAUDE.md`,
- * seção 4) — dia de feriado conta como dia normal.
+ * Feriado conta como dia desligado, pela MESMA lista do atraso
+ * (`holidayMatcher`, em `@azvchat/shared`): follow-up e disparo em massa não
+ * mandam mensagem no feriado, e saem na abertura do próximo dia útil.
  */
 
 function minutesOfDay(time: string): number {
@@ -52,16 +52,17 @@ const MAX_DAYS_SCANNED = 400;
  */
 export function nextBusinessMoment(
   moment: Date,
-  settings: Pick<AttendanceSettings, "timezone" | "businessHours">,
+  settings: BusinessCalendar,
 ): Date | null {
   const days = usableDays(settings.businessHours);
   if (days.size === 0) return null;
+  const isHoliday = holidayMatcher(settings.holidays);
 
   const timeZone = safeTimeZone(settings.timezone);
   let cursor: CivilDate = civilDateIn(timeZone, moment);
 
   for (let scanned = 0; scanned < MAX_DAYS_SCANNED; scanned += 1) {
-    const config = days.get(weekdayOf(cursor));
+    const config = isHoliday(cursor) ? undefined : days.get(weekdayOf(cursor));
     if (config) {
       const opens = zonedTimeToUtc(
         timeZone,
@@ -89,7 +90,7 @@ export function nextBusinessMoment(
 /** Está dentro do expediente agora? Atalho para quem só precisa do booleano. */
 export function isWithinBusinessHours(
   moment: Date,
-  settings: Pick<AttendanceSettings, "timezone" | "businessHours">,
+  settings: BusinessCalendar,
 ): boolean {
   const resolved = nextBusinessMoment(moment, settings);
   return resolved !== null && resolved.getTime() === moment.getTime();

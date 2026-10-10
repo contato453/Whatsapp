@@ -1,3 +1,5 @@
+import { DEFAULT_HOLIDAY_SETTINGS, type HolidaySettings } from "./holidays.js";
+
 /**
  * Parâmetros de atendimento — SLA de resposta e expediente do escritório.
  *
@@ -197,7 +199,22 @@ export interface AttendanceSettings {
   loginHours: LoginHours[];
   greeting: GreetingSettings;
   outOfHours: OutOfHoursSettings;
+  /**
+   * Feriados: dias que o expediente trata como desligados, mesmo caindo num
+   * dia da semana ativo. Ver `holidays.ts`.
+   */
+  holidays: HolidaySettings;
 }
+
+/**
+ * O que toda conta de "tempo de expediente" precisa saber: fuso, semana e
+ * feriados. `holidays` é opcional só para objeto montado à mão (testes antigos,
+ * fakes) — ausente vale como "sem feriados". Quem lê do banco
+ * (`loadAttendanceSettings`) sempre traz o campo.
+ */
+export type BusinessCalendar = Pick<AttendanceSettings, "timezone" | "businessHours"> & {
+  holidays?: HolidaySettings;
+};
 
 /** Segunda a sexta das 08:00 às 18:00; sábado e domingo desligados. */
 export function defaultBusinessHoursFor(weekday: Weekday): BusinessHours {
@@ -221,6 +238,7 @@ export const DEFAULT_ATTENDANCE_SETTINGS: AttendanceSettings = {
   loginHours: DEFAULT_LOGIN_HOURS,
   greeting: DEFAULT_GREETING_SETTINGS,
   outOfHours: DEFAULT_OUT_OF_HOURS_SETTINGS,
+  holidays: DEFAULT_HOLIDAY_SETTINGS,
 };
 
 /**

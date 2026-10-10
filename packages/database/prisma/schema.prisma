@@ -1311,12 +1311,19 @@ model AttendanceSettings {
   /// resposta automática atrás da outra.
   outOfHoursCooldownMinutes Int      @default(180)
   outOfHoursInstanceId      String?
+  /// Feriados nacionais (calculados no código, inclusive os móveis) param o
+  /// relógio do atraso. Ligado por padrão: feriado nacional não é expediente.
+  nationalHolidaysEnabled   Boolean  @default(true)
+  /// Pontos facultativos nacionais (Carnaval e Corpus Christi). Desligado por
+  /// padrão: nem todo escritório fecha neles.
+  optionalHolidaysEnabled   Boolean  @default(false)
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
 
   organization       Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   businessHours      AttendanceBusinessHours[]
   loginHours         AttendanceLoginHours[]
+  holidays           AttendanceHoliday[]
   greetingInstance   WhatsAppInstance?         @relation("AttendanceGreetingInstance", fields: [greetingInstanceId], references: [id], onDelete: SetNull)
   outOfHoursInstance WhatsAppInstance?         @relation("AttendanceOutOfHoursInstance", fields: [outOfHoursInstanceId], references: [id], onDelete: SetNull)
 
@@ -1326,6 +1333,22 @@ model AttendanceSettings {
 /// Expediente de um dia da semana. Sete linhas por configuração — cada dia
 /// se liga e desliga sozinho, porque o escritório pode passar a atender
 /// sábado de manhã sem mexer nos outros dias.
+/// Feriado PRÓPRIO do escritório (estadual, municipal, recesso). Os nacionais
+/// não moram aqui: são calculados em `packages/shared/src/holidays.ts`.
+model AttendanceHoliday {
+  id         String  @id @default(uuid())
+  settingsId String
+  /// "AAAA-MM-DD" no fuso da configuração. Quando `recurring`, só mês e dia valem.
+  date       String
+  name       String
+  recurring  Boolean @default(false)
+
+  settings AttendanceSettings @relation(fields: [settingsId], references: [id], onDelete: Cascade)
+
+  @@unique([settingsId, date])
+  @@map("attendance_holidays")
+}
+
 model AttendanceBusinessHours {
   id         String  @id @default(uuid())
   settingsId String

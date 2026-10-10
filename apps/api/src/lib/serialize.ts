@@ -364,6 +364,15 @@ export function serializeAttendanceSettings(settings: AttendanceSettings) {
     })),
     greeting: settings.greeting,
     outOfHours: settings.outOfHours,
+    holidays: {
+      nationalEnabled: settings.holidays.nationalEnabled,
+      optionalEnabled: settings.holidays.optionalEnabled,
+      custom: settings.holidays.custom.map((holiday) => ({
+        date: holiday.date,
+        name: holiday.name,
+        recurring: holiday.recurring,
+      })),
+    },
   };
 }
 

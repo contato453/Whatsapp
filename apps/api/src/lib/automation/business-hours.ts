@@ -1,4 +1,4 @@
-import type { AttendanceSettings } from "@azvchat/shared";
+import { holidayMatcher, type BusinessCalendar } from "@azvchat/shared";
 import { civilDateIn, weekdayOf } from "../../modules/dashboard/metrics.js";
 import { minutesOfDay, isValidTimezone, DEFAULT_ATTENDANCE_SETTINGS } from "../attendance-settings.js";
 
@@ -10,11 +10,14 @@ import { minutesOfDay, isValidTimezone, DEFAULT_ATTENDANCE_SETTINGS } from "../a
  * `AttendanceSettings.businessHours`, no mesmo fuso.
  */
 export function isWithinBusinessHours(
-  settings: Pick<AttendanceSettings, "timezone" | "businessHours">,
+  settings: BusinessCalendar,
   now: Date,
 ): boolean {
   const timezone = isValidTimezone(settings.timezone) ? settings.timezone : DEFAULT_ATTENDANCE_SETTINGS.timezone;
   const civil = civilDateIn(timezone, now);
+  // Feriado é dia fechado: a mensagem de "fora do expediente" sai, e fluxo
+  // ou agente de IA marcado para cobrir fora do horário passa a atender.
+  if (holidayMatcher(settings.holidays)(civil)) return false;
   const weekday = weekdayOf(civil);
   const day = settings.businessHours.find((row) => row.weekday === weekday);
   if (!day || !day.active) return false;
@@ -38,18 +41,22 @@ function minutesOfDayInTimeZone(timeZone: string, now: Date): number {
 /**
  * Início da próxima janela de expediente ATIVA a partir de `now` (inclusive)
  * — usado pelo nó "Aguardar até o próximo expediente". Varre no máximo os
- * próximos 8 dias: uma semana inteira desligada é configuração de quem
+ * próximos 15 dias (feriados contam como fechados): uma semana inteira desligada é configuração de quem
  * fechou o escritório, não bug — devolve `null` nesse caso, em vez de
  * procurar um dia útil que não existe.
  */
 export function nextBusinessWindowStart(
-  settings: Pick<AttendanceSettings, "timezone" | "businessHours">,
+  settings: BusinessCalendar,
   now: Date,
 ): Date | null {
   const timezone = isValidTimezone(settings.timezone) ? settings.timezone : DEFAULT_ATTENDANCE_SETTINGS.timezone;
-  for (let offset = 0; offset < 8; offset += 1) {
+  const isHoliday = holidayMatcher(settings.holidays);
+  // 15 dias, e não 8: Natal e Ano-Novo com recesso cadastrado tiram mais de
+  // uma semana seguida, e "próximo expediente" não pode virar "nunca".
+  for (let offset = 0; offset < 15; offset += 1) {
     const candidateInstant = new Date(now.getTime() + offset * 24 * 60 * 60 * 1000);
     const civil = civilDateIn(timezone, candidateInstant);
+    if (isHoliday(civil)) continue;
     const weekday = weekdayOf(civil);
     const day = settings.businessHours.find((row) => row.weekday === weekday);
     if (!day || !day.active) continue;

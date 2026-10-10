@@ -288,8 +288,22 @@ snake_case e id `uuid`.
   chega mais cedo — o número de atraso passaria a mentir junto. Nasce desligada: ligada de
   saída, o deploy trancaria do lado de fora quem estivesse trabalhando.
 - A filha aponta para `AttendanceSettings`, e não para a organização: parâmetro por
-  departamento no futuro é só uma linha nova de settings. **Não há tabela de feriados** —
-  feriado conta como dia normal.
+  departamento no futuro é só uma linha nova de settings.
+- **Feriados** (`AttendanceSettings.nationalHolidaysEnabled`, padrão `true`;
+  `optionalHolidaysEnabled`, padrão `false`; e `AttendanceHoliday`, as datas PRÓPRIAS do
+  escritório, únicas por `(settingsId, date)`, com `recurring` para o que repete todo ano).
+  Migration `20261009120000_attendance_holidays`. Feriado é DIA FECHADO: o relógio do atraso
+  para (card "Atrasados agora" e métricas do Quality), a mensagem de fora do expediente sai,
+  e follow-up, disparo e "aguardar o próximo expediente" pulam para o próximo dia útil. **Os
+  nacionais NÃO são gravados**: saem calculados de `packages/shared/src/holidays.ts`
+  (fixos, Consciência Negra a partir de 2024 e Sexta-feira da Paixão pela Páscoa; Carnaval
+  e Corpus Christi são os pontos facultativos), senão alguém teria de semear o ano seguinte
+  todo dezembro. `holidayMatcher` é a fonte única que `businessMinutesBetween`,
+  `nextBusinessMoment`, `isWithinBusinessHours` e `nextBusinessWindowStart` consultam, e a
+  tela de Parâmetros mostra a prévia do ano com a MESMA `holidaysForYear`. **A janela de
+  LOGIN não consulta feriado**, de propósito: trancar a equipe num feriado em que alguém
+  precisou trabalhar seria pior. No `PUT /attendance-settings` o campo `holidays` é
+  OPCIONAL: ausente (aba antiga aberta) mantém o que está gravado, em vez de apagar a lista.
 - Padrões e rótulos em `packages/shared/src/attendance.ts` (`DEFAULT_ATTENDANCE_SETTINGS`,
   `WEEKDAY_LABELS`, `DASHBOARD_PERIODS`, `DEFAULT_LOGIN_HOURS`,
   `LOGIN_OUTSIDE_SCHEDULE_MESSAGE`). Eles semeiam a linha e servem de fallback quando
@@ -1716,8 +1730,9 @@ nível?" por igualdade é um lugar onde o papel novo perde acesso em silêncio (
 - Tempo de atraso conta **só dentro do expediente**, no fuso configurado
   (`modules/dashboard/metrics.ts`): mensagem que chega 17h50 de sexta volta a contar na
   abertura do próximo dia ativo, e dia desligado não acumula nada. Semana inteira desligada
-  devolve zero em vez de procurar um próximo horário útil que não existe. Feriado não é
-  tratado e conta como dia normal. Nota interna não é `Message`, então nunca conta como
+  devolve zero em vez de procurar um próximo horário útil que não existe. Feriado
+  cadastrado nos Parâmetros (nacional, facultativo ou do escritório) é dia fechado e não
+  acumula nada. Nota interna não é `Message`, então nunca conta como
   resposta ao cliente; mensagem apagada e saída ainda `pending` também não contam.
 - **A janela de login também é lida no fuso do escritório, nunca no do container.** O
   container roda em UTC: às 22:00 de Brasília lá já é o dia seguinte, e a faixa de segunda
@@ -3288,8 +3303,8 @@ retorno do cliente") e, se configurada, uma etiqueta (`finalizeTagId` — o pedi
 `lib/business-schedule.ts` (`nextBusinessMoment`) empurra o horário calculado da
 próxima etapa para a abertura do próximo dia útil quando ele cai fora do expediente
 configurado em `AttendanceSettings`/`AttendanceBusinessHours` — **a MESMA fonte que o
-dashboard usa para expediente**, nunca uma segunda definição. Feriado não é tratado,
-pelo mesmo motivo do card de atraso: não existe tabela de feriados no AZVCHAT.
+dashboard usa para expediente**, nunca uma segunda definição. Feriado cadastrado nos
+Parâmetros conta como dia fechado aqui também (`holidayMatcher`).
 
 **Cancelamento e reinício da contagem** (seções 14/16 do pedido): mensagem recebida
 cancela sempre (`client_replied`); mensagem enviada pela equipe **enquanto a etapa

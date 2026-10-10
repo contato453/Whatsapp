@@ -14,6 +14,7 @@ export * from "./azevedo-os.js";
 export * from "./dashboard-filters.js";
 export * from "./enums.js";
 export * from "./follow-up.js";
+export * from "./holidays.js";
 export * from "./inbox-filters.js";
 export * from "./internal-note.js";
 export * from "./mentions.js";

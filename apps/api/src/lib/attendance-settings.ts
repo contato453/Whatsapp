@@ -27,7 +27,7 @@ export async function loadAttendanceSettings(
 ): Promise<AttendanceSettings> {
   const row = await prisma.attendanceSettings.findUnique({
     where: { organizationId },
-    include: { businessHours: true, loginHours: true },
+    include: { businessHours: true, loginHours: true, holidays: { orderBy: { date: "asc" } } },
   });
   if (!row) return DEFAULT_ATTENDANCE_SETTINGS;
   return {
@@ -48,6 +48,15 @@ export async function loadAttendanceSettings(
       message: row.outOfHoursMessage ?? DEFAULT_ATTENDANCE_SETTINGS.outOfHours.message,
       cooldownMinutes: row.outOfHoursCooldownMinutes,
       whatsappInstanceId: row.outOfHoursInstanceId,
+    },
+    holidays: {
+      nationalEnabled: row.nationalHolidaysEnabled,
+      optionalEnabled: row.optionalHolidaysEnabled,
+      custom: row.holidays.map((holiday) => ({
+        date: holiday.date,
+        name: holiday.name,
+        recurring: holiday.recurring,
+      })),
     },
   };
 }
