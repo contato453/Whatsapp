@@ -130,6 +130,21 @@ export async function messageRoutes(app: FastifyInstance, deps: AppDeps): Promis
         error: String(err),
       });
     }
+
+    // Palavra-chave de agente de IA escrita pelo atendente. Vem DEPOIS da
+    // interrupção lá do começo: a mensagem da pessoa já tirou a IA da
+    // conversa, e a frase de ativar devolve a conversa a um agente. O motor
+    // tem fila própria e nunca lança.
+    if (actor && !conversation.archivedAt) {
+      deps.aiRuntime?.onConversationText({
+        organizationId,
+        conversationId,
+        text: message.content,
+        author: "team",
+        at: message.timestamp,
+        actor: { userId: actor.sub, userName: actor.name },
+      });
+    }
   }
 
   /**

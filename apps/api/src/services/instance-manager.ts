@@ -28,6 +28,7 @@ import { handleBroadcastInbound } from "../lib/broadcast.js";
 import type { MessageIngestService } from "./message-ingest.js";
 import type { AuditService } from "../modules/audit/service.js";
 import type { AutomationEngine } from "./automation/engine.js";
+import type { AiRuntime } from "./ai/runtime.js";
 import type { AzevedoOsClient } from "./azevedo-os-client.js";
 
 /** Intervalo entre downloads de foto para não sobrecarregar o WhatsApp. */
@@ -100,7 +101,7 @@ export class InstanceManager {
      * da publicação em tempo real: a mensagem já está no banco e na tela
      * antes de qualquer agente pensar em responder.
      */
-    private readonly aiRuntime?: { onInboundMessage(input: { organizationId: string; conversationId: string; messageId: string }): void },
+    private readonly aiRuntime?: Pick<AiRuntime, "onInboundMessage" | "onConversationText">,
     /**
      * Motor dos disparos em massa. Opcional pelo mesmo motivo do `aiRuntime`
      * (testes que sobem o instance-manager sem ele). A ingestão NÃO sabe o
@@ -324,6 +325,23 @@ export class InstanceManager {
               organizationId,
               conversationId: conversation.id,
               content: persisted.content,
+            });
+          }
+
+          // Palavra-chave de ligar/desligar agente de IA: vale para o que o
+          // CLIENTE escreve e para o que a equipe escreve do próprio celular
+          // (mensagem de saída nova que chegou por aqui). Mensagem com `origem`
+          // é do sistema (IA, fluxo, disparo, integração) e nunca conta — a IA
+          // repetindo a frase desligaria a si mesma. Entra na fila da conversa
+          // ANTES do turno do debounce, então a sessão aberta pela frase já
+          // está de pé quando o turno roda. O grupo da Maya fica de fora.
+          if (!conversation.archivedAt && !grupoDaMaya && !hasSystemOrigin(persisted.metadata)) {
+            this.aiRuntime?.onConversationText({
+              organizationId,
+              conversationId: conversation.id,
+              text: persisted.content,
+              author: persisted.direction === "inbound" ? "client" : "team",
+              at: persisted.timestamp,
             });
           }
 
@@ -1638,4 +1656,13 @@ export class InstanceManager {
     this.logger.info({ instanceId, event: "groups_synced", count: groups.length });
     void this.backfillAvatars(instanceId, organizationId);
   }
+}
+
+/** Mensagem gerada pelo sistema (IA, fluxo, disparo, integração), e não por uma pessoa. */
+function hasSystemOrigin(metadata: unknown): boolean {
+  return (
+    !!metadata &&
+    typeof metadata === "object" &&
+    typeof (metadata as { origem?: unknown }).origem === "string"
+  );
 }
