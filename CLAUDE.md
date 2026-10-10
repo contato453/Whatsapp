@@ -2805,7 +2805,7 @@ passa por `verifySession`/`authenticate`/`requireRole` — não há usuário. O 
 autenticado fica em `request.integrationToken`.
 
 **Envio** — `POST /integrations/messages` (token), corpo Zod
-`{ telefone, mensagem, idempotencyKey?, instanceId? }`:
+`{ telefone, mensagem, idempotencyKey?, instanceId?, assignedUserId?, tagId? }`:
 - **normaliza o telefone ANTES de tudo** (`normalizeBrazilPhone`, em
   `@azvchat/shared` — com ou sem 55, com ou sem pontuação; número inválido é
   **422**, grupo é **422**, nunca tenta enviar);
@@ -2826,6 +2826,18 @@ autenticado fica em `request.integrationToken`.
   atualização de prévia e os eventos `MessageNew` + `ConversationUpdated` na
   `conversationAudience()`. Sucesso devolve `{ status, messageId,
   conversationId, phone, idempotent }`;
+- **responsável e etiqueta opcionais** (`assignedUserId`, `tagId`, uuid): conferidos
+  **antes de qualquer envio** — usuário precisa ser da organização do token, ativo e com
+  acesso ao número do token (`eligibleAssigneeWhere`); etiqueta precisa ser da organização.
+  Fora disso é **400** (`responsavel_invalido` / `etiqueta_invalida`), sem dizer se o id
+  existe em outro tenant. São aplicados **logo após `ensureConversation` e antes do
+  `sendText`**, para a conversa já ter dono quando o cliente responder: a automação de IA
+  com "Só em conversa sem responsável" (`AiAutomation.onlyUnassigned`, padrão ligado) não
+  a pega. Atribuição grava histórico (`performedByUserId` nulo, nota "Atribuído pela
+  integração (<token>)"), audita `conversation.assigned`/`transferred` e interrompe sessão
+  de IA ativa; etiqueta audita `conversation.tag_added`. **Não** dispara gatilho de
+  etiqueta do motor de automações nem do CRM (de propósito). Sem os campos, nada muda. Uso
+  de origem: o pop-up "falar com humano" do site azvchat.com.br;
 - **rate limit por token** (429), `INTEGRATION_TOKEN_RATE_LIMIT_PER_MINUTE`
   (padrão 60), keyed pelo hash do bearer.
 

@@ -3,6 +3,8 @@ import { z } from "zod";
 import { RealtimeEvents, normalizeBrazilPhone } from "@azvchat/shared";
 import type { IntegrationToken } from "@azvchat/database";
 import { requireRole } from "../../lib/auth.js";
+import { assignToUserData } from "../../lib/conversation-assignment.js";
+import { eligibleAssigneeWhere } from "../../lib/default-assignee.js";
 import { AppError, NotFoundError, UnauthorizedError } from "../../lib/errors.js";
 import {
   generateIntegrationToken,
@@ -10,6 +12,7 @@ import {
 } from "../../lib/integration-token.js";
 import { serializeConversation, serializeMessage } from "../../lib/serialize.js";
 import { conversationAudience } from "../../realtime/socket.js";
+import { interruptAiSessionForHuman } from "../../services/ai/session.js";
 import { buildPreview } from "../../services/message-ingest.js";
 import type { AppDeps } from "../../types.js";
 import { serializeIntegrationToken } from "./serialize.js";
@@ -63,6 +66,13 @@ const sendBodySchema = z.object({
   // Instância é SEMPRE a do token; aceitar o campo só serve para RECUSAR uma
   // tentativa de enviar por outra (403). Enviar sem ele usa a do token.
   instanceId: z.string().uuid().optional(),
+  // Responsável e etiqueta opcionais: o sistema externo já sabe, na hora do
+  // envio, se aquele contato é para gente ou para a IA (o pop-up do site com
+  // "quero falar com humano"). Atribuir ANTES do envio é o que impede a
+  // automação de IA — que por padrão só entra em conversa sem responsável —
+  // de responder o lead que pediu humano.
+  assignedUserId: z.string().uuid().optional(),
+  tagId: z.string().uuid().optional(),
 });
 
 /**
@@ -133,6 +143,39 @@ export function registerIntegrationSendRoute(app: FastifyInstance, deps: AppDeps
         throw new AppError("A mensagem não pode ser vazia.", 422, "mensagem_vazia");
       }
 
+      // Responsável e etiqueta são conferidos ANTES de qualquer envio: id de
+      // outra organização (ou inexistente) é 400, sem dizer qual dos dois,
+      // para o token não virar sonda de ids de outro tenant. O responsável
+      // precisa, além de ser da organização do token, estar ativo e enxergar
+      // o número do token — senão a conversa iria para uma caixa que ele não
+      // abre, que é pior que "sem responsável".
+      const assignee = body.assignedUserId
+        ? await deps.prisma.user.findFirst({
+            where: eligibleAssigneeWhere({
+              userId: body.assignedUserId,
+              organizationId: token.organizationId,
+              whatsappInstanceId: token.whatsappInstanceId,
+            }),
+            select: { id: true, name: true },
+          })
+        : null;
+      if (body.assignedUserId && !assignee) {
+        throw new AppError(
+          "Responsável inválido: o usuário não existe nesta organização, está inativo ou não tem acesso ao número deste token.",
+          400,
+          "responsavel_invalido",
+        );
+      }
+      const tag = body.tagId
+        ? await deps.prisma.tag.findFirst({
+            where: { id: body.tagId, organizationId: token.organizationId },
+            select: { id: true },
+          })
+        : null;
+      if (body.tagId && !tag) {
+        throw new AppError("Etiqueta inválida: não existe nesta organização.", 400, "etiqueta_invalida");
+      }
+
       // Idempotência: chave já usada dentro da janela devolve o resultado
       // original, sem reenviar. Fora da janela, segue o envio (e a linha é
       // sobrescrita no fim).
@@ -183,7 +226,7 @@ export function registerIntegrationSendRoute(app: FastifyInstance, deps: AppDeps
       // Conversa (e contato) criados no MESMO caminho do número novo que chega
       // — sem inventar departamento nem responsável (nasce como qualquer
       // conversa de número desconhecido).
-      const conversation = await deps.ingest.ensureConversation(
+      const ensured = await deps.ingest.ensureConversation(
         {
           instanceId: instance.id,
           externalChatId: normalized.jid,
@@ -193,6 +236,17 @@ export function registerIntegrationSendRoute(app: FastifyInstance, deps: AppDeps
         },
         instance.organizationId,
       );
+
+      // Responsável e etiqueta pedidos pelo sistema externo entram ANTES do
+      // envio: se o cliente responder em um segundo, a conversa já chega com
+      // dono, e a automação de IA "só sem responsável" não a pega.
+      const conversation = await applyRequestedRouting(deps, {
+        conversation: ensured,
+        organizationId: instance.organizationId,
+        token,
+        assignee,
+        tagId: tag?.id ?? null,
+      });
 
       let sendResult: { externalMessageId: string; timestamp: Date };
       try {
@@ -302,6 +356,111 @@ export function registerIntegrationSendRoute(app: FastifyInstance, deps: AppDeps
       });
     },
   );
+}
+
+type EnsuredConversation = Awaited<ReturnType<AppDeps["ingest"]["ensureConversation"]>>;
+
+/**
+ * Atribui o responsável e aplica a etiqueta pedidos no corpo do envio.
+ * Mesmo desenho da rota manual de atribuição (histórico + auditoria +
+ * interrupção da IA), mas sem pessoa logada: `performedByUserId` nulo e a
+ * nota diz que foi a integração. Não dispara gatilho de etiqueta do motor de
+ * automações nem do CRM de propósito — a integração só envia e classifica;
+ * fluxo que conversa com o cliente não deve nascer de uma chamada de máquina.
+ */
+async function applyRequestedRouting(
+  deps: AppDeps,
+  input: {
+    conversation: EnsuredConversation;
+    organizationId: string;
+    token: IntegrationToken;
+    assignee: { id: string; name: string } | null;
+    tagId: string | null;
+  },
+): Promise<EnsuredConversation> {
+  const { conversation, organizationId, token, assignee, tagId } = input;
+  let changed = false;
+
+  if (assignee && conversation.assignedUserId !== assignee.id) {
+    const isTransfer = conversation.assignedUserId != null;
+    const leftAllUsers = conversation.assignedToAll;
+    await deps.prisma.$transaction([
+      deps.prisma.conversation.update({
+        where: { id: conversation.id },
+        data: assignToUserData(assignee.id),
+      }),
+      ...(leftAllUsers
+        ? [
+            deps.prisma.conversationAssignmentHistory.create({
+              data: {
+                organizationId,
+                conversationId: conversation.id,
+                action: "unassigned_from_all" as const,
+                performedByUserId: null,
+                // Instante anterior: as duas linhas nascem na mesma transação
+                // e o painel ordena por data (mesma razão da rota manual).
+                createdAt: new Date(Date.now() - 1),
+              },
+            }),
+          ]
+        : []),
+      deps.prisma.conversationAssignmentHistory.create({
+        data: {
+          organizationId,
+          conversationId: conversation.id,
+          action: isTransfer ? ("transferred_user" as const) : ("assigned" as const),
+          fromUserId: conversation.assignedUserId,
+          toUserId: assignee.id,
+          toDepartmentId: conversation.departmentId,
+          performedByUserId: null,
+          note: `Atribuído pela integração (${token.name})`,
+        },
+      }),
+    ]);
+    deps.audit.record({
+      organizationId,
+      userId: null,
+      action: isTransfer ? "conversation.transferred" : "conversation.assigned",
+      entityType: "Conversation",
+      entityId: conversation.id,
+      metadata: { origem: "api-integration", integrationTokenId: token.id, toUserId: assignee.id },
+    });
+    // Se a IA estava atendendo este número (o contato pediu IA antes e agora
+    // pediu gente), ela para na hora — mesma regra de quando alguém assume.
+    await interruptAiSessionForHuman(deps, {
+      organizationId,
+      conversationId: conversation.id,
+      userId: assignee.id,
+      userName: `${assignee.name} (integração ${token.name})`,
+    });
+    changed = true;
+  }
+
+  if (tagId) {
+    await deps.prisma.conversationTag.upsert({
+      where: { conversationId_tagId: { conversationId: conversation.id, tagId } },
+      update: {},
+      create: { conversationId: conversation.id, tagId },
+    });
+    deps.audit.record({
+      organizationId,
+      userId: null,
+      action: "conversation.tag_added",
+      entityType: "Conversation",
+      entityId: conversation.id,
+      metadata: { origem: "api-integration", integrationTokenId: token.id, tagId },
+    });
+    changed = true;
+  }
+
+  if (!changed) return conversation;
+  // Relê com as relações para o evento de tempo real já anunciar o dono e a
+  // etiqueta novos — a Inbox não pode mostrar "sem responsável" até o F5.
+  const fresh = await deps.prisma.conversation.findUnique({
+    where: { id: conversation.id },
+    include: { assignedUser: true, department: true, instance: true, tags: { include: { tag: true } } },
+  });
+  return (fresh as EnsuredConversation | null) ?? conversation;
 }
 
 const createTokenSchema = z.object({
