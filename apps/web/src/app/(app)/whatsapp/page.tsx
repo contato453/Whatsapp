@@ -338,174 +338,195 @@ export default function WhatsAppPage() {
         />
       ) : (
         <Card className="overflow-hidden">
-          <div className="hidden items-center gap-4 border-b border-slate-200 bg-slate-50 px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:flex">
-            <span className="min-w-0 flex-1">Instância</span>
-            <span className="w-44 shrink-0">Número</span>
-            <span className="w-44 shrink-0">Departamento</span>
-            <span className="w-52 shrink-0">Responsável padrão</span>
-            <span className="w-28 shrink-0">Backup</span>
-            <span className="w-36 shrink-0">Status</span>
-            <span className="w-44 shrink-0">Última conexão</span>
-            <span className="w-56 shrink-0 text-right">Ações</span>
-          </div>
+          {/* Linha em dois níveis, e não tabela de oito colunas: com colunas de
+              largura fixa, tela estreita (ou zoom do navegador) espremia o nome
+              até zero e número, nome e cabeçalhos passavam a se desenhar uns por
+              cima dos outros. Em cima fica quem é e como está; embaixo, o que se
+              configura — e os dois níveis quebram linha em vez de sobrepor. */}
           <ul className="divide-y divide-slate-200">
             {instances.map((instance) => {
               const statusLabel = CONNECTION_STATUS_LABELS[instance.status];
               const statusColor = CONNECTION_STATUS_COLORS[instance.status];
               return (
-                <li
-                  key={instance.id}
-                  className="flex flex-col gap-3 px-5 py-3.5 transition-colors hover:bg-slate-50 lg:flex-row lg:items-center lg:gap-4"
-                >
-                  <div className="flex min-w-0 flex-1 items-center gap-3">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-500">
-                      <Smartphone className="h-4 w-4" />
+                <li key={instance.id} className="px-5 py-4 transition-colors hover:bg-slate-50">
+                  <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
+                    <div className="flex min-w-[14rem] flex-1 items-start gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-500">
+                        <Smartphone className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start gap-1.5">
+                          {/* Quebra a linha em vez de cortar: dois chips com o
+                              mesmo começo de nome viravam reticências iguais. */}
+                          <p className="break-words font-semibold leading-snug text-slate-900">
+                            {instance.name}
+                          </p>
+                          {/* Mesma chave que a API exige no PATCH: botão que aparece é botão que funciona. */}
+                          {can("whatsapp_instance.manage") && (
+                            <button
+                              type="button"
+                              className="shrink-0 rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                              onClick={() => setRenaming({ instance, name: instance.name })}
+                              title="Renomear número"
+                              aria-label={`Renomear ${instance.name}`}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                          {instance.phoneNumber ? (
+                            <span className="whitespace-nowrap font-mono text-xs text-slate-500">
+                              {formatPhone(instance.phoneNumber)}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-slate-400">Número não vinculado</span>
+                          )}
+                          {/* Selo junto da identificação: explica por que este número
+                              não aparece nas conversas nem nos números do dashboard. */}
+                          {instance.isBackup && (
+                            <Badge className="bg-slate-200 text-slate-600">
+                              <DatabaseBackup className="h-3 w-3" /> Backup
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <p className="truncate font-semibold text-slate-900">{instance.name}</p>
-                    {/* Mesma chave que a API exige no PATCH: botão que aparece é botão que funciona. */}
-                    {can("whatsapp_instance.manage") && (
-                      <button
-                        type="button"
-                        className="shrink-0 rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
-                        onClick={() => setRenaming({ instance, name: instance.name })}
-                        title="Renomear número"
-                        aria-label={`Renomear ${instance.name}`}
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                    {/* Selo ao lado do nome: explica por que este número não
-                        aparece nas conversas nem nos números do dashboard. */}
-                    {instance.isBackup && (
-                      <Badge className="shrink-0 bg-slate-200 text-slate-600">
-                        <DatabaseBackup className="h-3 w-3" /> Backup
-                      </Badge>
-                    )}
+
+                    <div className="flex shrink-0 flex-col items-start gap-1 sm:items-end">
+                      <Badge color={statusColor}>{statusLabel}</Badge>
+                      <span className="whitespace-nowrap text-[11px] text-slate-400">
+                        {instance.lastConnectionAt
+                          ? `Última conexão ${formatDateTime(instance.lastConnectionAt)}`
+                          : "Nunca conectado"}
+                      </span>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-2">
+                      {/* Pôr no ar e tirar do ar é chave separada de editar o
+                          cadastro: desconectar derruba o atendimento daquele
+                          número para o escritório inteiro. */}
+                      {!can("whatsapp_instance.connection") ? null : instance.status === "connected" ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busy === instance.id}
+                          onClick={() => disconnect(instance)}
+                        >
+                          <Unplug className="h-3.5 w-3.5" /> Desconectar
+                        </Button>
+                      ) : instance.status === "qr_required" ? (
+                        <Button size="sm" disabled={busy === instance.id} onClick={() => connect(instance)}>
+                          <QrCode className="h-3.5 w-3.5" /> Ver QR Code
+                        </Button>
+                      ) : (
+                        <Button size="sm" disabled={busy === instance.id} onClick={() => connect(instance)}>
+                          <PlugZap className="h-3.5 w-3.5" /> Conectar
+                        </Button>
+                      )}
+                      {/* Excluir número é fixo no código: só administrador, sem
+                          chave no catálogo. */}
+                      {me?.role === "admin" && (
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          disabled={busy === instance.id}
+                          onClick={() => remove(instance)}
+                          title="Excluir número"
+                          aria-label={`Excluir ${instance.name}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="w-44 shrink-0">
-                    {instance.phoneNumber ? (
-                      <span className="font-mono text-sm text-slate-700">{formatPhone(instance.phoneNumber)}</span>
-                    ) : (
-                      <span className="text-sm text-slate-400">Não vinculado</span>
-                    )}
-                  </div>
-
-                  <div className="w-44 shrink-0">
-                    <select
-                      className="w-full max-w-[11rem] rounded-lg border border-slate-200 px-2 py-1 text-xs"
-                      value={instance.departmentId ?? ""}
-                      disabled={busy === instance.id}
-                      onChange={(event) => void changeDepartment(instance, event.target.value)}
-                      title="Departamento em que as conversas deste número entram"
-                    >
-                      <option value="">Sem departamento</option>
-                      {departments.map((department) => (
-                        <option key={department.id} value={department.id}>
-                          {department.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="flex w-52 shrink-0 items-center gap-1">
-                    <select
-                      className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-xs"
-                      value={instance.defaultAssigneeId ?? ""}
-                      disabled={busy === instance.id}
-                      onChange={(event) => void changeDefaultAssignee(instance, event.target.value)}
-                      title="Quem assume as conversas deste número que chegam sem responsável"
-                    >
-                      <option value="">Sem responsável padrão</option>
-                      {(assignees[instance.id] ?? []).map((user) => (
-                        <option key={user.id} value={user.id}>
-                          {user.name}
-                        </option>
-                      ))}
-                    </select>
-                    {instance.defaultAssigneeId && (
-                      <button
-                        type="button"
-                        className="shrink-0 rounded-lg border border-slate-200 p-1.5 text-slate-500 transition-colors hover:bg-slate-100 disabled:opacity-50"
+                  <div className="mt-3 flex flex-wrap items-end gap-x-4 gap-y-3 sm:pl-[3.25rem]">
+                    <label className="block w-full sm:w-52">
+                      <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                        Departamento
+                      </span>
+                      <select
+                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs"
+                        value={instance.departmentId ?? ""}
                         disabled={busy === instance.id}
-                        onClick={() => void applyDefaultAssignee(instance)}
-                        title="Atribuir também as conversas que já estão sem responsável"
+                        onChange={(event) => void changeDepartment(instance, event.target.value)}
+                        title="Departamento em que as conversas deste número entram"
                       >
-                        <UserCheck className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                  </div>
-
-                  <div className="flex w-28 shrink-0 items-center gap-1">
-                    {/* Marcar backup tem chave PRÓPRIA no catálogo: muda como
-                        toda conversa futura do número nasce, e por isso não
-                        anda junto de editar nome e departamento. */}
-                    {can("whatsapp_instance.backup") && (
-                    <label
-                      className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-600"
-                      title="Ligado, toda conversa nova deste número já nasce arquivada"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={instance.isBackup}
-                        disabled={busy === instance.id}
-                        onChange={() => void toggleBackup(instance)}
-                        className="h-3.5 w-3.5 accent-slate-600"
-                      />
-                      Backup
+                        <option value="">Sem departamento</option>
+                        {departments.map((department) => (
+                          <option key={department.id} value={department.id}>
+                            {department.name}
+                          </option>
+                        ))}
+                      </select>
                     </label>
-                    )}
-                    {instance.isBackup && can("whatsapp_instance.manage") && (
-                      <button
-                        type="button"
-                        className="shrink-0 rounded-lg border border-slate-200 p-1.5 text-slate-500 transition-colors hover:bg-slate-100 disabled:opacity-50"
-                        disabled={busy === instance.id}
-                        onClick={() => void archiveAllConversations(instance)}
-                        title="Arquivar todas as conversas deste número (diz quantas antes de executar)"
-                      >
-                        <Archive className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                  </div>
 
-                  <div className="w-36 shrink-0">
-                    <Badge color={statusColor}>{statusLabel}</Badge>
-                  </div>
+                    <div className="w-full sm:w-64">
+                      <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                        Responsável padrão
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <select
+                          className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs"
+                          value={instance.defaultAssigneeId ?? ""}
+                          disabled={busy === instance.id}
+                          onChange={(event) => void changeDefaultAssignee(instance, event.target.value)}
+                          title="Quem assume as conversas deste número que chegam sem responsável"
+                          aria-label="Responsável padrão"
+                        >
+                          <option value="">Sem responsável padrão</option>
+                          {(assignees[instance.id] ?? []).map((user) => (
+                            <option key={user.id} value={user.id}>
+                              {user.name}
+                            </option>
+                          ))}
+                        </select>
+                        {instance.defaultAssigneeId && (
+                          <button
+                            type="button"
+                            className="shrink-0 rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 transition-colors hover:bg-slate-100 disabled:opacity-50"
+                            disabled={busy === instance.id}
+                            onClick={() => void applyDefaultAssignee(instance)}
+                            title="Atribuir também as conversas que já estão sem responsável"
+                          >
+                            <UserCheck className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
 
-                  <div className="w-44 shrink-0 text-xs text-slate-400">
-                    <span className="lg:hidden">Última conexão: </span>
-                    {instance.lastConnectionAt ? formatDateTime(instance.lastConnectionAt) : "nunca"}
-                  </div>
-
-                  <div className="flex w-56 shrink-0 flex-wrap gap-2 lg:justify-end">
-                    {/* Pôr no ar e tirar do ar é chave separada de editar o
-                        cadastro: desconectar derruba o atendimento daquele
-                        número para o escritório inteiro. */}
-                    {!can("whatsapp_instance.connection") ? null : instance.status === "connected" ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={busy === instance.id}
-                        onClick={() => disconnect(instance)}
-                      >
-                        <Unplug className="h-3.5 w-3.5" /> Desconectar
-                      </Button>
-                    ) : instance.status === "qr_required" ? (
-                      <Button size="sm" disabled={busy === instance.id} onClick={() => connect(instance)}>
-                        <QrCode className="h-3.5 w-3.5" /> Ver QR Code
-                      </Button>
-                    ) : (
-                      <Button size="sm" disabled={busy === instance.id} onClick={() => connect(instance)}>
-                        <PlugZap className="h-3.5 w-3.5" /> Conectar
-                      </Button>
-                    )}
-                    {/* Excluir número é fixo no código: só administrador, sem
-                        chave no catálogo. */}
-                    {me?.role === "admin" && (
-                      <Button size="sm" variant="danger" disabled={busy === instance.id} onClick={() => remove(instance)}>
-                        <Trash2 className="h-3.5 w-3.5" /> Excluir
-                      </Button>
-                    )}
+                    <div className="flex items-center gap-1 pb-1">
+                      {/* Marcar backup tem chave PRÓPRIA no catálogo: muda como
+                          toda conversa futura do número nasce, e por isso não
+                          anda junto de editar nome e departamento. */}
+                      {can("whatsapp_instance.backup") && (
+                        <label
+                          className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-600"
+                          title="Ligado, toda conversa nova deste número já nasce arquivada"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={instance.isBackup}
+                            disabled={busy === instance.id}
+                            onChange={() => void toggleBackup(instance)}
+                            className="h-3.5 w-3.5 accent-slate-600"
+                          />
+                          Número de backup
+                        </label>
+                      )}
+                      {instance.isBackup && can("whatsapp_instance.manage") && (
+                        <button
+                          type="button"
+                          className="shrink-0 rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 transition-colors hover:bg-slate-100 disabled:opacity-50"
+                          disabled={busy === instance.id}
+                          onClick={() => void archiveAllConversations(instance)}
+                          title="Arquivar todas as conversas deste número (diz quantas antes de executar)"
+                        >
+                          <Archive className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </li>
               );
