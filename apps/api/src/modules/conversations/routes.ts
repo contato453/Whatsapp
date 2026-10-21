@@ -762,6 +762,13 @@ export async function conversationRoutes(app: FastifyInstance, deps: AppDeps): P
   app.post("/conversations/:id/avatar/refresh", { preHandler: authenticate }, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const conversation = await findConversationOr404(id, request.user);
+    // Em grupo, o botão também busca os PARTICIPANTES de novo. Sem isto, grupo
+    // que nunca foi sincronizado (o caso de todo grupo novo no AstraCalls)
+    // não tinha como sair do "participantes ainda não sincronizados", e o
+    // aviso do "@" mandava a pessoa apertar um botão que não fazia nada.
+    if (conversation.type === "group") {
+      await deps.instanceManager.refreshGroups(conversation.whatsappInstanceId);
+    }
     const group = await deps.prisma.whatsAppGroup.findFirst({
       where: { conversationId: id, organizationId: request.user.organizationId },
       select: { id: true },

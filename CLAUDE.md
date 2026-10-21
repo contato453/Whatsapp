@@ -963,6 +963,24 @@ Controllers, services, banco e frontend consomem **só** a interface `WhatsAppPr
   áudio chegar como indisponível no celular do cliente. Conhecimento sobre formato aceito
   mora aqui em `packages/whatsapp`, junto com o Baileys, e a API o consome pelas funções
   exportadas: nada fora do pacote precisa saber o que o WhatsApp aceita.
+- **GRUPO SÓ GANHA PARTICIPANTES PELO `groups-sync`, E O ASTRACALLS NÃO O MANDA SOZINHO.**
+  O painel e o "@" leem `WhatsAppGroup` + `GroupParticipant`, que só o `syncGroups` do
+  instance-manager escreve. O Baileys emite `groups-sync` ao conectar e a cada mudança de
+  grupo; o provider do AstraCalls não emitia nunca, e todo grupo criado depois da troca
+  de provider (outubro de 2026, relato da Daniela no Comercial) virava só conversa:
+  "... participantes" no cabeçalho e "participantes ainda não sincronizados" no "@",
+  enquanto os grupos da época do Baileys seguiam funcionando — o que escondia a causa.
+  Hoje são quatro gatilhos, todos chegando ao mesmo `syncGroups`: (1) o AstraCalls
+  sincroniza ao CONECTAR; (2) o webhook `group_participants` relê a lista (antes era
+  descartado); (3) mensagem de grupo SEM registro pede a sincronização
+  (`ensureGroupKnown`); (4) o botão de atualizar do painel busca os participantes em
+  grupo, e não só as fotos. Cada sincronização lê TODOS os grupos do número, por isso
+  os pedidos são COALESCIDOS (uma execução mais um reforço, em
+  `services/group-sync.ts` e no próprio provider) e grupo desconhecido que a busca não
+  trouxe só é procurado de novo depois de 10 min. O `syncGroups` emite
+  `group:participants` para o grupo novo ou cujo total mudou, e a conversa aberta
+  recarrega sozinha. Limitação herdada: quem SAIU do grupo continua na lista, porque o
+  `syncGroups` nunca removeu participante.
 - `apps/api/src/services/instance-manager.ts` orquestra provider ⇄ banco ⇄ socket
   (registro de instância, sync de chats/grupos/contatos, fotos, reconexão com backoff,
   `resumeSessions` no boot).
