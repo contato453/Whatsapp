@@ -139,8 +139,8 @@ export function MentionPicker({
       </p>
       {!hasParticipants && (
         <p className="px-3 py-2 text-xs text-slate-500">
-          Participantes ainda não sincronizados. Use o botão de atualizar do painel de
-          contexto, ao lado, e tente de novo.
+          Participantes ainda não sincronizados. Use o botão de atualizar (no topo do
+          painel ao lado) para buscá-los agora e tente de novo.
         </p>
       )}
       {hasParticipants && options.length === 0 && (

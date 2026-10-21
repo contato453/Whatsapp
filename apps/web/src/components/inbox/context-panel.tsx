@@ -350,7 +350,11 @@ export function ContextPanel({
             <p className="text-xs text-slate-400">via {conversation.instanceName ?? "—"}</p>
           </div>
           <button
-            title="Atualizar fotos (conversa e participantes)"
+            title={
+              conversation.type === "group"
+                ? "Atualizar participantes e fotos do grupo"
+                : "Atualizar foto da conversa"
+            }
             disabled={busy}
             onClick={() =>
               run(async () => {

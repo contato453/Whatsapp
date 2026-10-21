@@ -29,6 +29,7 @@ import type { MessageIngestService } from "./message-ingest.js";
 import type { AuditService } from "../modules/audit/service.js";
 import type { AutomationEngine } from "./automation/engine.js";
 import type { AzevedoOsClient } from "./azevedo-os-client.js";
+import { GroupSyncCoordinator } from "./group-sync.js";
 
 /** Intervalo entre downloads de foto para não sobrecarregar o WhatsApp. */
 const AVATAR_FETCH_DELAY_MS = 300;
@@ -75,6 +76,14 @@ const PARTICIPANT_AVATAR_TTL_MS = 7 * 24 * 60 * 60 * 1000;
  */
 export class InstanceManager {
   private readonly orgByInstance = new Map<string, string>();
+  /**
+   * Sincronização de grupos pedida daqui (ver `services/group-sync.ts`): o
+   * provider do AstraCalls não manda grupo nenhum sozinho, e sem isto grupo
+   * criado depois da troca de provider ficava sem participantes e sem "@".
+   */
+  private readonly groupSync = new GroupSyncCoordinator((instanceId) =>
+    this.withOrg(instanceId, (organizationId) => this.fetchAndSyncGroups(instanceId, organizationId)),
+  );
   /** Conversas sem foto disponível — evita repetir download a cada evento. */
   private readonly avatarsUnavailable = new Set<string>();
   private avatarSyncRunning = false;
@@ -190,6 +199,9 @@ export class InstanceManager {
               message.senderName,
               message.senderPhone,
             );
+          }
+          if (message.chatType === "group") {
+            void this.ensureGroupKnown(message.instanceId, message.externalChatId);
           }
           // Mensagem que já existia e voltou com texto diferente: é a edição
           // que o reenvio do servidor revelou. Publica a atualização, e não
@@ -1552,12 +1564,68 @@ export class InstanceManager {
     this.logger.info({ instanceId, event: "contacts_synced", count: contacts.length });
   }
 
+  /**
+   * Grupo que manda mensagem e ainda não tem registro (criado agora, ou depois
+   * que o número passou a rodar num provider que não sincroniza sozinho):
+   * busca os grupos do número. Sem isto a conversa existe, mas o painel não
+   * mostra quem está nela e o "@" não tem ninguém para marcar.
+   */
+  private async ensureGroupKnown(instanceId: string, externalChatId: string): Promise<void> {
+    try {
+      const known = await this.prisma.whatsAppGroup.findUnique({
+        where: { whatsappInstanceId_externalId: { whatsappInstanceId: instanceId, externalId: externalChatId } },
+        select: { id: true },
+      });
+      if (known) return;
+      const pending = this.groupSync.requestForMissingGroup(instanceId, externalChatId);
+      if (pending) {
+        this.logger.info({ instanceId, event: "group_unknown_sync_requested" });
+        await pending;
+      }
+    } catch (err) {
+      this.logger.warn({ instanceId, event: "group_unknown_check_failed", error: String(err) });
+    }
+  }
+
+  /**
+   * Sincroniza agora os grupos do número (botão de atualizar do painel).
+   * Espera terminar: quem chama quer ler o resultado logo em seguida.
+   */
+  async refreshGroups(instanceId: string): Promise<void> {
+    await this.groupSync.request(instanceId);
+  }
+
+  private async fetchAndSyncGroups(instanceId: string, organizationId: string): Promise<void> {
+    try {
+      const groups = await this.provider.getGroups(instanceId);
+      if (groups.length === 0) {
+        this.logger.info({ instanceId, event: "groups_sync_empty" });
+        return;
+      }
+      await this.syncGroups(instanceId, organizationId, groups);
+    } catch (err) {
+      this.logger.warn({ instanceId, event: "groups_sync_failed", error: String(err) });
+    }
+  }
+
   private async syncGroups(
     instanceId: string,
     organizationId: string,
     groups: ProviderGroup[],
   ): Promise<void> {
     const { departmentId, isBackup } = await this.instanceDefaults(instanceId);
+    // O que já existia, para avisar a tela só do que mudou: grupo que acabou
+    // de ganhar registro, ou cujo número de participantes mudou. Sem o aviso,
+    // a conversa aberta continuaria dizendo "participantes ainda não
+    // sincronizados" até alguém recarregar a página.
+    const before = new Map(
+      (
+        await this.prisma.whatsAppGroup.findMany({
+          where: { whatsappInstanceId: instanceId },
+          select: { externalId: true, participantCount: true },
+        })
+      ).map((group) => [group.externalId, group.participantCount]),
+    );
     for (const group of groups) {
       // Grupo é entidade de primeira classe: garante conversa + registro do grupo.
       const conversation = await this.prisma.conversation.upsert({
@@ -1633,6 +1701,12 @@ export class InstanceManager {
             isSuperAdmin: participant.isSuperAdmin,
           },
         });
+      }
+
+      if (before.get(group.externalId) !== group.participantCount) {
+        this.io
+          .to(conversationAudience(organizationId, conversation))
+          .emit(RealtimeEvents.GroupParticipants, { conversationId: conversation.id });
       }
     }
     this.logger.info({ instanceId, event: "groups_synced", count: groups.length });

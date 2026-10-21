@@ -110,6 +110,16 @@ export class AstraCallsProvider implements WhatsAppProvider {
    * atendeu).
    */
   private readonly endedByUs = new Set<string>();
+  /**
+   * Sincronização de grupos em andamento (e pedido de reforço) por instância.
+   * O Baileys manda os grupos sozinho; o AstraCalls não, e sem isto nenhum
+   * grupo criado depois da troca de provider ganhava participantes no
+   * AZVCHAT. Cada sincronização busca TODOS os grupos do número, então
+   * pedidos em rajada (vários avisos de entrada/saída seguidos) viram uma
+   * execução mais, no máximo, um reforço.
+   */
+  private readonly groupSyncRunning = new Set<string>();
+  private readonly groupSyncPending = new Set<string>();
 
   constructor(options: AstraCallsProviderOptions) {
     this.logger = options.logger ?? pino({ level: process.env.LOG_LEVEL ?? "info" });
@@ -163,6 +173,32 @@ export class AstraCallsProvider implements WhatsAppProvider {
     state.status = status;
     this.logger.info({ instanceId, event: "instance_status", status, reason });
     this.emit("status", { instanceId, status, reason, phoneNumber: state.phoneNumber });
+    // Conectou: traz os grupos, como o Baileys faz ao abrir a sessão. É o que
+    // cobre os grupos criados enquanto a API estava fora do ar.
+    if (status === "connected") this.requestGroupSync(instanceId);
+  }
+
+  /** Pede a sincronização dos grupos da instância; nunca lança. */
+  private requestGroupSync(instanceId: string): void {
+    if (this.groupSyncRunning.has(instanceId)) {
+      this.groupSyncPending.add(instanceId);
+      return;
+    }
+    this.groupSyncRunning.add(instanceId);
+    void (async () => {
+      try {
+        do {
+          this.groupSyncPending.delete(instanceId);
+          const groups = await this.getGroups(instanceId).catch((err: unknown) => {
+            this.logger.warn({ instanceId, event: "astracalls_groups_sync_failed", error: String(err) });
+            return [];
+          });
+          if (groups.length > 0) this.emit("groups-sync", { instanceId, groups });
+        } while (this.groupSyncPending.has(instanceId));
+      } finally {
+        this.groupSyncRunning.delete(instanceId);
+      }
+    })();
   }
 
   private mapSessionState(state: string | undefined): ConnectionStatus {
@@ -552,7 +588,10 @@ export class AstraCallsProvider implements WhatsAppProvider {
 
   async getGroups(instanceId: string): Promise<ProviderGroup[]> {
     const sid = await this.requireSid(instanceId);
-    const groups = await this.client.getGroups(sid).catch(() => []);
+    // Falha aqui SOBE: quem chama decide (a sincronização loga e segue).
+    // Engolir devolvia lista vazia, e "grupo sem participantes" ficava
+    // indistinguível de "o AstraCalls caiu".
+    const groups = await this.client.getGroups(sid);
     return groups
       .map((g): ProviderGroup | null => {
         const externalId = g.jid ?? g.id;
@@ -730,8 +769,12 @@ export class AstraCallsProvider implements WhatsAppProvider {
           return;
         }
         case "group_participants": {
-          // TODO: traduzir para atualização de participantes (entrou/saiu/admin).
-          this.logger.debug({ instanceId, event: "astracalls_group_participants" });
+          // Alguém entrou, saiu ou virou admin: relê os grupos do número.
+          // O payload não é traduzido participante a participante de
+          // propósito — a lista do /groups é a fonte já normalizada, e uma
+          // segunda leitura do mesmo dado divergiria dela.
+          this.logger.info({ instanceId, event: "astracalls_group_participants" });
+          this.requestGroupSync(instanceId);
           return;
         }
         default:
