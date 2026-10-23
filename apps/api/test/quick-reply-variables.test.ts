@@ -191,6 +191,26 @@ describe("resolução", () => {
       ).text,
     ).toBe("12/2025");
   });
+
+  it("a competência posterior é o mês seguinte, e vira janeiro em dezembro", () => {
+    expect(
+      resolveQuickReplyTemplate("{{data.competencia_posterior}}", contexto()).text,
+    ).toBe("04/2026");
+    expect(
+      resolveQuickReplyTemplate(
+        "{{data.competencia_posterior}}",
+        contexto({ now: new Date(2026, 11, 15) }),
+      ).text,
+    ).toBe("01/2027");
+    // Dia 31 de janeiro mais um mês "estoura" fevereiro e cai em março se a
+    // conta for feita na data inteira; a competência é do mês, não do dia.
+    expect(
+      resolveQuickReplyTemplate(
+        "{{data.competencia_posterior}}",
+        contexto({ now: new Date(2026, 0, 31) }),
+      ).text,
+    ).toBe("02/2026");
+  });
 });
 
 describe("validação do cadastro", () => {
@@ -223,6 +243,16 @@ describe("marcador escrito à mão", () => {
     expect(achados).toHaveLength(1);
     expect(achados[0]?.raw).toBe("[nome do cliente]");
     expect(achados[0]?.suggestion?.name).toBe("conversa.nome");
+  });
+
+  it("marcador de competência anterior ou seguinte sugere a variável do mês certo", () => {
+    const sugestao = (texto: string) => detectManualPlaceholders(texto)[0]?.suggestion?.name;
+    expect(sugestao("Referente à [competência seguinte].")).toBe("data.competencia_posterior");
+    expect(sugestao("Documentos do [próximo mês].")).toBe("data.competencia_posterior");
+    expect(sugestao("Fechamento da [competência anterior].")).toBe("data.competencia_anterior");
+    expect(sugestao("Fechamento do [mês passado].")).toBe("data.competencia_anterior");
+    expect(sugestao("Competência [mês].")).toBe("data.competencia");
+    expect(sugestao("Olá [nome do próximo cliente].")).toBe("conversa.nome");
   });
 
   it("texto sem colchete não gera aviso nenhum", () => {
