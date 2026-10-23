@@ -299,6 +299,21 @@ export const QUICK_REPLY_VARIABLES: readonly QuickReplyVariable[] = [
         : `${pad2(mes)}/${now.getFullYear()}`;
     },
   },
+  {
+    name: "data.competencia_posterior",
+    label: "Competência posterior",
+    description: "Mês seguinte no formato MM/AAAA — a próxima competência.",
+    group: "data",
+    example: "04/2026",
+    // Conta só com mês e ano, nunca somando um mês à data inteira: em 31 de
+    // janeiro isso pularia fevereiro e a mensagem sairia com 03.
+    resolve: ({ now }) => {
+      const mes = now.getMonth();
+      return mes === 11
+        ? `01/${now.getFullYear() + 1}`
+        : `${pad2(mes + 2)}/${now.getFullYear()}`;
+    },
+  },
 ];
 
 const VARIABLES_BY_NAME = new Map(
@@ -463,6 +478,29 @@ const MANUAL_SUGGESTIONS: { keywords: string[]; variable: string }[] = [
   { keywords: ["folha"], variable: "empresa.folha_pagamento" },
   { keywords: ["situacao", "situação"], variable: "empresa.situacao" },
   { keywords: ["numero da empresa", "número da empresa", "cod", "código"], variable: "empresa.numero" },
+  // Anterior e seguinte antes da genérica: "[competência seguinte]" também
+  // contém "competência", e a primeira regra que casa é a que vale. Sempre
+  // a expressão inteira, nunca "seguinte" ou "próximo" sozinhos, senão
+  // "[nome do próximo cliente]" viraria sugestão de competência.
+  {
+    keywords: [
+      "competencia seguinte", "competência seguinte",
+      "competencia posterior", "competência posterior",
+      "proxima competencia", "próxima competência",
+      "mes seguinte", "mês seguinte",
+      "proximo mes", "próximo mês",
+      "mes que vem", "mês que vem",
+    ],
+    variable: "data.competencia_posterior",
+  },
+  {
+    keywords: [
+      "competencia anterior", "competência anterior",
+      "mes anterior", "mês anterior",
+      "mes passado", "mês passado",
+    ],
+    variable: "data.competencia_anterior",
+  },
   { keywords: ["competencia", "competência", "mes", "mês"], variable: "data.competencia" },
   { keywords: ["data", "hoje"], variable: "data.hoje" },
   { keywords: ["telefone", "fone", "whatsapp"], variable: "conversa.telefone" },

@@ -1346,7 +1346,7 @@ menu com ele, a API valida o texto com ele (`unknownQuickReplyVariables`, no Zod
 | Empresa (do Azevedo-OS) | `empresa.razao_social`, `empresa.nome_fantasia`, `empresa.numero`, `empresa.cnpj`, `empresa.situacao`, `empresa.regime_tributario`, `empresa.folha_pagamento` |
 | Conversa | `conversa.nome` (`customTitle` vence `title`), `conversa.telefone`, `conversa.departamento`, `conversa.responsavel` |
 | Atendente | `atendente.primeiro_nome` |
-| Data (calculadas) | `data.hoje` (DD/MM/AAAA), `data.competencia` (MM/AAAA do mês corrente), `data.competencia_anterior` |
+| Data (calculadas) | `data.hoje` (DD/MM/AAAA), `data.competencia` (MM/AAAA do mês corrente), `data.competencia_anterior`, `data.competencia_posterior` (mês seguinte) |
 
 Variável nova entra no catálogo com nome técnico, rótulo, descrição, grupo, exemplo (para
 a pré-visualização do cadastro) e a função que resolve — os três consumidores passam a
