@@ -1,6 +1,11 @@
 import { z } from "zod";
 import type { Logger } from "pino";
-import type { AzevedoOsCompany, AzevedoOsContact } from "@azvchat/shared";
+import type {
+  AzevedoOsCompany,
+  AzevedoOsContact,
+  AzevedoOsRequestLink,
+  AzevedoOsRequestLinkType,
+} from "@azvchat/shared";
 import { AppError } from "../lib/errors.js";
 
 /**
@@ -130,6 +135,13 @@ const FIELD_ALIASES = {
   taxRegime: ["taxRegime", "tax_regime", "regimeTributario", "regime_tributario"],
   payrollInfo: ["payrollInfo", "payroll_info", "folhaPagamento", "folha_pagamento"],
   contacts: ["contacts", "contatos"],
+  requestLinks: ["requestLinks", "request_links", "linksDeSolicitacao", "links_de_solicitacao"],
+} as const;
+
+const REQUEST_LINK_ALIASES = {
+  type: ["type", "slug", "tipo"],
+  label: ["label", "name", "nome"],
+  url: ["url", "link"],
 } as const;
 
 const CONTACT_ALIASES = {
@@ -163,6 +175,64 @@ function readContacts(raw: Record<string, unknown>): AzevedoOsContact[] {
       }))
       // Contato sem nome não diz nada a quem atende e ainda ocupa uma linha.
       .filter((contact) => contact.name.length > 0);
+  }
+  return [];
+}
+
+/** Mesmo formato do slug de página do Azevedo-OS (ver `requestLinkTypeFromVariable`). */
+const REQUEST_LINK_TYPE = /^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/;
+
+/**
+ * Só endereço http(s) passa. A URL vai parar no texto que o cliente recebe e
+ * num link clicável da Inbox, e o contrato externo é lido com tolerância: um
+ * `javascript:` ou um texto qualquer no lugar da URL não pode atravessar só
+ * porque veio no campo certo.
+ */
+function readHttpUrl(raw: Record<string, unknown>): string | null {
+  const value = readText(raw, REQUEST_LINK_ALIASES.url);
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Tipo e rótulo de um link (ou de um tipo do catálogo). Slug fora do formato é
+ * descartado em vez de virar variável que ninguém consegue escrever. O rótulo
+ * cai no slug quando o Azevedo-OS não manda o dele.
+ */
+function readRequestLinkType(item: Record<string, unknown>): AzevedoOsRequestLinkType | null {
+  const type = readText(item, REQUEST_LINK_ALIASES.type)?.toLowerCase() ?? null;
+  if (!type || !REQUEST_LINK_TYPE.test(type)) return null;
+  return { type, label: readText(item, REQUEST_LINK_ALIASES.label) ?? type };
+}
+
+function readRequestLinks(raw: Record<string, unknown>): AzevedoOsRequestLink[] {
+  for (const key of FIELD_ALIASES.requestLinks) {
+    const value = raw[key];
+    if (!Array.isArray(value)) continue;
+    const vistos = new Set<string>();
+    const links: AzevedoOsRequestLink[] = [];
+    for (const item of value) {
+      if (typeof item !== "object" || item === null) continue;
+      const record = item as Record<string, unknown>;
+      // Link marcado com status diferente de ativo não vira variável: o
+      // contrato manda só os vivos, e isto é a rede de proteção para o dia
+      // em que ele passar a mandar todos com o estado ao lado.
+      const status = readText(record, ["status", "situacao"]);
+      if (status && !["active", "ativo"].includes(status.toLowerCase())) continue;
+      const tipo = readRequestLinkType(record);
+      const url = readHttpUrl(record);
+      // Um link vivo por tipo e empresa é regra de lá; se vier repetido, o
+      // primeiro vence, para a variável nunca trocar de link entre leituras.
+      if (!tipo || !url || vistos.has(tipo.type)) continue;
+      vistos.add(tipo.type);
+      links.push({ ...tipo, url });
+    }
+    return links;
   }
   return [];
 }
@@ -272,8 +342,16 @@ export function normalizeCompany(raw: RawCompany): AzevedoOsCompany {
     taxRegime: readText(record, FIELD_ALIASES.taxRegime),
     payrollInfo: readText(record, FIELD_ALIASES.payrollInfo),
     contacts: readContacts(record),
+    requestLinks: readRequestLinks(record),
   };
 }
+
+/** A lista de tipos aceita as mesmas três formas da lista de empresas. */
+const rawRequestLinkTypesSchema = z.union([
+  z.array(z.unknown()),
+  z.object({ data: z.array(z.unknown()) }),
+  z.object({ types: z.array(z.unknown()) }),
+]);
 
 export interface AzevedoOsClient {
   /** Falso quando falta URL ou token: a tela avisa em vez de tentar. */
@@ -292,6 +370,8 @@ export interface AzevedoOsClient {
   companyFacets(): Promise<AzevedoOsCompanyFacets>;
   /** Ids das empresas que batem com o critério — só os ids. */
   companyIds(criteria: AzevedoOsCompanyCriteria): Promise<AzevedoOsCompanyIds>;
+  /** Tipos de link de solicitação que uma empresa pode ter (catálogo, sem URL). */
+  requestLinkTypes(): Promise<AzevedoOsRequestLinkType[]>;
   /** Endereço da empresa no Azevedo-OS; `null` quando não configurado. */
   companyWebUrl(id: string): string | null;
 }
@@ -439,6 +519,29 @@ export function createAzevedoOsClient(options: AzevedoOsClientOptions): AzevedoO
       if (Array.isArray(parsed.data)) return { ids: parsed.data, truncated: false };
       const ids = "data" in parsed.data ? parsed.data.data : parsed.data.ids;
       return { ids, truncated: parsed.data.truncated === true };
+    },
+
+    async requestLinkTypes() {
+      const payload = await call("/request-link-types");
+      const parsed = rawRequestLinkTypesSchema.safeParse(payload);
+      if (!parsed.success) {
+        logger.warn({ event: "azevedo_os_unexpected_payload", path: "/request-link-types" });
+        throw new AzevedoOsError("invalid_response");
+      }
+      const list = Array.isArray(parsed.data)
+        ? parsed.data
+        : "data" in parsed.data
+          ? parsed.data.data
+          : parsed.data.types;
+      markSuccess();
+      const vistos = new Set<string>();
+      return list.flatMap((item) => {
+        if (typeof item !== "object" || item === null) return [];
+        const tipo = readRequestLinkType(item as Record<string, unknown>);
+        if (!tipo || vistos.has(tipo.type)) return [];
+        vistos.add(tipo.type);
+        return [tipo];
+      });
     },
 
     companyWebUrl(id) {

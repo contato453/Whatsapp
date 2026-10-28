@@ -122,6 +122,31 @@ export async function integrationRoutes(app: FastifyInstance, deps: AppDeps): Pr
   );
 
   /**
+   * Tipos de link de solicitação, para o menu de variáveis do cadastro de
+   * resposta rápida (`{{empresa.link.<tipo>}}`). Mesmo desenho da rota de
+   * facetas, pelo mesmo motivo: não parte de conversa porque não devolve
+   * empresa nem link nenhum — só o catálogo de tipos, com o nome escrito lá —,
+   * e nunca vira erro HTTP, porque o cadastro precisa abrir com o portal
+   * fora do ar. `types: null` com `unavailable: false` é integração desligada
+   * (o menu não desenha o bloco); com `unavailable: true`, portal mudo (o menu
+   * avisa, e quem já sabe o nome ainda pode digitar a variável).
+   */
+  app.get(
+    "/integrations/azevedo-os/request-link-types",
+    { preHandler: authenticate },
+    async () => {
+      if (!deps.azevedoOs.enabled) return { types: null, unavailable: false };
+      try {
+        const types = await deps.azevedoOs.requestLinkTypes();
+        return { types: types.map((t) => ({ type: t.type, label: t.label })), unavailable: false };
+      } catch (err) {
+        if (!(err instanceof AzevedoOsError)) throw err;
+        return { types: null, unavailable: true };
+      }
+    },
+  );
+
+  /**
    * Verificação de saúde da integração — só admin. Diferente das rotas
    * acima, esta FAZ uma consulta ao vivo quando a integração está
    * configurada (o mesmo endpoint dos seletores da Inbox, que não depende

@@ -76,6 +76,14 @@ export function serializeAzevedoOsCompany(
       phone: contact.phone,
       email: contact.email,
     })),
+    // A URL é o próprio link que o cliente abre sem login: sai para quem já
+    // enxerga a conversa (é para mandar a ele), e para mais ninguém — esta
+    // função só é chamada por rota que validou o acesso à conversa.
+    requestLinks: company.requestLinks.map((link) => ({
+      type: link.type,
+      label: link.label,
+      url: link.url,
+    })),
     webUrl,
   };
 }

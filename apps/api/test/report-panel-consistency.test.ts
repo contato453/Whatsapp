@@ -339,6 +339,7 @@ async function buildApp(): Promise<FastifyInstance> {
         payroll: { options: [], noneCount: 0 },
       }),
       companyIds: async () => ({ ids: [], truncated: false }),
+      requestLinkTypes: async () => [],
       companyWebUrl: () => null,
     } as AzevedoOsClient,
     logger: { warn: () => undefined, info: () => undefined },

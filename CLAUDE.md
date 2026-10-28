@@ -528,6 +528,10 @@ GET    /integrations/azevedo-os/company-facets
        (agent+; opções dos dois seletores, com o rótulo escrito no Azevedo-OS.
         Nunca devolve erro: `facets: null` com `unavailable: false` é
         integração desligada e com `true` é portal mudo)
+GET    /integrations/azevedo-os/request-link-types
+       (agent+; tipos de link de solicitação para o menu de variáveis da
+        resposta rápida — só tipo e rótulo, sem URL nem empresa. Mesmo
+        contrato da de facetas: `types: null` + `unavailable`)
 POST   /conversations/:id/archive         POST /conversations/:id/unarchive
        (papel mínimo agent, o mesmo de status/atribuição; audita e emite
         conversation:updated — não há contador de conversa para zerar, a
@@ -1344,6 +1348,7 @@ menu com ele, a API valida o texto com ele (`unknownQuickReplyVariables`, no Zod
 | Grupo | Variáveis |
 | --- | --- |
 | Empresa (do Azevedo-OS) | `empresa.razao_social`, `empresa.nome_fantasia`, `empresa.numero`, `empresa.cnpj`, `empresa.situacao`, `empresa.regime_tributario`, `empresa.folha_pagamento` |
+| Links de solicitação (do Azevedo-OS) | `empresa.link.<tipo>` — uma por tipo de link (`empresa.link.nota-fiscal`, `empresa.link.admissao`...) |
 | Conversa | `conversa.nome` (`customTitle` vence `title`), `conversa.telefone`, `conversa.departamento`, `conversa.responsavel` |
 | Atendente | `atendente.primeiro_nome` |
 | Data (calculadas) | `data.hoje` (DD/MM/AAAA), `data.competencia` (MM/AAAA do mês corrente), `data.competencia_anterior`, `data.competencia_posterior` (mês seguinte) |
@@ -1351,6 +1356,20 @@ menu com ele, a API valida o texto com ele (`unknownQuickReplyVariables`, no Zod
 Variável nova entra no catálogo com nome técnico, rótulo, descrição, grupo, exemplo (para
 a pré-visualização do cadastro) e a função que resolve — os três consumidores passam a
 conhecê-la sozinhos. **Dado financeiro nunca entra**: ver a seção 13.
+
+**`{{empresa.link.<tipo>}}` é a única FAMÍLIA do catálogo** (`requestLinkVariable`, no
+mesmo arquivo): o link de solicitação daquele tipo, da empresa vinculada — o da aba "Links
+de Solicitações" da ficha dela no Azevedo-OS, que o cliente abre e preenche sem login.
+`<tipo>` é o slug da página lá (`nota-fiscal`). Família, e não uma variável por tipo na
+lista fixa, porque o catálogo de tipos é editado no Azevedo-OS sem avisar ninguém: lista
+escrita aqui seria a segunda que diverge. Por isso QUALQUER slug bem formado passa na
+validação do cadastro (como o `{{campo.<coluna>}}` dos disparos), e o menu pergunta os
+tipos ao Azevedo-OS na hora (`GET /integrations/azevedo-os/request-link-types`). Validar o
+slug contra o catálogo de lá no salvamento seria pior: com o portal fora do ar, ninguém
+salvaria resposta que cita link. Slug errado não chega ao cliente: nunca resolve, e o
+composer o mostra como `[Link: ...]` antes do Enter. **Só link VIVO resolve** (ativo,
+dentro da validade, empresa na operação) — o pausado ou vencido daria ao cliente um link
+que não abre, então fica por preencher, e a atendente vê.
 
 ---
 
@@ -2441,7 +2460,7 @@ número (enviadas e recebidas); edição de participante valendo para a PESSOA i
 (nome e papel corrigidos uma vez aparecem em todos os grupos dela e na conversa
 individual, com aviso da contagem antes de salvar);
 respostas rápidas com `/`, inclusive com mídia anexada (imagem, áudio ou vídeo) que sai
-junto com o texto e com variáveis de empresa, conversa, atendente e data preenchidas na
+junto com o texto e com variáveis de empresa, links de solicitação do Azevedo-OS, conversa, atendente e data preenchidas na
 inserção (o que não resolve fica destacado no composer, e avisa antes de enviar); mídia ampliada em tela cheia com navegação por teclado e download;
 botão de baixar em documento recebido; download do áudio da conversa (recebido e enviado) em MP3 por padrão, com o original no menu secundário, nome de arquivo legível e conversão guardada para não repetir; arrastar arquivo para a conversa e colar com Ctrl+V,
 os dois com prévia (miniatura, legenda, remover, adicionar, progresso por arquivo e
@@ -2623,6 +2642,18 @@ aceita alguns nomes (camelCase, snake_case, português) e o que faltar vira `nul
 card. Campos exibidos: nome, CNPJ, número da empresa, status, regime tributário, folha de
 pagamento e contatos. **Não há bloco de responsáveis internos** nesta fase — nem na tela,
 nem na consulta.
+
+**Links de solicitação (`requestLinks`).** O `GET /companies/:id` do Azevedo-OS manda, ao
+lado do resto, a lista `requestLinks: [{ type, label, url }]` com os links de solicitação
+VIVOS da empresa (a URL completa, que lá só o banco decifra). Eles não aparecem no card:
+existem para as variáveis `{{empresa.link.<tipo>}}` da resposta rápida (seção 10). A
+leitura aqui é mais desconfiada que a do resto, porque a URL vai parar no texto que o
+cliente recebe: só `http(s)`, link com `status` diferente de ativo é descartado, tipo fora
+do formato de slug é descartado e tipo repetido fica com o primeiro. Campo ausente é lista
+vazia, nunca erro — é o estado de um Azevedo-OS que ainda não manda o campo. O catálogo de
+tipos (sem URL) vem de `GET /request-link-types` (`{ data: [{ type, label }] }`). A URL só
+sai do AZVCHAT dentro da rota da empresa vinculada, que já confere o acesso à conversa —
+é o link que se manda para aquele cliente, e para mais ninguém.
 
 **Quem nomeia o status é o Azevedo-OS.** O contrato manda os dois campos de propósito:
 `status` é o código estável, o único comparado em código, e `statusLabel` é o rótulo já em

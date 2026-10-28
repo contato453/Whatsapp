@@ -6,6 +6,8 @@ import {
   previewQuickReplyTemplate,
   quickReplyTemplateHasVariables,
   quickReplyVariableToken,
+  quickReplyVariablesByGroup,
+  requestLinkVariable,
   resolveQuickReplyTemplate,
   unknownQuickReplyVariables,
   type AzevedoOsCompany,
@@ -35,6 +37,7 @@ function empresa(overrides: Partial<AzevedoOsCompany> = {}): AzevedoOsCompany {
     taxRegime: "Simples Nacional",
     payrollInfo: "Com folha",
     contacts: [],
+    requestLinks: [],
     ...overrides,
   };
 }
@@ -257,5 +260,78 @@ describe("marcador escrito à mão", () => {
 
   it("texto sem colchete não gera aviso nenhum", () => {
     expect(detectManualPlaceholders("Bom dia, tudo certo por aí?")).toEqual([]);
+  });
+});
+
+/**
+ * `{{empresa.link.<tipo>}}`: o link de solicitação da empresa vinculada. É a
+ * única família de variáveis que não está na lista fixa, porque os tipos são
+ * do Azevedo-OS — e por isso o que precisa ficar trancado é a regra, não a
+ * lista: qualquer slug bem formado vale, e o que não resolve fica destacado.
+ */
+describe("links de solicitação", () => {
+  const NF = "https://portal.azevedoassessoria.com.br/solicitacao/nota-fiscal/azevedo/AbC123";
+
+  it("resolve com o link vivo da empresa vinculada", () => {
+    const resolucao = resolveQuickReplyTemplate(
+      "Para pedir a nota, preencha: {{empresa.link.nota-fiscal}}",
+      contexto({
+        company: empresa({
+          requestLinks: [{ type: "nota-fiscal", label: "Nota Fiscal", url: NF }],
+        }),
+      }),
+    );
+    expect(resolucao.text).toBe(`Para pedir a nota, preencha: ${NF}`);
+    expect(resolucao.unresolved).toEqual([]);
+  });
+
+  it("empresa sem aquele link, ou conversa sem empresa, deixa o marcador destacado", () => {
+    for (const company of [empresa(), null]) {
+      const resolucao = resolveQuickReplyTemplate(
+        "Link: {{empresa.link.admissao}}",
+        contexto({ company }),
+      );
+      expect(resolucao.text).toBe("Link: [Link: Admissao]");
+      expect(resolucao.unresolved).toEqual([
+        { name: "empresa.link.admissao", label: "Link: Admissao", placeholder: "[Link: Admissao]" },
+      ]);
+    }
+  });
+
+  it("um tipo nunca resolve com o link de outro", () => {
+    const resolucao = resolveQuickReplyTemplate(
+      "{{empresa.link.admissao}}",
+      contexto({
+        company: empresa({
+          requestLinks: [{ type: "nota-fiscal", label: "Nota Fiscal", url: NF }],
+        }),
+      }),
+    );
+    expect(resolucao.text).toBe("[Link: Admissao]");
+  });
+
+  it("qualquer tipo bem formado é variável válida; tipo torto é recusado", () => {
+    expect(unknownQuickReplyVariables("{{empresa.link.tipo-que-ainda-nao-existe}}")).toEqual([]);
+    expect(unknownQuickReplyVariables("{{empresa.link.Nota Fiscal}} {{empresa.link.}}")).toEqual([
+      "{{empresa.link.Nota Fiscal}}",
+      "{{empresa.link.}}",
+    ]);
+  });
+
+  it("o menu põe os tipos informados no bloco próprio, com o rótulo de lá", () => {
+    const grupos = quickReplyVariablesByGroup([requestLinkVariable("nota-fiscal", "Nota Fiscal")]);
+    const links = grupos.find((grupo) => grupo.group === "links");
+    expect(links?.label).toBe("Links de solicitação");
+    expect(links?.variables.map((v) => [v.name, v.label])).toEqual([
+      ["empresa.link.nota-fiscal", "Link: Nota Fiscal"],
+    ]);
+    // Sem catálogo, o bloco não aparece vazio no menu.
+    expect(quickReplyVariablesByGroup().some((grupo) => grupo.group === "links")).toBe(false);
+  });
+
+  it("marcador manual de link não ganha sugestão errada de nome do cliente", () => {
+    expect(detectManualPlaceholders("Preencha [link da nota fiscal da empresa]")).toEqual([
+      { raw: "[link da nota fiscal da empresa]", suggestion: null },
+    ]);
   });
 });
