@@ -136,6 +136,12 @@ export interface IntegrationTokenDto {
   active: boolean;
   lastUsedAt: string | null;
   usageCount: number;
+  /** Destino no CRM de quem chega por este token; nulo = só envia mensagem. */
+  crmPipelineId: string | null;
+  crmPipelineName: string | null;
+  /** Nula com funil = a primeira etapa do funil. */
+  crmStageId: string | null;
+  crmStageName: string | null;
   createdAt: string;
 }
 
