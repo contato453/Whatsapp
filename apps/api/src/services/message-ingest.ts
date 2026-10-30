@@ -14,6 +14,11 @@ import type { Logger } from "pino";
 import type { MediaStorage } from "../lib/media-storage.js";
 import { extensionFromMime } from "../lib/media-storage.js";
 import { eligibleAssigneeWhere } from "../lib/default-assignee.js";
+import {
+  findPhoneTwins,
+  phoneForChatId,
+  pickConversationWithLatestReply,
+} from "../lib/conversation-twin.js";
 
 /**
  * P2002 do Prisma: violação de índice único. É o sinal de uma CORRIDA, não
@@ -133,7 +138,9 @@ export class MessageIngestService {
     message: NormalizedMessage,
     context: { organizationId: string },
   ): Promise<IngestResult | null> {
-    const conversation = await this.upsertConversation(message, context.organizationId);
+    const conversation = await this.upsertConversation(message, context.organizationId, {
+      adoptPhoneTwin: true,
+    });
 
     // Conversa sem responsável cai para o responsável padrão — do
     // departamento, ou do número quando não há departamento. Vale tanto na
@@ -730,6 +737,39 @@ export class MessageIngestService {
     },
     organizationId: string,
   ) {
+    // Quem chama só conhece o telefone digitado (formulário do site, disparo,
+    // lembrete), e o endereço montado com ele pode não ser o que o WhatsApp
+    // usa para essa pessoa. Se ela já tem conversa por outro endereço (sem o
+    // nono dígito, ou `@lid`), a mensagem vai para LÁ — senão a resposta
+    // dela cairia numa conversa e o nosso envio em outra.
+    if (!input.isGroup) {
+      const phone = await phoneForChatId(
+        this.prisma,
+        input.instanceId,
+        input.externalChatId,
+        input.callerPhone,
+      );
+      if (phone) {
+        const twins = await findPhoneTwins(this.prisma, {
+          whatsappInstanceId: input.instanceId,
+          phone,
+          excludeChatId: input.externalChatId,
+          includeLid: true,
+        });
+        if (twins.length > 0) {
+          const exact = await this.prisma.conversation.findUnique({
+            where: {
+              whatsappInstanceId_externalChatId: {
+                whatsappInstanceId: input.instanceId,
+                externalChatId: input.externalChatId,
+              },
+            },
+          });
+          const candidates = exact ? [exact, ...twins] : twins;
+          return pickConversationWithLatestReply(this.prisma, candidates, exact ?? twins[0]!);
+        }
+      }
+    }
     return this.upsertConversation(
       {
         instanceId: input.instanceId,
@@ -832,6 +872,7 @@ export class MessageIngestService {
       | "senderPhone"
     >,
     organizationId: string,
+    options: { adoptPhoneTwin?: boolean } = {},
   ) {
     const fallbackTitle =
       message.chatName ??
@@ -863,6 +904,11 @@ export class MessageIngestService {
         });
       }
       return existing;
+    }
+
+    if (options.adoptPhoneTwin && message.chatType === "individual") {
+      const adopted = await this.adoptPhoneTwin(message);
+      if (adopted) return adopted;
     }
 
     // A conversa nasce no departamento padrão do número, para já entrar
@@ -908,6 +954,114 @@ export class MessageIngestService {
           },
         },
       });
+    }
+  }
+
+  /**
+   * Mensagem do WhatsApp por um endereço que ainda não tem conversa, de uma
+   * pessoa para quem o AZVCHAT JÁ abriu conversa pelo telefone digitado: a
+   * conversa existente passa a usar o endereço que chegou, em vez de nascer
+   * uma segunda. É o caso do lead do site, que recebe o ingresso no
+   * "55 + DDD + 9 + número" e responde pelo número sem o nono dígito ou pelo
+   * `@lid`.
+   *
+   * O endereço que vence é o que CHEGOU, porque é o que o WhatsApp usa: com
+   * ele a próxima mensagem casa direto, o sync de chats não recria a conversa
+   * e a resposta da equipe sai pelo mesmo caminho das conversas comuns.
+   *
+   * Só é adotada conversa que NUNCA recebeu mensagem do cliente: ela nasceu do
+   * nosso palpite e ninguém respondeu nela. Conversa com resposta própria já é
+   * um endereço que o WhatsApp usa, e renomeá-la faria as duas trocarem de
+   * endereço a cada mensagem — o par antigo continua como está.
+   */
+  private async adoptPhoneTwin(
+    message: Pick<
+      NormalizedMessage,
+      "instanceId" | "externalChatId" | "direction" | "senderName" | "senderPhone"
+    >,
+  ) {
+    const isLid = message.externalChatId.endsWith("@lid");
+    // Na mensagem que SAI (outro aparelho da mesma conta), `senderPhone` é o
+    // nosso número, nunca o do cliente.
+    const webhookPhone = message.direction === "inbound" ? message.senderPhone : null;
+    const phone = await phoneForChatId(
+      this.prisma,
+      message.instanceId,
+      message.externalChatId,
+      webhookPhone,
+    );
+    if (!phone) return null;
+
+    // O `@lid` com telefone conhecido fica anotado no `Contact` do número: é
+    // por ele que o PRÓXIMO envio pelo telefone digitado acha esta conversa.
+    if (isLid && webhookPhone) await this.rememberLidPhone(message.instanceId, message.externalChatId, phone);
+
+    const twins = await findPhoneTwins(this.prisma, {
+      whatsappInstanceId: message.instanceId,
+      phone,
+      excludeChatId: message.externalChatId,
+      includeLid: false,
+    });
+    for (const twin of twins) {
+      const reply = await this.prisma.message.findFirst({
+        where: { conversationId: twin.id, direction: "inbound" },
+        select: { id: true },
+      });
+      if (reply) continue;
+      const betterTitle =
+        message.direction === "inbound" &&
+        message.senderName &&
+        (twin.title === twin.externalChatId || /^\d+$/.test(twin.title))
+          ? { title: message.senderName }
+          : {};
+      try {
+        const adopted = await this.prisma.conversation.update({
+          where: { id: twin.id },
+          data: { externalChatId: message.externalChatId, ...betterTitle },
+        });
+        this.logger.info({
+          instanceId: message.instanceId,
+          conversationId: adopted.id,
+          event: "conversation_chat_id_adopted",
+          addressing: isLid ? "lid" : "phone",
+        });
+        return adopted;
+      } catch (err) {
+        // Outra mensagem do mesmo lote criou a conversa do endereço novo no
+        // meio do caminho: fica a dela, como na corrida de criação.
+        if (!isUniqueViolation(err)) throw err;
+        return this.prisma.conversation.findUniqueOrThrow({
+          where: {
+            whatsappInstanceId_externalChatId: {
+              whatsappInstanceId: message.instanceId,
+              externalChatId: message.externalChatId,
+            },
+          },
+        });
+      }
+    }
+    return null;
+  }
+
+  private async rememberLidPhone(instanceId: string, externalId: string, phone: string): Promise<void> {
+    const where = { whatsappInstanceId_externalId: { whatsappInstanceId: instanceId, externalId } };
+    const contact = await this.prisma.contact.findUnique({ where, select: { id: true, phoneNumber: true } });
+    if (contact?.phoneNumber) return;
+    if (contact) {
+      await this.prisma.contact.update({ where: { id: contact.id }, data: { phoneNumber: phone } });
+      return;
+    }
+    const instance = await this.prisma.whatsAppInstance.findUnique({
+      where: { id: instanceId },
+      select: { organizationId: true },
+    });
+    if (!instance) return;
+    try {
+      await this.prisma.contact.create({
+        data: { organizationId: instance.organizationId, whatsappInstanceId: instanceId, externalId, phoneNumber: phone },
+      });
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
     }
   }
 }

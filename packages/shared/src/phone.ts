@@ -87,3 +87,33 @@ export function normalizeBrazilPhone(raw: string | null | undefined): Normalized
   const phone = `55${national}`;
   return { ok: true, phone, jid: `${phone}@s.whatsapp.net` };
 }
+
+/**
+ * O MESMO celular brasileiro escrito das duas formas que o WhatsApp usa: com e
+ * sem o nono dígito ("5531999998888" e "553199998888").
+ *
+ * Existe porque o identificador de uma conta no WhatsApp NÃO é o número como
+ * a pessoa o digita: conta antiga (comum fora de São Paulo) segue endereçada
+ * pelo número de 8 dígitos, mesmo depois que o nono dígito passou a valer.
+ * O envio para "55 + DDD + 9 + número" chega do mesmo jeito, só que a RESPOSTA
+ * volta pelo endereço de verdade — e, comparando os dois ao pé da letra, o
+ * AZVCHAT abria uma segunda conversa para a mesma pessoa.
+ *
+ * Só celular ganha a variação: o assinante de 8 dígitos que começa com 6 a 9
+ * é o mesmo aparelho do de 9 dígitos com o 9 na frente. Fixo (2 a 5) nunca
+ * teve nono dígito, e juntá-lo a um celular fundiria duas pessoas diferentes.
+ * Devolve sempre o próprio número primeiro; sem variação possível, só ele.
+ */
+export function brazilPhoneVariants(phone: string): string[] {
+  const digits = phone.replace(/\D/g, "");
+  if (!digits.startsWith("55")) return [digits];
+  const ddd = digits.slice(2, 4);
+  const subscriber = digits.slice(4);
+  if (subscriber.length === 9 && subscriber.startsWith("9") && /^[6-9]/.test(subscriber.slice(1))) {
+    return [digits, `55${ddd}${subscriber.slice(1)}`];
+  }
+  if (subscriber.length === 8 && /^[6-9]/.test(subscriber)) {
+    return [digits, `55${ddd}9${subscriber}`];
+  }
+  return [digits];
+}
