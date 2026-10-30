@@ -95,7 +95,7 @@ export class MemoryPrisma {
 
   constructor() {
     for (const name of [
-      "organization", "user", "department", "whatsAppInstance", "conversation", "message", "tag", "tagDepartment",
+      "organization", "user", "department", "whatsAppInstance", "conversation", "message", "contact", "tag", "tagDepartment",
       "conversationTag", "internalNote", "scheduledMessage", "conversationAssignmentHistory", "personProfile",
       "attendanceSettings", "attendanceBusinessHours", "attendanceLoginHours", "quickReply", "rolePermission",
       "userWhatsAppInstance", "userDepartment", "auditLog",

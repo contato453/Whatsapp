@@ -2190,6 +2190,25 @@ nível?" por igualdade é um lugar onde o papel novo perde acesso em silêncio (
   literal no texto (não existe token de grupo no protocolo) e marca todo mundo pela lista,
   respeitando o teto de `MENTION_MAX_PER_MESSAGE` (100, teto nosso: o Baileys não impõe
   nenhum e o WhatsApp não documenta).
+- **A MESMA PESSOA PODE CHEGAR POR TRÊS ENDEREÇOS, E SÓ O TELEFONE OS JUNTA.** O WhatsApp
+  endereça uma conta ora pelo telefone COM o nono dígito, ora SEM ele (conta antiga, comum
+  fora de SP), ora pelo `@lid`. Quando o AZVCHAT inicia a conversa (API de integração do
+  site, disparo, lembrete, "conversar" pelo participante) ele só conhece o telefone
+  DIGITADO, e a resposta volta pelo endereço de verdade — comparados ao pé da letra, viravam
+  duas conversas (o lead do workshop respondendo numa aba diferente do ingresso que
+  recebeu). Fonte única em `apps/api/src/lib/conversation-twin.ts` +
+  `brazilPhoneVariants` (`@azvchat/shared`). Duas pontas: (1) `ensureConversation` procura a
+  conversa do mesmo telefone por outro endereço (variações do nono dígito e `@lid` ligado ao
+  telefone pelo `Contact`) e, havendo mais de uma, fica com a que recebeu a última mensagem
+  DO CLIENTE; (2) a ingestão, quando o endereço que chegou não tem conversa, ADOTA a conversa
+  do mesmo telefone que nunca recebeu resposta (renomeia `externalChatId` para o endereço
+  que chegou, log `conversation_chat_id_adopted`) e anota no `Contact` o telefone do `@lid`
+  que o webhook trouxe. Regras que não são opcionais: casar só por TELEFONE, nunca por nome;
+  só celular varia (fixo nunca teve nono dígito); conversa que JÁ tem resposta do cliente
+  não é renomeada, senão as duas trocariam de endereço a cada mensagem; e os pares
+  duplicados anteriores à correção ficam como estão (fundir conversa mexe em nota,
+  etiqueta, CRM e histórico, e não é coisa de fazer sozinho). Coberto por
+  `apps/api/test/conversation-phone-twin.test.ts`.
 - LID (`@lid`) não é telefone. Existe migration só para limpar telefones que vieram de LID
   (`20260814140000_clear_lid_phone_numbers`).
 - **Chamada recebida por LID pode não ter telefone — e isso é esperado.** O aviso de
