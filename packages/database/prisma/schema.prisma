@@ -1417,12 +1417,24 @@ model IntegrationToken {
   createdById        String?
   lastUsedAt         DateTime?
   usageCount         Int       @default(0)
+  /// Destino no CRM de quem chega por este token (ex.: o formulário do site do
+  /// workshop): todo envio abre também um card neste funil. Nulo = o token só
+  /// manda mensagem, como sempre fez. Fica no TOKEN, e não no corpo da
+  /// chamada, para trocar a etapa ser decisão de quem administra o AZVCHAT,
+  /// sem mexer no site. `SetNull`: funil apagado faz o token voltar a só
+  /// enviar, em vez de quebrar o envio.
+  crmPipelineId      String?
+  /// Etapa de entrada; nula = a primeira do funil. Etapa removida cai na
+  /// primeira em vez de perder o lead.
+  crmStageId         String?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
   organization Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   instance     WhatsAppInstance        @relation(fields: [whatsappInstanceId], references: [id], onDelete: Cascade)
   createdBy    User?                   @relation("IntegrationTokenCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  crmPipeline  CrmPipeline?            @relation(fields: [crmPipelineId], references: [id], onDelete: SetNull)
+  crmStage     CrmStage?               @relation(fields: [crmStageId], references: [id], onDelete: SetNull)
   messageLogs  IntegrationMessageLog[]
 
   @@index([organizationId])
@@ -1518,6 +1530,7 @@ model CrmPipeline {
   stages              CrmStage[]
   opportunities       CrmOpportunity[]
   broadcastCampaigns   BroadcastCampaign[]
+  integrationTokens    IntegrationToken[]
 
   @@unique([organizationId, name])
   @@index([organizationId, isActive])
@@ -1610,6 +1623,7 @@ model CrmStage {
   actions       CrmStageAction[]
   opportunities CrmOpportunity[]
   broadcastCampaigns BroadcastCampaign[]
+  integrationTokens IntegrationToken[]
 
   @@unique([pipelineId, name])
   @@index([pipelineId, position])

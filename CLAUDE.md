@@ -605,8 +605,9 @@ DELETE /scheduled-messages/:id
 GET    /integration-tokens   (admin; tokens da API de integração — nunca o token em claro)
 POST   /integration-tokens   (admin; cria e devolve o token em claro UMA vez)
 POST   /integration-tokens/:id/revoke   (admin; desativa, nunca apaga — histórico fica)
+PATCH  /integration-tokens/:id          (admin; nome e destino no CRM — o número não muda)
 POST   /integrations/messages           (token de máquina, NÃO sessão; ver a seção 17)
-       { telefone, mensagem, idempotencyKey?, instanceId? }
+       { telefone, mensagem, idempotencyKey?, instanceId?, nome?, funilId?, etapaId? }
        (envia por sistema externo pela instância do token; telefone normalizado
         antes de tudo (422 se inválido/grupo), instância errada 403,
         desconectada/excluída 409, idempotência de 24h, rate limit por token 429.
@@ -2867,9 +2868,36 @@ autenticado fica em `request.integrationToken`.
 - **rate limit por token** (429), `INTEGRATION_TOKEN_RATE_LIMIT_PER_MINUTE`
   (padrão 60), keyed pelo hash do bearer.
 
+**Card no CRM junto do envio** (migration `20261030120000_integration_token_crm`). O caso
+de origem: o formulário do site do workshop manda a mensagem por esta rota, e a pessoa
+precisava também cair numa etapa do funil — e fluxo não resolve, porque nenhum gatilho
+dispara com mensagem que NÓS enviamos (e o "Primeira mensagem" também não pega o lead
+quando ele responde: a conversa já tem a mensagem da integração). O destino mora no
+TOKEN (`IntegrationToken.crmPipelineId`/`crmStageId`, `SetNull`), escolhido em
+Configurações → Tokens de integração: trocar a etapa é decisão de quem administra o
+AZVCHAT, sem mexer no site. A chamada pode passar `funilId`/`etapaId` por cima do token,
+e `nome` vira o título do card (não mexe no nome da conversa). Regras:
+- **o card nunca derruba o envio.** Ele é aberto DEPOIS da mensagem sair, por
+  `openIntegrationOpportunity` (`lib/integration-crm.ts`), que não lança: CRM desligado,
+  funil apagado/desativado e falha viram `crm.status` na resposta e log
+  (`integration_crm_*`). Responder erro com a mensagem já enviada faria o sistema externo
+  repetir e mandar duas vezes ao cliente;
+- **o que vem NA CHAMADA é conferido ANTES do envio** (funil inexistente/desativado,
+  etapa de outro funil, etapa sem funil → 422), porque aí ainda dá para corrigir sem
+  duplicar nada. O do token foi conferido ao gravar (`assertCrmTarget`);
+- **o caminho de criação é o único** (`createCrmOpportunity`): contato da conversa,
+  duplicidade pelo índice parcial (preencher o formulário duas vezes não dá dois cards —
+  `crm.status = "existing"`), ações de entrada da etapa e distribuição do funil. Etapa que
+  saiu do funil cai na primeira; origem `whatsapp`; autor nulo;
+- **a repetição idempotente não abre card de novo** (`crm: null` na resposta).
+A resposta ganhou `crm: { status, opportunityId } | null` e a auditoria
+`message.sent.integration` leva `crmStatus`/`crmOpportunityId`.
+
 **Administração** (`admin`, papel fixo no código, como criar/excluir número):
 `GET /integration-tokens`, `POST /integration-tokens` (devolve o token em claro
-UMA vez), `POST /integration-tokens/:id/revoke`. Tela: card **Tokens de
+UMA vez; aceita `crmPipelineId`/`crmStageId`), `PATCH /integration-tokens/:id` (nome e
+destino no CRM; trocar o funil sem dizer a etapa zera a etapa; o NÚMERO não muda — chip
+novo é token novo), `POST /integration-tokens/:id/revoke`. Tela: card **Tokens de
 integração** em Configurações, só para admin
 (`components/settings/integration-tokens.tsx`), que lista, cria (mostrando o
 token uma vez com botão copiar) e revoga, e exibe a URL do endpoint + exemplo
@@ -2877,7 +2905,8 @@ de chamada pronto.
 
 **Visibilidade**: nada muda — a conversa criada segue `lib/access.ts` como
 qualquer outra, e o endpoint **não expõe leitura** de conversa/mensagem/contato.
-**Auditoria**: `integration_token.created`, `integration_token.revoked` e
+**Auditoria**: `integration_token.created`, `integration_token.updated` (antes/depois),
+`integration_token.revoked` e
 `message.sent.integration` (com token, instância, conversa e resultado — nunca
 conteúdo nem token em claro).
 

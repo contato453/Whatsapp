@@ -20,6 +20,12 @@ export interface IntegrationTokenDto {
   active: boolean;
   lastUsedAt: string | null;
   usageCount: number;
+  /** Destino no CRM de quem chega por este token; nulo = só envia mensagem. */
+  crmPipelineId: string | null;
+  crmPipelineName: string | null;
+  /** Nula com funil = a primeira etapa do funil. */
+  crmStageId: string | null;
+  crmStageName: string | null;
   createdAt: string;
 }
 
@@ -29,7 +35,11 @@ export interface IntegrationTokenDto {
  * volta pela rota de criação.
  */
 export function serializeIntegrationToken(
-  token: IntegrationToken & { instance?: { name: string } | null },
+  token: IntegrationToken & {
+    instance?: { name: string } | null;
+    crmPipeline?: { name: string } | null;
+    crmStage?: { name: string } | null;
+  },
 ): IntegrationTokenDto {
   return {
     id: token.id,
@@ -40,6 +50,10 @@ export function serializeIntegrationToken(
     active: token.active,
     lastUsedAt: token.lastUsedAt ? token.lastUsedAt.toISOString() : null,
     usageCount: token.usageCount,
+    crmPipelineId: token.crmPipelineId,
+    crmPipelineName: token.crmPipeline?.name ?? null,
+    crmStageId: token.crmStageId,
+    crmStageName: token.crmStage?.name ?? null,
     createdAt: token.createdAt.toISOString(),
   };
 }

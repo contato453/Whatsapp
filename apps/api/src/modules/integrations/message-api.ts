@@ -8,6 +8,7 @@ import {
   generateIntegrationToken,
   hashIntegrationToken,
 } from "../../lib/integration-token.js";
+import { openIntegrationOpportunity, type IntegrationCrmResult } from "../../lib/integration-crm.js";
 import { serializeConversation, serializeMessage } from "../../lib/serialize.js";
 import { conversationAudience } from "../../realtime/socket.js";
 import { buildPreview } from "../../services/message-ingest.js";
@@ -63,7 +64,63 @@ const sendBodySchema = z.object({
   // Instância é SEMPRE a do token; aceitar o campo só serve para RECUSAR uma
   // tentativa de enviar por outra (403). Enviar sem ele usa a do token.
   instanceId: z.string().uuid().optional(),
+  // Nome da pessoa, quando o sistema externo tem (o formulário do site tem):
+  // vira o título do card no CRM. Não mexe no nome da conversa — esse continua
+  // vindo do WhatsApp e da equipe, como em qualquer conversa.
+  nome: z.string().trim().max(120).optional(),
+  // Destino no CRM escolhido pela CHAMADA, por cima do configurado no token.
+  // O normal é deixar a escolha no token (quem administra troca a etapa sem
+  // mexer no site); estes dois existem para o sistema que precisa mandar cada
+  // lead para um funil diferente.
+  funilId: z.string().uuid().optional(),
+  etapaId: z.string().uuid().optional(),
 });
+
+/** Destino do card no CRM para este envio: o da chamada vence o do token. */
+interface CrmTarget {
+  pipelineId: string;
+  stageId: string | null;
+}
+
+/**
+ * Resolve e CONFERE o destino ANTES de enviar. O que vem na chamada é
+ * recusado com 422 se estiver errado — a mensagem ainda não saiu, então o
+ * sistema externo pode corrigir e repetir sem duplicar nada. O que vem do
+ * token não é conferido aqui: ele foi validado ao ser gravado, e se o funil
+ * mudou depois quem trata é o helper, sem derrubar o envio.
+ */
+async function resolveCrmTarget(
+  deps: AppDeps,
+  token: IntegrationToken,
+  body: z.infer<typeof sendBodySchema>,
+  organizationId: string,
+): Promise<CrmTarget | null> {
+  if (!body.funilId && !body.etapaId) {
+    return token.crmPipelineId ? { pipelineId: token.crmPipelineId, stageId: token.crmStageId } : null;
+  }
+  const pipelineId = body.funilId ?? token.crmPipelineId;
+  if (!pipelineId) {
+    throw new AppError(
+      "Informe o funil (funilId): este token não tem funil do CRM configurado.",
+      422,
+      "funil_nao_informado",
+    );
+  }
+  const pipeline = await deps.prisma.crmPipeline.findFirst({
+    where: { id: pipelineId, organizationId },
+    select: { isActive: true, stages: { select: { id: true } } },
+  });
+  if (!pipeline || !pipeline.isActive) {
+    throw new AppError("Funil do CRM não encontrado ou desativado.", 422, "funil_invalido");
+  }
+  // Etapa sem funil na chamada vale para o funil do token; funil novo sem
+  // etapa começa na primeira — a etapa do token é de OUTRO funil.
+  const stageId = body.etapaId ?? (body.funilId ? null : token.crmStageId);
+  if (body.etapaId && !pipeline.stages.some((stage) => stage.id === body.etapaId)) {
+    throw new AppError("Esta etapa não pertence ao funil informado.", 422, "etapa_invalida");
+  }
+  return { pipelineId, stageId };
+}
 
 /**
  * Rota de ENVIO da API de integração — autenticada por token de máquina.
@@ -152,6 +209,9 @@ export function registerIntegrationSendRoute(app: FastifyInstance, deps: AppDeps
             conversationId: prior.conversationId,
             phone: prior.normalizedPhone,
             idempotent: true,
+            // A repetição não abre card de novo: a chamada original já cuidou
+            // disso, e o resultado dela não é guardado (o card está no CRM).
+            crm: null,
           });
         }
       }
@@ -171,6 +231,10 @@ export function registerIntegrationSendRoute(app: FastifyInstance, deps: AppDeps
 
       // Desconectada ou aguardando QR: não enfileira em silêncio — responde
       // 409 para o sistema externo saber que a confirmação NÃO saiu.
+      // Destino no CRM conferido ANTES do envio: erro aqui ainda não mandou
+      // nada ao cliente.
+      const crmTarget = await resolveCrmTarget(deps, token, body, instance.organizationId);
+
       const status = await deps.provider.getConnectionStatus(instance.id);
       if (status !== "connected") {
         throw new AppError(
@@ -245,6 +309,22 @@ export function registerIntegrationSendRoute(app: FastifyInstance, deps: AppDeps
         .to(room)
         .emit(RealtimeEvents.ConversationUpdated, serializeConversation(conversationForEmit, null));
 
+      // Card no CRM. Depois do envio e sem poder derrubá-lo: a mensagem já
+      // saiu, e responder erro agora faria o sistema externo repeti-la.
+      const crm: IntegrationCrmResult | null = crmTarget
+        ? await openIntegrationOpportunity(
+            { prisma: deps.prisma, io: deps.io, logger: deps.logger },
+            {
+              organizationId: instance.organizationId,
+              conversationId: conversation.id,
+              pipelineId: crmTarget.pipelineId,
+              stageId: crmTarget.stageId,
+              title: body.nome || null,
+              integrationTokenId: token.id,
+            },
+          )
+        : null;
+
       // Marca o uso do token — para a tela mostrar "último uso" e o contador.
       await deps.prisma.integrationToken.update({
         where: { id: token.id },
@@ -290,6 +370,8 @@ export function registerIntegrationSendRoute(app: FastifyInstance, deps: AppDeps
           conversationId: conversation.id,
           messageId: message.id,
           result: "sent",
+          crmStatus: crm?.status ?? null,
+          crmOpportunityId: crm?.opportunityId ?? null,
         },
       });
 
@@ -299,15 +381,59 @@ export function registerIntegrationSendRoute(app: FastifyInstance, deps: AppDeps
         conversationId: conversation.id,
         phone: normalized.phone,
         idempotent: false,
+        // Nulo = este envio não tinha destino no CRM.
+        crm,
       });
     },
   );
 }
 
+const crmTargetFields = {
+  crmPipelineId: z.string().uuid().nullish(),
+  crmStageId: z.string().uuid().nullish(),
+};
+
 const createTokenSchema = z.object({
   name: z.string().min(2).max(80),
   whatsappInstanceId: z.string().uuid(),
+  ...crmTargetFields,
 });
+
+const updateTokenSchema = z.object({
+  name: z.string().min(2).max(80).optional(),
+  ...crmTargetFields,
+});
+
+/** O que a lista de tokens precisa para mostrar número e destino no CRM. */
+const tokenInclude = {
+  instance: { select: { name: true } },
+  crmPipeline: { select: { name: true } },
+  crmStage: { select: { name: true } },
+} as const;
+
+/**
+ * Confere o destino no CRM antes de GRAVAR no token: funil desta organização
+ * e etapa dele. Etapa sem funil é recusada — não teria a que pertencer.
+ */
+async function assertCrmTarget(
+  deps: AppDeps,
+  organizationId: string,
+  pipelineId: string | null,
+  stageId: string | null,
+): Promise<void> {
+  if (!pipelineId) {
+    if (stageId) throw new AppError("Escolha o funil antes da etapa.", 422, "funil_nao_informado");
+    return;
+  }
+  const pipeline = await deps.prisma.crmPipeline.findFirst({
+    where: { id: pipelineId, organizationId },
+    select: { stages: { select: { id: true } } },
+  });
+  if (!pipeline) throw new NotFoundError("Funil");
+  if (stageId && !pipeline.stages.some((stage) => stage.id === stageId)) {
+    throw new AppError("Esta etapa não pertence ao funil escolhido.", 422, "etapa_invalida");
+  }
+}
 
 /**
  * Administração de tokens — só admin, papel FIXO no código (mesma régua de
@@ -322,7 +448,7 @@ export function registerIntegrationTokenAdminRoutes(app: FastifyInstance, deps: 
       const tokens = await deps.prisma.integrationToken.findMany({
         where: { organizationId: request.user.organizationId },
         orderBy: { createdAt: "desc" },
-        include: { instance: { select: { name: true } } },
+        include: tokenInclude,
       });
       return { tokens: tokens.map(serializeIntegrationToken) };
     },
@@ -340,6 +466,9 @@ export function registerIntegrationTokenAdminRoutes(app: FastifyInstance, deps: 
         select: { id: true },
       });
       if (!instance) throw new NotFoundError("Instância de WhatsApp");
+      const crmPipelineId = body.crmPipelineId ?? null;
+      const crmStageId = crmPipelineId ? (body.crmStageId ?? null) : null;
+      await assertCrmTarget(deps, request.user.organizationId, crmPipelineId, body.crmStageId ?? null);
 
       const generated = generateIntegrationToken();
       const created = await deps.prisma.integrationToken.create({
@@ -349,9 +478,11 @@ export function registerIntegrationTokenAdminRoutes(app: FastifyInstance, deps: 
           tokenPrefix: generated.tokenPrefix,
           tokenHash: generated.tokenHash,
           whatsappInstanceId: body.whatsappInstanceId,
+          crmPipelineId,
+          crmStageId,
           createdById: request.user.sub,
         },
-        include: { instance: { select: { name: true } } },
+        include: tokenInclude,
       });
 
       deps.audit.record({
@@ -360,7 +491,7 @@ export function registerIntegrationTokenAdminRoutes(app: FastifyInstance, deps: 
         action: "integration_token.created",
         entityType: "IntegrationToken",
         entityId: created.id,
-        metadata: { instanceId: body.whatsappInstanceId, name: body.name },
+        metadata: { instanceId: body.whatsappInstanceId, name: body.name, crmPipelineId, crmStageId },
       });
 
       // O token em claro sai UMA vez, aqui. Não há rota que o devolva de novo.
@@ -368,6 +499,65 @@ export function registerIntegrationTokenAdminRoutes(app: FastifyInstance, deps: 
         token: generated.token,
         integrationToken: serializeIntegrationToken(created),
       });
+    },
+  );
+
+  // Editar nome e destino no CRM. O número NÃO muda por aqui: trocar o número
+  // de um token em uso faria o sistema externo passar a falar por outro chip
+  // sem ninguém do lado de lá saber — para isso, gera-se um token novo.
+  app.patch(
+    "/integration-tokens/:id",
+    { preHandler: requireRole("admin") },
+    async (request) => {
+      const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+      const body = updateTokenSchema.parse(request.body);
+      const token = await deps.prisma.integrationToken.findFirst({
+        where: { id, organizationId: request.user.organizationId },
+      });
+      if (!token) throw new NotFoundError("Token de integração");
+
+      const data: { name?: string; crmPipelineId?: string | null; crmStageId?: string | null } = {};
+      if (body.name !== undefined) data.name = body.name;
+      if (body.crmPipelineId !== undefined || body.crmStageId !== undefined) {
+        const crmPipelineId =
+          body.crmPipelineId !== undefined ? (body.crmPipelineId ?? null) : token.crmPipelineId;
+        // Trocar ou limpar o funil sem dizer a etapa zera a etapa: a antiga
+        // era de outro funil.
+        const crmStageId = !crmPipelineId
+          ? null
+          : body.crmStageId !== undefined
+            ? (body.crmStageId ?? null)
+            : crmPipelineId === token.crmPipelineId
+              ? token.crmStageId
+              : null;
+        await assertCrmTarget(deps, request.user.organizationId, crmPipelineId, crmStageId);
+        data.crmPipelineId = crmPipelineId;
+        data.crmStageId = crmStageId;
+      }
+
+      const updated = await deps.prisma.integrationToken.update({
+        where: { id },
+        data,
+        include: tokenInclude,
+      });
+
+      deps.audit.record({
+        organizationId: request.user.organizationId,
+        userId: request.user.sub,
+        action: "integration_token.updated",
+        entityType: "IntegrationToken",
+        entityId: id,
+        metadata: {
+          before: { name: token.name, crmPipelineId: token.crmPipelineId, crmStageId: token.crmStageId },
+          after: {
+            name: updated.name,
+            crmPipelineId: updated.crmPipelineId,
+            crmStageId: updated.crmStageId,
+          },
+        },
+      });
+
+      return { integrationToken: serializeIntegrationToken(updated) };
     },
   );
 
@@ -385,7 +575,7 @@ export function registerIntegrationTokenAdminRoutes(app: FastifyInstance, deps: 
       const updated = await deps.prisma.integrationToken.update({
         where: { id },
         data: { active: false },
-        include: { instance: { select: { name: true } } },
+        include: tokenInclude,
       });
 
       deps.audit.record({
