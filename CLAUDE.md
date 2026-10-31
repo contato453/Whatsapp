@@ -2204,7 +2204,10 @@ nível?" por igualdade é um lugar onde o papel novo perde acesso em silêncio (
   DO CLIENTE; (2) a ingestão, quando o endereço que chegou não tem conversa, ADOTA a conversa
   do mesmo telefone que nunca recebeu resposta (renomeia `externalChatId` para o endereço
   que chegou, log `conversation_chat_id_adopted`) e anota no `Contact` o telefone do `@lid`
-  que o webhook trouxe. Regras que não são opcionais: casar só por TELEFONE, nunca por nome;
+  que o webhook trouxe — também em conversa `@lid` que JÁ existia (31/10/2026: sem isso o
+  contato antigo, cujo telefone só estava nas mensagens, ganhava uma segunda conversa no
+  envio do site; a migration `20261031120000_contact_lid_phone_backfill` anotou as
+  existentes). Regras que não são opcionais: casar só por TELEFONE, nunca por nome;
   só celular varia (fixo nunca teve nono dígito); conversa que JÁ tem resposta do cliente
   não é renomeada, senão as duas trocariam de endereço a cada mensagem; e os pares
   duplicados anteriores à correção ficam como estão (fundir conversa mexe em nota,

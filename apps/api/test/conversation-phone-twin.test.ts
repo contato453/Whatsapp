@@ -165,6 +165,30 @@ describe("resposta do lead cai na MESMA conversa do envio automático", () => {
     expect(db.rows("conversation")).toHaveLength(2);
   });
 
+  it("contato antigo pelo @lid recebe o envio do site na conversa dele, mesmo sem o telefone no Contact", async () => {
+    // O caso que escapou do conserto acima (relato de 31/10/2026): a conversa
+    // `@lid` já existia ANTES — nasceu antes do `rememberLidPhone`, ou chegou
+    // por outro caminho —, então o telefone só estava nas mensagens. O envio
+    // pelo telefone digitado não achava o `@lid` e abria outra conversa.
+    const { db, ingest } = setup();
+    db.seed("conversation", {
+      id: "conv-antiga",
+      organizationId: ORG,
+      whatsappInstanceId: INSTANCE,
+      externalChatId: "123456789012345@lid",
+      type: "individual",
+      title: "Lead Antigo",
+      status: "open",
+      lastMessageAt: new Date("2026-09-07T02:00:00Z"),
+    });
+
+    await ingest.ingest(inbound("123456789012345@lid", "5531999998888", "msg-nova"), { organizationId: ORG });
+    const enviada = await sendFromForm(ingest, "5531999998888");
+
+    expect(enviada.id).toBe("conv-antiga");
+    expect(db.rows("conversation")).toHaveLength(1);
+  });
+
   it("@lid sem telefone conhecido continua abrindo conversa própria (não adivinha)", async () => {
     const { db, ingest } = setup();
     await sendFromForm(ingest, "5531999998888");
