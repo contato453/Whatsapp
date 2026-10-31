@@ -185,6 +185,9 @@ export function serializeCrmOpportunity(opportunity: OpportunityWithRelations) {
     position: opportunity.position,
     stageEnteredAt: opportunity.stageEnteredAt.toISOString(),
     lastInteractionAt: opportunity.lastInteractionAt?.toISOString() ?? null,
+    // `lastInteractionAt` só anda com a resposta do CLIENTE (é a régua do
+    // follow-up). O alerta de card parado conta mensagem de qualquer lado.
+    conversationLastMessageAt: opportunity.conversation?.lastMessageAt?.toISOString() ?? null,
     // A próxima ação é o que faz o card virar agenda em vez de post-it. Vem
     // só a PRÓXIMA pendente (a consulta já traz `take: 1`), nunca a lista.
     nextActivity: nextActivity

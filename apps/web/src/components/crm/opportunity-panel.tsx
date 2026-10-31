@@ -23,8 +23,9 @@ import {
   crmOriginLabel,
   crmTimeInStageLabel,
   formatCurrencyBRL,
+  stripWhatsAppFormatting,
 } from "@azvchat/shared";
-import { crmApi } from "@/lib/api";
+import { api, crmApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import type {
   CrmActivityDto,
@@ -32,6 +33,7 @@ import type {
   CrmLossReasonDto,
   CrmOpportunityDto,
   CrmPipelineDto,
+  MessageDto,
 } from "@/lib/types";
 import { cn, formatDateTime } from "@/lib/utils";
 import { Badge, Button, Field, Input, Modal, Spinner, Textarea } from "@/components/ui";
@@ -292,6 +294,14 @@ export function OpportunityPanel({
             )}
 
             <div className="flex flex-wrap gap-2 pt-1">
+              {oportunidade.conversationId && (
+                <Link
+                  href={`/inbox/${oportunidade.conversationId}`}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-brand-600 px-2.5 py-1.5 text-xs font-medium text-brand-700 transition-colors hover:bg-brand-50"
+                >
+                  <MessageSquare className="h-3.5 w-3.5" /> Abrir conversa
+                </Link>
+              )}
               {podeMexer && (
                 <Button size="sm" variant="outline" onClick={() => onEdit(oportunidade)}>
                   <Pencil className="h-3.5 w-3.5" /> Editar
@@ -323,6 +333,10 @@ export function OpportunityPanel({
                 </Button>
               )}
             </div>
+
+            {oportunidade.conversationId && (
+              <MensagensRecentes conversationId={oportunidade.conversationId} />
+            )}
           </div>
         )}
 
@@ -443,6 +457,104 @@ export function OpportunityPanel({
         </>
       )}
     </aside>
+  );
+}
+
+/** Quantas mensagens o painel mostra: o suficiente para entender o pé da conversa. */
+const MENSAGENS_NO_PAINEL = 15;
+
+const ROTULO_TIPO: Record<string, string> = {
+  image: "📷 Imagem",
+  audio: "🎤 Áudio",
+  video: "🎬 Vídeo",
+  document: "📄 Documento",
+  sticker: "🩵 Figurinha",
+  location: "📍 Localização",
+  contact: "👤 Contato",
+  poll: "📊 Enquete",
+  call: "📞 Ligação",
+};
+
+function resumoDaMensagem(mensagem: MessageDto): string {
+  if (mensagem.deletedAt) return "Mensagem apagada";
+  const texto = mensagem.content ? stripWhatsAppFormatting(mensagem.content).trim() : "";
+  if (mensagem.type === "text") return texto || "Mensagem";
+  const rotulo = ROTULO_TIPO[mensagem.type] ?? "Mensagem";
+  return texto ? `${rotulo} — ${texto}` : rotulo;
+}
+
+/**
+ * O pé da conversa dentro do card, para decidir o próximo passo sem trocar de
+ * tela. É LEITURA: responder continua sendo na conversa (botão "Abrir
+ * conversa"), onde estão anexos, áudio e o compositor.
+ *
+ * Usa a mesma rota da Inbox, com o mesmo controle de acesso: quem enxerga o
+ * card mas não a conversa (outro departamento) vê o aviso, não as mensagens.
+ * Só busca quando a aba Dados abre o card — o quadro não paga por isso.
+ */
+function MensagensRecentes({ conversationId }: { conversationId: string }) {
+  const [mensagens, setMensagens] = useState<MessageDto[] | null>(null);
+  const [semAcesso, setSemAcesso] = useState(false);
+
+  useEffect(() => {
+    let ativo = true;
+    setMensagens(null);
+    setSemAcesso(false);
+    api
+      .get<{ messages: MessageDto[]; hasMore: boolean }>(
+        `/conversations/${conversationId}/messages?limit=${MENSAGENS_NO_PAINEL}`,
+      )
+      .then((data) => {
+        if (ativo) setMensagens(data.messages);
+      })
+      .catch(() => {
+        if (ativo) setSemAcesso(true);
+      });
+    return () => {
+      ativo = false;
+    };
+  }, [conversationId]);
+
+  return (
+    <section className="border-t border-slate-100 pt-3">
+      <h3 className="mb-2 text-[11px] uppercase tracking-wide text-slate-400">Últimas mensagens</h3>
+      {semAcesso && (
+        <p className="text-xs text-slate-500">
+          Não foi possível carregar as mensagens — a conversa pode ser de um departamento que você não acessa.
+        </p>
+      )}
+      {!semAcesso && mensagens === null && (
+        <div className="flex justify-center py-4">
+          <Spinner />
+        </div>
+      )}
+      {mensagens && mensagens.length === 0 && (
+        <p className="text-xs text-slate-500">Nenhuma mensagem nesta conversa ainda.</p>
+      )}
+      {mensagens && mensagens.length > 0 && (
+        <ol className="space-y-1.5">
+          {mensagens.map((mensagem) => {
+            const recebida = mensagem.direction === "inbound";
+            return (
+              <li key={mensagem.id} className={cn("flex", recebida ? "justify-start" : "justify-end")}>
+                <div
+                  className={cn(
+                    "max-w-[85%] rounded-lg px-2 py-1 text-xs",
+                    recebida ? "bg-slate-100 text-slate-800" : "bg-brand-50 text-slate-800",
+                  )}
+                >
+                  {!recebida && mensagem.senderName && (
+                    <p className="truncate text-[10px] font-medium text-brand-700">{mensagem.senderName}</p>
+                  )}
+                  <p className="line-clamp-3 whitespace-pre-wrap break-words">{resumoDaMensagem(mensagem)}</p>
+                  <p className="mt-0.5 text-right text-[10px] text-slate-400">{formatDateTime(mensagem.timestamp)}</p>
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </section>
   );
 }
 

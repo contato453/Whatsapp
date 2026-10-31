@@ -5,6 +5,8 @@ import {
   DEFAULT_PIPELINE_STAGES,
   crmDaysInStage,
   crmEffectiveProbability,
+  crmIdleAlert,
+  crmLastActivityAt,
   crmFinalValue,
   crmPositionBetween,
   crmStageActionNeedsConversation,
@@ -251,5 +253,37 @@ describe("automação de etapa", () => {
     expect(crmStageActionNeedsConversation("internal_note")).toBe(true);
     expect(crmStageActionNeedsConversation("assign_user")).toBe(false);
     expect(crmStageActionNeedsConversation("create_activity")).toBe(false);
+  });
+});
+
+describe("card vermelho por falta de interação", () => {
+  const agora = new Date("2026-10-31T12:00:00Z");
+  const diasAtras = (dias: number) => new Date(agora.getTime() - dias * 86_400_000).toISOString();
+
+  it("conta da mensagem mais recente, de qualquer lado", () => {
+    expect(
+      crmLastActivityAt({
+        conversationLastMessageAt: diasAtras(1),
+        lastInteractionAt: diasAtras(6),
+        createdAt: diasAtras(10),
+      }),
+    ).toBe(diasAtras(1));
+  });
+
+  it("sem mensagem nenhuma, conta da criação do card", () => {
+    expect(crmLastActivityAt({ conversationLastMessageAt: null, lastInteractionAt: null, createdAt: diasAtras(5) })).toBe(
+      diasAtras(5),
+    );
+  });
+
+  it("acende com 4 dias cheios e apaga com qualquer mensagem nova", () => {
+    expect(crmIdleAlert(diasAtras(3.9), agora)).toBe(false);
+    expect(crmIdleAlert(diasAtras(4), agora)).toBe(true);
+    const depoisDaMensagem = crmLastActivityAt({
+      conversationLastMessageAt: diasAtras(0),
+      lastInteractionAt: diasAtras(7),
+      createdAt: diasAtras(9),
+    });
+    expect(crmIdleAlert(depoisDaMensagem, agora)).toBe(false);
   });
 });

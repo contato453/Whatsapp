@@ -1,7 +1,11 @@
 "use client";
 
-import { AlarmClock, Building2, CalendarClock, MessageSquare, Phone } from "lucide-react";
+import Link from "next/link";
+import { AlarmClock, Building2, CalendarClock, MessageSquare, MessageSquareShare, Phone } from "lucide-react";
 import {
+  crmDaysInStage,
+  crmIdleAlert,
+  crmLastActivityAt,
   crmOriginLabel,
   crmStageSlaBroken,
   crmTimeInStageLabel,
@@ -38,6 +42,10 @@ export function OpportunityCard({
 }) {
   const parado = crmStageSlaBroken(opportunity.stageEnteredAt, opportunity.stageSlaDays);
   const atrasada = opportunity.nextActivity?.overdue ?? false;
+  // Card ABERTO sem mensagem nenhuma há dias: vermelho, por cima do âmbar do
+  // SLA. Ganho e perdido já saíram do jogo e não esfriam.
+  const ultimoSinal = crmLastActivityAt(opportunity);
+  const esquecido = opportunity.status === "open" && crmIdleAlert(ultimoSinal);
 
   return (
     <article
@@ -59,8 +67,12 @@ export function OpportunityCard({
       tabIndex={0}
       aria-label={`Abrir oportunidade ${opportunity.title}`}
       className={cn(
-        "cursor-grab rounded-lg border bg-white p-2.5 shadow-sm transition-shadow hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 active:cursor-grabbing",
-        parado ? "border-amber-300" : "border-slate-200",
+        "cursor-grab rounded-lg border p-2.5 shadow-sm transition-shadow hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 active:cursor-grabbing",
+        esquecido
+          ? "border-red-400 bg-red-50"
+          : parado
+            ? "border-amber-300 bg-white"
+            : "border-slate-200 bg-white",
         dragging && "opacity-40",
       )}
     >
@@ -72,6 +84,22 @@ export function OpportunityCard({
           <span className="shrink-0 text-xs font-semibold text-slate-700">
             {formatCurrencyBRL(opportunity.finalValue)}
           </span>
+        )}
+        {opportunity.conversationId && (
+          // Atalho para a conversa sem passar pelo painel. O clique e o Enter
+          // param aqui: subir até o card abriria o painel por cima da
+          // navegação, e o link não pode virar alça de arrasto.
+          <Link
+            href={`/inbox/${opportunity.conversationId}`}
+            draggable={false}
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+            title="Abrir conversa"
+            aria-label={`Abrir conversa de ${opportunity.title}`}
+            className="-mr-1 -mt-0.5 shrink-0 rounded-md p-1 text-slate-400 hover:bg-brand-50 hover:text-brand-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40"
+          >
+            <MessageSquareShare className="h-3.5 w-3.5" />
+          </Link>
         )}
       </div>
 
@@ -132,9 +160,15 @@ export function OpportunityCard({
             {opportunity.assignedUser?.name ?? "Sem responsável"}
           </span>
         </span>
-        <span className={cn("shrink-0", parado && "font-medium text-amber-600")}>
-          {crmTimeInStageLabel(opportunity.stageEnteredAt)}
-        </span>
+        {esquecido ? (
+          <span className="shrink-0 font-medium text-red-700">
+            {crmDaysInStage(ultimoSinal)} dias sem interação
+          </span>
+        ) : (
+          <span className={cn("shrink-0", parado && "font-medium text-amber-600")}>
+            {crmTimeInStageLabel(opportunity.stageEnteredAt)}
+          </span>
+        )}
       </div>
 
       {opportunity.contactPhone && !opportunity.conversationId && (
