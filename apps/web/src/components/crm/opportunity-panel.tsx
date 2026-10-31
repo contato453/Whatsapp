@@ -23,9 +23,8 @@ import {
   crmOriginLabel,
   crmTimeInStageLabel,
   formatCurrencyBRL,
-  stripWhatsAppFormatting,
 } from "@azvchat/shared";
-import { api, crmApi } from "@/lib/api";
+import { crmApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import type {
   CrmActivityDto,
@@ -33,12 +32,19 @@ import type {
   CrmLossReasonDto,
   CrmOpportunityDto,
   CrmPipelineDto,
-  MessageDto,
 } from "@/lib/types";
 import { cn, formatDateTime } from "@/lib/utils";
 import { Badge, Button, Field, Input, Modal, Spinner, Textarea } from "@/components/ui";
 
 type Aba = "dados" | "atividades" | "historico";
+
+/**
+ * Largura do painel no desktop, usada pelo Kanban e pela lista. Desde que a
+ * conversa inteira passou a morar no painel (31/10/2026) ele precisa de
+ * espaço para o chat, mas nunca passa de metade da tela: o funil continua à
+ * vista, que é a razão de ser painel e não página.
+ */
+export const OPPORTUNITY_PANEL_WIDTH_CLASS = "lg:w-[48vw] lg:min-w-[26rem]";
 
 /**
  * O detalhe da oportunidade, em painel lateral.
@@ -113,7 +119,7 @@ export function OpportunityPanel({
   const funil = pipelines.find((item) => item.id === oportunidade?.pipelineId) ?? null;
 
   return (
-    <aside className="flex h-full w-full flex-col border-l border-slate-200 bg-white lg:w-[26rem]">
+    <aside className="flex h-full w-full flex-col border-l border-slate-200 bg-white">
       <header className="flex items-start justify-between gap-2 border-b border-slate-100 px-4 py-3">
         <div className="min-w-0">
           <h2 className="truncate text-sm font-semibold text-slate-900">
@@ -335,7 +341,7 @@ export function OpportunityPanel({
             </div>
 
             {oportunidade.conversationId && (
-              <MensagensRecentes conversationId={oportunidade.conversationId} />
+              <ConversaEmbutida conversationId={oportunidade.conversationId} />
             )}
           </div>
         )}
@@ -460,100 +466,30 @@ export function OpportunityPanel({
   );
 }
 
-/** Quantas mensagens o painel mostra: o suficiente para entender o pé da conversa. */
-const MENSAGENS_NO_PAINEL = 15;
-
-const ROTULO_TIPO: Record<string, string> = {
-  image: "📷 Imagem",
-  audio: "🎤 Áudio",
-  video: "🎬 Vídeo",
-  document: "📄 Documento",
-  sticker: "🩵 Figurinha",
-  location: "📍 Localização",
-  contact: "👤 Contato",
-  poll: "📊 Enquete",
-  call: "📞 Ligação",
-};
-
-function resumoDaMensagem(mensagem: MessageDto): string {
-  if (mensagem.deletedAt) return "Mensagem apagada";
-  const texto = mensagem.content ? stripWhatsAppFormatting(mensagem.content).trim() : "";
-  if (mensagem.type === "text") return texto || "Mensagem";
-  const rotulo = ROTULO_TIPO[mensagem.type] ?? "Mensagem";
-  return texto ? `${rotulo} — ${texto}` : rotulo;
-}
-
 /**
- * O pé da conversa dentro do card, para decidir o próximo passo sem trocar de
- * tela. É LEITURA: responder continua sendo na conversa (botão "Abrir
- * conversa"), onde estão anexos, áudio e o compositor.
+ * A conversa de verdade dentro do card: a mesma tela da Inbox, com envio,
+ * áudio, anexo, resposta rápida, nota interna e "assumir da IA" — para a
+ * equipe trabalhar o lead sem trocar de aba (pedido do Lincoln, 31/10/2026).
  *
- * Usa a mesma rota da Inbox, com o mesmo controle de acesso: quem enxerga o
- * card mas não a conversa (outro departamento) vê o aviso, não as mensagens.
- * Só busca quando a aba Dados abre o card — o quadro não paga por isso.
+ * É a PRÓPRIA Inbox em modo embutido (`?embed=crm`), e não uma cópia: tudo o
+ * que a conversa ganhar na Inbox aparece aqui sem retrabalho. O quadro
+ * embutido isola a navegação da conversa (que troca o endereço em `/inbox/...`)
+ * do endereço do CRM, e o acesso é o de sempre — quem não enxerga a conversa
+ * vê a recusa da própria Inbox.
+ *
+ * Abrir o card abre a conversa, então ela conta como LIDA para quem abriu,
+ * exatamente como na Inbox.
  */
-function MensagensRecentes({ conversationId }: { conversationId: string }) {
-  const [mensagens, setMensagens] = useState<MessageDto[] | null>(null);
-  const [semAcesso, setSemAcesso] = useState(false);
-
-  useEffect(() => {
-    let ativo = true;
-    setMensagens(null);
-    setSemAcesso(false);
-    api
-      .get<{ messages: MessageDto[]; hasMore: boolean }>(
-        `/conversations/${conversationId}/messages?limit=${MENSAGENS_NO_PAINEL}`,
-      )
-      .then((data) => {
-        if (ativo) setMensagens(data.messages);
-      })
-      .catch(() => {
-        if (ativo) setSemAcesso(true);
-      });
-    return () => {
-      ativo = false;
-    };
-  }, [conversationId]);
-
+function ConversaEmbutida({ conversationId }: { conversationId: string }) {
   return (
     <section className="border-t border-slate-100 pt-3">
-      <h3 className="mb-2 text-[11px] uppercase tracking-wide text-slate-400">Últimas mensagens</h3>
-      {semAcesso && (
-        <p className="text-xs text-slate-500">
-          Não foi possível carregar as mensagens — a conversa pode ser de um departamento que você não acessa.
-        </p>
-      )}
-      {!semAcesso && mensagens === null && (
-        <div className="flex justify-center py-4">
-          <Spinner />
-        </div>
-      )}
-      {mensagens && mensagens.length === 0 && (
-        <p className="text-xs text-slate-500">Nenhuma mensagem nesta conversa ainda.</p>
-      )}
-      {mensagens && mensagens.length > 0 && (
-        <ol className="space-y-1.5">
-          {mensagens.map((mensagem) => {
-            const recebida = mensagem.direction === "inbound";
-            return (
-              <li key={mensagem.id} className={cn("flex", recebida ? "justify-start" : "justify-end")}>
-                <div
-                  className={cn(
-                    "max-w-[85%] rounded-lg px-2 py-1 text-xs",
-                    recebida ? "bg-slate-100 text-slate-800" : "bg-brand-50 text-slate-800",
-                  )}
-                >
-                  {!recebida && mensagem.senderName && (
-                    <p className="truncate text-[10px] font-medium text-brand-700">{mensagem.senderName}</p>
-                  )}
-                  <p className="line-clamp-3 whitespace-pre-wrap break-words">{resumoDaMensagem(mensagem)}</p>
-                  <p className="mt-0.5 text-right text-[10px] text-slate-400">{formatDateTime(mensagem.timestamp)}</p>
-                </div>
-              </li>
-            );
-          })}
-        </ol>
-      )}
+      <h3 className="mb-2 text-[11px] uppercase tracking-wide text-slate-400">Conversa</h3>
+      <iframe
+        key={conversationId}
+        src={`/inbox/${conversationId}?embed=crm`}
+        title="Conversa do lead"
+        className="h-[calc(100vh-8rem)] min-h-[28rem] w-full rounded-lg border border-slate-200 bg-slate-50"
+      />
     </section>
   );
 }

@@ -28,7 +28,8 @@ import { CrmNav } from "@/components/crm/crm-nav";
 import { CrmFilterBar } from "@/components/crm/crm-filter-bar";
 import { KanbanBoard } from "@/components/crm/kanban-board";
 import { OpportunityForm } from "@/components/crm/opportunity-form";
-import { OpportunityPanel } from "@/components/crm/opportunity-panel";
+import { OPPORTUNITY_PANEL_WIDTH_CLASS, OpportunityPanel } from "@/components/crm/opportunity-panel";
+import { cn } from "@/lib/utils";
 
 /**
  * O Kanban — a tela onde o CRM acontece.
@@ -309,7 +310,12 @@ export default function CrmKanbanPage() {
         {aberta && (
           // Em tela estreita o painel cobre o quadro; no desktop ele divide a
           // largura, para não perder o funil de vista.
-          <div className="absolute inset-0 z-20 bg-white lg:static lg:z-auto lg:w-[26rem] lg:shrink-0">
+          <div
+            className={cn(
+              "absolute inset-0 z-20 bg-white lg:static lg:z-auto lg:shrink-0",
+              OPPORTUNITY_PANEL_WIDTH_CLASS,
+            )}
+          >
             <OpportunityPanel
               opportunityId={aberta}
               pipelines={pipelines}

@@ -142,6 +142,11 @@ const NO_PARTICIPANTS: NonNullable<ConversationDetailDto["group"]>["participants
 export function InboxShell({ conversationId }: { conversationId?: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  // Modo embutido: a mesma conversa, inteira (envio, áudio, anexo, nota,
+  // assumir da IA), dentro do painel do card do CRM. Fica só o chat: sem a
+  // lista à esquerda, sem o painel de contexto e sem ações que levam para
+  // fora da conversa — o resto é este mesmo componente, e não uma cópia.
+  const embedded = searchParams.get("embed") === "crm";
   const socket = useSocket();
   const { user: me, can } = useAuth();
 
@@ -1746,6 +1751,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
   return (
     <div className="flex h-full">
       {/* Coluna esquerda: lista */}
+      {!embedded && (
       <div className="flex w-80 shrink-0 flex-col border-r border-slate-200 bg-white xl:w-96">
         <div className="border-b border-slate-200 p-3">
           <FilterBar
@@ -1807,6 +1813,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
           )}
         </div>
       </div>
+      )}
 
       {/* Centro: chat.
           A zona de arrastar/colar arquivo envolve a coluna inteira, e não só
@@ -1925,21 +1932,28 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
                     )}
                   </Button>
                 )}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  title="Marcar como não lida"
-                  onClick={async () => {
-                    const data = await conversationReadApi.unread(conversation.id);
-                    setUnreadCount(conversation.id, data.unreadCount);
-                    router.push("/inbox");
-                  }}
-                >
-                  <Mail className="h-4 w-4" />
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setShowPanel((value) => !value)}>
-                  <Info className="h-4 w-4" />
-                </Button>
+                {/* Embutida no card, "não lida" e o painel de contexto saem:
+                    o primeiro leva para a Inbox (fora do card) e o segundo
+                    repete os dados que o próprio card já mostra ao lado. */}
+                {!embedded && (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      title="Marcar como não lida"
+                      onClick={async () => {
+                        const data = await conversationReadApi.unread(conversation.id);
+                        setUnreadCount(conversation.id, data.unreadCount);
+                        router.push("/inbox");
+                      }}
+                    >
+                      <Mail className="h-4 w-4" />
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setShowPanel((value) => !value)}>
+                      <Info className="h-4 w-4" />
+                    </Button>
+                  </>
+                )}
               </div>
             </header>
 
@@ -2624,7 +2638,7 @@ export function InboxShell({ conversationId }: { conversationId?: string }) {
       )}
 
       {/* Coluna direita: contexto */}
-      {conversationId && detail && showPanel && (
+      {conversationId && detail && showPanel && !embedded && (
         <div className="hidden w-80 shrink-0 border-l border-slate-200 bg-white lg:block">
           <ContextPanel
             detail={detail}
