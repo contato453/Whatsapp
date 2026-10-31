@@ -1086,3 +1086,163 @@ describe("AiRuntime — o agente só atende os departamentos marcados nele", () 
     expect(s.db.rows("aiSession")[0]?.status).toBe("active");
   });
 });
+
+describe("AiRuntime — palavra-chave liga e desliga o agente de dentro da conversa", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  /** Cenário sem automação ativa: a frase é a ÚNICA porta de entrada. */
+  function keywordScenario(extra?: (config: ReturnType<typeof defaultAiAgentConfig>) => void): Scenario {
+    const s = scenario({
+      config: (config) => {
+        config.keywords = { activate: ["#ia", "quero falar com a assistente"], deactivate: ["#humano"] };
+        extra?.(config);
+      },
+    });
+    for (const automation of s.db.rows("aiAutomation")) automation.active = false;
+    return s;
+  }
+
+  async function text(
+    s: Scenario,
+    input: { text: string; author: "client" | "team"; at?: Date; actor?: { userId: string; userName: string } },
+  ) {
+    s.runtime.onConversationText({
+      organizationId: ORG,
+      conversationId: s.conversationId,
+      text: input.text,
+      author: input.author,
+      at: input.at ?? new Date(),
+      actor: input.actor ?? null,
+    });
+    await vi.advanceTimersByTimeAsync(50);
+    await vi.runAllTimersAsync();
+  }
+
+  function outbound(db: MemoryPrisma, content: string, at: Date) {
+    return db.seed("message", {
+      organizationId: ORG,
+      conversationId: db.rows("conversation")[0]?.id,
+      externalMessageId: `out-${Math.random()}`,
+      direction: "outbound",
+      type: "text",
+      content,
+      timestamp: at,
+      status: "sent",
+      deletedAt: null,
+      metadata: null,
+      senderName: "Ana",
+    });
+  }
+
+  it("sem automação nenhuma, o cliente escrevendo a frase abre a sessão e a própria mensagem é respondida", async () => {
+    const s = keywordScenario();
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", mockFetch([() => openAiResponse("Claro, como posso ajudar?")], calls));
+
+    const message = inbound(s.db, s.conversationId, "Oi, QUERO falar com a ASSISTENTE por favor");
+    s.runtime.onConversationText({ organizationId: ORG, conversationId: s.conversationId, text: message.content as string, author: "client", at: message.timestamp as Date });
+    await settle(s.runtime, s, message.id as string);
+
+    const session = s.db.rows("aiSession")[0];
+    expect(session?.status).toBe("active");
+    expect(session?.automationId).toBeNull();
+    expect(s.sent.map((entry) => entry.text)).toEqual([
+      "Olá! Sou a assistente virtual do escritório.",
+      "Claro, como posso ajudar?",
+    ]);
+    // Um turno só: a ativação e o debounce não respondem duas vezes.
+    expect(calls.filter((call) => call.url.endsWith("/chat/completions"))).toHaveLength(1);
+    expect(
+      s.db.rows("conversationAssignmentHistory").some((row) => String(row.note).includes('palavra-chave "quero falar com a assistente"')),
+    ).toBe(true);
+  });
+
+  it("a frase precisa aparecer inteira: 'ia' dentro de outra palavra não liga nada", async () => {
+    const s = keywordScenario((config) => (config.keywords.activate = ["ia"]));
+    vi.stubGlobal("fetch", mockFetch([], []));
+    await text(s, { text: "Bom dia, a tia mandou o documento", author: "client" });
+    expect(s.db.rows("aiSession")).toHaveLength(0);
+    expect(s.sent).toHaveLength(0);
+  });
+
+  it("nota interna da equipe ativa e a IA responde só o que ficou sem resposta — nunca o histórico", async () => {
+    const s = keywordScenario((config) => (config.identity.sendGreeting = false));
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", mockFetch([() => openAiResponse("Respondendo a pendência.")], calls));
+
+    const now = Date.now();
+    const answered = inbound(s.db, s.conversationId, "Pergunta antiga", new Date(now - 60_000));
+    outbound(s.db, "Resposta antiga", new Date(now - 50_000));
+    inbound(s.db, s.conversationId, "Pergunta pendente", new Date(now - 10_000));
+
+    await text(s, { text: "Deixa com a #IA.", author: "team", actor: { userId: "user-1", userName: "Ana" } });
+
+    const session = s.db.rows("aiSession")[0];
+    expect(session?.status).toBe("active");
+    expect(session?.lastProcessedMessageId).not.toBe(answered.id);
+    const chatCall = calls.find((call) => call.url.endsWith("/chat/completions"));
+    const messages = chatCall?.body.messages as Array<{ role: string; content: string }>;
+    expect(messages.at(-1)).toMatchObject({ role: "user", content: "Pergunta pendente" });
+    expect(s.sent.map((entry) => entry.text)).toEqual(["Respondendo a pendência."]);
+  });
+
+  it("atendente escrevendo a frase numa MENSAGEM: a IA entra e espera o próximo passo do cliente", async () => {
+    const s = keywordScenario((config) => (config.identity.sendGreeting = false));
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", mockFetch([], calls));
+
+    const now = Date.now();
+    inbound(s.db, s.conversationId, "Preciso de ajuda", new Date(now - 20_000));
+    const own = outbound(s.db, "Vou passar para a nossa assistente #ia", new Date(now - 1_000));
+    await text(s, { text: own.content as string, author: "team", at: own.timestamp as Date, actor: { userId: "user-1", userName: "Ana" } });
+
+    expect(s.db.rows("aiSession")[0]?.status).toBe("active");
+    expect(calls.filter((call) => call.url.endsWith("/chat/completions"))).toHaveLength(0);
+  });
+
+  it("o cliente escrevendo a frase de desativar: aviso de transferência, resumo e fila humana", async () => {
+    const s = keywordScenario((config) => (config.identity.sendGreeting = false));
+    vi.stubGlobal("fetch", mockFetch([() => openAiResponse("Posso ajudar?")], []));
+    const first = inbound(s.db, s.conversationId, "#ia");
+    s.runtime.onConversationText({ organizationId: ORG, conversationId: s.conversationId, text: "#ia", author: "client", at: first.timestamp as Date });
+    await settle(s.runtime, s, first.id as string);
+    expect(s.db.rows("aiSession")[0]?.status).toBe("active");
+
+    await text(s, { text: "Prefiro #HUMANO", author: "client" });
+
+    const session = s.db.rows("aiSession")[0];
+    expect(session?.status).toBe("stopped");
+    expect(session?.endReason).toBe("keyword_deactivated");
+    expect(s.sent.at(-1)?.text).toContain("encaminhar você para um de nossos atendentes");
+    expect(s.db.rows("internalNote").some((row) => String(row.content).includes("RESUMO DO ATENDIMENTO POR IA"))).toBe(true);
+  });
+
+  it("a equipe desativando: a IA só sai, sem mandar nada ao cliente", async () => {
+    const s = keywordScenario((config) => (config.identity.sendGreeting = false));
+    vi.stubGlobal("fetch", mockFetch([], []));
+    await text(s, { text: "#ia", author: "team", actor: { userId: "user-1", userName: "Ana" } });
+    expect(s.db.rows("aiSession")[0]?.status).toBe("active");
+
+    await text(s, { text: "#humano", author: "team", actor: { userId: "user-1", userName: "Ana" } });
+
+    const session = s.db.rows("aiSession")[0];
+    expect(session?.status).toBe("stopped");
+    expect(session?.endReason).toBe("keyword_deactivated");
+    expect(s.sent).toHaveLength(0);
+    expect(s.db.rows("conversationAssignmentHistory").some((row) => String(row.note).includes('palavra-chave "#humano", escrita por Ana'))).toBe(true);
+  });
+
+  it("ativar respeita as réguas do agente: 'só individual' não entra no grupo pela frase", async () => {
+    const s = keywordScenario((config) => (config.advanced.conversationType = "individual"));
+    s.db.rows("conversation")[0]!.type = "group";
+    vi.stubGlobal("fetch", mockFetch([], []));
+    await text(s, { text: "#ia", author: "client" });
+    expect(s.db.rows("aiSession")).toHaveLength(0);
+  });
+});

@@ -11,6 +11,7 @@ import {
   AI_RESPONSE_LENGTHS,
   AI_TONES,
   defaultAiAgentConfig,
+  normalizeAiKeyword,
   SCHEDULE_MODES,
   type AiAgentConfig,
 } from "@azvchat/shared";
@@ -29,6 +30,17 @@ function booleanRecord<K extends string>(keys: readonly K[]) {
     Object.fromEntries(keys.map((key) => [key, z.boolean()])) as Record<K, z.ZodBoolean>,
   );
 }
+
+/**
+ * Lista de palavras-chave: sem vazias, sem repetidas (comparadas como o motor
+ * compara, sem acento e sem maiúscula) e com teto de tamanho.
+ */
+const keywordListSchema = z
+  .array(z.string().trim().min(1).max(AI_CONFIG_LIMITS.keywords.maxLength))
+  .max(AI_CONFIG_LIMITS.keywords.max)
+  .refine((phrases) => new Set(phrases.map(normalizeAiKeyword)).size === phrases.length, {
+    message: "Palavra-chave repetida",
+  });
 
 const collectFieldSchema = z.object({
   key: z
@@ -127,6 +139,20 @@ export const aiAgentConfigSchema: z.ZodType<AiAgentConfig> = z.object({
     scheduleMode: z.enum(SCHEDULE_MODES),
     conversationType: z.enum(AI_AGENT_CONVERSATION_TYPES),
   }),
+  keywords: z
+    .object({
+      activate: keywordListSchema,
+      deactivate: keywordListSchema,
+    })
+    // A mesma frase nas duas listas ligaria e desligaria o agente com a mesma
+    // mensagem — quem ganha dependeria da ordem do código, não de quem cadastrou.
+    .refine(
+      (keywords) => {
+        const activate = new Set(keywords.activate.map(normalizeAiKeyword));
+        return !keywords.deactivate.some((phrase) => activate.has(normalizeAiKeyword(phrase)));
+      },
+      { message: "A mesma palavra-chave não pode ativar e desativar o agente" },
+    ),
 });
 
 /**

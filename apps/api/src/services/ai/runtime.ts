@@ -7,6 +7,7 @@ import {
   agentAcceptsConversationType,
   agentServesDepartment,
   estimateCostMicros,
+  findAiKeyword,
   type AiAgentConfig,
   type AiAgentConversationType,
   type AiChatTurn,
@@ -400,7 +401,19 @@ export class AiRuntime {
     conversation: Conversation,
     agent: AiAgent,
     credentials: ResolvedCredentials,
-    origin: { automationId: string | null; automationExecutionId: string | null; originNote: string },
+    origin: {
+      automationId: string | null;
+      automationExecutionId: string | null;
+      originNote: string;
+      /**
+       * Onde o turno começa a ler. Nulo (as duas portas de sempre) é "toda
+       * mensagem recebida", que numa sessão aberta pela primeira mensagem do
+       * cliente é só ela. A palavra-chave abre a sessão no MEIO de uma
+       * conversa antiga e precisa apontar o cursor, senão o primeiro turno
+       * responderia ao histórico inteiro do cliente.
+       */
+      lastProcessedMessageId?: string | null;
+    },
   ): Promise<SessionRow | null> {
     const { prisma } = this.deps;
     const version = await prisma.aiAgentVersion.findUnique({
@@ -415,6 +428,7 @@ export class AiRuntime {
           agentVersionId: version?.id ?? null,
           automationId: origin.automationId,
           automationExecutionId: origin.automationExecutionId,
+          lastProcessedMessageId: origin.lastProcessedMessageId ?? null,
           state: { collected: {}, summary: null, subject: null, intent: null, actions: [] },
         },
         include: { agent: true, agentVersion: true },
@@ -492,6 +506,206 @@ export class AiRuntime {
     const settings = await loadAttendanceSettings(this.deps.prisma, organizationId);
     const withinHours = isWithinBusinessHours(settings, new Date());
     return config.advanced.scheduleMode === "business_hours" ? withinHours : !withinHours;
+  }
+
+  // -------------------------------------------------------------------------
+  // Palavra-chave: ligar e desligar o agente de DENTRO da conversa
+  // -------------------------------------------------------------------------
+
+  /**
+   * Um texto escrito por uma PESSOA apareceu na conversa — mensagem do
+   * cliente, mensagem da equipe (composer ou o próprio celular) ou nota
+   * interna. Confere as palavras-chave dos agentes (`config.keywords`):
+   * desativar para a sessão ativa, ativar abre uma sessão nova.
+   *
+   * Entra na MESMA fila da conversa, então nunca cruza com um turno em
+   * andamento, e a mensagem do cliente que ativou é respondida pelo turno do
+   * debounce de sempre, que roda depois daqui. Nunca lança.
+   *
+   * Texto da própria IA nunca chega aqui (quem chama filtra): a resposta do
+   * agente repetindo a frase desligaria o próprio agente.
+   */
+  onConversationText(input: {
+    organizationId: string;
+    conversationId: string;
+    text: string | null;
+    author: "client" | "team";
+    /** Quando o texto apareceu — é a régua do cursor da sessão nova. */
+    at: Date;
+    actor?: { userId: string; userName: string } | null;
+  }): void {
+    if (!input.text || !input.text.trim()) return;
+    void this.enqueue(input.conversationId, () => this.handleKeywordText(input));
+  }
+
+  private async handleKeywordText(input: {
+    organizationId: string;
+    conversationId: string;
+    text: string | null;
+    author: "client" | "team";
+    at: Date;
+    actor?: { userId: string; userName: string } | null;
+  }): Promise<void> {
+    const { prisma, logger } = this.deps;
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: input.conversationId, organizationId: input.organizationId },
+    });
+    if (!conversation || conversation.archivedAt) return;
+
+    const active = await this.loadActive(conversation.id);
+    if (active) {
+      // Vale a configuração ATUAL do agente, e não a versão da sessão: é
+      // interruptor, como o status — quem acabou de cadastrar a frase espera
+      // que ela funcione na conversa que já está aberta.
+      const config = parseStoredAgentConfig(active.agent.config);
+      const phrase = findAiKeyword(input.text, config.keywords.deactivate);
+      if (!phrase) return;
+      logger.info({ event: "ai_keyword_deactivated", conversationId: conversation.id, sessionId: active.id, author: input.author });
+      await this.deactivateByKeyword(active, conversation, phrase, input);
+      return;
+    }
+
+    const agents = await prisma.aiAgent.findMany({
+      where: { organizationId: conversation.organizationId, status: "active" },
+      orderBy: { createdAt: "asc" },
+    });
+    for (const agent of agents) {
+      const config = parseStoredAgentConfig(agent.config);
+      const phrase = findAiKeyword(input.text, config.keywords.activate);
+      if (!phrase) continue;
+      // As MESMAS réguas do agente que as outras portas aplicam: tipo de
+      // conversa, departamento e horário. A palavra-chave pula só a escolha
+      // da automação e a trava de reinício (`canRestart`) — ela é o pedido
+      // explícito de alguém, como o "Devolver para IA".
+      if (!agentAcceptsConversationType(config.advanced.conversationType, conversation.type)) continue;
+      if (!(await this.agentServesConversation(agent, conversation.departmentId))) continue;
+      if (!(await this.isAgentScheduledNow(config, conversation.organizationId))) {
+        logger.info({ event: "ai_keyword_outside_schedule", conversationId: conversation.id, agentId: agent.id });
+        continue;
+      }
+      await this.activateByKeyword(agent, conversation, phrase, input);
+      return;
+    }
+  }
+
+  private async activateByKeyword(
+    agent: AiAgent,
+    conversation: Conversation,
+    phrase: string,
+    input: { author: "client" | "team"; at: Date; actor?: { userId: string; userName: string } | null },
+  ): Promise<void> {
+    const { prisma, logger } = this.deps;
+    const settings = await loadAiSettings(prisma, conversation.organizationId);
+    const budget = await loadBudgetState(prisma, conversation.organizationId, settings);
+    if (budget.blocked) {
+      logger.info({ event: "ai_keyword_budget_blocked", conversationId: conversation.id, agentId: agent.id });
+      return;
+    }
+    const credentials = await resolveCredentials(prisma, this.deps.cipher, logger, conversation.organizationId);
+    if (!credentials) {
+      logger.warn({ event: "ai_provider_not_connected", organizationId: conversation.organizationId });
+      return;
+    }
+
+    // O cursor: a IA responde ao que ficou SEM resposta até a frase — as
+    // mensagens do cliente depois da última mensagem nossa. Cliente que
+    // escreveu a frase tem a própria mensagem respondida; atendente que a
+    // escreveu numa mensagem deixa a IA esperando o próximo passo do cliente
+    // (a última mensagem nossa é a dele); escrita numa NOTA, a IA assume e já
+    // responde o que estava pendente. Nunca o histórico inteiro.
+    const lastOutbound = await prisma.message.findFirst({
+      where: { conversationId: conversation.id, direction: "outbound", deletedAt: null, timestamp: { lte: input.at } },
+      orderBy: { timestamp: "desc" },
+      select: { timestamp: true },
+    });
+    const cursor = lastOutbound
+      ? await prisma.message.findFirst({
+          where: { conversationId: conversation.id, direction: "inbound", timestamp: { lte: lastOutbound.timestamp } },
+          orderBy: { timestamp: "desc" },
+          select: { id: true },
+        })
+      : null;
+
+    const who =
+      input.author === "client"
+        ? "pelo cliente"
+        : input.actor
+          ? `por ${input.actor.userName}`
+          : "pela equipe";
+    const session = await this.createSessionForAgent(conversation, agent, credentials, {
+      automationId: null,
+      automationExecutionId: null,
+      originNote: `pela palavra-chave "${phrase}", escrita ${who}`,
+      lastProcessedMessageId: cursor?.id ?? null,
+    });
+    if (!session) return;
+    this.deps.audit.record({
+      organizationId: conversation.organizationId,
+      userId: input.actor?.userId ?? null,
+      action: "ai.session_keyword_activated",
+      entityType: "Conversation",
+      entityId: conversation.id,
+      metadata: { sessionId: session.id, agentId: agent.id, author: input.author },
+    });
+    // Mensagem pendente do cliente? O turno sai já — na mesma fila, então
+    // depois deste trabalho, e sem esperar uma mensagem nova.
+    if (await this.hasUnprocessedInbound(session)) {
+      void this.enqueue(conversation.id, () => this.handleInbound(conversation.organizationId, conversation.id));
+    }
+  }
+
+  private async deactivateByKeyword(
+    session: SessionRow,
+    conversation: Conversation,
+    phrase: string,
+    input: { author: "client" | "team"; actor?: { userId: string; userName: string } | null },
+  ): Promise<void> {
+    if (input.author === "client") {
+      // O cliente pediu para sair da IA: é o pedido de atendente, e segue o
+      // caminho dele — aviso de transferência, resumo em nota interna e a
+      // conversa no destino humano do agente. Parar calado deixaria o cliente
+      // falando sozinho.
+      const config = parseStoredAgentConfig(session.agentVersion?.config ?? session.agent.config);
+      const state = readSessionState(session.state);
+      const message = config.handoff.transferMessage.trim();
+      if (message) {
+        const credentials = await resolveCredentials(this.deps.prisma, this.deps.cipher, this.deps.logger, conversation.organizationId);
+        if (credentials) {
+          try {
+            await this.sendAiText(session, conversation, message, credentials, config);
+          } catch (err) {
+            this.deps.logger.warn({ event: "ai_keyword_transfer_send_failed", sessionId: session.id, error: String(err) });
+          }
+        }
+      }
+      await this.transferToHuman(
+        session,
+        conversation,
+        config,
+        {
+          kind: "transfer",
+          reason: `O cliente escreveu a palavra-chave de desativar "${phrase}"`,
+          subject: state.subject ?? "",
+          need: "",
+          summary: state.summary ?? "",
+        },
+        state,
+        "keyword_deactivated",
+      );
+      return;
+    }
+    // A equipe desligou: ela está na conversa, então a IA só sai, sem aviso
+    // ao cliente e sem mexer em quem é o responsável.
+    await endAiSession(this.deps, {
+      sessionId: session.id,
+      organizationId: conversation.organizationId,
+      conversationId: conversation.id,
+      reason: "keyword_deactivated",
+      endedByUserId: input.actor?.userId ?? null,
+      historyNote: `Atendimento por IA (${session.agent.name}) desativado pela palavra-chave "${phrase}"${
+        input.actor ? `, escrita por ${input.actor.userName}` : ""
+      }.`,
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -1903,6 +2117,8 @@ function reasonLabel(reason: AiSessionEndReason): string {
       return "O agente deixou de atender este tipo de conversa";
     case "department_excluded":
       return "O agente não atende o departamento desta conversa";
+    case "keyword_deactivated":
+      return "Desativado por palavra-chave escrita na conversa";
     case "attempt_limit":
       return "Limite de tentativas sem resolver";
     default:

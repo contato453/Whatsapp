@@ -412,6 +412,11 @@ export const AI_SESSION_END_REASONS = [
   // cadastro dele, ou a conversa mudou para um setor que ele não atende).
   // Separado do tipo pelo mesmo motivo: o histórico diz qual regra parou.
   "department_excluded",
+  // Alguém (cliente ou equipe) escreveu na conversa uma das palavras-chave de
+  // DESATIVAR do agente (`AiAgentConfig.keywords.deactivate`). Motivo próprio
+  // porque não é interruptor nem limite: foi um pedido feito DENTRO da
+  // conversa, e o histórico precisa dizer isso.
+  "keyword_deactivated",
   "conversation_archived",
 ] as const;
 export type AiSessionEndReason = (typeof AI_SESSION_END_REASONS)[number];
@@ -432,6 +437,7 @@ export const AI_SESSION_END_REASON_LABELS: Record<AiSessionEndReason, string> = 
   flow_disabled: "O fluxo que iniciou o atendimento foi desligado",
   conversation_type_excluded: "O agente deixou de atender este tipo de conversa",
   department_excluded: "O agente não atende o departamento desta conversa",
+  keyword_deactivated: "Desativado por palavra-chave escrita na conversa",
   conversation_archived: "A conversa foi arquivada",
 };
 
@@ -855,6 +861,19 @@ export interface AiAgentConfig {
      */
     conversationType: AiAgentConversationType;
   };
+  /**
+   * PALAVRAS-CHAVE que ligam e desligam o agente de DENTRO da conversa. Quando
+   * alguém escreve uma delas — o cliente, ou a equipe numa mensagem ou numa
+   * nota interna —, o agente começa (`activate`) ou para (`deactivate`) ali
+   * mesmo. É a porta de entrada que não depende de automação: a equipe digita
+   * a frase e a IA assume, ou o cliente digita a frase e a IA sai. A
+   * comparação ignora maiúsculas, acentos e espaços repetidos, e casa a frase
+   * INTEIRA como palavra (ver `findAiKeyword`). Lista vazia = desligado.
+   */
+  keywords: {
+    activate: string[];
+    deactivate: string[];
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -886,6 +905,9 @@ export const AI_CONFIG_LIMITS = {
   // Teto de 60s: mais que isso é o cliente achando que a IA travou, não que
   // está digitando — e o debounce de entrada (2,5s) já é uma espera à parte.
   responseDelaySeconds: { min: 0, max: 60, default: 0 },
+  // Palavras-chave de ativar/desativar: poucas e curtas. Frase longa quase
+  // nunca aparece igual na conversa, e lista grande vira gatilho por acidente.
+  keywords: { max: 20, maxLength: 100 },
 } as const;
 
 export const AI_DEFAULT_TRANSFER_MESSAGE =
@@ -945,6 +967,7 @@ export function defaultAiAgentConfig(): AiAgentConfig {
       scheduleMode: DEFAULT_SCHEDULE_MODE,
       conversationType: "any",
     },
+    keywords: { activate: [], deactivate: [] },
   };
 }
 
@@ -1501,4 +1524,46 @@ export function agentAcceptsConversationType(
   conversationType: ConversationType,
 ): boolean {
   return agentType === "any" || agentType === conversationType;
+}
+
+// ---------------------------------------------------------------------------
+// Palavras-chave de ativar/desativar o agente
+// ---------------------------------------------------------------------------
+
+/**
+ * Forma de comparação: minúsculas, sem acento, espaços colapsados. Pontuação
+ * FICA — é ela que deixa a equipe escolher um código que nunca aparece por
+ * acaso ("#ia", "/robo"), em vez de uma palavra comum do português.
+ */
+export function normalizeAiKeyword(text: string): string {
+  return text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Qual das frases aparece no texto? Devolve a frase como foi cadastrada, ou
+ * nulo. A frase precisa aparecer INTEIRA e como palavra: "ia" não casa dentro
+ * de "dia", e "atendente humano" não casa com "atendente humanos". Sem a borda
+ * de palavra, uma palavra-chave curta ligaria e desligaria a IA a cada frase
+ * comum do cliente — o tipo de defeito que ninguém liga à causa.
+ */
+export function findAiKeyword(text: string | null | undefined, phrases: readonly string[]): string | null {
+  if (!text) return null;
+  const haystack = normalizeAiKeyword(text);
+  if (!haystack) return null;
+  for (const phrase of phrases) {
+    const needle = normalizeAiKeyword(phrase);
+    if (!needle) continue;
+    const pattern = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(needle)}($|[^\\p{L}\\p{N}])`, "u");
+    if (pattern.test(haystack)) return phrase;
+  }
+  return null;
 }
