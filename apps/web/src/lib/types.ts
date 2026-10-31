@@ -935,6 +935,8 @@ export interface CrmOpportunityDto {
   position: number;
   stageEnteredAt: string;
   lastInteractionAt: string | null;
+  /** Última mensagem da conversa, de qualquer lado — a régua do card vermelho. */
+  conversationLastMessageAt: string | null;
   nextActivity: {
     id: string;
     title: string;

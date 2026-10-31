@@ -589,6 +589,36 @@ export function crmStageSlaBroken(
   return crmDaysInStage(stageEnteredAt, now) >= slaDays;
 }
 
+/**
+ * Dias sem mensagem nenhuma (do cliente ou da equipe) que deixam o card
+ * VERMELHO no Kanban. Pedido do Lincoln (31/10/2026): lead esquecido tem de
+ * saltar aos olhos, e qualquer mensagem zera a contagem.
+ */
+export const CRM_IDLE_ALERT_DAYS = 4;
+
+/**
+ * O último sinal de vida do card: a mensagem mais recente da conversa, de
+ * qualquer lado, ou a última resposta registrada no próprio card (o que for
+ * mais novo). Sem nenhum dos dois, conta da criação — card que nasceu e
+ * ninguém tocou também esfria.
+ */
+export function crmLastActivityAt(input: {
+  conversationLastMessageAt?: string | null;
+  lastInteractionAt?: string | null;
+  createdAt: string;
+}): string {
+  const candidatos = [input.conversationLastMessageAt, input.lastInteractionAt].filter(
+    (item): item is string => Boolean(item),
+  );
+  if (candidatos.length === 0) return input.createdAt;
+  return candidatos.reduce((maior, item) => (new Date(item) > new Date(maior) ? item : maior));
+}
+
+/** O card passou do limite sem mensagem? Mesma régua de dias cheios da etapa. */
+export function crmIdleAlert(lastActivityAt: string | Date, now: Date = new Date()): boolean {
+  return crmDaysInStage(lastActivityAt, now) >= CRM_IDLE_ALERT_DAYS;
+}
+
 /** Texto do tempo na etapa, já em português e no singular certo. */
 export function crmTimeInStageLabel(stageEnteredAt: string | Date, now: Date = new Date()): string {
   const dias = crmDaysInStage(stageEnteredAt, now);
