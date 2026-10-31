@@ -279,6 +279,7 @@ describe("client do Azevedo-OS — leitura do contrato", () => {
       taxRegime: null,
       payrollInfo: null,
       contacts: [],
+      requestLinks: [],
     });
   });
 
@@ -332,5 +333,83 @@ describe("client do Azevedo-OS — link de abertura", () => {
       webUrlTemplate: "https://gestao.exemplo/empresas/{id}",
     });
     expect(client.companyWebUrl("abc 1")).toBe("https://gestao.exemplo/empresas/abc%201");
+  });
+});
+
+/**
+ * Links de solicitação viram variável de resposta rápida, e a URL vai parar
+ * no texto que o cliente recebe. Por isso a leitura é mais desconfiada do que
+ * a do resto do card: só http(s), só link vivo, um por tipo, e o tipo no
+ * formato que dá para escrever como variável.
+ */
+describe("client do Azevedo-OS — links de solicitação", () => {
+  const LINK_NF = "https://portal.azevedoassessoria.com.br/solicitacao/nota-fiscal/azevedo/AbC123";
+
+  it("lê os links vivos com tipo, rótulo e URL", async () => {
+    const client = build((async () =>
+      jsonResponse({
+        data: {
+          ...EMPRESA,
+          requestLinks: [
+            { type: "nota-fiscal", label: "Nota Fiscal", url: LINK_NF },
+            { slug: "admissao", nome: "Admissao de funcionario", link: "https://x.exemplo/a" },
+          ],
+        },
+      })) as unknown as typeof fetch);
+    const company = await client.getCompany(EMPRESA.id);
+    expect(company.requestLinks).toEqual([
+      { type: "nota-fiscal", label: "Nota Fiscal", url: LINK_NF },
+      { type: "admissao", label: "Admissao de funcionario", url: "https://x.exemplo/a" },
+    ]);
+  });
+
+  it("descarta URL que não é http(s), link fora de ativo, tipo torto e tipo repetido", async () => {
+    const client = build((async () =>
+      jsonResponse({
+        ...EMPRESA,
+        requestLinks: [
+          { type: "nota-fiscal", label: "Nota Fiscal", url: "javascript:alert(1)" },
+          { type: "admissao", label: "Admissão", url: "https://x.exemplo/a", status: "expired" },
+          { type: "Abertura de Empresa", label: "Abertura", url: "https://x.exemplo/b" },
+          { type: "migracao-contabil", label: "Migração", url: "https://x.exemplo/c", status: "active" },
+          { type: "migracao-contabil", label: "Migração 2", url: "https://x.exemplo/d" },
+          "lixo",
+        ],
+      })) as unknown as typeof fetch);
+    const company = await client.getCompany(EMPRESA.id);
+    expect(company.requestLinks).toEqual([
+      { type: "migracao-contabil", label: "Migração", url: "https://x.exemplo/c" },
+    ]);
+  });
+
+  it("Azevedo-OS que ainda não manda o campo dá lista vazia, não erro", async () => {
+    const client = build((async () => jsonResponse(EMPRESA)) as unknown as typeof fetch);
+    expect((await client.getCompany(EMPRESA.id)).requestLinks).toEqual([]);
+  });
+
+  it("o catálogo de tipos vem de /request-link-types, sem URL e sem repetição", async () => {
+    const fetchSpy = vi.fn(async () =>
+      jsonResponse({
+        data: [
+          { type: "nota-fiscal", label: "Nota Fiscal" },
+          { type: "admissao" },
+          { type: "nota-fiscal", label: "Repetido" },
+          { type: "com espaço", label: "Torto" },
+        ],
+      }),
+    );
+    const client = build(fetchSpy as unknown as typeof fetch);
+    const types = await client.requestLinkTypes();
+    const [url] = fetchSpy.mock.calls[0] as unknown as [string];
+    expect(url).toBe(`${BASE}/request-link-types`);
+    expect(types).toEqual([
+      { type: "nota-fiscal", label: "Nota Fiscal" },
+      { type: "admissao", label: "admissao" },
+    ]);
+  });
+
+  it("catálogo em formato inesperado vira falha da integração, nunca exceção crua", async () => {
+    const client = build((async () => jsonResponse({ algo: 1 })) as unknown as typeof fetch);
+    await expect(client.requestLinkTypes()).rejects.toBeInstanceOf(AzevedoOsError);
   });
 });

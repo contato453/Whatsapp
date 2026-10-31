@@ -65,12 +65,17 @@ const VARIABLE_PATTERN = /\{\{\s*([^{}]*?)\s*\}\}/g;
  * Contexto de resolução
  * ------------------------------------------------------------------ */
 
-/** Empresa, conversa, atendente e data — os quatro grupos do catálogo. */
-export const QUICK_REPLY_VARIABLE_GROUPS = ["empresa", "conversa", "atendente", "data"] as const;
+/**
+ * Os grupos do catálogo, na ordem do menu. "Links de solicitação" é o único
+ * grupo que não sai da lista fixa abaixo: os tipos de link são do Azevedo-OS
+ * (ver `requestLinkVariable`).
+ */
+export const QUICK_REPLY_VARIABLE_GROUPS = ["empresa", "links", "conversa", "atendente", "data"] as const;
 export type QuickReplyVariableGroup = (typeof QUICK_REPLY_VARIABLE_GROUPS)[number];
 
 export const QUICK_REPLY_VARIABLE_GROUP_LABELS: Record<QuickReplyVariableGroup, string> = {
   empresa: "Empresa",
+  links: "Links de solicitação",
   conversa: "Conversa",
   atendente: "Atendente",
   data: "Data",
@@ -320,20 +325,101 @@ const VARIABLES_BY_NAME = new Map(
   QUICK_REPLY_VARIABLES.map((variable) => [variable.name, variable] as const),
 );
 
-export function quickReplyVariable(name: string): QuickReplyVariable | null {
-  return VARIABLES_BY_NAME.get(name) ?? null;
+/* ------------------------------------------------------------------ *
+ * Links de solicitação (família dinâmica)
+ * ------------------------------------------------------------------ */
+
+/**
+ * `{{empresa.link.nota-fiscal}}`: o link de solicitação daquele tipo, da
+ * empresa vinculada à conversa — o mesmo da aba "Links de Solicitações" da
+ * ficha dela no Azevedo-OS, que o cliente abre e preenche sem login.
+ *
+ * ------------------------------------------------------------------
+ * POR QUE É UMA FAMÍLIA, E NÃO UMA VARIÁVEL POR TIPO NESTA LISTA
+ * ------------------------------------------------------------------
+ * Os tipos de link (Abertura de Empresa, Admissão, Nota Fiscal...) são um
+ * catálogo que o Azevedo-OS edita sem avisar ninguém. Escrevê-los aqui seria
+ * a segunda lista que diverge: tipo novo lá não teria variável cá, e tipo
+ * renomeado lá deixaria resposta rápida salva apontando para nada. Então o
+ * nome técnico é o identificador estável do tipo lá (o slug da página), e
+ * QUALQUER slug bem formado é variável válida — como o `{{campo.<coluna>}}`
+ * dos disparos. O menu do cadastro pergunta os tipos ao Azevedo-OS na hora
+ * (`GET /integrations/azevedo-os/request-link-types`).
+ *
+ * Validar o slug contra o catálogo de lá no salvamento parece mais seguro e
+ * é pior: com o portal fora do ar, ninguém conseguiria salvar resposta rápida
+ * nenhuma que citasse link. Slug errado não chega ao cliente do mesmo jeito:
+ * ele simplesmente nunca resolve, e o composer o mostra como "[Link: ...]"
+ * antes do Enter, que é a trava que vale para qualquer variável.
+ */
+export const QUICK_REPLY_REQUEST_LINK_PREFIX = "empresa.link.";
+
+/** Forma do slug de página do Azevedo-OS: minúsculas, dígitos e hífen no meio. */
+const REQUEST_LINK_TYPE_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/;
+
+export function requestLinkVariableName(type: string): string {
+  return `${QUICK_REPLY_REQUEST_LINK_PREFIX}${type}`;
 }
 
-/** Catálogo agrupado, na ordem em que o menu da tela desenha os blocos. */
-export function quickReplyVariablesByGroup(): {
+/** O tipo de link que a variável pede, ou `null` quando ela não é dessa família. */
+export function requestLinkTypeFromVariable(name: string): string | null {
+  if (!name.startsWith(QUICK_REPLY_REQUEST_LINK_PREFIX)) return null;
+  const type = name.slice(QUICK_REPLY_REQUEST_LINK_PREFIX.length);
+  return REQUEST_LINK_TYPE_PATTERN.test(type) ? type : null;
+}
+
+/**
+ * Nome legível do tipo quando não há rótulo de lá: "nota-fiscal" vira "Nota
+ * fiscal". É o que aparece no "[Link: Nota fiscal]" do composer — o composer
+ * não carrega o catálogo de tipos, e o rótulo do Azevedo-OS só viria junto
+ * com o próprio link, que é justamente o que faltou.
+ */
+function requestLinkTypeLabel(type: string): string {
+  const texto = type.replace(/-/g, " ");
+  return texto.charAt(0).toUpperCase() + texto.slice(1);
+}
+
+/**
+ * A variável de um tipo de link. `label` é o nome escrito no Azevedo-OS,
+ * quando a tela o tem (o menu do cadastro); sem ele, sai do slug.
+ */
+export function requestLinkVariable(type: string, label?: string | null): QuickReplyVariable {
+  const nome = label?.trim() || requestLinkTypeLabel(type);
+  return {
+    name: requestLinkVariableName(type),
+    label: `Link: ${nome}`,
+    description: `Link "${nome}" da empresa vinculada, para o cliente preencher sem login. Sem link ativo (pausado, vencido ou nunca gerado), fica por preencher.`,
+    group: "links",
+    example: `https://portal.azevedoassessoria.com.br/solicitacao/${type}/empresa/AbC123`,
+    // Só link vivo chega na empresa (ver `AzevedoOsRequestLink`): o pausado
+    // ou vencido resolvendo daria ao cliente um link que não abre.
+    resolve: ({ company }) =>
+      texto((company?.requestLinks ?? []).find((link) => link.type === type)?.url),
+  };
+}
+
+export function quickReplyVariable(name: string): QuickReplyVariable | null {
+  const fixa = VARIABLES_BY_NAME.get(name);
+  if (fixa) return fixa;
+  const type = requestLinkTypeFromVariable(name);
+  return type ? requestLinkVariable(type) : null;
+}
+
+/**
+ * Catálogo agrupado, na ordem em que o menu da tela desenha os blocos.
+ * `extra` são as variáveis que não moram na lista fixa — hoje, os tipos de
+ * link de solicitação que o Azevedo-OS informou —, cada uma no próprio grupo.
+ */
+export function quickReplyVariablesByGroup(extra: readonly QuickReplyVariable[] = []): {
   group: QuickReplyVariableGroup;
   label: string;
   variables: QuickReplyVariable[];
 }[] {
+  const todas = [...QUICK_REPLY_VARIABLES, ...extra];
   return QUICK_REPLY_VARIABLE_GROUPS.map((group) => ({
     group,
     label: QUICK_REPLY_VARIABLE_GROUP_LABELS[group],
-    variables: QUICK_REPLY_VARIABLES.filter((variable) => variable.group === group),
+    variables: todas.filter((variable) => variable.group === group),
   })).filter((bloco) => bloco.variables.length > 0);
 }
 
@@ -469,8 +555,15 @@ export function previewQuickReplyTemplate(text: string): string {
  */
 const MANUAL_PLACEHOLDER_PATTERN = /\[([^[\]\n]{2,60})\]/g;
 
-/** Palavra-chave do marcador manual → variável sugerida. Primeiro acerto vence. */
-const MANUAL_SUGGESTIONS: { keywords: string[]; variable: string }[] = [
+/**
+ * Palavra-chave do marcador manual → variável sugerida. Primeiro acerto vence.
+ * `variable: null` é "parece variável, mas não sei qual": serve para impedir
+ * que a regra genérica do fim sugira algo errado.
+ */
+const MANUAL_SUGGESTIONS: { keywords: string[]; variable: string | null }[] = [
+  // Antes de tudo: "[link da nota fiscal]" contém "nota", "empresa", "nome"...
+  // e cairia na sugestão de nome do cliente. Qual link é escolhido no menu.
+  { keywords: ["link"], variable: null },
   { keywords: ["cnpj"], variable: "empresa.cnpj" },
   { keywords: ["razao", "razão"], variable: "empresa.razao_social" },
   { keywords: ["fantasia"], variable: "empresa.nome_fantasia" },
@@ -528,7 +621,7 @@ export function detectManualPlaceholders(text: string): QuickReplyManualPlacehol
     const regra = MANUAL_SUGGESTIONS.find((item) =>
       item.keywords.some((keyword) => miolo.includes(keyword)),
     );
-    achados.push({ raw, suggestion: regra ? quickReplyVariable(regra.variable) : null });
+    achados.push({ raw, suggestion: regra?.variable ? quickReplyVariable(regra.variable) : null });
   }
   return achados;
 }

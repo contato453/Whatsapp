@@ -58,6 +58,39 @@ export interface AzevedoOsCompany {
   taxRegime: string | null;
   payrollInfo: string | null;
   contacts: AzevedoOsContact[];
+  /**
+   * Links de solicitação da empresa que FUNCIONAM agora (ativos, dentro da
+   * validade, empresa na operação) — a aba "Links de Solicitações" da ficha
+   * dela no Azevedo-OS. Viram as variáveis `{{empresa.link.<tipo>}}` da
+   * resposta rápida. Lista vazia quando a empresa não tem link vivo OU quando
+   * o Azevedo-OS ainda não manda o campo: nos dois casos a variável fica por
+   * preencher, que é o que a atendente precisa ver antes de mandar.
+   */
+  requestLinks: AzevedoOsRequestLink[];
+}
+
+/**
+ * Um link de solicitação ("Admissão de funcionário", "Nota Fiscal"...).
+ *
+ * `type` é o identificador estável do tipo no Azevedo-OS (o slug da página,
+ * `nota-fiscal`), e é ele que entra no nome da variável; `label` é o nome que
+ * a equipe lê, escrito lá. A URL é a que o cliente abre, sem login — por isso
+ * só chega aqui link vivo: link pausado, vencido ou revogado não atravessa.
+ */
+export interface AzevedoOsRequestLink {
+  type: string;
+  label: string;
+  url: string;
+}
+
+/**
+ * Um TIPO de link de solicitação, sem empresa nenhuma — o que o menu de
+ * variáveis do cadastro de resposta rápida oferece. Não tem URL: o link é da
+ * empresa, e o cadastro não sabe para qual conversa a resposta vai.
+ */
+export interface AzevedoOsRequestLinkType {
+  type: string;
+  label: string;
 }
 
 /**

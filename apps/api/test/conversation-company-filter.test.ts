@@ -91,6 +91,7 @@ function fakeAzevedoOs(overrides: Partial<AzevedoOsClient> = {}): AzevedoOsClien
       gravado.chamadasAoPortal += 1;
       return { ids: [EMPRESA_A, EMPRESA_B], truncated: false };
     },
+    requestLinkTypes: async () => [],
     companyWebUrl: () => null,
     ...overrides,
   };

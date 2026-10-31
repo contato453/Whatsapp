@@ -119,6 +119,7 @@ function fakeAzevedoOs(): AzevedoOsClient {
       payroll: { options: [], noneCount: 0 },
     }),
     companyIds: async () => ({ ids: [], truncated: false }),
+    requestLinkTypes: async () => [],
     companyWebUrl: () => null,
   };
 }

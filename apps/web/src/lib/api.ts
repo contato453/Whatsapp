@@ -41,6 +41,7 @@ import type {
   AzevedoOsCompanyDto,
   AzevedoOsFacetsDto,
   AzevedoOsHealthDto,
+  AzevedoOsRequestLinkType,
   ConfigurableRole,
   ConversationStatus,
   ParticipantClientRole,
@@ -708,6 +709,16 @@ export const azevedoOsApi = {
   facets: () =>
     api.get<{ facets: AzevedoOsFacetsDto | null; unavailable: boolean }>(
       "/integrations/azevedo-os/company-facets",
+    ),
+  /**
+   * Tipos de link de solicitação, para o menu de variáveis do cadastro de
+   * resposta rápida. Mesmo contrato das facetas: `types` nulo com
+   * `unavailable` falso é integração desligada (o bloco some do menu); com
+   * `unavailable` verdadeiro, portal mudo (o bloco aparece avisando).
+   */
+  requestLinkTypes: () =>
+    api.get<{ types: AzevedoOsRequestLinkType[] | null; unavailable: boolean }>(
+      "/integrations/azevedo-os/request-link-types",
     ),
   /** Empresa vinculada; `null` quando a conversa não tem vínculo. */
   company: (conversationId: string) =>

@@ -1,13 +1,54 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Braces } from "lucide-react";
 import {
+  QUICK_REPLY_REQUEST_LINK_PREFIX,
   quickReplyVariableToken,
   quickReplyVariablesByGroup,
+  requestLinkVariable,
+  type AzevedoOsRequestLinkType,
   type QuickReplyVariable,
 } from "@azvchat/shared";
+import { azevedoOsApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
+
+/**
+ * Estado do catálogo de tipos de link. `off` é integração desligada (o bloco
+ * nem aparece); `unavailable`, portal mudo — o bloco aparece avisando, porque
+ * sumir com ele faria quem cadastra achar que o recurso deixou de existir.
+ */
+type LinkTypesState =
+  | { status: "loading" }
+  | { status: "off" }
+  | { status: "unavailable" }
+  | { status: "ready"; types: AzevedoOsRequestLinkType[] };
+
+/**
+ * Os tipos de link vêm do Azevedo-OS, e não do catálogo fixo: lá a lista é
+ * editada sem avisar ninguém. Pedidos uma vez por montagem do menu — o
+ * cadastro é aberto poucas vezes, e um tipo novo aparece no próximo uso.
+ */
+function useRequestLinkTypes(): LinkTypesState {
+  const [state, setState] = useState<LinkTypesState>({ status: "loading" });
+  useEffect(() => {
+    let vivo = true;
+    azevedoOsApi
+      .requestLinkTypes()
+      .then((data) => {
+        if (!vivo) return;
+        if (data.types) setState({ status: "ready", types: data.types });
+        else setState({ status: data.unavailable ? "unavailable" : "off" });
+      })
+      .catch(() => {
+        if (vivo) setState({ status: "unavailable" });
+      });
+    return () => {
+      vivo = false;
+    };
+  }, []);
+  return state;
+}
 
 /**
  * Menu de variáveis da resposta rápida.
@@ -29,7 +70,28 @@ export function VariablePicker({
 }) {
   const [open, setOpen] = useState(false);
   const boxRef = useRef<HTMLDivElement | null>(null);
-  const grupos = quickReplyVariablesByGroup();
+  const linkTypes = useRequestLinkTypes();
+  const grupos = useMemo(
+    () =>
+      quickReplyVariablesByGroup(
+        linkTypes.status === "ready"
+          ? linkTypes.types.map((tipo) =>
+              requestLinkVariable(tipo.type, tipo.label),
+            )
+          : [],
+      ),
+    [linkTypes],
+  );
+  // O aviso do bloco de links quando não há o que listar: o bloco não sai da
+  // lista agrupada (ele não tem variável), então é desenhado à parte.
+  const linksAviso =
+    linkTypes.status === "loading"
+      ? "Carregando os tipos de link do Azevedo-OS..."
+      : linkTypes.status === "unavailable"
+        ? `Azevedo-OS indisponível agora. Quem souber o tipo pode digitar {{${QUICK_REPLY_REQUEST_LINK_PREFIX}tipo}}.`
+        : linkTypes.status === "ready" && linkTypes.types.length === 0
+          ? "Nenhum tipo de link cadastrado no Azevedo-OS."
+          : null;
 
   useEffect(() => {
     if (!open) return;
@@ -60,30 +122,49 @@ export function VariablePicker({
       {open && (
         <div className="thin-scroll absolute right-0 z-30 mt-1 max-h-80 w-80 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
           {grupos.map((grupo) => (
-            <div key={grupo.group}>
-              <p className="border-b border-slate-100 bg-slate-50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                {grupo.label}
-              </p>
-              {grupo.variables.map((variable) => (
-                <button
-                  key={variable.name}
-                  type="button"
-                  onClick={() => {
-                    onInsert(variable);
-                    setOpen(false);
-                  }}
-                  className="block w-full px-3 py-2 text-left hover:bg-brand-50"
-                >
-                  <span className="flex items-baseline gap-2">
-                    <span className="text-xs font-semibold text-slate-800">{variable.label}</span>
-                    <span className="font-mono text-[10px] text-slate-400">
-                      {quickReplyVariableToken(variable.name)}
+            <Fragment key={grupo.group}>
+              <div>
+                <p className="border-b border-slate-100 bg-slate-50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                  {grupo.label}
+                </p>
+                {grupo.variables.map((variable) => (
+                  <button
+                    key={variable.name}
+                    type="button"
+                    onClick={() => {
+                      onInsert(variable);
+                      setOpen(false);
+                    }}
+                    className="block w-full px-3 py-2 text-left hover:bg-brand-50"
+                  >
+                    <span className="flex items-baseline gap-2">
+                      <span className="text-xs font-semibold text-slate-800">
+                        {variable.label}
+                      </span>
+                      <span className="font-mono text-[10px] text-slate-400">
+                        {quickReplyVariableToken(variable.name)}
+                      </span>
                     </span>
-                  </span>
-                  <span className="block text-[11px] text-slate-500">{variable.description}</span>
-                </button>
-              ))}
-            </div>
+                    <span className="block text-[11px] text-slate-500">
+                      {variable.description}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              {/* O bloco de links não tem variável quando o catálogo não veio,
+                então o aviso dele entra logo depois de Empresa, onde ele
+                apareceria. */}
+              {grupo.group === "empresa" && linksAviso && (
+                <div>
+                  <p className="border-b border-slate-100 bg-slate-50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                    Links de solicitação
+                  </p>
+                  <p className="px-3 py-2 text-[11px] text-slate-500">
+                    {linksAviso}
+                  </p>
+                </div>
+              )}
+            </Fragment>
           ))}
         </div>
       )}

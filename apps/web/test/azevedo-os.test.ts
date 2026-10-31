@@ -27,6 +27,7 @@ function empresa(overrides: Partial<AzevedoOsCompany> = {}): AzevedoOsCompany {
     taxRegime: "Imune/Isenta",
     payrollInfo: "Só Pró-labore",
     contacts: [],
+    requestLinks: [],
     ...overrides,
   };
 }
