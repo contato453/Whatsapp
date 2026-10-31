@@ -489,8 +489,18 @@ export interface SendMessageInput {
 export const integrationTokensApi = {
   list: () =>
     api.get<{ tokens: IntegrationTokenDto[] }>("/integration-tokens").then((data) => data.tokens),
-  create: (input: { name: string; whatsappInstanceId: string }) =>
-    api.post<{ token: string; integrationToken: IntegrationTokenDto }>("/integration-tokens", input),
+  create: (input: {
+    name: string;
+    whatsappInstanceId: string;
+    crmPipelineId?: string | null;
+    crmStageId?: string | null;
+  }) => api.post<{ token: string; integrationToken: IntegrationTokenDto }>("/integration-tokens", input),
+  // Nome e destino no CRM. O número não muda por aqui: trocar o chip de um
+  // token em uso é gerar outro token.
+  update: (id: string, input: { name?: string; crmPipelineId?: string | null; crmStageId?: string | null }) =>
+    api
+      .patch<{ integrationToken: IntegrationTokenDto }>(`/integration-tokens/${id}`, input)
+      .then((data) => data.integrationToken),
   revoke: (id: string) =>
     api
       .post<{ integrationToken: IntegrationTokenDto }>(`/integration-tokens/${id}/revoke`)
