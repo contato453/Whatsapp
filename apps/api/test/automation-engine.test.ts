@@ -8,10 +8,14 @@ import { AutomationEngine } from "../src/services/automation/engine.js";
 // disso trava o fluxo.
 const crmMocks = vi.hoisted(() => ({
   createCrmOpportunity: vi.fn(),
+  moveCrmOpportunity: vi.fn(),
   crmEnabled: { value: true },
 }));
 vi.mock("../src/lib/crm-opportunity.js", () => ({
   createCrmOpportunity: crmMocks.createCrmOpportunity,
+}));
+vi.mock("../src/lib/crm-move.js", () => ({
+  moveCrmOpportunity: crmMocks.moveCrmOpportunity,
 }));
 vi.mock("../src/lib/organization-features.js", () => ({
   loadOrganizationFeatures: async () => ({ crm: crmMocks.crmEnabled.value }),
@@ -1132,11 +1136,16 @@ describe("AutomationEngine", () => {
   });
 
   describe("bloco 'Enviar para funil (CRM)'", () => {
-    function crmGraph(pipelineId: string, stageId = ""): AutomationGraph {
+    function crmGraph(pipelineId: string, stageId = "", advanceExisting = false): AutomationGraph {
       return {
         nodes: [
           { id: "trigger", type: "trigger", position: { x: 0, y: 0 }, data: {} },
-          { id: "crm", type: "crm_opportunity", position: { x: 100, y: 0 }, data: { pipelineId, stageId } },
+          {
+            id: "crm",
+            type: "crm_opportunity",
+            position: { x: 100, y: 0 },
+            data: { pipelineId, stageId, advanceExisting },
+          },
           { id: "send", type: "send_message", position: { x: 200, y: 0 }, data: { messageType: "text", text: "Seguiu" } },
           { id: "finish", type: "finish", position: { x: 300, y: 0 }, data: {} },
         ],
@@ -1155,7 +1164,12 @@ describe("AutomationEngine", () => {
         id: "pipe-1",
         organizationId: env.ORG,
         isActive: true,
-        stages: [{ id: "stage-a" }, { id: "stage-b" }],
+        stages: [
+          { id: "stage-a", position: 1000, type: "open" },
+          { id: "stage-b", position: 2000, type: "in_progress" },
+          { id: "stage-c", position: 3000, type: "in_progress" },
+          { id: "stage-won", position: 4000, type: "won" },
+        ],
       });
       return env;
     }
@@ -1163,7 +1177,96 @@ describe("AutomationEngine", () => {
     beforeEach(() => {
       crmMocks.createCrmOpportunity.mockReset();
       crmMocks.createCrmOpportunity.mockResolvedValue({ opportunity: { id: "opp-1" }, duplicated: false });
+      crmMocks.moveCrmOpportunity.mockReset();
+      crmMocks.moveCrmOpportunity.mockResolvedValue({});
       crmMocks.crmEnabled.value = true;
+    });
+
+    describe("avançar card que já existe (lead respondeu)", () => {
+      function existingCardAt(stageId: string) {
+        crmMocks.createCrmOpportunity.mockResolvedValue({
+          opportunity: { id: "opp-1", stageId },
+          duplicated: true,
+        });
+      }
+
+      it("card numa etapa anterior avança para a etapa do bloco, como sistema", async () => {
+        const env = setup();
+        existingCardAt("stage-a");
+        const conversation = env.createConversation();
+        env.createFlow({ name: "Lead", triggerType: "first_message", graph: crmGraph("pipe-1", "stage-b", true) });
+
+        await env.inbound(conversation.id as string, "Quero saber mais");
+
+        expect(crmMocks.moveCrmOpportunity).toHaveBeenCalledTimes(1);
+        expect(crmMocks.moveCrmOpportunity.mock.calls[0]?.[1]).toMatchObject({
+          organizationId: env.ORG,
+          opportunityId: "opp-1",
+          toStageId: "stage-b",
+          fromStageId: "stage-a",
+          performedByUserId: null,
+        });
+        expect(env.executionLogs.some((log) => log.event === "automation_crm_opportunity_advanced")).toBe(true);
+        expect(env.sentMessages.map((message) => message.text)).toEqual(["Seguiu"]);
+      });
+
+      it("card que o vendedor já adiantou (mesma etapa ou depois) fica onde está", async () => {
+        for (const stageId of ["stage-b", "stage-c"]) {
+          const env = setup();
+          existingCardAt(stageId);
+          const conversation = env.createConversation();
+          env.createFlow({ name: "Lead", triggerType: "first_message", graph: crmGraph("pipe-1", "stage-b", true) });
+          await env.inbound(conversation.id as string, "Oi");
+        }
+        expect(crmMocks.moveCrmOpportunity).not.toHaveBeenCalled();
+      });
+
+      it("sem a opção ligada, o card existente não se move (comportamento de antes)", async () => {
+        const env = setup();
+        existingCardAt("stage-a");
+        const conversation = env.createConversation();
+        env.createFlow({ name: "Lead", triggerType: "first_message", graph: crmGraph("pipe-1", "stage-b") });
+
+        await env.inbound(conversation.id as string, "Oi");
+
+        expect(crmMocks.moveCrmOpportunity).not.toHaveBeenCalled();
+      });
+
+      it("Ganho nunca é destino de avanço automático", async () => {
+        const env = setup();
+        existingCardAt("stage-a");
+        const conversation = env.createConversation();
+        env.createFlow({ name: "Lead", triggerType: "first_message", graph: crmGraph("pipe-1", "stage-won", true) });
+
+        await env.inbound(conversation.id as string, "Oi");
+
+        expect(crmMocks.moveCrmOpportunity).not.toHaveBeenCalled();
+      });
+
+      it("card novo nasce direto na etapa do bloco, sem mover nada", async () => {
+        const env = setup();
+        const conversation = env.createConversation();
+        env.createFlow({ name: "Lead", triggerType: "first_message", graph: crmGraph("pipe-1", "stage-b", true) });
+
+        await env.inbound(conversation.id as string, "Oi");
+
+        expect(crmMocks.createCrmOpportunity.mock.calls[0]?.[1]).toMatchObject({ stageId: "stage-b" });
+        expect(crmMocks.moveCrmOpportunity).not.toHaveBeenCalled();
+      });
+
+      it("falha ao mover (alguém moveu antes) não trava o fluxo", async () => {
+        const env = setup();
+        existingCardAt("stage-a");
+        crmMocks.moveCrmOpportunity.mockRejectedValueOnce(new Error("Alguém moveu este card antes de você."));
+        const conversation = env.createConversation();
+        env.createFlow({ name: "Lead", triggerType: "first_message", graph: crmGraph("pipe-1", "stage-b", true) });
+
+        await env.inbound(conversation.id as string, "Oi");
+
+        expect(env.sentMessages.map((message) => message.text)).toEqual(["Seguiu"]);
+        expect([...env.executions.values()][0]?.status).toBe("completed");
+        expect(env.executionLogs.some((log) => log.event === "automation_crm_opportunity_failed")).toBe(true);
+      });
     });
 
     it("abre o card com o contato da conversa, no funil e na etapa escolhidos, como sistema", async () => {

@@ -37,6 +37,7 @@ import { conversationAudience } from "../../realtime/socket.js";
 import { emitConversationAutomation } from "../../lib/conversation-automation.js";
 import { buildPreview, isUniqueViolation } from "../message-ingest.js";
 import { createCrmOpportunity } from "../../lib/crm-opportunity.js";
+import { moveCrmOpportunity } from "../../lib/crm-move.js";
 import { loadOrganizationFeatures } from "../../lib/organization-features.js";
 import { buildAutomationVariableContext, type AutomationExecutionContextData } from "./context.js";
 
@@ -1038,7 +1039,7 @@ export class AutomationEngine {
         }
         const pipeline = await this.prisma.crmPipeline.findFirst({
           where: { id: data.pipelineId, organizationId: conversation.organizationId },
-          select: { isActive: true, stages: { select: { id: true } } },
+          select: { isActive: true, stages: { select: { id: true, position: true, type: true } } },
         });
         if (!pipeline || !pipeline.isActive) {
           await this.log(execution.id, "warn", "automation_crm_pipeline_unavailable", { nodeId: node.id });
@@ -1072,6 +1073,38 @@ export class AutomationEngine {
             nodeId: node.id,
             data: { opportunityId: opportunity.id },
           });
+          // A exceção é PARA A FRENTE, e só com a opção ligada: o card que está
+          // numa etapa anterior à do bloco avança (o lead do site respondeu e
+          // sai de "Novo Lead"). Ganho/Perdido nunca é destino daqui — fechar
+          // venda exige motivo e valor, que uma mensagem não traz.
+          if (duplicated && data.advanceExisting && stageId) {
+            const target = pipeline.stages.find((stage) => stage.id === stageId);
+            const current = pipeline.stages.find((stage) => stage.id === opportunity.stageId);
+            if (
+              target &&
+              current &&
+              target.type !== "won" &&
+              target.type !== "lost" &&
+              current.position < target.position
+            ) {
+              await moveCrmOpportunity(
+                { prisma: this.prisma, io: this.io, logger: this.logger },
+                {
+                  organizationId: conversation.organizationId,
+                  opportunityId: opportunity.id,
+                  toStageId: stageId,
+                  // Conferência otimista: se alguém moveu no meio do caminho,
+                  // vale o que a pessoa fez e o bloco desiste (cai no catch).
+                  fromStageId: opportunity.stageId,
+                  performedByUserId: null,
+                },
+              );
+              await this.log(execution.id, "info", "automation_crm_opportunity_advanced", {
+                nodeId: node.id,
+                data: { opportunityId: opportunity.id, fromStageId: opportunity.stageId, toStageId: stageId },
+              });
+            }
+          }
         } catch (err) {
           await this.log(execution.id, "warn", "automation_crm_opportunity_failed", {
             nodeId: node.id,
