@@ -891,6 +891,24 @@ export class MessageIngestService {
       },
     });
     if (existing) {
+      // Conversa `@lid` que já existia (nasceu antes do `rememberLidPhone`, ou
+      // por um caminho que não passa pela adoção): o telefone que o webhook
+      // traz também fica anotado no `Contact`. Sem isso o envio pelo telefone
+      // digitado não acha esta conversa e abre outra para a mesma pessoa.
+      if (
+        message.chatType === "individual" &&
+        message.direction === "inbound" &&
+        message.senderPhone &&
+        message.externalChatId.endsWith("@lid")
+      ) {
+        const phone = await phoneForChatId(
+          this.prisma,
+          message.instanceId,
+          message.externalChatId,
+          message.senderPhone,
+        );
+        if (phone) await this.rememberLidPhone(message.instanceId, message.externalChatId, phone);
+      }
       // Melhora o título se antes só tínhamos o telefone/JID e agora temos nome.
       if (
         message.chatType === "individual" &&
