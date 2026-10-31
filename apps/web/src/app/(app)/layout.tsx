@@ -669,6 +669,16 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const { enabled: qualityEnabled, loading: qualityLoading } = useQualityAvailability();
   const router = useRouter();
   const pathname = usePathname();
+  // Conversa embutida no painel do card do CRM (`/inbox/<id>?embed=crm`): a
+  // página de fora já tem o menu, o som, o aviso de chamada e o de fim de
+  // expediente — repetidos aqui dentro tocariam duas vezes. Lido da URL na
+  // montagem (e não com `useSearchParams`) para não exigir Suspense no layout
+  // inteiro; não muda depois, porque o painel troca o endereço do quadro.
+  const [embedded] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("embed") === "crm",
+  );
 
   useEffect(() => {
     if (!loading && !user) {
@@ -698,6 +708,16 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     !current || pathAllowed(current, pathname, user.role, can, hasFeature, qualityEnabled || qualityLoading);
   // Bloqueio por módulo desligado tem texto próprio (ver AccessDenied).
   const moduleOff = Boolean(current?.feature && !hasFeature(current.feature));
+
+  if (embedded) {
+    return (
+      <CallProvider>
+        <main className="h-screen overflow-hidden bg-slate-50">
+          {allowed ? children : <AccessDenied moduleOff={moduleOff} />}
+        </main>
+      </CallProvider>
+    );
+  }
 
   return (
     <CallProvider>
