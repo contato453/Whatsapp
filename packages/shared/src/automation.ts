@@ -406,6 +406,13 @@ export interface CrmOpportunityNodeData {
   pipelineId: string;
   /** Etapa inicial; vazio = a primeira etapa do funil. */
   stageId?: string;
+  /**
+   * Card que JÁ existe numa etapa ANTERIOR à escolhida avança para ela. Só
+   * para a frente, e nunca para Ganho/Perdido: o lead do site nasce em "Novo
+   * Lead" e, quando responde, o fluxo o leva a "Primeiro Contato" sem desfazer
+   * o que o vendedor já tiver adiantado.
+   */
+  advanceExisting?: boolean;
 }
 
 export interface WebhookNodeData {
@@ -631,6 +638,14 @@ export function validateAutomationGraph(graph: AutomationGraph): AutomationFlowP
     }
     if (node.type === "crm_opportunity" && !(node.data as unknown as CrmOpportunityNodeData).pipelineId) {
       problems.push({ nodeId: node.id, message: "Selecione o funil do CRM para este bloco." });
+    }
+    if (node.type === "crm_opportunity") {
+      const crm = node.data as unknown as CrmOpportunityNodeData;
+      // "Avançar para a primeira etapa" nunca move nada: a opção ligada sem
+      // etapa é um bloco que parece fazer algo e não faz.
+      if (crm.advanceExisting && !crm.stageId) {
+        problems.push({ nodeId: node.id, message: "Escolha a etapa para onde o card que já existe deve avançar." });
+      }
     }
     if (node.type === "wait" && (node.data as unknown as WaitNodeData).resumeOnReply) {
       const handles = new Set(outgoing.map((edge) => edge.sourceHandle));

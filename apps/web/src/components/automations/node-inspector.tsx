@@ -642,6 +642,23 @@ function CrmOpportunityFields({
           </select>
         </Field>
       )}
+      {selected && (
+        <label className="flex items-start gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500/30"
+            checked={config.advanceExisting ?? false}
+            onChange={(event) => set({ advanceExisting: event.target.checked })}
+          />
+          <span>
+            Se o card já existir numa etapa anterior, avançar para esta etapa
+            <span className="block text-xs text-slate-500">
+              Ex.: o lead do site nasce em "Novo Lead" e, quando responde, vai para "Primeiro Contato". Só move
+              para a frente e nunca para Ganho ou Perdido.
+            </span>
+          </span>
+        </label>
+      )}
       {pipelines.length === 0 && (
         <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-700">
           Nenhum funil ativo que você enxergue. Crie um em CRM → Funis.
@@ -649,7 +666,8 @@ function CrmOpportunityFields({
       )}
       <p className="text-xs text-slate-500">
         Abre uma oportunidade com o contato da própria conversa. Se ela já tiver um card aberto neste
-        funil, o card fica onde está — o fluxo não desfaz o avanço que a equipe já fez. O responsável
+        funil, o card fica onde está (ou só avança, com a opção acima) — o fluxo nunca desfaz o avanço que
+        a equipe já fez. O responsável
         segue a regra de distribuição do funil.
       </p>
     </>
