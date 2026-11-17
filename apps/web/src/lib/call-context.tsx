@@ -16,6 +16,7 @@ import {
   type CallStatusPayload,
 } from "@azvchat/shared";
 import { ApiError, callsApi } from "@/lib/api";
+import { callAudioErrorMessage } from "@/lib/call-audio-error";
 import { CallTonePlayer } from "@/lib/call-tones";
 import { useSocket } from "@/lib/socket-context";
 import { CallPanel } from "@/components/inbox/call-panel";
@@ -245,10 +246,14 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         await pc.setRemoteDescription({ type: "answer", sdp: sdp_answer });
         return true;
       } catch (err) {
-        const message =
-          err instanceof DOMException && err.name === "NotAllowedError"
-            ? "Permissão de microfone negada."
-            : "Falha ao conectar o áudio.";
+        const message = callAudioErrorMessage(err);
+        // O nome do erro vai para o console: é o que separa "sem microfone"
+        // de "servidor recusou" quando alguém mandar print da tela.
+        console.warn("[call] áudio não conectou", {
+          callId,
+          errorName: err instanceof Error ? err.name : typeof err,
+          apiCode: err instanceof ApiError ? (err.code ?? null) : null,
+        });
         // Na saída, a chamada já foi discada: encerra no provedor para o
         // telefone do cliente não continuar tocando sem ninguém do lado de cá.
         if (outbound) void callsApi.end(conversationId, callId).catch(() => undefined);
